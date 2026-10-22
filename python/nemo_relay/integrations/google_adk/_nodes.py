@@ -17,9 +17,9 @@ from google.adk.workflow import START, BaseNode, Workflow
 import nemo_relay
 from nemo_relay import Json, JsonObject, ScopeType
 from nemo_relay.integrations.google_adk._context import (
-    CURRENT_AGENT_HANDLE,
-    CURRENT_CLOSER,
+    CURRENT_PARENT,
     OK_STATUS,
+    current_invocation,
     error_status,
     integration_metadata,
     log_unrecorded_once,
@@ -55,8 +55,9 @@ def _methods(cls: type[BaseNode]) -> Mapping[str, object]:
 
     async def _run_impl(self: BaseNode, *, ctx: Context, node_input: object) -> _NodeRun:
         run = original(self, ctx=ctx, node_input=node_input)
-        async for item in _record_run(self, scope_type, run, ctx, node_input):
-            yield item
+        async with contextlib.aclosing(_record_run(self, scope_type, run, ctx, node_input)) as items:
+            async for item in items:
+                yield item
 
     return {"_run_impl": _run_impl}
 
@@ -77,8 +78,8 @@ async def _record_run(
 
     Outside an observed invocation, yield the items without a scope.
     """
-    closer = CURRENT_CLOSER.get()
-    if closer is None:
+    invocation = current_invocation()
+    if invocation is None:
         log_unrecorded_once("workflow node run")
         async with contextlib.aclosing(run) as items:
             async for item in items:
@@ -94,10 +95,12 @@ async def _record_run(
     handle = nemo_relay.scope.push(
         node.name, scope_type, handle=parent_handle(), input=scope_input, metadata=integration_metadata()
     )
-    closer.own(handle.uuid)
-    closer.recorded_nodes.add(ctx.node_path)
-    previous_agent = CURRENT_AGENT_HANDLE.get()
-    CURRENT_AGENT_HANDLE.set(handle)
+    invocation.own(handle.uuid)
+    invocation.recorded_nodes.add(ctx.node_path)
+    previous = CURRENT_PARENT.get()
+    if previous is invocation:
+        invocation.watch()
+    CURRENT_PARENT.set(handle)
     output: Json = None
     try:
         async with contextlib.aclosing(run) as items:
@@ -107,15 +110,15 @@ async def _record_run(
                     output = json_safe(value)
                 yield item
     except (GeneratorExit, asyncio.CancelledError):
-        closer.close(handle, output={"status": "cancelled"}, metadata=error_status("node cancelled"))
+        invocation.close(handle, output={"status": "cancelled"}, metadata=error_status("node cancelled"))
         raise
     except Exception as error:
-        closer.close(handle, output={"error": repr(error)}, metadata=error_status(str(error)))
+        invocation.close(handle, output={"error": repr(error)}, metadata=error_status(str(error)))
         raise
     else:
         child_error = ctx.error
         if child_error is not None:
-            closer.close(
+            invocation.close(
                 handle,
                 output={"error": repr(child_error), "error_node_path": ctx.error_node_path},
                 metadata=error_status(str(child_error)),
@@ -124,6 +127,6 @@ async def _record_run(
             result: JsonObject = {"status": "ok"}
             if output is not None:
                 result["output"] = output
-            closer.close(handle, output=result, metadata=OK_STATUS)
+            invocation.close(handle, output=result, metadata=OK_STATUS)
     finally:
-        CURRENT_AGENT_HANDLE.set(previous_agent)
+        CURRENT_PARENT.set(previous)

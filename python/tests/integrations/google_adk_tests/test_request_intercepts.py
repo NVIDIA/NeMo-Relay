@@ -150,7 +150,7 @@ async def test_parallel_calls_to_one_tool_without_ids_run_through_relay(
 
     assert final_text(adk_events) == "Both sunny."
     assert_balanced(subscribed_events)
-    assert [event.name for event in starts(subscribed_events, "llm")] == ["parallel-model"] * 2
+    assert [event.name for event in starts(subscribed_events, "llm")] == ["RespondingLlm"] * 2
     tools = starts(subscribed_events, "tool")
     assert sorted(str(data_of(tool)["location"]) for tool in tools if isinstance(tool.data, dict)) == ["Paris", "Rome"]
     adk_ids = [

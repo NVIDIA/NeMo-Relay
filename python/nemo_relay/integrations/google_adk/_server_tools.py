@@ -36,6 +36,9 @@ class ServerTool(StrEnum):
 
     GOOGLE_SEARCH = "google_search"
     ENTERPRISE_WEB_SEARCH = "enterprise_web_search"
+    PARALLEL_AI_SEARCH = "parallel_ai_search"
+    EXA_AI_SEARCH = "exa_ai_search"
+    WEB_SEARCH = "web_search"
     VERTEX_AI_SEARCH = "vertex_ai_search"
     GOOGLE_MAPS = "google_maps"
     URL_CONTEXT = "url_context"
@@ -56,7 +59,12 @@ _TOOL_TYPE_TOOLS: Final[Mapping[str, ServerTool]] = {
     types.ToolType.GOOGLE_MAPS.value: ServerTool.GOOGLE_MAPS,
     types.ToolType.URL_CONTEXT.value: ServerTool.URL_CONTEXT,
 }
-_SEARCH_TOOLS: Final = (ServerTool.GOOGLE_SEARCH, ServerTool.ENTERPRISE_WEB_SEARCH)
+_SEARCH_TOOLS: Final = (
+    ServerTool.GOOGLE_SEARCH,
+    ServerTool.ENTERPRISE_WEB_SEARCH,
+    ServerTool.PARALLEL_AI_SEARCH,
+    ServerTool.EXA_AI_SEARCH,
+)
 _SERVER_SIDE: Final = (
     EnterpriseWebSearchTool,
     GoogleMapsGroundingTool,
@@ -71,9 +79,10 @@ def is_server_side(tool: BaseTool) -> bool:
 
 
 def server_tool_names(tools: Sequence[types.Tool | Callable[..., object]] | None) -> set[ServerTool]:
-    """Return the Google Search, enterprise web search, and code execution tools that the request declares.
+    """Return the web search and code execution tools that the request declares.
 
-    The response evidence of these tools does not name the tool, so the request supplies the names.
+    The response evidence of these tools does not name the tool, so the request supplies the names. Legacy Google
+    Search retrieval counts as Google Search.
     """
     names: set[ServerTool] = set()
     for tool in tools or ():
@@ -81,7 +90,10 @@ def server_tool_names(tools: Sequence[types.Tool | Callable[..., object]] | None
             continue
         present = (
             (ServerTool.GOOGLE_SEARCH, tool.google_search),
+            (ServerTool.GOOGLE_SEARCH, tool.google_search_retrieval),
             (ServerTool.ENTERPRISE_WEB_SEARCH, tool.enterprise_web_search),
+            (ServerTool.PARALLEL_AI_SEARCH, tool.parallel_ai_search),
+            (ServerTool.EXA_AI_SEARCH, tool.exa_ai_search),
             (ServerTool.CODE_EXECUTION, tool.code_execution),
         )
         names.update(name for name, value in present if value is not None)
@@ -89,11 +101,13 @@ def server_tool_names(tools: Sequence[types.Tool | Callable[..., object]] | None
 
 
 def _search_tool(names: Collection[ServerTool]) -> ServerTool:
+    """Return the one web search tool that the request declares, or `web_search` when it declares several or none.
+
+    Web search queries do not name the tool that ran them, and the Gemini API accepts several search tools in one
+    request.
+    """
     searches = [tool for tool in _SEARCH_TOOLS if tool in names]
-    if len(searches) != 1:
-        found = [tool.value for tool in searches]
-        raise ValueError(f"A response with web search queries needs one search tool on its request, not {found}")
-    return searches[0]
+    return searches[0] if len(searches) == 1 else ServerTool.WEB_SEARCH
 
 
 class _Identified(Protocol):
@@ -133,19 +147,24 @@ def _tool_call_name(tool_type: types.ToolType | None) -> str:
     return value.lower() if tool is None else tool
 
 
-def record_server_tools(event: Event, names: Collection[ServerTool], parent: nemo_relay.ScopeHandle | None) -> None:
+def record_server_tools(
+    event: Event, names: Collection[ServerTool], parent: Callable[[], nemo_relay.ScopeHandle]
+) -> None:
     """Record each provider-run tool that the event reports as a Tool scope at the event's time.
 
-    Pair `tool_call` parts with `tool_response` parts. Record grounding web search queries and Google Maps context only
-    when those parts did not report that tool. Record code execution parts only when `names` includes code execution.
-    Raise `ValueError` when web search queries arrive and `names` does not hold exactly one search tool.
+    Resolve the parent scope from `parent` only when the event reports a tool. Pair `tool_call` parts with
+    `tool_response` parts. Record grounding web search queries and Google Maps context only when those parts did not
+    report that tool, and name the queries after the one web search tool in `names`, or `web_search` without one.
+    Record code execution parts only when `names` includes code execution.
     """
     when = datetime.datetime.fromtimestamp(event.timestamp, datetime.UTC)
     parts = [] if event.content is None else event.content.parts or []
-    tool_calls = _paired((part.tool_call, part.tool_response) for part in parts)
-    reported = {_tool_call_name(call.tool_type) for call, _ in tool_calls}
-    for call, response in tool_calls:
-        name = _tool_call_name(call.tool_type)
+    tool_calls = [
+        (_tool_call_name(call.tool_type), call, response)
+        for call, response in _paired((part.tool_call, part.tool_response) for part in parts)
+    ]
+    reported = {name for name, _, _ in tool_calls}
+    for name, call, response in tool_calls:
         _record(name, data=json_safe(call), output=response, tool_call_id=call.id, parent=parent, when=when)
     grounding = event.grounding_metadata
     if grounding is not None:
@@ -188,7 +207,7 @@ def _record(
     data: Json,
     output: object,
     tool_call_id: str | None,
-    parent: nemo_relay.ScopeHandle | None,
+    parent: Callable[[], nemo_relay.ScopeHandle],
     when: datetime.datetime,
 ) -> None:
     """Open and close a Tool scope for one call that the provider ran, and project the result before the scope opens."""
@@ -197,6 +216,6 @@ def _record(
     if (adk_type := _ADK_TYPES.get(name)) is not None:
         metadata["adk_tool_type"] = adk_type.__name__
     handle = nemo_relay.tools.call(
-        name, data, handle=parent, metadata=metadata, tool_call_id=tool_call_id, timestamp=when
+        name, data, handle=parent(), metadata=metadata, tool_call_id=tool_call_id, timestamp=when
     )
     nemo_relay.tools.call_end(handle, ToolExecutionResult(result), metadata=OK_STATUS, timestamp=when)

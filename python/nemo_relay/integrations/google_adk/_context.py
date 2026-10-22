@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Share per-invocation scope state between the plugin and the recorded nodes."""
+"""Share per-invocation scope state between the plugin, the recorded nodes, and the root run observer."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import datetime
@@ -24,21 +25,6 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
-
-CURRENT_AGENT_HANDLE: Final[
-    Annotated[
-        contextvars.ContextVar[nemo_relay.ScopeHandle | None],
-        "This variable holds the innermost invocation, agent, or node scope open in the current context.",
-    ]
-] = contextvars.ContextVar("nemo_relay_google_adk_agent_handle", default=None)
-
-
-def parent_handle() -> nemo_relay.ScopeHandle:
-    """Return the scope in `CURRENT_AGENT_HANDLE`, or the top of the current scope stack when that variable is None."""
-    handle = CURRENT_AGENT_HANDLE.get()
-    if handle is not None:
-        return handle
-    return nemo_relay.scope.get_handle()
 
 
 def integration_metadata(**extra: Json) -> JsonObject:
@@ -114,22 +100,119 @@ class _PendingClose(NamedTuple):
     ended_at: datetime.datetime
 
 
-class DeferredCloser:
-    """Close an invocation's scopes in stack order.
+class InvocationScope(NamedTuple):
+    name: str
+    parent: nemo_relay.ScopeHandle
+    input: JsonObject
+    metadata: JsonObject
+    started_at: datetime.datetime
 
-    A scope closes once it reaches the top of the stack, and `drain` closes each owned scope that is still open as
-    cancelled.
+
+class Invocation:
+    """Own one ADK invocation's scope, and close the invocation's scopes in stack order.
+
+    The invocation scope opens with its start time when a call first needs it. A scope closes once it reaches the top
+    of the stack, and `finish` closes each owned scope that is still open as cancelled.
     """
 
-    def __init__(self, scope_context: ScopeContext, invocation_id: str) -> None:
+    def __init__(
+        self,
+        invocation_id: str,
+        *,
+        scope: InvocationScope,
+        driver: asyncio.Task[object],
+        previous_parent: _Parent,
+        previous_invocation: Invocation | None,
+        end: Callable[[JsonObject, JsonObject], None],
+        abandon: Callable[[], None],
+    ) -> None:
         self.invocation_id = invocation_id
+        self.driver: Annotated[
+            asyncio.Task[object], "This field holds the task that runs the invocation's run hooks."
+        ] = driver
+        self.previous_parent = previous_parent
+        self.previous_invocation = previous_invocation
+        self.end: Annotated[
+            Callable[[JsonObject, JsonObject], None],
+            "This callable ends the invocation with an output and status, as its run hooks do.",
+        ] = end
+        self.abandon: Annotated[
+            Callable[[], None], "This callable closes the invocation's scope as cancelled when a call opened it."
+        ] = abandon
         self.recorded_nodes: Annotated[
             set[str], "This set holds the paths of the nodes that `wrap_node` recorded as scopes in the invocation."
         ] = set()
-        self._scope_context = scope_context
+        self.finished = False
+        self._unrecorded = False
+        self._scope = scope
+        self._scope_context = ScopeContext.capture()
         self._lock = threading.Lock()
+        self._handle: nemo_relay.ScopeHandle | None = None
+        self._root_claimed = False
         self._pending: dict[str, _PendingClose] = {}
         self._owned: set[str] = set()
+        driver.add_done_callback(self._driver_done)
+
+    def handle(self) -> nemo_relay.ScopeHandle:
+        """Return the invocation scope, and push it with its start time when no call has opened it yet.
+
+        A push that raises leaves the invocation unrecorded and finished, so later calls take the invocation's parent
+        and the invocation's end records nothing.
+        """
+        with self._lock:
+            if self._handle is None:
+                scope = self._scope
+                try:
+                    self._handle = self._scope_context.run(
+                        lambda: nemo_relay.scope.push(
+                            scope.name,
+                            nemo_relay.ScopeType.Agent,
+                            handle=scope.parent,
+                            input=scope.input,
+                            metadata=scope.metadata,
+                            timestamp=scope.started_at,
+                        )
+                    )
+                except Exception:
+                    self.finished = self._unrecorded = True
+                    raise
+                self._owned.add(self._handle.uuid)
+            return self._handle
+
+    def claim_root(self) -> bool:
+        """Return true for the first run that claims the root of the invocation, and false for every later one."""
+        with self._lock:
+            claimed, self._root_claimed = self._root_claimed, True
+            return not claimed
+
+    def interrupt(self) -> None:
+        """End the invocation as cancelled when its driving task is being cancelled.
+
+        ADK calls no run hook for a cancelled driving task. A run that stops for any other reason ends through ADK's run
+        hooks.
+        """
+        if self.driver.cancelling():
+            self.end({"status": "cancelled"}, CANCELLED_STATUS)
+
+    def watch(self) -> None:
+        """Interrupt the invocation when the current task, which runs a top-level run of it, ends cancelled.
+
+        ADK's node runtime runs the root node and each agent transfer in a task of its own, and cancels that task before
+        the driving task resumes, so the done callback still sees the driving task's cancellation. The driving task
+        itself needs no watch.
+        """
+        task = current_task()
+        if task is not self.driver:
+            task.add_done_callback(self._run_task_done)
+
+    def _run_task_done(self, task: asyncio.Task[object]) -> None:
+        if task.cancelled():
+            self.interrupt()
+
+    def _driver_done(self, task: asyncio.Task[object]) -> None:
+        """Abandon the invocation, which ended without ADK's run hooks when its driving task finishes before it."""
+        del task
+        self.abandon()
 
     def own(self, scope_uuid: str) -> None:
         with self._lock:
@@ -140,9 +223,24 @@ class DeferredCloser:
             self._pending[handle.uuid] = _PendingClose(handle, output, metadata, datetime.datetime.now(datetime.UTC))
             self._scope_context.run(lambda: self._drain_locked(force=False))
 
-    def drain(self) -> None:
+    def finish(self, *, output: JsonObject, metadata: JsonObject, record: bool) -> None:
+        """Close the invocation scope with the output and status, and close each owned scope left open as cancelled.
+
+        Open the invocation scope first when `record` is true and no call opened it. Mark the invocation finished
+        before closing, so a call that starts meanwhile no longer takes it as a parent.
+        """
+        self.finished = True
+        self.driver.remove_done_callback(self._driver_done)
+        if not self._unrecorded and (record or self._handle is not None):
+            self.close(self.handle(), output=output, metadata=metadata)
         with self._lock:
             self._scope_context.run(lambda: self._drain_locked(force=True))
+
+    def release(self) -> None:
+        """Restore the context variables from before the invocation when the invocation is current in this context."""
+        if CURRENT_INVOCATION.get() is self:
+            CURRENT_PARENT.set(self.previous_parent)
+            CURRENT_INVOCATION.set(self.previous_invocation)
 
     def _drain_locked(self, *, force: bool) -> None:
         while self._pending or force:
@@ -163,9 +261,47 @@ class DeferredCloser:
             self._owned.discard(top.uuid)
 
 
-CURRENT_CLOSER: Final[
+_Parent: TypeAlias = "nemo_relay.ScopeHandle | Invocation | None"
+
+CURRENT_PARENT: Final[
     Annotated[
-        contextvars.ContextVar[DeferredCloser | None],
-        "This variable holds the closer of the ADK invocation that runs in the current context.",
+        contextvars.ContextVar[_Parent],
+        "This variable holds the innermost invocation, agent scope, or node scope in the current context.",
     ]
-] = contextvars.ContextVar("nemo_relay_google_adk_closer", default=None)
+] = contextvars.ContextVar("nemo_relay_google_adk_parent", default=None)
+CURRENT_INVOCATION: Final[
+    Annotated[
+        contextvars.ContextVar[Invocation | None],
+        "This variable holds the innermost ADK invocation that the plugin observes in the current context.",
+    ]
+] = contextvars.ContextVar("nemo_relay_google_adk_invocation", default=None)
+
+
+def parent_handle() -> nemo_relay.ScopeHandle:
+    """Return the innermost open invocation, agent, or node scope in the current context.
+
+    Open the invocation scope when a call first needs it, and skip invocations that already finished. Outside an
+    invocation, return the top of the current scope stack.
+    """
+    parent = CURRENT_PARENT.get()
+    while isinstance(parent, Invocation) and parent.finished:
+        parent = parent.previous_parent
+    if isinstance(parent, Invocation):
+        return parent.handle()
+    return nemo_relay.scope.get_handle() if parent is None else parent
+
+
+def current_invocation() -> Invocation | None:
+    """Return the innermost unfinished invocation in the current context, or None outside one."""
+    invocation = CURRENT_INVOCATION.get()
+    while invocation is not None and invocation.finished:
+        invocation = invocation.previous_invocation
+    return invocation
+
+
+def current_task() -> asyncio.Task[object]:
+    """Return the running asyncio task, and raise `RuntimeError` outside one."""
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("NeMo Relay records Google ADK runs only inside an asyncio task")
+    return task

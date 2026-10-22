@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_python_integration_google_adk:
+        description: 'Whether Google ADK Python integration checks may need optional extras'
+        required: false
+        default: false
+        type: boolean
       base:
         description: 'The comparison base used for filtered pre-commit checks'
         required: false
@@ -207,6 +212,7 @@ jobs:
           PRE_COMMIT_BASE: ${{ inputs.base }}
           PRE_COMMIT_HOME: ${{ runner.temp }}/.cache/pre-commit
           PYTHON_INTEGRATION_LANGCHAIN: ${{ inputs.run_python_integration_langchain }}
+          PYTHON_INTEGRATION_GOOGLE_ADK: ${{ inputs.run_python_integration_google_adk }}
           # The attribution hook syncs docs deps; do not apply repo warning policy to third-party Rust builds.
           RUSTFLAGS: ""
         run: |
@@ -215,7 +221,10 @@ jobs:
 
           FLOW_CI_UV_SYNC_EXTRA_ARGS=()
           if [[ "$PYTHON_INTEGRATION_LANGCHAIN" == "true" ]]; then
-            FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents --extra google-adk)
+            FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents)
+          fi
+          if [[ "$PYTHON_INTEGRATION_GOOGLE_ADK" == "true" ]]; then
+            FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra google-adk)
           fi
 
           uv sync --frozen --inexact --no-install-project --no-install-package nemo-relay "${FLOW_CI_UV_SYNC_EXTRA_ARGS[@]}"

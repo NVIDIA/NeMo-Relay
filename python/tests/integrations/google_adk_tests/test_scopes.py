@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import datetime
 import logging
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, NoReturn, get_args
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import pytest
 from _helpers import (
@@ -28,6 +29,7 @@ from _helpers import (
     invocation_context,
     invocation_start,
     invocation_starts,
+    llm_conditional_execution_guardrail,
     make_agent,
     make_runner,
     marks,
@@ -57,9 +59,11 @@ from typing_extensions import override
 import nemo_relay
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator, Mapping
+    from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 
+    from google.adk.agents import LlmAgent
     from google.adk.agents.callback_context import CallbackContext
+    from google.adk.agents.readonly_context import ReadonlyContext
     from google.adk.events.event import Event
     from google.adk.models import BaseLlm
     from google.adk.models.llm_request import LlmRequest
@@ -102,7 +106,7 @@ async def test_single_agent_records_an_llm_scope_per_model_call_under_the_agent(
 
     agent = named(subscribed_events, "weather_agent", "agent")
     llm_calls = starts(subscribed_events, "llm")
-    assert [event.name for event in llm_calls] == ["scripted-weather_agent"] * 2
+    assert [event.name for event in llm_calls] == ["ScriptedLlm"] * 2
     assert all(event.parent_uuid == agent.uuid for event in llm_calls)
     assert present(llm_calls[0].category_profile)["model_name"] == "scripted-weather_agent"
     assert metadata_of(llm_calls[0])["adk_model_type"] == "ScriptedLlm"
@@ -198,7 +202,11 @@ async def test_agent_tool_runs_the_nested_invocation_under_the_calling_agent(
     (nested,) = [event for event in invocations if event.parent_uuid == outer_scope.uuid]
     inner_agent = named(subscribed_events, "inner_agent", "agent")
     assert inner_agent.parent_uuid == nested.uuid
-    inner_call = named(subscribed_events, "scripted-inner_agent", "llm")
+    (inner_call,) = [
+        event
+        for event in starts(subscribed_events, "llm")
+        if present(event.category_profile)["model_name"] == "scripted-inner_agent"
+    ]
     assert parent_of(subscribed_events, inner_call).uuid == inner_agent.uuid
     ordered = [(event.scope_category, event.name) for event in scope_events(subscribed_events)]
     assert ordered.index(("end", "inner_agent")) < ordered.index(("end", "outer"))
@@ -383,11 +391,13 @@ async def test_close_pops_invocation_scope_left_open_by_cancellation(
     scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
 ) -> None:
     from nemo_relay.integrations.google_adk import NemoRelayPlugin
+    from nemo_relay.integrations.google_adk._context import parent_handle
 
     plugin = NemoRelayPlugin()
     context = invocation_context(make_agent(scripted_llm, "cancelled_agent"), "e-cancelled")
     with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         await plugin.before_run_callback(invocation_context=context)
+        parent_handle()
         await plugin.close()
     await nemo_relay.subscribers.flush_async()
 
@@ -402,6 +412,7 @@ async def test_close_from_another_context_closes_the_invocation_on_its_own_stack
     scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
 ) -> None:
     from nemo_relay.integrations.google_adk import NemoRelayPlugin
+    from nemo_relay.integrations.google_adk._context import parent_handle
 
     plugin = NemoRelayPlugin()
     context = invocation_context(make_agent(scripted_llm, "cancelled_agent"), "e-elsewhere")
@@ -410,6 +421,7 @@ async def test_close_from_another_context_closes_the_invocation_on_its_own_stack
         nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent),
     ):
         await plugin.before_run_callback(invocation_context=context)
+        parent_handle()
         await asyncio.create_task(plugin.close(), context=contextvars.Context())
     await nemo_relay.subscribers.flush_async()
 
@@ -526,7 +538,7 @@ async def test_a_failing_plugin_hook_is_logged_and_the_adk_run_continues(
 
     assert final_text(adk_events) == "Answer from weather_agent to 'hi'."
     failures = [record.getMessage() for record in caplog.records if record.name == _PLUGIN_LOGGER and record.exc_info]
-    assert failures == ["NeMo Relay: before_run_callback failed"]
+    assert failures == ["NeMo Relay: before_agent_callback failed"]
 
 
 def test_plugin_implements_every_adk_plugin_hook_it_needs() -> None:
@@ -544,6 +556,40 @@ def test_plugin_implements_every_adk_plugin_hook_it_needs() -> None:
         "after_tool_callback",
         "on_tool_error_callback",
     }
+
+
+def test_class_swaps_layer_in_the_order_they_are_applied() -> None:
+    from nemo_relay.integrations.google_adk._swap import is_swapped, swap_class
+
+    class Greeter:
+        def greet(self) -> str:
+            return "hi"
+
+    def louder(cls: type[Greeter]) -> Mapping[str, object]:
+        original = cls.greet
+
+        def greet(self: Greeter) -> str:
+            return f"{original(self)}!"
+
+        return {"greet": greet}
+
+    def quoted(cls: type[Greeter]) -> Mapping[str, object]:
+        original = cls.greet
+
+        def greet(self: Greeter) -> str:
+            return f"<{original(self)}>"
+
+        return {"greet": greet}
+
+    greeter = Greeter()
+    swap_class(greeter, louder)
+    swap_class(greeter, quoted)
+    swap_class(greeter, louder)
+
+    assert greeter.greet() == "<hi!>"
+    assert is_swapped(greeter)
+    assert isinstance(greeter, Greeter)
+    assert type(greeter).__name__ == "Greeter"
 
 
 def test_wrapping_keeps_the_identity_and_type_of_a_model(scripted_llm: ScriptedLlmFactory) -> None:
@@ -626,7 +672,7 @@ def default_llm_class_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[
     registry.LLMRegistry.resolve.cache_clear()
 
 
-async def test_agent_relying_on_the_default_model_name_is_pinned_for_the_run_and_recorded(
+async def test_agent_relying_on_the_default_model_name_is_wrapped_when_selected_and_recorded(
     default_llm_class: type[BaseLlm], subscribed_events: list[nemo_relay.Event], caplog: pytest.LogCaptureFixture
 ) -> None:
     from google.adk.agents import LlmAgent
@@ -640,7 +686,8 @@ async def test_agent_relying_on_the_default_model_name_is_pinned_for_the_run_and
     assert final_text(adk_events) == "Default."
     assert agent.model == ""
     (llm_start,) = starts(subscribed_events, "llm")
-    assert llm_start.name == "relay-default-model"
+    assert llm_start.name == "DefaultLlm"
+    assert present(llm_start.category_profile)["model_name"] == "relay-default-model"
     assert [record.message for record in caplog.records if "NeMo Relay" in record.message] == []
     assert_balanced(subscribed_events)
 
@@ -663,6 +710,108 @@ async def test_agent_relying_on_a_default_model_instance_is_recorded(
     (llm_start,) = starts(subscribed_events, "llm")
     assert present(llm_start.category_profile)["model_name"] == "relay-default-model"
     assert_balanced(subscribed_events)
+
+
+def _selecting_agent(select: Callable[[ReadonlyContext], BaseLlm], declared: BaseLlm) -> LlmAgent:
+    """Return an `LlmAgent` subclass instance whose asynchronous resolver returns the model that `select` picks."""
+    from google.adk.agents import LlmAgent
+
+    class Selecting(LlmAgent):
+        @override
+        async def canonical_model_async(self, ctx: ReadonlyContext) -> BaseLlm:
+            await asyncio.sleep(0)
+            return select(ctx)
+
+    return Selecting(name="selector", model=declared)
+
+
+def _user_text(ctx: ReadonlyContext) -> str:
+    return present(present(present(ctx.user_content).parts)[0].text)
+
+
+@pytest.mark.parametrize("streaming_mode", ["NONE", "SSE"])
+async def test_a_model_an_agent_selects_per_invocation_runs_through_relay(
+    streaming_mode: Literal["NONE", "SSE"], scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents.run_config import RunConfig, StreamingMode
+
+    from nemo_relay.integrations.google_adk._swap import is_swapped
+
+    selected = ScriptedLlmFactory()
+    models = {"first": selected(model="first-model"), "second": selected(model="second-model")}
+    declared = scripted_llm(model="declared-model")
+    agent = _selecting_agent(lambda ctx: models[_user_text(ctx)], declared)
+    run_config = RunConfig(streaming_mode=StreamingMode[streaming_mode])
+    first = await run_recorded(agent, run_config=run_config, message="first")
+    second = await run_recorded(agent, run_config=run_config, message="second")
+
+    assert final_text(first) == "Answer from selector to 'first'."
+    assert final_text(second) == "Answer from selector to 'second'."
+    assert scripted_llm.seen_requests == []
+    assert len(selected.seen_requests) == 2
+    assert all(is_swapped(model) for model in models.values())
+    assert not is_swapped(declared)
+    recorded = [present(start.category_profile)["model_name"] for start in starts(subscribed_events, "llm")]
+    assert recorded == ["first-model", "second-model"]
+    assert_balanced(subscribed_events)
+
+
+async def test_a_guardrail_rejects_a_model_an_agent_selects(
+    scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    selected = ScriptedLlmFactory()
+    model = selected(model="selected-model")
+    agent = _selecting_agent(lambda ctx: model, scripted_llm(model="declared-model"))
+    with (
+        llm_conditional_execution_guardrail(lambda request: "no model calls"),
+        pytest.raises(RuntimeError, match="guardrail rejected: no model calls"),
+    ):
+        await run_recorded(agent)
+
+    assert selected.seen_requests == []
+    assert scripted_llm.seen_requests == []
+    assert starts(subscribed_events, "llm") == []
+    assert_balanced(subscribed_events)
+
+
+async def test_a_fallback_model_an_agent_selects_has_each_delegate_wrapped(
+    scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.models import FallbackModel
+
+    from nemo_relay.integrations.google_adk._swap import is_swapped
+
+    selected = ScriptedLlmFactory()
+    delegate = selected(model="delegate-model")
+    fallback = FallbackModel(models=[delegate])
+    agent = _selecting_agent(lambda ctx: fallback, scripted_llm(model="declared-model"))
+    adk_events = await run_recorded(agent)
+
+    assert final_text(adk_events) == "Answer from selector to 'hi'."
+    assert is_swapped(delegate)
+    assert not is_swapped(fallback)
+    (llm_start,) = starts(subscribed_events, "llm")
+    assert present(llm_start.category_profile)["model_name"] == "delegate-model"
+    assert_balanced(subscribed_events)
+
+
+async def test_a_model_selected_for_a_compositional_function_calling_run_stays_unwrapped(
+    scripted_llm: ScriptedLlmFactory,
+) -> None:
+    from google.adk.agents.readonly_context import ReadonlyContext
+    from google.adk.agents.run_config import RunConfig
+
+    from nemo_relay.integrations.google_adk._models import wrap_agent_models
+    from nemo_relay.integrations.google_adk._swap import is_swapped
+
+    selected = scripted_llm(model="selected-model")
+    agent = _selecting_agent(lambda ctx: selected, scripted_llm(model="declared-model"))
+    wrap_agent_models(agent)
+    context = invocation_context(agent, "e-cfc")
+    context.run_config = RunConfig(support_cfc=True)
+
+    assert await agent.canonical_model_async(ReadonlyContext(context)) is selected
+    assert not is_swapped(selected)
 
 
 async def test_cancelled_invocation_does_not_nest_the_next_one(
@@ -926,8 +1075,9 @@ async def test_tool_confirmation_rejected_runs_no_tool(
 async def test_hooks_outside_an_observed_invocation_still_wrap_without_scopes(
     scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
 ) -> None:
-    """Verify that agent hooks without `before_run_callback` record no scope and still wrap the agent's model."""
+    """Verify that agent hooks without `before_run_callback` record no scope and still wrap the agent's models."""
     from google.adk.agents.callback_context import CallbackContext
+    from google.adk.agents.readonly_context import ReadonlyContext
 
     from nemo_relay.integrations.google_adk import NemoRelayPlugin
     from nemo_relay.integrations.google_adk._swap import is_swapped
@@ -939,7 +1089,8 @@ async def test_hooks_outside_an_observed_invocation_still_wrap_without_scopes(
     assert await plugin.after_agent_callback(agent=agent, callback_context=CallbackContext(context)) is None
     await nemo_relay.subscribers.flush_async()
 
-    assert is_swapped(agent.canonical_model)
+    assert is_swapped(agent)
+    assert is_swapped(await agent.canonical_model_async(ReadonlyContext(context)))
     assert starts(subscribed_events) == []
 
 
@@ -1034,24 +1185,42 @@ async def test_cancelled_invocation_closed_elsewhere_does_not_nest_a_run_on_anot
     assert_balanced(subscribed_events)
 
 
-def test_closer_drain_closes_pending_scopes_in_stack_order_and_cancels_owned_scopes_left_open(
+async def test_invocation_finish_closes_pending_scopes_in_stack_order_and_cancels_owned_scopes_left_open(
     subscribed_events: list[nemo_relay.Event],
 ) -> None:
-    from nemo_relay.integrations.google_adk._context import OK_STATUS, DeferredCloser, ScopeContext
+    from nemo_relay.integrations.google_adk._context import (
+        OK_STATUS,
+        Invocation,
+        InvocationScope,
+        current_task,
+    )
 
-    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-        closer = DeferredCloser(ScopeContext.capture(), "e-drain")
-        outer = nemo_relay.scope.push("outer", nemo_relay.ScopeType.Agent)
+    ended: list[nemo_relay.JsonObject] = []
+    abandoned: list[str] = []
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent) as request:
+        invocation = Invocation(
+            "e-drain",
+            scope=InvocationScope("adk-invocation:drain", request, {}, {}, datetime.datetime.now(datetime.UTC)),
+            driver=current_task(),
+            previous_parent=None,
+            previous_invocation=None,
+            end=lambda output, metadata: ended.append(output),
+            abandon=lambda: abandoned.append("abandoned"),
+        )
+        outer = nemo_relay.scope.push("outer", nemo_relay.ScopeType.Agent, handle=invocation.handle())
         inner = nemo_relay.scope.push("inner", nemo_relay.ScopeType.Function)
-        closer.own(outer.uuid)
-        closer.own(inner.uuid)
-        closer.close(outer, output={"status": "ok"}, metadata=OK_STATUS)
-        closer.drain()
-    nemo_relay.subscribers.flush()
+        invocation.own(outer.uuid)
+        invocation.own(inner.uuid)
+        invocation.close(outer, output={"status": "ok"}, metadata=OK_STATUS)
+        invocation.finish(output={"status": "ok"}, metadata=OK_STATUS, record=False)
+    await nemo_relay.subscribers.flush_async()
 
+    assert ended == []
+    assert abandoned == []
     assert [(event.name, event.data) for event in ends(subscribed_events)] == [
         ("inner", {"status": "cancelled"}),
         ("outer", {"status": "ok"}),
+        ("adk-invocation:drain", {"status": "ok"}),
         ("request", None),
     ]
     inner_end = named_end(subscribed_events, "inner")

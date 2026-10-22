@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pydantic
 import pytest
@@ -27,15 +27,18 @@ from google.genai import types
 
 import nemo_relay
 from nemo_relay.integrations.google_adk._serialization import (
+    CACHE_WRITE_KEY,
     CODEC,
+    CODECS,
+    RESPONSE_ID_KEY,
     URL_CONTEXT_KEY,
+    Api,
     ProducedResponses,
     aggregate_partials,
     header_text,
     http_headers,
     json_safe,
     request_payload,
-    resolve_provider,
     response_from_payload,
     response_payload,
     response_schema_payload,
@@ -201,7 +204,9 @@ def test_an_edited_response_keeps_the_parts_the_edit_left_unchanged() -> None:
     )
     url_context = types.UrlContextMetadata(url_metadata=[types.UrlMetadata(retrieved_url="https://weather.example")])
     produced = ProducedResponses()
-    payload = produced.add(response, url_context=url_context)
+    payload = produced.add(
+        response, url_context=url_context, response_id="resp-1", response_model=None, provider_cost=None
+    )
     assert payload["custom_metadata"] == {"trace": "<unserializable builtins.object>", "ids": [1, 9], "raw": "iVBORw=="}
     edited: nemo_relay.JsonObject = {
         **payload,
@@ -378,22 +383,26 @@ def test_encode_writes_back_a_config_edit_between_equal_numbers_and_booleans() -
 
 
 def test_encode_writes_back_a_tool_edit_between_equal_numbers_and_booleans() -> None:
-    def schema(default: int | bool) -> nemo_relay.JsonObject:
+    def schema(*, default: int | bool) -> nemo_relay.JsonObject:
         return {"type": "object", "properties": {"n": {"type": "integer", "default": default}}}
 
-    declaration = types.FunctionDeclaration(name="count", parameters_json_schema=schema(1))
+    declaration = types.FunctionDeclaration(name="count", parameters_json_schema=schema(default=1))
     tools: list[types.Tool | Callable[..., object]] = [types.Tool(function_declarations=[declaration])]
     request = LlmRequest(model="gemini-2.5-flash", config=types.GenerateContentConfig(tools=tools))
     raw = _raw(request)
     annotated = CODEC.decode(raw)
     (function,) = annotated.tools or []
-    annotated.tools = [{**function, "function": {**as_object(function["function"]), "parameters": schema(True)}}]
+    annotated.tools = [
+        {**function, "function": {**as_object(function["function"]), "parameters": schema(default=True)}}
+    ]
 
     encoded = CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
     (tool,) = request.config.tools or []
     (written,) = present(as_instance(tool, types.Tool).function_declarations)
-    assert json.dumps(written.parameters_json_schema, sort_keys=True) == json.dumps(schema(True), sort_keys=True)
+    assert json.dumps(written.parameters_json_schema, sort_keys=True) == json.dumps(
+        schema(default=True), sort_keys=True
+    )
 
 
 def test_decode_maps_messages_instructions_params_tools_and_tool_choice() -> None:
@@ -889,10 +898,15 @@ def test_url_context_rides_on_the_payload_and_is_dropped_from_a_rebuilt_response
     response = LlmResponse(content=types.Content(role="model", parts=[types.Part(text="hello")]))
     url_context = types.UrlContextMetadata(url_metadata=[types.UrlMetadata(retrieved_url="https://weather.example")])
 
-    payload = produced.add(response, url_context=url_context)
+    payload = produced.add(
+        response, url_context=url_context, response_id="resp-1", response_model=None, provider_cost=None
+    )
 
     assert payload[URL_CONTEXT_KEY] == {"url_metadata": [{"retrieved_url": "https://weather.example"}]}
-    assert aggregate_partials([{**payload, "partial": True}])[URL_CONTEXT_KEY] == payload[URL_CONTEXT_KEY]
+    assert payload[RESPONSE_ID_KEY] == "resp-1"
+    aggregated = aggregate_partials([{**payload, "partial": True}])
+    assert aggregated[URL_CONTEXT_KEY] == payload[URL_CONTEXT_KEY]
+    assert aggregated[RESPONSE_ID_KEY] == "resp-1"
     assert produced.restore_result(payload) is response
     edited: nemo_relay.JsonObject = {**payload, "content": {"role": "model", "parts": [{"text": "edited"}]}}
     assert response_from_payload(edited).content == types.Content(role="model", parts=[types.Part(text="edited")])
@@ -930,26 +944,6 @@ def test_response_from_payload_validates_a_dump_and_rejects_anything_else() -> N
     assert rebuilt.partial is False
     with pytest.raises(TypeError):
         response_from_payload("nope")
-
-
-@pytest.mark.parametrize(
-    ("model", "provider"),
-    [
-        ("gemini-2.5-flash", "gemini"),
-        ("models/gemini-2.0-flash", "gemini"),
-        ("gemma-4-9b", "gemini"),
-        ("gemini/gemini-2.5-flash", "gemini"),
-        ("claude-sonnet-4", "anthropic"),
-        ("openai/gpt-4o", "openai"),
-        ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
-        ("projects/p/locations/l/publishers/google/models/gemini-2.5-flash", "vertex_ai"),
-        ("projects/p/locations/l/publishers/anthropic/models/claude-3", "anthropic"),
-        ("projects/p/locations/l/endpoints/123", "vertex_ai"),
-        ("scripted-model", "scripted-model"),
-    ],
-)
-def test_resolve_provider(model: str, provider: str) -> None:
-    assert resolve_provider(model) == provider
 
 
 def test_json_safe_counts_binary_anywhere_and_serializes_everything_else() -> None:
@@ -1310,17 +1304,33 @@ def test_aggregate_partials_reads_argument_paths_like_adk() -> None:
 
 
 @pytest.mark.parametrize(
-    "partial_args",
+    ("partial_args", "error", "message"),
     [
-        "nope",
-        [{"json_path": "$.x", "null_value": "null"}],
-        [{"json_path": "$", "number_value": 1}],
-        [{"json_path": "$.big[10001]", "string_value": "x"}],
-        [{"json_path": "$." + ".".join(["d"] * 129), "number_value": 1}],
+        pytest.param("nope", TypeError, "partial_args must be a list", id="not_a_list"),
+        pytest.param(
+            [{"json_path": "$.x", "null_value": "null"}],
+            ValueError,
+            "null_value must be NULL_VALUE",
+            id="null_value",
+        ),
+        pytest.param(
+            [{"json_path": "$", "number_value": 1}], ValueError, "does not address an argument", id="root_path"
+        ),
+        pytest.param(
+            [{"json_path": "$.big[10001]", "string_value": "x"}], ValueError, "indexes past 10000", id="index_cap"
+        ),
+        pytest.param(
+            [{"json_path": "$." + ".".join(["d"] * 129), "number_value": 1}],
+            ValueError,
+            "nests deeper than 128 levels",
+            id="depth_cap",
+        ),
     ],
 )
-def test_aggregate_partials_rejects_a_malformed_fragment(partial_args: nemo_relay.Json) -> None:
-    with pytest.raises((TypeError, ValueError)):
+def test_aggregate_partials_rejects_a_malformed_fragment(
+    partial_args: nemo_relay.Json, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
         aggregate_partials([_call_chunk({"name": "g", "partial_args": partial_args})])
 
 
@@ -1868,3 +1878,111 @@ def test_encode_rejects_a_tool_message_whose_blocks_do_not_start_with_the_respon
 
     with pytest.raises(TypeError, match="first block is the response text"):
         CODEC.encode(annotated, raw)
+
+
+_USAGE_DUMP: Final[nemo_relay.JsonObject] = {
+    "prompt_token_count": 100,
+    "candidates_token_count": 20,
+    "total_token_count": 120,
+    "cached_content_token_count": 40,
+    "thoughts_token_count": 5,
+    CACHE_WRITE_KEY: 10,
+}
+
+
+@pytest.mark.parametrize(
+    ("api", "usage", "api_specific", "unmodeled"),
+    [
+        pytest.param(
+            Api.GEMINI_GENERATE_CONTENT,
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cache_read_tokens": 40,
+                "uncached_input_tokens": 60,
+            },
+            {"api": "gemini_generate_content", "thoughts_tokens": 5},
+            {CACHE_WRITE_KEY: 10},
+            id="gemini",
+        ),
+        pytest.param(
+            Api.ANTHROPIC_MESSAGES,
+            {
+                "prompt_tokens": 50,
+                "uncached_input_tokens": 50,
+                "completion_tokens": 25,
+                "total_tokens": 75,
+                "cache_read_tokens": 40,
+                "cache_write_tokens": 10,
+            },
+            {"api": "anthropic_messages"},
+            {"thoughts_token_count": 5},
+            id="anthropic",
+        ),
+        pytest.param(
+            Api.OPENAI_CHAT,
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cache_read_tokens": 40,
+                "uncached_input_tokens": 60,
+            },
+            {"api": "openai_chat"},
+            {"thoughts_token_count": 5, CACHE_WRITE_KEY: 10},
+            id="openai_chat",
+        ),
+        pytest.param(
+            Api.OPENAI_RESPONSES,
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cache_read_tokens": 40,
+                "uncached_input_tokens": 60,
+            },
+            {
+                "api": "openai_responses",
+                "input_tokens_details": {"cached_tokens": 40},
+                "output_tokens_details": {"reasoning_tokens": 5},
+            },
+            {CACHE_WRITE_KEY: 10},
+            id="openai_responses",
+        ),
+    ],
+)
+def test_decode_response_reads_usage_by_provider_api(
+    api: Api, usage: nemo_relay.JsonObject, api_specific: nemo_relay.JsonObject, unmodeled: nemo_relay.JsonObject
+) -> None:
+    annotated = CODECS[api].decode_response(
+        {"content": {"role": "model", "parts": [{"text": "x"}]}, "usage_metadata": _USAGE_DUMP}
+    )
+
+    assert annotated.usage == usage
+    assert annotated.api_specific == api_specific
+    assert annotated.extra == {"usage_metadata": unmodeled}
+
+
+def test_decode_response_takes_the_recorded_response_id_over_the_interaction_id() -> None:
+    assert CODEC.decode_response({"interaction_id": "int-1", RESPONSE_ID_KEY: "resp-1"}).id == "resp-1"
+    assert CODEC.decode_response({"interaction_id": "int-1"}).id == "int-1"
+
+
+def test_anthropic_usage_rejects_cache_tokens_beyond_the_prompt() -> None:
+    with pytest.raises(ValueError, match="must include"):
+        CODECS[Api.ANTHROPIC_MESSAGES].decode_response(
+            {"usage_metadata": {"prompt_token_count": 10, "cached_content_token_count": 20}}
+        )
+
+
+def test_cache_write_rides_on_the_usage_dump_and_returns_to_a_rebuilt_response() -> None:
+    usage = types.GenerateContentResponseUsageMetadata(prompt_token_count=10)
+    object.__setattr__(usage, CACHE_WRITE_KEY, 3)
+
+    payload = response_payload(LlmResponse(usage_metadata=usage))
+
+    assert payload["usage_metadata"] == {"prompt_token_count": 10, CACHE_WRITE_KEY: 3}
+    rebuilt = response_from_payload(payload)
+    assert present(rebuilt.usage_metadata).prompt_token_count == 10
+    assert getattr(rebuilt.usage_metadata, CACHE_WRITE_KEY) == 3

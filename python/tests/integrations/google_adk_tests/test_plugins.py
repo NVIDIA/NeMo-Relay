@@ -105,7 +105,7 @@ async def test_model_pricing_bills_thinking_tokens_at_the_output_rate(
 
     assert final_text(adk_events) == "Priced."
     (llm_start,) = starts(subscribed_events, "llm")
-    assert llm_start.name == "gemini"
+    assert llm_start.name == "RespondingLlm"
     (llm_end,) = ends(subscribed_events, "llm")
     assert present(response_of(llm_end).usage)["completion_tokens"] == 300_000
     assert response_of(llm_end).api_specific == {"api": "gemini_generate_content", "thoughts_tokens": 200_000}

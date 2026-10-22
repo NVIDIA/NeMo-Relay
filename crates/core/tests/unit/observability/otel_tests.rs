@@ -22,8 +22,9 @@ use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
-    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
+    PricingCatalog, PricingResolver, ResponseToolCall, Usage, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -4913,6 +4914,9 @@ fn gen_ai_projection_prefers_standard_names_and_normalized_provider_details() {
     for (name, expected) in [
         ("azure_openai.chat", "azure.ai.openai"),
         ("azure_ai_inference.chat", "azure.ai.inference"),
+        ("azure", "azure.ai.openai"),
+        ("azure/openai", "azure.ai.openai"),
+        ("azure_ai", "azure.ai.inference"),
     ] {
         let event = Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
@@ -7927,4 +7931,47 @@ fn provider_build_drains_the_startup_resource_message_before_the_first_span() {
         ["first"],
         "the first span must survive the startup message: {contents}"
     );
+}
+
+#[test]
+fn gen_ai_projection_reads_cache_tokens_by_the_declared_api_shape() {
+    let usage = Usage {
+        prompt_tokens: Some(150),
+        completion_tokens: Some(20),
+        total_tokens: Some(170),
+        cache_read_tokens: Some(40),
+        cache_write_tokens: None,
+        uncached_input_tokens: Some(110),
+        cost: None,
+    };
+    let openai_shaped = ApiSpecificResponse::OpenAIChat {
+        logprobs: None,
+        system_fingerprint: None,
+        service_tier: None,
+    };
+    for (api_specific, input_tokens) in [(Some(openai_shaped), "150"), (None, "190")] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "anthropic",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(usage.clone()),
+                        api_specific,
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.usage.input_tokens"),
+            Some(&input_tokens.to_string())
+        );
+    }
 }

@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from _helpers import (
+    HANG_TIMEOUT,
     ScriptedLlmFactory,
     ToolCallRecord,
     ToolNext,
@@ -33,6 +35,7 @@ from _helpers import (
     weather_call,
     weather_result,
 )
+from typing_extensions import override
 
 import nemo_relay
 
@@ -159,6 +162,53 @@ async def test_tool_error_retried_by_an_execution_intercept(
     assert function_response.response == {"location": "San Francisco", "forecast": "sunny"}
     (tool_end,) = ends(subscribed_events, "tool")
     assert status_of(tool_end) == "OK"
+    assert_balanced(subscribed_events)
+
+
+async def test_a_hedged_tool_call_runs_each_attempt_on_its_own_arguments(
+    scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.tools import BaseTool
+    from google.genai import types
+
+    both_in_flight = asyncio.Barrier(2)
+    results: list[nemo_relay.Json] = []
+
+    class SlowWeather(BaseTool):
+        def __init__(self) -> None:
+            super().__init__(name="get_weather", description="Get the weather.")
+
+        @override
+        def _get_declaration(self) -> types.FunctionDeclaration:
+            return types.FunctionDeclaration(
+                name="get_weather",
+                description="Get the weather.",
+                parameters_json_schema={"type": "object", "properties": {"location": {"type": "string"}}},
+            )
+
+        @override
+        async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
+            await both_in_flight.wait()
+            return {"location": args["location"], "forecast": "sunny"}
+
+    async def hedge(
+        context: nemo_relay.ToolExecutionContext, next_call: ToolNext
+    ) -> nemo_relay.ToolExecutionInterceptOutcome:
+        primary, secondary = await asyncio.gather(
+            next_call(context.args), next_call({**as_object(context.args), "location": "Oakland"})
+        )
+        results.extend([primary.result, secondary.result])
+        return nemo_relay.ToolExecutionInterceptOutcome(secondary.result)
+
+    agent = make_agent(scripted_llm, "weather_agent", tools=[SlowWeather()], call=weather_call())
+    with tool_execution_intercept(hedge):
+        async with asyncio.timeout(HANG_TIMEOUT):
+            adk_events = await run_recorded(agent)
+
+    assert results == [weather_result("San Francisco"), weather_result("Oakland")]
+    (function_response,) = function_responses(adk_events)
+    assert function_response.response == {"location": "Oakland", "forecast": "sunny"}
+    assert len(starts(subscribed_events, "tool")) == 1
     assert_balanced(subscribed_events)
 
 

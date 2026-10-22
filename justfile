@@ -1073,7 +1073,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents --extra google-adk
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents --extra google-adk --group google-adk-test
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
@@ -1622,7 +1622,7 @@ test-python-google-adk:
         pytest_cmd+=(--cov --cov-config=python/tests/integrations/google_adk_tests/coverage.toml)
         pytest_cmd+=(--cov-report term-missing --cov-report "xml:$coverage_out")
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra google-adk
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra google-adk --group google-adk-test
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"

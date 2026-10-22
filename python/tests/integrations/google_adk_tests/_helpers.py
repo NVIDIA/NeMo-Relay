@@ -524,13 +524,21 @@ def llm_stream_execution_intercept(fn: nemo_relay.LlmStreamExecutionIntercept) -
 
 def llm_request_intercept(fn: nemo_relay.LlmRequestIntercept) -> AbstractContextManager[None]:
     return _registered(
-        nemo_relay.intercepts.register_llm_request, nemo_relay.intercepts.deregister_llm_request, 1, False, fn
+        nemo_relay.intercepts.register_llm_request,
+        nemo_relay.intercepts.deregister_llm_request,
+        1,
+        break_chain=False,
+        fn=fn,
     )
 
 
 def tool_request_intercept(fn: nemo_relay.ToolRequestIntercept) -> AbstractContextManager[None]:
     return _registered(
-        nemo_relay.intercepts.register_tool_request, nemo_relay.intercepts.deregister_tool_request, 1, False, fn
+        nemo_relay.intercepts.register_tool_request,
+        nemo_relay.intercepts.deregister_tool_request,
+        1,
+        break_chain=False,
+        fn=fn,
     )
 
 

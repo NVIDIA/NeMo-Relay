@@ -110,18 +110,25 @@ python_package:
   - 'uv.lock'
 
 python_integration_langchain:
-  # One switch gates every optional Python framework integration.
+  # Includes LangGraph and DeepAgents integrations as well
   - 'justfile'
   - 'pyproject.toml'
   - 'python/nemo_relay/integrations/deepagents/**'
-  - 'python/nemo_relay/integrations/google_adk/**'
   - 'python/nemo_relay/integrations/langchain/**'
   - 'python/nemo_relay/integrations/langgraph/**'
   - 'python/tests/integrations/conftest.py'
   - 'python/tests/integrations/deepagents_tests/**'
-  - 'python/tests/integrations/google_adk_tests/**'
   - 'python/tests/integrations/langchain_tests/**'
   - 'python/tests/integrations/langgraph_tests/**'
+  - 'rust-toolchain.toml'
+  - 'uv.lock'
+
+python_integration_google_adk:
+  - 'justfile'
+  - 'pyproject.toml'
+  - 'python/nemo_relay/integrations/google_adk/**'
+  - 'python/tests/integrations/conftest.py'
+  - 'python/tests/integrations/google_adk_tests/**'
   - 'rust-toolchain.toml'
   - 'uv.lock'
 

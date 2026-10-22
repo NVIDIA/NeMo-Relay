@@ -31,6 +31,7 @@ from _helpers import (
     tool_sanitize_response_guardrail,
     toolset_of,
 )
+from typing_extensions import override
 
 import nemo_relay
 
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from google.adk.models.llm_request import LlmRequest
     from google.adk.models.llm_response import LlmResponse
     from google.adk.tools import BaseTool
+    from google.adk.tools.tool_context import ToolContext
     from google.genai import types
 
 
@@ -126,6 +128,44 @@ async def test_provider_grounding_is_recorded_as_a_tool_scope(
         },
     }
     assert status_of(tool_end) == "OK"
+
+
+@pytest.mark.parametrize(
+    ("declared", "name"),
+    [
+        (["google_search_retrieval"], "google_search"),
+        (["parallel_ai_search"], "parallel_ai_search"),
+        (["exa_ai_search"], "exa_ai_search"),
+        (["google_search", "enterprise_web_search"], "web_search"),
+        ([], "web_search"),
+    ],
+)
+async def test_grounding_web_search_is_named_after_the_one_search_tool_the_request_declares(
+    declared: list[str], name: str, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.adk.tools import BaseTool
+    from google.genai import types
+
+    class Declared(BaseTool):
+        def __init__(self, field: str) -> None:
+            super().__init__(name=field, description=field)
+            self.tool = types.Tool.model_validate({field: {}})
+
+        @override
+        async def process_llm_request(self, *, tool_context: ToolContext, llm_request: LlmRequest) -> None:
+            llm_request.config.tools = [*(llm_request.config.tools or []), self.tool]
+
+    grounding = types.GroundingMetadata(web_search_queries=["weather"])
+    model = responding_llm(_grounded(grounding), model="gemini-2.5-flash")
+    agent = LlmAgent(name="searcher", model=model, tools=[Declared(field) for field in declared])
+    adk_events = await run_recorded(agent)
+
+    assert final_text(adk_events) == "Sunny."
+    assert_balanced(subscribed_events)
+    (recorded,) = starts(subscribed_events, "tool")
+    assert recorded.name == name
+    assert recorded.data == {"queries": ["weather"]}
 
 
 async def test_provider_tool_from_a_toolset_is_recorded_under_its_own_name(

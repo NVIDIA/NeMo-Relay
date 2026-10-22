@@ -12,8 +12,9 @@ from collections import Counter, deque
 from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from enum import Enum
 from itertools import pairwise
-from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, TypeAlias, TypeVar, assert_never, cast
 
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
@@ -24,7 +25,13 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs, override
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, Json, JsonObject, LLMRequest
-from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+from nemo_relay.codecs import (
+    AnthropicMessagesCodec,
+    LlmCodec,
+    LlmResponseCodec,
+    OpenAIChatCodec,
+    OpenAIResponsesCodec,
+)
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -33,6 +40,7 @@ _PROVIDER: Final = "google_adk"
 _REQUEST_EXCLUDE: Final[Mapping[str, set[str]]] = {"config": {"http_options", "response_schema"}}
 _FRAMEWORK_MODULES: Final = ("google.genai.", "google.adk.")
 _SCALARS: Final = frozenset({str, int, float, bool, type(None), bytes, bytearray})
+_PYTHON_VALUES: Final = TypeAdapter(object)
 _PARAMS: Final = (
     ("temperature", "temperature"),
     ("top_p", "top_p"),
@@ -44,6 +52,14 @@ _MODELED_REQUEST_KEYS: Final = frozenset({"model", "contents", "config"})
 _REQUEST_FIELDS: Final = frozenset(LlmRequest.model_fields)
 _API_SPECIFIC_REQUEST_KEYS: Final = _REQUEST_FIELDS - _MODELED_REQUEST_KEYS - {"tools_dict"}
 URL_CONTEXT_KEY: Final = "url_context_metadata"
+RESPONSE_ID_KEY: Final = "response_id"
+PROVIDER_COST_KEY: Final[
+    Annotated[str, "This payload key holds the cost fields that the provider client reports in its usage."]
+] = "provider_usage_cost"
+CACHE_WRITE_KEY: Final[
+    Annotated[str, "ADK sets this usage attribute for Anthropic cache writes outside the GenAI schema."]
+] = "cache_creation_input_tokens"
+_RECORDED_KEYS: Final = frozenset({URL_CONTEXT_KEY, RESPONSE_ID_KEY, PROVIDER_COST_KEY})
 _WIRE_METADATA: Final[tuple[tuple[str, str, type[BaseModel]], ...]] = (
     ("grounding_metadata", "grounding_metadata", types.GroundingMetadata),
     ("citation_metadata", "citation_metadata", types.CitationMetadata),
@@ -51,16 +67,9 @@ _WIRE_METADATA: Final[tuple[tuple[str, str, type[BaseModel]], ...]] = (
     (URL_CONTEXT_KEY, "urlContextMetadata", types.UrlContextMetadata),
 )
 _MODELED_RESPONSE_KEYS: Final = frozenset(
-    {
-        "content",
-        "finish_reason",
-        "usage_metadata",
-        "model_version",
-        "interaction_id",
-        "avg_logprobs",
-        *(key for key, _, _ in _WIRE_METADATA),
-    }
+    {"content", "finish_reason", "usage_metadata", "model_version", "interaction_id", URL_CONTEXT_KEY, RESPONSE_ID_KEY}
 )
+_GEMINI_RESPONSE_KEYS: Final = frozenset({"avg_logprobs", *(key for key, _, _ in _WIRE_METADATA)})
 _USAGE: Final = (
     ("prompt_token_count", "prompt_tokens"),
     ("candidates_token_count", "completion_tokens"),
@@ -71,7 +80,22 @@ _GEMINI_USAGE: Final = (
     ("thoughts_token_count", "thoughts_tokens"),
     ("tool_use_prompt_token_count", "tool_use_prompt_tokens"),
 )
-_USAGE_KEYS: Final = frozenset(source for source, _ in (*_USAGE, *_GEMINI_USAGE))
+_CACHE_WRITE: Final = ((CACHE_WRITE_KEY, "cache_write_tokens"),)
+_USAGE_KEYS: Final = frozenset(source for source, _ in _USAGE)
+_GEMINI_USAGE_KEYS: Final = _USAGE_KEYS | frozenset(source for source, _ in _GEMINI_USAGE)
+_ANTHROPIC_USAGE_KEYS: Final = _USAGE_KEYS | {CACHE_WRITE_KEY}
+_OPENAI_RESPONSES_USAGE_KEYS: Final = _USAGE_KEYS | {"thoughts_token_count"}
+
+
+class Api(Enum):
+    """Name the provider API whose usage semantics an ADK model class carries."""
+
+    GEMINI_GENERATE_CONTENT = "gemini_generate_content"
+    ANTHROPIC_MESSAGES = "anthropic_messages"
+    OPENAI_CHAT = "openai_chat"
+    OPENAI_RESPONSES = "openai_responses"
+
+
 _FinishReason: TypeAlias = Literal["complete", "length", "content_filter", "tool_use"]
 _FINISH_REASONS: Final[Mapping[str, _FinishReason]] = dict[str, _FinishReason](
     [
@@ -100,18 +124,6 @@ _TOOL_CHOICE_WRITE_BACK: Final[Mapping[str, str]] = {
 _PART_METADATA_KEYS: Final = frozenset(
     {"thought", "thought_signature", "part_metadata", "media_resolution", "video_metadata"}
 )
-_PROVIDER_FAMILIES: Final = (
-    ("gemini", ("gemini", "gemma", "imagen", "veo", "learnlm", "model-optimizer")),
-    ("anthropic", ("claude",)),
-    ("openai", ("gpt", "o1", "o3", "o4", "chatgpt", "codex", "text-embedding")),
-    ("mistral", ("mistral", "mixtral", "magistral", "codestral")),
-    ("meta", ("llama",)),
-    ("cohere", ("command",)),
-    ("deepseek", ("deepseek",)),
-    ("xai", ("grok",)),
-)
-_PROVIDER_ALIASES: Final[Mapping[str, str]] = {"google_ai": "gemini", "vertexai": "vertex_ai"}
-_PUBLISHER: Final = re.compile(r"publishers/([^/]+)/")
 _AdkRole: TypeAlias = Literal["user", "model"]
 _MESSAGE_ROLES: Final[Mapping[str, _AdkRole]] = dict[str, _AdkRole](
     user="user", assistant="model", system="user", developer="user"
@@ -124,25 +136,6 @@ _Functions: TypeAlias = list[tuple[int, JsonObject]]
 _Message: TypeAlias = Mapping[str, Json]
 _K = TypeVar("_K", bound=Hashable)
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
-
-
-def resolve_provider(model: str) -> str:
-    """Return the provider route of an ADK model string, or the string itself when no route is known."""
-    name = model.strip()
-    if (publisher := _PUBLISHER.search(name)) is not None:
-        vendor = publisher.group(1).lower()
-        return "vertex_ai" if vendor == "google" else vendor
-    if name.startswith("projects/"):
-        return "vertex_ai"
-    name = name.removeprefix("models/")
-    lowered = name.lower()
-    if "/" in lowered:
-        prefix = lowered.split("/", 1)[0]
-        return _PROVIDER_ALIASES.get(prefix, prefix)
-    for provider, families in _PROVIDER_FAMILIES:
-        if lowered.startswith(families):
-            return provider
-    return name
 
 
 def unserializable(value: object) -> str:
@@ -272,8 +265,18 @@ def _response_schema_of(payload: JsonObject) -> Json | None:
 
 
 def response_payload(response: LlmResponse) -> JsonObject:
-    """Return the plain dump of ADK's response."""
-    return _framework_json(response, {})
+    """Return the plain dump of ADK's response with the cache-write count that ADK attaches outside the GenAI schema.
+
+    Raise `TypeError` when that count is not an integer.
+    """
+    payload = _framework_json(response, {})
+    cache_write = getattr(response.usage_metadata, CACHE_WRITE_KEY, None)
+    if cache_write is not None:
+        if not isinstance(cache_write, int):
+            raise TypeError(f"ADK usage_metadata {CACHE_WRITE_KEY} must be an integer")
+        usage_metadata = _object(payload.get("usage_metadata"), field="ADK usage_metadata")
+        payload["usage_metadata"] = {**usage_metadata, CACHE_WRITE_KEY: cache_write}
+    return payload
 
 
 def write_back_request(request: LlmRequest, *, payload: JsonObject, original_payload: JsonObject) -> bool:
@@ -398,13 +401,29 @@ def write_headers(request: LlmRequest, headers: dict[str, str]) -> None:
 
 
 def response_from_payload(payload: Json) -> LlmResponse:
+    """Rebuild ADK's response from a dump, and attach the cache-write count as ADK does.
+
+    Drop the fields that the integration recorded from the provider client, and raise `TypeError` when the payload is
+    not an object.
+    """
     if not isinstance(payload, dict):
         raise TypeError("an LLM execution intercept must return an LlmResponse dump")
     return _response_from_fields(payload)
 
 
 def _response_from_fields(values: Mapping[str, object]) -> LlmResponse:
-    return LlmResponse.model_validate({key: value for key, value in values.items() if key != URL_CONTEXT_KEY})
+    fields = {key: value for key, value in values.items() if key not in _RECORDED_KEYS}
+    usage_metadata = fields.get("usage_metadata")
+    cache_write = None
+    if _is_object(usage_metadata) and CACHE_WRITE_KEY in usage_metadata:
+        cache_write = usage_metadata[CACHE_WRITE_KEY]
+        fields["usage_metadata"] = {key: value for key, value in usage_metadata.items() if key != CACHE_WRITE_KEY}
+    response = LlmResponse.model_validate(fields)
+    if cache_write is not None:
+        if not isinstance(cache_write, int):
+            raise TypeError(f"ADK usage_metadata {CACHE_WRITE_KEY} must be an integer")
+        object.__setattr__(response.usage_metadata, CACHE_WRITE_KEY, cache_write)
+    return response
 
 
 def canonical(value: _Content | _Message) -> str:
@@ -527,11 +546,23 @@ class ProducedResponses:
         response: LlmResponse,
         *,
         url_context: types.UrlContextMetadata | None,
+        response_id: str | None,
+        response_model: str | None,
+        provider_cost: JsonObject | None,
     ) -> JsonObject:
-        """Return the response's dump with the recorded URL context added, and remember the response under that dump."""
+        """Return the response's dump with the recorded fields added, and remember the response under that dump.
+
+        Set `response_model` as `model_version` only when the dump has no `model_version`.
+        """
         payload = response_payload(response)
         if url_context is not None:
             payload[URL_CONTEXT_KEY] = url_context.model_dump(mode="json", exclude_none=True)
+        if response_id is not None:
+            payload[RESPONSE_ID_KEY] = response_id
+        if provider_cost is not None:
+            payload[PROVIDER_COST_KEY] = provider_cost
+        if response_model is not None and "model_version" not in payload:
+            payload["model_version"] = response_model
         self._pending.append((canonical(payload), payload, response))
         return payload
 
@@ -577,6 +608,8 @@ _AGGREGATE_LAST_SEEN: Final = (
     "usage_metadata",
     "grounding_metadata",
     URL_CONTEXT_KEY,
+    RESPONSE_ID_KEY,
+    PROVIDER_COST_KEY,
     "citation_metadata",
     "cache_metadata",
     "custom_metadata",
@@ -1743,6 +1776,11 @@ def _wire(model: type[BaseModel], value: Json) -> Json:
 class AdkCodec(LlmCodec, LlmResponseCodec):
     """Translate the plain dumps of ADK's `LlmRequest` and `LlmResponse` for intercepts and events."""
 
+    def __init__(self, api: Api) -> None:
+        self.api: Annotated[
+            Api, "This field holds the provider API whose usage semantics the decoded responses follow."
+        ] = api
+
     @override
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         return _decode(request.content)
@@ -1796,40 +1834,142 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
             for index, call in calls
         ]
         usage_metadata = _object(response.get("usage_metadata"), field="ADK usage_metadata")
-        usage = _token_counts(usage_metadata, _USAGE)
-        prompt, cached = usage.get("prompt_tokens"), usage.get("cache_read_tokens")
-        if prompt is not None and cached is not None and cached <= prompt:
-            usage["uncached_input_tokens"] = prompt - cached
-        gemini: JsonObject = {"api": "gemini_generate_content", **_token_counts(usage_metadata, _GEMINI_USAGE)}
-        gemini.update(
-            (target, _wire(model, value))
-            for source, target, model in _WIRE_METADATA
-            if (value := response.get(source)) is not None
-        )
-        avg_logprobs = response.get("avg_logprobs")
-        if avg_logprobs is not None:
-            if not isinstance(avg_logprobs, int | float):
-                raise TypeError("ADK avg_logprobs must be a number")
-            gemini["avgLogprobs"] = avg_logprobs
-        extra = {key: value for key, value in response.items() if key not in _MODELED_RESPONSE_KEYS}
-        if usage_details := {key: value for key, value in usage_metadata.items() if key not in _USAGE_KEYS}:
+        normalized = _normalized_usage(self.api, usage_metadata)
+        api_specific = normalized.api_specific
+        modeled = _MODELED_RESPONSE_KEYS
+        if self.api is Api.GEMINI_GENERATE_CONTENT:
+            api_specific.update(
+                (target, _wire(model, value))
+                for source, target, model in _WIRE_METADATA
+                if (value := response.get(source)) is not None
+            )
+            avg_logprobs = response.get("avg_logprobs")
+            if avg_logprobs is not None:
+                if not isinstance(avg_logprobs, int | float):
+                    raise TypeError("ADK avg_logprobs must be a number")
+                api_specific["avgLogprobs"] = avg_logprobs
+            modeled = modeled | _GEMINI_RESPONSE_KEYS
+        usage: dict[str, Json] = dict(normalized.usage)
+        if (native := _COST_CODECS.get(self.api)) is not None:
+            modeled = modeled | {PROVIDER_COST_KEY}
+            if (reported := response.get(PROVIDER_COST_KEY)) is not None:
+                cost = _reported_cost(native, _object(reported, field="ADK provider_usage_cost"))
+                if cost is not None:
+                    usage["cost"] = cost
+        extra = {key: value for key, value in response.items() if key not in modeled}
+        if usage_details := {key: value for key, value in usage_metadata.items() if key not in normalized.modeled}:
             extra["usage_metadata"] = usage_details
+        recorded = response.get(RESPONSE_ID_KEY)
         return AnnotatedLLMResponse(
-            id=_optional_text(response.get("interaction_id"), field="ADK interaction_id"),
+            id=_optional_text(
+                response.get("interaction_id") if recorded is None else recorded, field="ADK response id"
+            ),
             model=_optional_text(response.get("model_version"), field="ADK model_version"),
             message=_message_content(parts),
             tool_calls=tool_calls or None,
             finish_reason=_finish_reason(response.get("finish_reason"), has_tool_calls=bool(tool_calls)),
             usage=usage or None,
-            api_specific=gemini if len(gemini) > 1 else None,
+            api_specific=_emitted(self.api, api_specific),
             extra=extra or None,
         )
 
 
-CODEC: Final = AdkCodec()
+_COST_CODECS: Final[
+    Annotated[
+        Mapping[Api, LlmResponseCodec],
+        "This mapping holds the native codec that reads the reported cost of each provider API that reports one.",
+    ]
+] = {
+    Api.OPENAI_CHAT: OpenAIChatCodec(),
+    Api.OPENAI_RESPONSES: OpenAIResponsesCodec(),
+    Api.ANTHROPIC_MESSAGES: AnthropicMessagesCodec(),
+}
 
 
-_PYTHON_VALUES: Final = TypeAdapter(object)
+def _reported_cost(codec: LlmResponseCodec, usage: JsonObject) -> Json:
+    """Return the cost that the provider reported in its usage, or None when the usage reports no cost.
+
+    The provider API's native codec normalizes the cost.
+    """
+    decoded = codec.decode_response({"usage": usage}).usage
+    return None if decoded is None else decoded.get("cost")
+
+
+class _NormalizedUsage(NamedTuple):
+    usage: dict[str, int]
+    api_specific: JsonObject
+    modeled: Annotated[AbstractSet[str], "This set holds the `usage_metadata` keys that the normalization consumed."]
+
+
+def _normalized_usage(api: Api, usage_metadata: JsonObject) -> _NormalizedUsage:
+    """Normalize ADK's GenAI-shaped usage counts by the usage semantics of the provider API."""
+    counts = _token_counts(usage_metadata, _USAGE)
+    separate = _token_counts(usage_metadata, _GEMINI_USAGE)
+    writes = _token_counts(usage_metadata, _CACHE_WRITE)
+    match api:
+        case Api.GEMINI_GENERATE_CONTENT:
+            return _NormalizedUsage(_with_uncached(counts), {"api": api.value, **separate}, _GEMINI_USAGE_KEYS)
+        case Api.ANTHROPIC_MESSAGES:
+            return _anthropic_usage(counts, separate, writes)
+        case Api.OPENAI_CHAT:
+            return _NormalizedUsage(_with_uncached(counts), {"api": api.value}, _USAGE_KEYS)
+        case Api.OPENAI_RESPONSES:
+            api_specific: JsonObject = {"api": api.value}
+            if (cached := counts.get("cache_read_tokens")) is not None:
+                api_specific["input_tokens_details"] = {"cached_tokens": cached}
+            if (reasoning := separate.get("thoughts_tokens")) is not None:
+                api_specific["output_tokens_details"] = {"reasoning_tokens": reasoning}
+            return _NormalizedUsage(_with_uncached(counts), api_specific, _OPENAI_RESPONSES_USAGE_KEYS)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
+    """Return the counts with an explicit `uncached_input_tokens` for a prompt count that includes the cache reads.
+
+    Leave out that count when the cache reads exceed the prompt.
+    """
+    usage = dict(counts)
+    prompt, cached = counts.get("prompt_tokens"), counts.get("cache_read_tokens")
+    if prompt is not None and cached is not None and cached <= prompt:
+        usage["uncached_input_tokens"] = prompt - cached
+    return usage
+
+
+def _anthropic_usage(
+    counts: Mapping[str, int], separate: Mapping[str, int], writes: Mapping[str, int]
+) -> _NormalizedUsage:
+    """Unfold Anthropic's own counts from the GenAI shape that ADK fits them to.
+
+    Raise `ValueError` when the prompt count is smaller than the cache tokens that ADK folds into it.
+    """
+    usage: dict[str, int] = {}
+    cached, written = counts.get("cache_read_tokens"), writes.get("cache_write_tokens")
+    if (prompt := counts.get("prompt_tokens")) is not None:
+        folded = (cached or 0) + (written or 0)
+        if folded > prompt:
+            raise ValueError("ADK prompt_token_count must include the Anthropic cache tokens it reports")
+        usage["prompt_tokens"] = usage["uncached_input_tokens"] = prompt - folded
+    if (candidates := counts.get("completion_tokens")) is not None:
+        usage["completion_tokens"] = candidates + separate.get("thoughts_tokens", 0)
+    if "prompt_tokens" in usage and "completion_tokens" in usage:
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+    if cached is not None:
+        usage["cache_read_tokens"] = cached
+    if written is not None:
+        usage["cache_write_tokens"] = written
+    return _NormalizedUsage(usage, {"api": Api.ANTHROPIC_MESSAGES.value}, _ANTHROPIC_USAGE_KEYS)
+
+
+def _emitted(api: Api, api_specific: JsonObject) -> JsonObject | None:
+    """Return the `api_specific` variant, or None for a Gemini variant that holds only its API name."""
+    if api is Api.GEMINI_GENERATE_CONTENT and len(api_specific) == 1:
+        return None
+    return api_specific
+
+
+CODECS: Final[Mapping[Api, AdkCodec]] = {api: AdkCodec(api) for api in Api}
+CODEC: Final = CODECS[Api.GEMINI_GENERATE_CONTENT]
 
 
 def python_dump(value: object) -> object:

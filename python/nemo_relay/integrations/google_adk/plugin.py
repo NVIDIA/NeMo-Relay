@@ -8,6 +8,7 @@ The plugin also wraps the models and tools that ADK calls.
 
 from __future__ import annotations
 
+import datetime
 import functools
 import logging
 import threading
@@ -24,17 +25,21 @@ import nemo_relay
 from nemo_relay import Json, JsonObject, ScopeType
 from nemo_relay.integrations.google_adk._context import (
     CANCELLED_STATUS,
-    CURRENT_AGENT_HANDLE,
-    CURRENT_CLOSER,
+    CURRENT_INVOCATION,
+    CURRENT_PARENT,
     OK_STATUS,
-    DeferredCloser,
-    ScopeContext,
+    Invocation,
+    InvocationScope,
+    current_invocation,
+    current_task,
     error_status,
     integration_metadata,
     log_unrecorded_once,
+    parent_handle,
 )
-from nemo_relay.integrations.google_adk._models import wrap_model
+from nemo_relay.integrations.google_adk._models import wrap_agent_models
 from nemo_relay.integrations.google_adk._nodes import wrap_node
+from nemo_relay.integrations.google_adk._root import observe_root
 from nemo_relay.integrations.google_adk._serialization import json_safe
 from nemo_relay.integrations.google_adk._server_tools import is_server_side, record_server_tools, server_tool_names
 from nemo_relay.integrations.google_adk._tools import wrap_code_executor, wrap_tool
@@ -98,7 +103,7 @@ _MarkName: TypeAlias = Literal[
 ]
 
 
-def _mark(name: _MarkName, parent: nemo_relay.ScopeHandle | None, **data: Json) -> None:
+def _mark(name: _MarkName, parent: nemo_relay.ScopeHandle, **data: Json) -> None:
     nemo_relay.scope.event(name, handle=parent, data=data, metadata=integration_metadata())
 
 
@@ -110,16 +115,13 @@ class _AgentKey(NamedTuple):
 @dataclass(slots=True)
 class _AgentRun:
     handle: nemo_relay.ScopeHandle
-    previous: nemo_relay.ScopeHandle | None
+    previous: nemo_relay.ScopeHandle | Invocation | None
     response: Json = None
 
 
 @dataclass(slots=True, kw_only=True)
 class _InvocationState:
-    handle: nemo_relay.ScopeHandle
-    previous_agent: nemo_relay.ScopeHandle | None
-    previous_closer: DeferredCloser | None
-    closer: DeferredCloser
+    invocation: Invocation
     runner: Annotated[
         int | None,
         "This field holds the runner's plugin manager `id` for a top-level invocation, or None for an `AgentTool` run.",
@@ -157,41 +159,42 @@ class NemoRelayPlugin(BasePlugin):
     @_never_raises
     @override
     async def after_run_callback(self, *, invocation_context: InvocationContext) -> None:
-        self._finish_invocation(invocation_context.invocation_id, output={"status": "ok"}, metadata=OK_STATUS)
+        """End the invocation as ADK reports it, as cancelled for an aborted run and otherwise as completed."""
+        invocation_id = invocation_context.invocation_id
+        if invocation_context.is_aborted:
+            self._end_invocation(invocation_id, {"status": "cancelled"}, CANCELLED_STATUS)
+        else:
+            self._end_invocation(invocation_id, {"status": "ok"}, OK_STATUS)
+        _release(invocation_id)
 
     @_never_raises
     @override
     async def on_run_error_callback(self, *, invocation_context: InvocationContext, error: Exception) -> None:
-        self._finish_invocation(
-            invocation_context.invocation_id, output={"error": repr(error)}, metadata=error_status(str(error))
-        )
+        self._end_invocation(invocation_context.invocation_id, {"error": repr(error)}, error_status(str(error)))
+        _release(invocation_context.invocation_id)
 
     @_never_raises
     @override
     async def close(self) -> None:
-        """Close each invocation that is still open as cancelled."""
+        """Close the scope of each invocation that is still running as cancelled."""
         with self._lock:
             open_invocations = list(self._invocations)
         for invocation_id in open_invocations:
-            self._finish_invocation(invocation_id, output={"status": "cancelled"}, metadata=CANCELLED_STATUS)
+            self._abandon_invocation(invocation_id)
 
     def _start_invocation(self, invocation_context: InvocationContext) -> None:
-        """Push the invocation scope under the current agent scope, which is the calling agent for an `AgentTool` run.
+        """Track the invocation, whose scope opens under the current parent when a call first needs it.
 
-        First close a stale invocation of the same runner in this context as cancelled, and clear context variables that
-        belong to an invocation this plugin no longer tracks. Warn once when the plugin serves more than one runner.
+        First close a stale invocation of the same runner in this context as cancelled. Observe the root agent's run
+        when ADK names a root agent on the invocation context, and warn once when the plugin serves more than one
+        runner.
         """
-        stale = CURRENT_CLOSER.get()
+        stale = current_invocation()
         if stale is not None:
-            state = self._state(stale.invocation_id)
-            if state is None:
-                CURRENT_AGENT_HANDLE.set(None)
-                CURRENT_CLOSER.set(None)
-            elif state.runner == id(invocation_context.plugin_manager):
-                self._finish_invocation(stale.invocation_id, output={"status": "cancelled"}, metadata=CANCELLED_STATUS)
-        previous_agent = CURRENT_AGENT_HANDLE.get()
-        previous_closer = CURRENT_CLOSER.get()
-        nested = previous_closer is not None
+            stale_state = self._state(stale.invocation_id)
+            if stale_state is not None and stale_state.runner == id(invocation_context.plugin_manager):
+                self._abandon_invocation(stale.invocation_id)
+        nested = current_invocation() is not None
         scope_input: JsonObject = {
             "invocation_id": invocation_context.invocation_id,
             "session_id": invocation_context.session.id,
@@ -199,33 +202,37 @@ class NemoRelayPlugin(BasePlugin):
             "app_name": invocation_context.app_name,
             "user_content": json_safe(invocation_context.user_content),
         }
-        if invocation_context.agent is not None:
-            scope_input["root_agent"] = invocation_context.agent.name
+        root = invocation_context.agent
+        if root is not None:
+            scope_input["root_agent"] = root.name
         metadata = integration_metadata()
         run_config = invocation_context.run_config
         if run_config is not None and run_config.custom_metadata:
             metadata["adk_custom_metadata"] = json_safe(run_config.custom_metadata)
-        handle = nemo_relay.scope.push(
-            f"adk-invocation:{invocation_context.app_name}",
-            ScopeType.Agent,
-            handle=previous_agent,
-            input=scope_input,
-            metadata=metadata,
+        invocation_id = invocation_context.invocation_id
+        invocation = Invocation(
+            invocation_id,
+            scope=InvocationScope(
+                f"adk-invocation:{invocation_context.app_name}",
+                parent_handle(),
+                scope_input,
+                metadata,
+                datetime.datetime.now(datetime.UTC),
+            ),
+            driver=current_task(),
+            previous_parent=CURRENT_PARENT.get(),
+            previous_invocation=CURRENT_INVOCATION.get(),
+            end=functools.partial(self._end_invocation, invocation_id),
+            abandon=functools.partial(self._abandon_invocation, invocation_id),
         )
-        closer = DeferredCloser(ScopeContext.capture(), invocation_context.invocation_id)
-        closer.own(handle.uuid)
         state = _InvocationState(
-            handle=handle,
-            previous_agent=previous_agent,
-            previous_closer=previous_closer,
-            closer=closer,
-            runner=None if nested else id(invocation_context.plugin_manager),
+            invocation=invocation, runner=None if nested else id(invocation_context.plugin_manager)
         )
         with self._lock:
             shared = state.runner is not None and any(
                 other.runner not in (None, state.runner) for other in self._invocations.values()
             )
-            self._invocations[invocation_context.invocation_id] = state
+            self._invocations[invocation_id] = state
             warn = shared and not self._shared_runner_warned
             if warn:
                 self._shared_runner_warned = True
@@ -235,18 +242,28 @@ class NemoRelayPlugin(BasePlugin):
                 "closes a plugin with the first Runner that closes and does not say which one.",
                 self.name,
             )
-        CURRENT_AGENT_HANDLE.set(handle)
-        CURRENT_CLOSER.set(closer)
+        CURRENT_PARENT.set(invocation)
+        CURRENT_INVOCATION.set(invocation)
+        if root is not None:
+            observe_root(root)
 
     def _state(self, invocation_id: str) -> _InvocationState | None:
         with self._lock:
             return self._invocations.get(invocation_id)
 
-    def _finish_invocation(self, invocation_id: str, *, output: JsonObject, metadata: JsonObject) -> None:
+    def _end_invocation(self, invocation_id: str, output: JsonObject, metadata: JsonObject) -> None:
+        """Record the invocation with the output and status, and open its scope first when no call opened it."""
+        self._finish_invocation(invocation_id, output=output, metadata=metadata, record=True)
+
+    def _abandon_invocation(self, invocation_id: str) -> None:
+        """Close the invocation's scope as cancelled when a call opened it, and otherwise record no scope for it."""
+        self._finish_invocation(invocation_id, output={"status": "cancelled"}, metadata=CANCELLED_STATUS, record=False)
+
+    def _finish_invocation(self, invocation_id: str, *, output: JsonObject, metadata: JsonObject, record: bool) -> None:
         """Close the agent runs that ADK ended without a completion hook, and then the invocation scope.
 
-        Close the scopes on the invocation's own stack, and restore the context variables from before the invocation. Do
-        nothing when the invocation is not open.
+        Close the scopes on the invocation's own stack, and restore the context variables from before the invocation
+        when the invocation is current in this context. Do nothing when the invocation already finished.
         """
         with self._lock:
             state = self._invocations.pop(invocation_id, None)
@@ -254,12 +271,11 @@ class NemoRelayPlugin(BasePlugin):
                 return
             runs = [run for stack in reversed(state.agent_runs.values()) for run in reversed(stack)]
             state.agent_runs.clear()
+        invocation = state.invocation
         for run in runs:
-            state.closer.close(run.handle, output=_with_response(output, run.response), metadata=metadata)
-        CURRENT_AGENT_HANDLE.set(state.previous_agent)
-        CURRENT_CLOSER.set(state.previous_closer)
-        state.closer.close(state.handle, output=_with_response(output, state.response), metadata=metadata)
-        state.closer.drain()
+            invocation.close(run.handle, output=_with_response(output, run.response), metadata=metadata)
+        invocation.finish(output=_with_response(output, state.response), metadata=metadata, record=record)
+        invocation.release()
 
     @_never_raises
     @override
@@ -271,7 +287,7 @@ class NemoRelayPlugin(BasePlugin):
         if state is None:
             log_unrecorded_once("agent run")
             return None
-        previous = CURRENT_AGENT_HANDLE.get()
+        previous = CURRENT_PARENT.get()
         scope_input: JsonObject = {
             "invocation_id": callback_context.invocation_id,
             "branch": callback_context.branch,
@@ -282,16 +298,18 @@ class NemoRelayPlugin(BasePlugin):
         handle = nemo_relay.scope.push(
             agent.name,
             ScopeType.Agent,
-            handle=previous or state.handle,
+            handle=parent_handle(),
             input=scope_input,
             metadata=integration_metadata(),
         )
-        state.closer.own(handle.uuid)
+        state.invocation.own(handle.uuid)
+        if previous is state.invocation:
+            state.invocation.watch()
         key = _AgentKey(callback_context.branch, agent.name)
         with self._lock:
             state.agent_runs.setdefault(key, []).append(_AgentRun(handle, previous))
             state.agent_names.add(agent.name)
-        CURRENT_AGENT_HANDLE.set(handle)
+        CURRENT_PARENT.set(handle)
         return None
 
     @_never_raises
@@ -299,12 +317,14 @@ class NemoRelayPlugin(BasePlugin):
     async def after_agent_callback(
         self, *, agent: BaseAgent, callback_context: CallbackContext
     ) -> types.Content | None:
+        """Close the agent run, as cancelled when ADK calls this hook while the agent's task is being cancelled."""
+        cancelled = current_task().cancelling() > 0
         self._finish_agent(
             callback_context.invocation_id,
             branch=callback_context.branch,
             agent_name=agent.name,
-            output={"status": "ok"},
-            metadata=OK_STATUS,
+            output={"status": "cancelled"} if cancelled else {"status": "ok"},
+            metadata=error_status("agent cancelled") if cancelled else OK_STATUS,
         )
         return None
 
@@ -332,8 +352,8 @@ class NemoRelayPlugin(BasePlugin):
             run = runs.pop() if runs else None
         if run is None:
             return
-        CURRENT_AGENT_HANDLE.set(run.previous)
-        state.closer.close(run.handle, output=_with_response(output, run.response), metadata=metadata)
+        CURRENT_PARENT.set(run.previous)
+        state.invocation.close(run.handle, output=_with_response(output, run.response), metadata=metadata)
 
     @_never_raises
     @override
@@ -360,7 +380,7 @@ class NemoRelayPlugin(BasePlugin):
         if confirmation is not None:
             _mark(
                 "adk.tool_confirmation_resumed",
-                CURRENT_AGENT_HANDLE.get(),
+                parent_handle(),
                 function_call_id=tool_context.function_call_id,
                 confirmed=confirmation.confirmed,
             )
@@ -378,13 +398,12 @@ class NemoRelayPlugin(BasePlugin):
         """
         actions = event.actions
         state = self._state(invocation_context.invocation_id)
-        parent = CURRENT_AGENT_HANDLE.get() or (state.handle if state is not None else None)
         if state is not None and event.author != "user" and event.content is not None and event.is_final_response():
             self._record_response(state, event)
         if actions.transfer_to_agent:
             _mark(
                 "adk.agent_transfer",
-                parent,
+                parent_handle(),
                 **{"from": event.author, "to": actions.transfer_to_agent, "reason": actions.transfer_reason},
             )
             self._finish_agent(
@@ -397,21 +416,31 @@ class NemoRelayPlugin(BasePlugin):
         if actions.requested_tool_confirmations:
             _mark(
                 "adk.tool_confirmation_requested",
-                parent,
+                parent_handle(),
                 function_call_ids=list[Json](sorted(actions.requested_tool_confirmations)),
             )
         if actions.escalate:
-            _mark("adk.escalate", parent, author=event.author)
+            _mark("adk.escalate", parent_handle(), author=event.author)
         if event.long_running_tool_ids:
-            _mark("adk.long_running_tools", parent, function_call_ids=list[Json](sorted(event.long_running_tool_ids)))
+            _mark(
+                "adk.long_running_tools",
+                parent_handle(),
+                function_call_ids=list[Json](sorted(event.long_running_tool_ids)),
+            )
         if state is not None:
             if not event.partial:
-                with self._lock:
-                    runs = state.agent_runs.get(_AgentKey(event.branch, event.author))
-                    author = runs[-1].handle if runs else parent
-                record_server_tools(event, state.server_tools.get(event.author, ()), author)
-            _record_node_event(state, event, parent)
+                record_server_tools(
+                    event, state.server_tools.get(event.author, ()), functools.partial(self._author_scope, state, event)
+                )
+            _record_node_event(state, event)
         return None
+
+    def _author_scope(self, state: _InvocationState, event: Event) -> nemo_relay.ScopeHandle:
+        """Return the scope of the open agent run that authored the event, or the current parent without one."""
+        with self._lock:
+            runs = state.agent_runs.get(_AgentKey(event.branch, event.author))
+            author = runs[-1].handle if runs else None
+        return parent_handle() if author is None else author
 
     def _record_response(self, state: _InvocationState, event: Event) -> None:
         """Store the event content as the latest final response of the invocation and of the event's agent run."""
@@ -424,17 +453,10 @@ class NemoRelayPlugin(BasePlugin):
 
 
 def _instrument_agent(agent: BaseNode | None, invocation_context: InvocationContext) -> None:
-    """Wrap the model and code executor of an `LlmAgent` outside live invocations.
-
-    Pin the resolved model instance on the agent when ADK resolves a new instance on each access. Leave a
-    `BuiltInCodeExecutor` unwrapped.
-    """
+    """Wrap the models that an `LlmAgent` selects and its code executor, outside live invocations."""
     if not isinstance(agent, LlmAgent) or _is_live(invocation_context):
         return
-    model = agent.canonical_model
-    if agent.canonical_model is not model:
-        agent.model = model
-    wrap_model(model)
+    wrap_agent_models(agent)
     executor = agent.code_executor
     if executor is not None and not isinstance(executor, BuiltInCodeExecutor):
         wrap_code_executor(executor)
@@ -448,26 +470,33 @@ def _instrument_tool(tool: BaseTool) -> None:
         wrap_node(node)
 
 
-def _record_node_event(state: _InvocationState, event: Event, parent: nemo_relay.ScopeHandle | None) -> None:
+def _record_node_event(state: _InvocationState, event: Event) -> None:
     """Mark the completion or failure of an ADK workflow node that no node scope or agent scope records.
 
     The integration observes such a node only through the event that the node ends with.
     """
     path = event.node_info.path
-    if not path or path in state.closer.recorded_nodes:
+    if not path or path in state.invocation.recorded_nodes:
         return
     if event.node_info.name in state.agent_names:
         return
     if event.error_code is not None or event.error_message is not None:
         _mark(
             "adk.node_failed",
-            parent,
+            parent_handle(),
             path=path,
             error_code=event.error_code,
             error_message=event.error_message,
         )
     elif event.output is not None or event.node_info.output_for:
-        _mark("adk.node_completed", parent, path=path, output=json_safe(event.output))
+        _mark("adk.node_completed", parent_handle(), path=path, output=json_safe(event.output))
+
+
+def _release(invocation_id: str) -> None:
+    """Restore the context variables from before the invocation when it is current in this context."""
+    invocation = CURRENT_INVOCATION.get()
+    if invocation is not None and invocation.invocation_id == invocation_id:
+        invocation.release()
 
 
 __all__ = ["NemoRelayPlugin"]

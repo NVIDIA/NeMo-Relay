@@ -3,30 +3,32 @@
 
 """Swap an instance's class in place so the instance keeps its identity.
 
-Each original class and method set gets one subclass.
+Each class and method set gets one subclass, and method sets layer in the order they are applied.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Final, TypeVar, cast
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
 _T = TypeVar("_T")
+_Methods: TypeAlias = "Callable[..., Mapping[str, object]]"
 _SWAPPED: Final = "__nemo_relay_swapped__"
-_SUBCLASSES: Final[dict[tuple[type[object], Callable[..., Mapping[str, object]]], type[object]]] = {}
+_SUBCLASSES: Final[dict[tuple[type[object], _Methods], type[object]]] = {}
 _LOCK: Final = threading.Lock()
 
 
 def swap_class(instance: _T, methods: Callable[[type[_T]], Mapping[str, object]]) -> None:
-    """Swap the instance's class for a subclass that carries the methods.
+    """Swap the instance's class for a subclass that adds the methods.
 
-    Leave an instance whose class is already a swapped subclass unchanged.
+    Leave the instance unchanged when its class already carries the methods. A class that carries other methods gains
+    a further subclass, so the methods applied last wrap the ones applied before them.
     """
     cls = type(instance)
-    if _SWAPPED not in cls.__dict__:
+    if methods not in _applied(cls):
         instance.__class__ = _subclass(cls, methods)
 
 
@@ -34,8 +36,12 @@ def is_swapped(instance: object) -> bool:
     return _SWAPPED in type(instance).__dict__
 
 
+def _applied(cls: type[object]) -> frozenset[_Methods]:
+    return cast("frozenset[_Methods]", cls.__dict__.get(_SWAPPED, frozenset()))
+
+
 def _subclass(cls: type[_T], methods: Callable[[type[_T]], Mapping[str, object]]) -> type[_T]:
-    """Return the one subclass of the class that carries the methods.
+    """Return the one subclass of the class that adds the methods.
 
     Create the subclass under a lock on the first request from any thread.
     """
@@ -46,7 +52,7 @@ def _subclass(cls: type[_T], methods: Callable[[type[_T]], Mapping[str, object]]
                 "__module__": cls.__module__,
                 "__qualname__": cls.__qualname__,
                 "__doc__": cls.__doc__,
-                _SWAPPED: True,
+                _SWAPPED: _applied(cls) | {methods},
                 **methods(cls),
             }
             made = _SUBCLASSES[key] = type(cls)(cls.__name__, (cls,), namespace)

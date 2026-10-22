@@ -105,7 +105,7 @@ async def test_a_request_relay_cannot_project_fails_the_call_under_a_rejection_m
     (agent_start,) = [event for event in starts(subscribed_events, "agent") if event.name == "weather_agent"]
     assert rejected.parent_uuid == agent_start.uuid
     assert data_of(rejected) == {
-        "provider": "scripted-weather_agent",
+        "provider": "ScriptedLlm",
         "model": "scripted-weather_agent",
         "error_type": "TypeError",
         "error_message": str(raised.value),

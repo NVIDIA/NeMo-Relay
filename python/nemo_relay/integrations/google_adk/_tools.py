@@ -46,11 +46,26 @@ def _tool_methods(cls: type[BaseTool]) -> Mapping[str, object]:
 
     async def run_async(self: BaseTool, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
         produced = ProducedResults()
+        in_flight = 0
 
         async def call(arguments: dict[str, Any]) -> ToolExecutionResult[Json]:
-            args.clear()
-            args.update(arguments)
-            return ToolExecutionResult(produced.add(await original(self, args=args, tool_context=tool_context)))
+            """Run the tool with the attempt's arguments.
+
+            Write them into ADK's dictionary when no other attempt is in flight, and run the tool on a copy otherwise.
+            """
+            nonlocal in_flight
+            if in_flight == 0:
+                args.clear()
+                args.update(arguments)
+                attempt_args = args
+            else:
+                attempt_args = dict(arguments)
+            in_flight += 1
+            try:
+                result = await original(self, args=attempt_args, tool_context=tool_context)
+            finally:
+                in_flight -= 1
+            return ToolExecutionResult(produced.add(result))
 
         metadata = integration_metadata(adk_tool_type=cls.__name__)
         if self.is_long_running:

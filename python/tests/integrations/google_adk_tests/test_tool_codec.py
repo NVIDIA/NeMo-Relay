@@ -8,7 +8,8 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import pytest
 from _helpers import as_object
@@ -23,13 +24,17 @@ from google.adk.code_executors.code_execution_utils import CodeExecutionInput, C
 from google.genai import types
 from pydantic import BaseModel, ConfigDict
 
-import nemo_relay
 from nemo_relay.integrations.google_adk._tool_codec import (
     AdkArgumentsCodec,
     AdkCodeInputCodec,
     ProducedResults,
     tool_result_json,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    import nemo_relay
 
 
 class _Weather(BaseModel):

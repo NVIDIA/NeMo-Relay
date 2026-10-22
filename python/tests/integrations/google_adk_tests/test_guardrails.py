@@ -68,7 +68,7 @@ async def test_model_guardrail_rejection_propagates_by_default(
 
     assert scripted_llm.seen_requests == []
     assert starts(subscribed_events, "llm") == []
-    (rejection,) = marks(subscribed_events, "scripted-weather_agent")
+    (rejection,) = marks(subscribed_events, "ScriptedLlm")
     assert rejection.data == {"rejected": True, "rejection_reason": "no model calls"}
     assert_balanced(subscribed_events)
 
