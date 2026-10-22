@@ -212,7 +212,9 @@ impl DiagnosticReadGrant {
         generation: &str,
         max_page_bytes: usize,
     ) -> Option<Self> {
-        if generation.is_empty() || generation.len() > 256 {
+        if generation.is_empty()
+            || generation.len() > super::broker::collection::MAX_GENERATION_BYTES
+        {
             return None;
         }
         Some(Self {
@@ -220,7 +222,13 @@ impl DiagnosticReadGrant {
             generation: generation.to_owned(),
             policy_revision: 1,
             max_page_bytes,
-            key: SensitiveString::new(super::common::control::random_secret(32).ok()?).ok()?,
+            key: SensitiveString::new(
+                super::common::control::random_secret(
+                    super::broker::collection::DIAGNOSTIC_KEY_BYTES,
+                )
+                .ok()?,
+            )
+            .ok()?,
         })
     }
     pub(crate) fn fence(&self) -> super::common::identity::TokenDigest {
@@ -230,7 +238,7 @@ impl DiagnosticReadGrant {
         self.source == offer.source
             && self.generation == generation
             && self.policy_revision == 1
-            && self.key.expose().len() == 43
+            && self.key.expose().len() == super::broker::collection::ENCODED_DIAGNOSTIC_KEY_BYTES
             && self.max_page_bytes > 0
             && self.max_page_bytes <= offer.max_page_bytes
             && offer.whole_context_read

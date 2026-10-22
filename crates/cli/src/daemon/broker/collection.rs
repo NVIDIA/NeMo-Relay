@@ -15,26 +15,35 @@ pub(crate) const SOURCES: usize = 64;
 pub(crate) const PAGE_BYTES: usize = 128 * 1024;
 pub(crate) const POLLS: usize = 4;
 pub(crate) const RESPONSE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_STAGED_WORKER_SESSIONS: usize = 4_096;
+pub(crate) const MAX_WORKER_ID_BYTES: usize = 256;
+pub(crate) const MAX_GENERATION_BYTES: usize = 256;
+pub(crate) const DIAGNOSTIC_KEY_BYTES: usize = 32;
+pub(crate) const ENCODED_DIAGNOSTIC_KEY_BYTES: usize = (DIAGNOSTIC_KEY_BYTES * 8).div_ceil(6);
+const SESSION_METADATA_ALLOWANCE_BYTES: usize =
+    std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticOffer>>()
+        + std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticReadGrant>>()
+        + MAX_WORKER_ID_BYTES
+        + MAX_GENERATION_BYTES
+        + std::mem::size_of::<uuid::Uuid>()
+        + std::mem::size_of::<TokenDigest>()
+        + ENCODED_DIAGNOSTIC_KEY_BYTES;
+const PER_SESSION_METADATA_ALLOWANCE_BYTES: usize =
+    SESSION_METADATA_ALLOWANCE_BYTES.next_multiple_of(64);
 const MAX_JSON_NODES: usize = 8192;
 const MAX_JSON_DEPTH: usize = 24;
 
 pub(crate) const fn owned_bytes() -> usize {
     // Compile-time checks keep the conservative fixed metadata allowances honest.
     assert!(std::mem::size_of::<Slot>() + 512 <= 1024);
-    assert!(
-        std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticOffer>>()
-            + std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticReadGrant>>()
-            + 43
-            + 256
-            + 2
-            <= 512
-    );
+    assert!(SESSION_METADATA_ALLOWANCE_BYTES <= PER_SESSION_METADATA_ALLOWANCE_BYTES);
+    assert!(PER_SESSION_METADATA_ALLOWANCE_BYTES <= 512);
     assert!(std::mem::size_of::<Collector>() + 2 * std::mem::size_of::<CacheKey>() + 256 < 4096);
     // Includes ingress, worst-case escaped-string parser scratch, output slots,
-    // session negotiation metadata at the existing 4096-session cap, and fixed indices.
+    // session negotiation metadata at the broker admission cap, and fixed indices.
     SOURCES * PAGE_BYTES
         + POLLS * (PAGE_BYTES + 2 * PAGE_BYTES + RESPONSE_BYTES)
-        + 4096 * 512
+        + MAX_STAGED_WORKER_SESSIONS * PER_SESSION_METADATA_ALLOWANCE_BYTES
         + SOURCES * 1024
         + 64 * 1024
 }
@@ -252,9 +261,9 @@ impl CacheKey {
         control: TokenDigest,
     ) -> Option<Self> {
         if worker_id.is_empty()
-            || worker_id.len() > 256
+            || worker_id.len() > MAX_WORKER_ID_BYTES
             || generation.is_empty()
-            || generation.len() > 256
+            || generation.len() > MAX_GENERATION_BYTES
         {
             return None;
         }

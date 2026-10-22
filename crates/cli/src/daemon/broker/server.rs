@@ -80,7 +80,6 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PENDING_CHALLENGES: usize = 512;
 const MAX_PENDING_MCP_CHALLENGES: usize = 384;
 const MAX_PENDING_WORKER_CHALLENGES: usize = 128;
-const MAX_STAGED_WORKER_SESSIONS: usize = 4_096;
 const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1296,7 +1295,7 @@ fn stage_worker(
     daemon_proof: HandshakeProof,
 ) -> Response<Body> {
     if worker_id.is_empty()
-        || worker_id.len() > 256
+        || worker_id.len() > super::collection::MAX_WORKER_ID_BYTES
         || endpoint.len() > 2_048
         || validate_worker_endpoint(&endpoint, tls_root_certificate.as_deref()).is_err()
     {
@@ -1338,7 +1337,7 @@ fn stage_worker(
         &mut worker_sessions,
         now_unix_ms(),
         &worker_id,
-        MAX_STAGED_WORKER_SESSIONS,
+        super::collection::MAX_STAGED_WORKER_SESSIONS,
     ) {
         return control_message(
             StatusCode::TOO_MANY_REQUESTS,
