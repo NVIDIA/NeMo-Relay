@@ -312,8 +312,8 @@ Experimental C callers use `nemo_relay_diagnostics_reader`,
 `nemo_relay_diagnostics_reader_free`. Successful strings are caller-owned and
 released with `nemo_relay_string_free`. Failed output pointers are null. Callers
 must provide live, valid, non-aliasing storage and keep the native library loaded;
-the ABI cannot identify arbitrary freed or forged pointers. Reader free must not
-race a read.
+the ABI cannot identify arbitrary freed or forged pointers. Do not call
+`nemo_relay_diagnostics_reader_free` concurrently with a read on the same reader.
 
 ### Availability, Budgets, and Copy Ownership
 
