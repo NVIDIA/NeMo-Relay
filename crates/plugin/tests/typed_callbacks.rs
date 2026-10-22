@@ -7239,3 +7239,6 @@ fn scope_stack_snapshot_native_owned_values_and_buffers_survive_clone_and_failur
     assert_eq!(retained, expected);
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), baseline);
 }
+
+#[path = "unit/diagnostics_tests.rs"]
+mod native_diagnostics;

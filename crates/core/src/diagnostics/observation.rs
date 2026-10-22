@@ -5,7 +5,7 @@
 
 use super::{
     BuiltinDiagnosticCode, Classification, ComponentHandle, ComponentOwnership,
-    DiagnosticCorrelation, DiagnosticCount, DiagnosticOutcome, DiagnosticSeverity, FailureClass,
+    DiagnosticCorrelation, DiagnosticOutcome, DiagnosticSeverity, FailureClass,
     PluginObservationContext,
 };
 use std::fmt;
@@ -259,31 +259,4 @@ impl<'a> Observation<'a> {
 /// Explicit authoring name for a borrowed observation.
 pub type DiagnosticObservation<'a> = Observation<'a>;
 
-/// Evidence retention is separate from numeric acceptance and output delivery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvidenceDisposition {
-    /// The header and supplied optional evidence fit retention budgets.
-    Retained,
-    /// The retained event has shortened or omitted optional detail/correlation.
-    Truncated,
-    /// Numeric acceptance succeeded without retaining an incoming event header.
-    Dropped,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Accepted lifetime and current-summary update, independent of retention and delivery.
-pub struct RecordReceipt {
-    /// Unique source-local accepted-update sequence, never an occurrence total.
-    pub sequence: u64,
-    /// Updated code total, absent for summary-only classification overflow.
-    pub code_total: Option<DiagnosticCount>,
-    /// Evidence retention disposition, independent of projection delivery.
-    pub evidence: EvidenceDisposition,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Accepted collection or intentional startup disablement.
-pub enum RecordOutcome {
-    /// Accepted numeric state and the independent retention disposition.
-    Recorded(RecordReceipt),
-    /// No factory, receipt, sequence, or loss accounting was produced.
-    Disabled,
-}
+pub use nemo_relay_types::diagnostics::{EvidenceDisposition, RecordOutcome, RecordReceipt};

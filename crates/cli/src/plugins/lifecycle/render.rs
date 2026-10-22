@@ -250,6 +250,7 @@ pub(super) struct PluginInspectView<'a> {
     pub(super) manifest: &'a DynamicPluginManifest,
     pub(super) manifest_ref: &'a str,
     pub(super) host_config: Option<&'a ResolvedDynamicPluginConfig>,
+    pub(super) policy: &'a EvaluatedDynamicPluginHostPolicy,
 }
 
 impl fmt::Display for PluginInspectView<'_> {
@@ -259,6 +260,7 @@ impl fmt::Display for PluginInspectView<'_> {
             self.manifest,
             self.manifest_ref,
             self.host_config,
+            self.policy,
         );
         let yaml = serde_saphyr::to_string(&view).map_err(|_| fmt::Error)?;
         write!(f, "{}", yaml.trim_end())
@@ -327,6 +329,11 @@ impl fmt::Display for PluginValidationSummaryView<'_> {
             f,
             "authenticity_state: {}",
             <&'static str>::from(self.trust.authenticity)
+        )?;
+        writeln!(
+            f,
+            "native_diagnostics_read_context: {}",
+            self.policy.native_diagnostics_read_context
         )?;
         writeln!(f, "startup_class: {}", self.policy.startup_class)?;
         writeln!(f, "attestation_mode: {}", self.policy.attestation_mode)?;

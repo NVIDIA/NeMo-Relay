@@ -66,6 +66,7 @@ fn policy(
     trusted_public_keys: Vec<String>,
 ) -> EvaluatedDynamicPluginHostPolicy {
     EvaluatedDynamicPluginHostPolicy {
+        native_diagnostics_read_context: false,
         policy_satisfied: satisfied,
         startup_class: super::super::DynamicPluginStartupClass::Required,
         attestation_mode,

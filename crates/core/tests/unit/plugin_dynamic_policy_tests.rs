@@ -55,3 +55,75 @@ fn matching_rules_and_id_overrides_apply_in_order() {
     assert!(evaluated.policy_satisfied);
     assert_eq!(evaluated.startup_class, DynamicPluginStartupClass::Required);
 }
+
+#[test]
+fn native_diagnostic_read_grant_uses_policy_layers_and_never_grants_worker_reads() {
+    let lower: FileDynamicPluginHostPolicy = toml::from_str(
+        r#"
+[defaults]
+native_diagnostics_read_context = true
+"#,
+    )
+    .unwrap();
+    let upper: FileDynamicPluginHostPolicy = toml::from_str(
+        r#"
+[[rules]]
+match_kind = "rust_dynamic"
+native_diagnostics_read_context = false
+[overrides."fixture.policy"]
+native_diagnostics_read_context = true
+"#,
+    )
+    .unwrap();
+    let mut policy: DynamicPluginHostPolicy = lower.into();
+    policy.merge_from(upper.into());
+    let mut native = manifest();
+    native.plugin.kind = DynamicPluginKind::RustDynamic;
+    assert!(evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context);
+    assert!(
+        !evaluate_dynamic_plugin_host_policy(&policy, &manifest()).native_diagnostics_read_context
+    );
+    policy.overrides.clear();
+    assert!(!evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context);
+    assert!(
+        !evaluate_dynamic_plugin_host_policy(&DynamicPluginHostPolicy::default(), &native)
+            .native_diagnostics_read_context
+    );
+}
+
+#[test]
+fn native_diagnostic_read_grant_preserves_explicit_denials_across_file_layers() {
+    let mut native = manifest();
+    native.plugin.kind = DynamicPluginKind::RustDynamic;
+    for table in ["[defaults]", "[[rules]]", "[overrides.\"fixture.policy\"]"] {
+        let lower: FileDynamicPluginHostPolicy = toml::from_str(&format!(
+            "{table}\nnative_diagnostics_read_context = true\n"
+        ))
+        .unwrap();
+        let upper: FileDynamicPluginHostPolicy = toml::from_str(&format!(
+            "{table}\nnative_diagnostics_read_context = false\n"
+        ))
+        .unwrap();
+        let mut policy: DynamicPluginHostPolicy = lower.into();
+        assert!(
+            evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context
+        );
+        policy.merge_from(upper.into());
+        assert!(
+            !evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context,
+            "explicit denial must survive merging {table}"
+        );
+    }
+}
+
+#[test]
+fn native_diagnostic_read_grant_requires_a_boolean_in_every_file_representation() {
+    for table in ["[defaults]", "[[rules]]", "[overrides.\"fixture.policy\"]"] {
+        for value in ["\"true\"", "1", "[]", "{}"] {
+            let input = format!("{table}\nnative_diagnostics_read_context = {value}\n");
+            assert!(toml::from_str::<FileDynamicPluginHostPolicy>(&input).is_err());
+        }
+        let misspelled = format!("{table}\nnative_diagnostic_read_context = true\n");
+        assert!(toml::from_str::<FileDynamicPluginHostPolicy>(&misspelled).is_err());
+    }
+}
