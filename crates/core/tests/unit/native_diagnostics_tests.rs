@@ -398,6 +398,21 @@ fn native_read_checks_permission_before_queries_and_never_publishes_partial_outp
         Error::PermissionDenied.status()
     );
     assert_eq!(written, 0);
+    written = 99;
+    assert_eq!(
+        unsafe {
+            read(
+                Arc::as_ptr(&allowed).cast(),
+                0,
+                abi::Bytes::text("{}"),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        },
+        Error::BufferTooSmall.status()
+    );
+    assert_eq!(written, 0);
     assert_eq!(
         unsafe {
             read(
