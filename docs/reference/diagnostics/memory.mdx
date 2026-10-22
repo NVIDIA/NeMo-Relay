@@ -87,16 +87,17 @@ For a Rust lease, choose the access method for your task:
 - `components()` and `entries()` borrow the copied rows.
 - `to_memory_page()` decodes a separate owned page.
 
-For example, inspect one entry without component rows. The language examples
+To inspect one entry without component rows from the CLI, run this command:
+
+```bash title="CLI" showLineNumbers={false}
+nemo-relay diagnostics --memory --query '{"max_components":0,"max_events":1}'
+```
+
+To make the same request from code, choose your binding below. These examples
 assume that the service is configured and the caller has read access. The Rust
 example uses a core `DiagnosticsReader`.
 
 <Tabs>
-<Tab title="CLI">
-```bash
-nemo-relay diagnostics --memory --query '{"max_components":0,"max_events":1}'
-```
-</Tab>
 <Tab title="Rust" language="rust">
 <Code src="_code/memory/inspect.rs" language="rust" title="Inspect memory" lines="4-14" showLineNumbers={false} />
 </Tab>

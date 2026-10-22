@@ -36,18 +36,19 @@ reader remains available after a plugin closes or fails.
 
 ## Discover Capabilities and Limits
 
-Before choosing page sizes, inspect the running context's capabilities. Select
-your reader below. The CLI command requires an existing gateway. Language examples
-assume that the service is already configured. The Rust example uses a core
+Before choosing page sizes, inspect the running context's capabilities.
+To inspect an existing gateway from the CLI, run this command:
+
+```bash title="CLI" showLineNumbers={false}
+nemo-relay diagnostics --capabilities
+```
+
+For a language-hosted runtime, choose your binding below. These examples assume
+that the service is already configured. The Rust example uses a core
 `DiagnosticsReader`. An embedded Rust reader exposes discovery through
 `reader.info()?.discovery`.
 
 <Tabs>
-<Tab title="CLI">
-```bash
-nemo-relay diagnostics --capabilities
-```
-</Tab>
 <Tab title="Rust" language="rust">
 <Code src="_code/api/discovery.rs" language="rust" title="Read capabilities" lines="4-4" showLineNumbers={false} />
 </Tab>

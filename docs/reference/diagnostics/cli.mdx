@@ -17,21 +17,17 @@ Diagnostics is compiled in and disabled by default. Configure it through the
 existing CLI configuration layers in `config.toml`. This is separate from the
 `plugins.toml` profile used by [embedded runtimes](/reference/diagnostics/bindings).
 Refer to [Shared Configuration](/nemo-relay-cli/basic-usage#shared-configuration)
-for user and system file discovery and precedence. Use a file for persistent
-settings or flags for one gateway process:
+for user and system file discovery and precedence. Use a configuration file for
+persistent settings:
 
-<Tabs>
-<Tab title="Configuration File">
 <Code src="_code/cli/config.toml" language="toml" title="config.toml" lines="4-11" showLineNumbers={false} />
-</Tab>
-<Tab title="Command-Line Flags">
-This command enables collection and HTTP reads with default limits:
 
-```bash
+For one gateway process, use command-line flags. This command enables collection
+and HTTP reads with default limits:
+
+```bash title="Command-Line Flags" showLineNumbers={false}
 nemo-relay --diagnostics=true --diagnostics-http=true --bind 127.0.0.1:4040 gateway start
 ```
-</Tab>
-</Tabs>
 
 Settings follow this precedence:
 
@@ -61,7 +57,7 @@ because the caller requested inspection. Pre-context failures cannot be retained
 
 ### Start and Inspect a Gateway
 
-1. Save the Configuration File example above as `diagnostics-config.toml`. An explicit file
+1. Save the configuration file example above as `diagnostics-config.toml`. An explicit file
    replaces the user file. System configuration still takes precedence.
 2. Start a gateway on an unused local address in one terminal:
 
