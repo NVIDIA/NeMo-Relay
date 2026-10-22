@@ -717,6 +717,7 @@ fn daemon_router_with_ready_worker(
     )
     .expect("active generation state");
     let state = Arc::new(DaemonState {
+        collector: None,
         sockets: socket::Hub::default(),
         registry,
         identity,
@@ -735,6 +736,7 @@ fn daemon_router_with_ready_worker(
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: None,
     });
     (router(state), target, generation_state)
 }
@@ -792,6 +794,7 @@ fn daemon_router_with_pass_through(
     )
     .expect("active generation state");
     let state = Arc::new(DaemonState {
+        collector: None,
         sockets: socket::Hub::default(),
         registry,
         identity,
@@ -810,6 +813,7 @@ fn daemon_router_with_pass_through(
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: None,
     });
     (router(state), generation_state)
 }
@@ -878,6 +882,7 @@ fn daemon_router_with_two_ready_workers(
     )
     .expect("active generation state");
     let state = Arc::new(DaemonState {
+        collector: None,
         sockets: socket::Hub::default(),
         registry,
         identity,
@@ -896,6 +901,7 @@ fn daemon_router_with_two_ready_workers(
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: None,
     });
     (router(state), targets, generation_state)
 }
@@ -1984,6 +1990,7 @@ fn lifecycle_daemon_router_with_activation(
         config.openai_base_url = format!("http://{provider}/v1");
     }
     let state = Arc::new(DaemonState {
+        collector: None,
         sockets: socket::Hub::default(),
         registry,
         identity: daemon_identity,
@@ -2017,6 +2024,11 @@ fn lifecycle_daemon_router_with_activation(
         worker_sessions: Mutex::new(HashMap::from([(
             worker_id.clone(),
             WorkerControlSession {
+                diagnostic_offer: None,
+                diagnostic_grant: None,
+                diagnostic_connected: false,
+                diagnostic_revoked: false,
+                diagnostic_poll_stopped: false,
                 fingerprint,
                 worker_id: worker_id.clone(),
                 secret: worker_control_secret.clone(),
@@ -2035,6 +2047,7 @@ fn lifecycle_daemon_router_with_activation(
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: None,
     });
     (
         router(Arc::clone(&state)),

@@ -31,7 +31,10 @@ pub(crate) struct Options {
     pub(crate) advertise_address: Option<String>,
 }
 
-pub(crate) async fn run(options: Options) -> Result<(), CliError> {
+pub(crate) async fn run(
+    options: Options,
+    prepared: Option<&crate::configuration::PreparedConfig>,
+) -> Result<(), CliError> {
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
     let bootstrap = read_bootstrap().await?;
     let bind = validate_bootstrap(&options, &bootstrap)?;
@@ -77,7 +80,7 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     )
     .await?;
 
-    let managed = crate::configuration::resolve_managed_worker_config()?;
+    let managed = crate::configuration::resolve_managed_worker_config(prepared)?;
     let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
         Some(&managed.plugin_config_path),
         &managed.resolved,

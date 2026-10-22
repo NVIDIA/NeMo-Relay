@@ -165,6 +165,12 @@ async fn run_provider_call() -> anyhow::Result<serde_json::Value> {
 
 Use the LLM stream execute helper when the framework exposes a stream boundary that NeMo Relay can own. Stream wrappers preserve the same scope and middleware model while letting subscribers observe the completed response after chunks are collected.
 
+Close the stream when reading ends, including after an error. The provider
+must stop pending work when Relay requests cancellation. Close waits for
+cleanup, but subscriber delivery requires a separate flush. Refer to
+[Streaming LLM Execution](/instrument-applications/code-examples#streaming-llm-execution)
+for examples, failure handling, and cleanup requirements.
+
 If the framework owns the stream internally, emit explicit start and end lifecycle events around the provider stream and use mark events for retry, queue, and partial-output milestones.
 
 ## Validate the LLM Wrapper

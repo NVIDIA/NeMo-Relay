@@ -10,6 +10,7 @@ use crate::error::CliError;
 
 pub(crate) mod broker;
 pub(crate) mod common;
+pub(crate) mod diagnostics;
 pub(crate) mod hook;
 pub(crate) mod managed;
 pub(crate) mod mcp;

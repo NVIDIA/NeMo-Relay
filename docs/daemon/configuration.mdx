@@ -60,11 +60,39 @@ stderr_enabled = true
 stderr_format = "jsonl"
 ```
 
-Provider base URLs must use HTTPS for remote hosts, including private Kubernetes
-service addresses. Plain HTTP is allowed only for loopback hosts such as
-`localhost`, `127.0.0.1`, or `::1`. Managed workers validate these URLs when
-loading configuration and check destination transport requirements when forwarding
-requests. Base URLs must not include user information, query strings, or fragments.
+Provider base URLs use HTTPS by default. Plain HTTP is allowed for loopback hosts
+such as `localhost`, `127.0.0.1`, or `::1`. For unauthenticated remote inference
+hosts, including private Kubernetes services, managed workers and daemon
+pass-through routing also accept an explicit `[upstream] insecure_http_model_hosts`
+list in `config.toml`:
+
+```toml
+[upstream]
+openai_base_url = "http://inference-gateway.internal:8000/v1"
+insecure_http_model_hosts = ["inference-gateway.internal"]
+```
+
+Entries are exact bare DNS hostnames or canonical IP addresses, without schemes,
+ports, paths, or wildcards. HTTP exposes model content without encryption.
+Configured provider credentials and API-key helpers conflict with remote HTTP;
+provider environment-key fallbacks are ignored. Only the documented content and
+protocol headers are forwarded, including in request trailers. Credentials,
+cookies, custom headers, and middleware-added authorization are removed before
+forwarding. The client does not use environment proxies, follow redirects, or
+retry automatically. Each final destination must match a trusted host and the
+origin of a configured OpenAI or Anthropic upstream. Remote HTTP WebSockets and
+caller-selected destinations retain their existing restrictions.
+
+For hardened deployments, set `insecure_http_model_hosts = []` under `[upstream]`
+in the system `config.toml` to prevent user configuration from enabling remote HTTP
+model hosts. An omitted setting preserves the lower-priority list; an explicit
+empty list replaces it. System configuration has higher file-level precedence than
+user configuration. This setting does not relax daemon-to-worker transport or
+worker authentication requirements.
+
+Managed workers validate base URLs when loading configuration and check the final
+destination when forwarding requests. Base URLs must not include user information,
+query strings, or fragments.
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same
@@ -119,9 +147,11 @@ Copy-Item .\config.toml, .\plugins.toml 'C:\ProgramData\nemo-relay\'
 ```
 
 For an existing installation, merge approved settings rather than replacing files
-or ACLs blindly. Managed workers ignore personal runtime configuration, plugin
-directories, and lifecycle state. Install required plugin binaries and dependencies
-in the administrator-managed locations referenced by the system manifest.
+or ACLs blindly. Local and remote-client workers load personal runtime
+configuration, plugin manifests, and dynamic plugins alongside the system layer.
+System settings take priority. Install required system plugin binaries and
+dependencies in the administrator-managed locations referenced by the system
+manifest.
 
 ## Provision Client Credentials
 

@@ -200,6 +200,7 @@ async fn forward_stream_to_channel(
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
 ) {
+    let mut undelivered_error = None;
     // One pull per `next()` keeps a forwarded stream as lazy as a pumped one. Reserve before
     // pulling so a cancel does not consume a chunk or error that goes undelivered.
     loop {
@@ -227,11 +228,36 @@ async fn forward_stream_to_channel(
         let Some(item) = item else {
             break;
         };
+        // Cancellation can arrive while `stream.next()` is being polled, after
+        // the biased select checked it. Keep a consumed error for close instead
+        // of delivering it to the pending read after cancellation.
+        if *cancel.borrow() {
+            undelivered_error = item.err();
+            break;
+        }
         permit.send(item);
     }
-    closed.send_replace(Some(
-        stream.close().await.map_err(|error| error.to_string()),
-    ));
+    let result = finish_forwarded_close(undelivered_error, stream.close().await);
+    closed.send_replace(Some(result));
+}
+
+fn finish_forwarded_close(
+    undelivered_error: Option<FlowError>,
+    cleanup: FlowResult<()>,
+) -> std::result::Result<(), String> {
+    match undelivered_error {
+        Some(error) => {
+            if let Err(cleanup) = cleanup {
+                log::warn!(
+                    target: "nemo_relay.runtime",
+                    event = "stream_cleanup_failed";
+                    "LLM stream cleanup failed after the stream failed: {cleanup}"
+                );
+            }
+            Err(error.to_string())
+        }
+        None => cleanup.map_err(|error| error.to_string()),
+    }
 }
 
 /// Close and drop a core stream on a worker so its callbacks are not released on the
@@ -807,3 +833,7 @@ fn combine_close_errors(
         format!("{acc}; {label}: {next}")
     }))
 }
+
+#[cfg(test)]
+#[path = "../tests/rust/stream_tests.rs"]
+mod tests;

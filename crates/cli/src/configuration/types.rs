@@ -31,6 +31,7 @@ pub(crate) struct LaunchedAgent {
 pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
+    pub(crate) insecure_http_model_hosts: super::HttpModelHosts,
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) openai_api_key: Option<String>,
     pub(crate) openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
@@ -94,6 +95,7 @@ impl GatewayConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
+    pub(crate) diagnostics: super::RuntimeDiagnosticsConfig,
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) logging: LoggingConfig,
@@ -148,6 +150,7 @@ impl Default for GatewayConfig {
                 .parse()
                 .expect("valid default bind address"),
             openai_base_url: "https://api.openai.com/v1".into(),
+            insecure_http_model_hosts: super::HttpModelHosts::default(),
             openai_auth_header: None,
             openai_api_key: None,
             openai_api_key_helper: None,

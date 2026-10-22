@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Never, SupportsIndex, cast
 
 import pytest
+from pydantic import BaseModel
 
 from nemo_relay import (
     Json,
@@ -96,6 +97,27 @@ class SumCodec(Codec[int]):
 
 prefix_codec = PrefixCodec()
 sum_codec = SumCodec()
+
+
+@dataclasses.dataclass
+class NestedResult:
+    """Hold JSON or nested typed values to test dataclass replay fidelity."""
+
+    value: object
+
+
+class DictReducingValue:
+    """Model an opaque value whose pickle reconstructs as a builtin dictionary."""
+
+    def __reduce__(self) -> tuple[object, tuple[dict[str, int]]]:
+        """Produce a safe pickle whose reconstructed type differs from the original class."""
+        return dict, ({"answer": 42},)
+
+
+class SearchModel(BaseModel):
+    """Provide a Pydantic result for replay tests with and without an allowlist."""
+
+    answer: str
 
 
 class BrokenValidatedModel:
@@ -219,7 +241,10 @@ class TestTypedHelpers:
 
 class TestTypedToolExecute:
     async def test_best_effort_tool_result_envelope_reaches_events(self, subscribed_events) -> None:
+        """Expose the normalized result in scope events while preserving opaque annotations."""
+
         def execute(_args: Json) -> ToolExecutionResult[object]:
+            """Return a displayable result with a separate annotation for the event assertion."""
             return ToolExecutionResult("answer", {"source": "test"})
 
         outcome = await typed.tool_execute(
@@ -244,9 +269,90 @@ class TestTypedToolExecute:
             "content": "answer",
             "is_error": False,
             "result": "answer",
+            "cache": {"replayable": True},
         }
         assert event.category_profile is not None
         assert event.category_profile["tool_result_annotation"] == {"source": "test"}
+
+    @pytest.mark.parametrize(
+        ("value", "allowed_types", "replayable"),
+        [
+            pytest.param("answer", (), True, id="string"),
+            pytest.param({"answer": 42}, (), True, id="json"),
+            pytest.param(SearchResult(items=["answer"], total=1), (SearchResult,), True, id="allowed-dataclass"),
+            pytest.param(SearchModel(answer="answer"), (SearchModel,), True, id="allowed-pydantic"),
+            pytest.param(frozenset({1, 2}), (), True, id="builtin-pickle"),
+            pytest.param(SearchResult(items=["answer"], total=1), (), False, id="unlisted-dataclass"),
+            pytest.param(SearchModel(answer="answer"), (), False, id="unlisted-pydantic"),
+            pytest.param(FaultyDumpValue(), (), False, id="unsupported-pickle"),
+            pytest.param({FaultyDumpValue()}, (), False, id="nested-unsupported-pickle"),
+            pytest.param(UnpickleableValue(), (), False, id="string-fallback"),
+            pytest.param(DictReducingValue(), (), False, id="type-changing-pickle"),
+            pytest.param(
+                NestedResult(SearchResult(["answer"], 1)), (NestedResult, SearchResult), False, id="nested-dataclass"
+            ),
+            pytest.param(
+                NestedResult([SearchResult(["answer"], 1)]),
+                (NestedResult, SearchResult),
+                False,
+                id="nested-dataclass-list",
+            ),
+            pytest.param(
+                NestedResult({"answer": SearchResult(["answer"], 1)}),
+                (NestedResult, SearchResult),
+                False,
+                id="nested-dataclass-dict",
+            ),
+            pytest.param(NestedResult({"answer": 42}), (NestedResult,), True, id="dataclass-with-json"),
+        ],
+    )
+    async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value, allowed_types, replayable) -> None:
+        """Replay portable results and rerun tools whose encoded values cannot be restored."""
+        from nemo_relay.adaptive import (
+            AdaptiveConfig,
+            AdaptiveRuntime,
+            ResponseCacheConfig,
+            ToolCacheConfig,
+            ToolOverride,
+        )
+
+        codec = BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types)
+        encoded = cast(JsonObject, codec.to_json(value))
+        assert encoded["cache"] == {"replayable": replayable}
+        expected = value if replayable else codec.from_json(encoded)
+        calls = 0
+
+        def execute(_args: Json) -> ToolExecutionResult[object]:
+            """Count tool executions and return the value and annotation used to verify replay."""
+            nonlocal calls
+            calls += 1
+            return ToolExecutionResult(value, {"source": "test"})
+
+        runtime = AdaptiveRuntime(
+            AdaptiveConfig(
+                response_cache=ResponseCacheConfig(
+                    namespace="typed-tool-replay",
+                    tools=ToolCacheConfig(enabled=True, overrides={"lookup": ToolOverride(cacheable=True)}),
+                )
+            ).to_dict()
+        )
+        await runtime.register()
+        try:
+            for call_id in ["call-1", "call-2"]:
+                outcome = await typed.tool_execute(
+                    "lookup",
+                    {},
+                    execute,
+                    JsonPassthrough(),
+                    BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types),
+                    tool_call_id=call_id,
+                )
+                assert outcome.result == expected
+                assert type(outcome.result) is type(expected)
+                assert outcome.annotation == {"source": "test"}
+            assert calls == (1 if replayable else 2)
+        finally:
+            runtime.deregister()
 
     async def test_dataclass_roundtrip(self) -> None:
         async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:

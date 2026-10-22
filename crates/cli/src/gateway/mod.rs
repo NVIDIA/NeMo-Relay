@@ -39,6 +39,7 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -50,6 +51,7 @@ use crate::operational::{
     self, OperationalContext, UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
     UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS,
 };
+use crate::runtime_diagnostics::{self as diag, Operation};
 use crate::server::AppState;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
@@ -329,6 +331,11 @@ pub(crate) async fn websocket_passthrough(
     }
     let extensions = std::mem::take(request.extensions_mut());
     let prepared = prepare_gateway_request(&state.config, request, authorization, &path).await?;
+    if reqwest::Url::parse(&prepared.upstream_url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        return Err(CliError::InvalidPayload("remote HTTP model opt-in supports HTTP requests and SSE only; WebSocket upstreams require HTTPS or loopback".into()));
+    }
     let headers = inject_provider_auth(
         state
             .http
@@ -492,6 +499,7 @@ async fn run_unmanaged_gateway(
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
         &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -516,7 +524,7 @@ async fn run_unmanaged_gateway(
     {
         operational::upstream_status(operational, status.as_u16());
     }
-    let bytes = match response.bytes().await {
+    let bytes = match diagnostic_response_body(response).await {
         Ok(bytes) => bytes,
         Err(error) => {
             if let Some(operational) = operational.as_ref() {
@@ -724,6 +732,7 @@ fn build_buffered_func(
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -733,6 +742,7 @@ fn build_buffered_func(
     Arc::new(move |request| {
         let http = http.clone();
         let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -746,6 +756,7 @@ fn build_buffered_func(
             let response = match forward_upstream_request(
                 &http,
                 &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -780,7 +791,7 @@ fn build_buffered_func(
                 operational::upstream_status(&operational, status.as_u16());
             }
             let response_headers = response_headers(response.headers());
-            let bytes = match response.bytes().await {
+            let bytes = match diagnostic_response_body(response).await {
                 Ok(bytes) => bytes,
                 Err(error) if retry_aware => {
                     operational::upstream_failed(&operational, "response_read");
@@ -1006,6 +1017,7 @@ fn build_streaming_func(
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -1015,6 +1027,7 @@ fn build_streaming_func(
     Arc::new(move |request| {
         let http = http.clone();
         let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -1028,6 +1041,7 @@ fn build_streaming_func(
             let response = match forward_upstream_request(
                 &http,
                 &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -1063,7 +1077,7 @@ fn build_streaming_func(
             }
             let response_headers = response_headers(response.headers());
             if !status.is_success() {
-                let bytes = match response.bytes().await {
+                let bytes = match diagnostic_response_body(response).await {
                     Ok(bytes) => bytes,
                     Err(error) if retry_aware => {
                         operational::upstream_failed(&operational, "response_read");
@@ -1178,6 +1192,11 @@ fn sse_json_stream_with_thresholds(
                                 yield Ok(event.data);
                             }
                             Err(error) => {
+                                diag::failure(
+                                    Operation::Upstream,
+                                    CliFailureCode::UpstreamResponse,
+                                    FailureClass::Unknown,
+                                );
                                 operational::upstream_stream_read_failed(&operational);
                                 yield Err(error);
                                 return;
@@ -1186,6 +1205,11 @@ fn sse_json_stream_with_thresholds(
                     }
                 }
                 Err(error) => {
+                    diag::failure(
+                        Operation::Upstream,
+                        CliFailureCode::UpstreamResponse,
+                        FailureClass::Unknown,
+                    );
                     operational::upstream_stream_read_failed(&operational);
                     yield Err(FlowError::Internal(error.to_string()));
                     return;
@@ -1201,11 +1225,17 @@ fn sse_json_stream_with_thresholds(
             }
             Ok(None) => {}
             Err(error) => {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 operational::upstream_stream_read_failed(&operational);
                 yield Err(error);
                 return;
             }
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         operational::upstream_completed(&operational, true);
     };
     LlmJsonStream::new(stream)
@@ -1371,6 +1401,7 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
 async fn forward_upstream_request(
     http: &reqwest::Client,
     helper_http: &reqwest::Client,
+    plaintext_http: &reqwest::Client,
     request: UpstreamForwardRequest<'_>,
 ) -> Result<reqwest::Response, CliError> {
     let UpstreamForwardRequest {
@@ -1403,7 +1434,11 @@ async fn forward_upstream_request(
         effective.credential_policy,
         TargetCredentialPolicy::SourceOrEnvironment
     ) && forwarding.authorization.allow_environment_provider_auth;
-    let http = if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
+    let http = if reqwest::Url::parse(&effective.url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        plaintext_http
+    } else if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
         helper_http
     } else {
         http
@@ -1443,9 +1478,20 @@ async fn forward_upstream_request(
         } else {
             operational::upstream_failed(operational, "transport");
         }
-        response.map_err(CliError::from)
+        response
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     } else {
-        http.execute(upstream).await.map_err(CliError::from)
+        http.execute(upstream)
+            .await
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     }
 }
 
@@ -1677,8 +1723,10 @@ async fn inject_provider_auth(
     config: &crate::configuration::GatewayConfig,
 ) -> Result<reqwest::Request, CliError> {
     let mut request = builder.build()?;
-    crate::upstream_auth::apply(
+    let destination = request.url().clone();
+    crate::upstream_auth::apply_for_destination(
         request.headers_mut(),
+        destination.as_str(),
         route.is_anthropic(),
         allow_configured_auth && route.allows_relay_auth(),
         config,
@@ -1698,6 +1746,7 @@ async fn passthrough_streaming(
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
         &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -1728,6 +1777,11 @@ async fn passthrough_streaming(
         let mut guard = UpstreamStreamGuard::new(operational_for_stream);
         while let Some(chunk) = bytes.next().await {
             if chunk.is_err() {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 if let Some(operational) = guard.context.as_ref() {
                     operational::upstream_stream_read_failed(operational);
                 }
@@ -1737,6 +1791,7 @@ async fn passthrough_streaming(
             }
             yield chunk;
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         guard.complete();
     });
     build_response(status, headers, body)
@@ -2000,9 +2055,31 @@ pub(crate) async fn models(
         &state.config,
     )
     .await?;
-    let upstream_response = http.execute(upstream).await?;
+    let http = if crate::configuration::remote_http(upstream.url()) {
+        &state.http_plaintext
+    } else {
+        http
+    };
+    let upstream_response = http
+        .execute(upstream)
+        .await
+        .inspect(|_| diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived))
+        .inspect_err(diag::transport_error)?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
-    let bytes = upstream_response.bytes().await?;
+    let bytes = diagnostic_response_body(upstream_response).await?;
     build_response(status, headers, Body::from(bytes))
+}
+
+async fn diagnostic_response_body(response: reqwest::Response) -> Result<Bytes, reqwest::Error> {
+    let result = response.bytes().await;
+    match &result {
+        Ok(_) => diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted),
+        Err(_) => diag::failure(
+            Operation::Upstream,
+            CliFailureCode::UpstreamResponse,
+            FailureClass::Unknown,
+        ),
+    }
+    result
 }

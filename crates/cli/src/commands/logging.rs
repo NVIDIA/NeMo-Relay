@@ -70,7 +70,7 @@ impl LoggingArgs {
         self.resolve_with_base(|| Ok(LoggingConfig::default()))
     }
 
-    fn resolve_with_base(
+    pub(super) fn resolve_with_base(
         &self,
         load_base: impl FnOnce() -> Result<LoggingConfig, CliError>,
     ) -> Result<LoggingConfig, CliError> {

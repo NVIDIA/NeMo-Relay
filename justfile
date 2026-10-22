@@ -1027,7 +1027,7 @@ is_true() {
 '''
 
 # validate the documentation site, links, navigation, and generated references
-docs:
+docs: docs-examples
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
@@ -1037,7 +1037,7 @@ docs:
     npx fern docs broken-links --strict
 
 # validate documentation links and navigation without a full site build
-docs-linkcheck:
+docs-linkcheck: docs-examples
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
@@ -1045,6 +1045,10 @@ docs-linkcheck:
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings
     npx fern docs broken-links --strict
+
+# compile and run Rust examples shared with the documentation
+docs-examples:
+    cargo test --locked -p nemo-relay --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:

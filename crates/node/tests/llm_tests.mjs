@@ -486,6 +486,58 @@ describe('LLM execute', () => {
 // ===========================================================================
 
 describe('LLM guardrails', () => {
+  for (const sanitize of [false, true]) {
+    it(`manual request codecs annotate telemetry with sanitization ${sanitize ? 'enabled' : 'disabled'}`, async () => {
+      const events = [];
+      const codec = new lib.OpenAIChatCodec();
+      const request = {
+        headers: { Authorization: 'Bearer secret' },
+        content: { model: 'test-model', messages: [{ role: 'user', content: 'private' }] },
+      };
+      const original = structuredClone(request);
+      registerSubscriber('manual_codec_subscriber', (event) => events.push(event));
+      registerLlmRequestIntercept('manual_codec_intercept', 1, false, () => {
+        assert.fail('Manual calls must not run request intercepts');
+      });
+      if (sanitize) {
+        registerLlmSanitizeRequestGuardrail('manual_codec_sanitizer', 1, (request, context) => {
+          assert.deepEqual(context.codec, { kind: 'opaque' });
+          const resolved = context.resolveCodec();
+          assert.notEqual(resolved, null);
+          const annotated = resolved.decode(request);
+          annotated.messages = [{ role: 'user', content: 'redacted' }];
+          return resolved.encode(annotated, request);
+        });
+      }
+      try {
+        const handle = llmCall(
+          'manual_codec',
+          request,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          codec.decode.bind(codec),
+          ({ annotated, original }) => codec.encode(annotated, original),
+        );
+        llmCallEnd(handle, {});
+        await flushSubscribers();
+        const start = events.find((event) => event.name === 'manual_codec' && event.scope_category === 'start');
+        const expected = sanitize ? 'redacted' : 'private';
+        assert.equal(start.data.content.messages[0].content, expected);
+        assert.deepEqual(start.data.headers, {});
+        assert.equal(start.category_profile.annotated_request.messages[0].content, expected);
+        assert.deepEqual(request, original);
+      } finally {
+        if (sanitize) deregisterLlmSanitizeRequestGuardrail('manual_codec_sanitizer');
+        deregisterLlmRequestIntercept('manual_codec_intercept');
+        deregisterSubscriber('manual_codec_subscriber');
+      }
+    });
+  }
+
   it('contextual sanitizers receive payload first and codec context second', async () => {
     const events = [];
     let requestContextChecked = false;
@@ -529,6 +581,16 @@ describe('LLM guardrails', () => {
   it('rejects incomplete request codec callback pairs', () => {
     const decode = (request) => request;
     const encode = ({ annotated }) => annotated;
+
+    for (const callbacks of [
+      [decode, null],
+      [null, encode],
+    ]) {
+      assert.throws(
+        () => llmCall('partial_codec_manual', makeNative(), null, null, null, null, null, null, ...callbacks),
+        /codecDecode and codecEncode must be provided together/,
+      );
+    }
 
     assert.throws(
       () => llmCallExecute('partial_codec_execute', makeNative(), () => ({}), null, null, null, null, null, decode),

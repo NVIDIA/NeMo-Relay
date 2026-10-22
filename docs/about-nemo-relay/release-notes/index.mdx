@@ -30,19 +30,83 @@ For the full release history, including individual pull requests, refer to
 
 ## Release 0.11.0
 
-{/* Add 0.11.0 release details here. */}
+NeMo Relay 0.11.0 is in development. The following sections summarize changes
+since 0.10.0, including fixes from the 0.10 patch releases. For the full history
+of a published version, refer to GitHub Releases.
 
 ### Highlights
 
-{/* Add 0.11.0 release details here. */}
+This release expands plugin control, deployment options, and setup guidance:
+
+- Daemon workers support the full middleware pipeline for large language model
+  (LLM) calls.
+  This covers OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+  Refer to
+  [LLM Middleware](/daemon/reference#llm-middleware).
+- Scope snapshots expose the visible scope IDs and types across bindings and
+  plugin SDKs. Refer to
+  [Inspect the Visible Stack](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
+- OpenTelemetry Protocol (OTLP) endpoints support custom certificate authorities
+  and mutual Transport Layer Security (TLS). Refer to
+  [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls).
+- Provider API key helpers can supply a fresh credential for each request
+  attempt. Refer to
+  [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
+- New quick starts cover application bindings and supported frameworks and
+  coding agents. Plugin setup guidance includes Switchyard. Refer to
+  [Quick Starts](/getting-started/quick-start) and
+  [Switchyard](/configure-plugins/switchyard).
+- The configuration editor exposes more gateway, provider, logging, and plugin
+  settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
+  [Interactive Setup](/nemo-relay-cli/basic-usage#interactive-setup) and
+  [Kubernetes Deployment Guidance](/daemon/kubernetes).
 
 ### Compatibility and Migration
 
-{/* Add 0.11.0 release details here. */}
+<Warning title="Review the Upgrade Steps">
+
+Upgrades from 0.10.0 can change hook failure behavior, provider access, worker
+configuration, and stream error handling. Review the
+[Migration Guides](/reference/migration-guides) before updating a deployment.
+
+</Warning>
+
+The main compatibility changes affect these areas:
+
+- Python object decoding now requires an explicit list of allowed classes to
+  restore tagged dataclass or Pydantic values.
+- Node.js streams now report provider, collector, and finalizer failures.
+  Callers must handle errors and await cleanup when they stop reading early.
+- Workers now load layered user and system configuration. Policy checks should
+  run before response caches. The default cache priority is now `150`.
+- Local hooks use verified TLS connections. Fail-closed delivery failures
+  return exit code `2`. Refresh personal hooks and restart affected processes.
+- Native plugins can use application binary interface (ABI) v8 scope snapshots.
+  Existing v7 callback layouts remain compatible. Worker snapshots require the
+  new `grpc-v1` extension.
 
 ### Fixes and Other Changes
 
-{/* Add 0.11.0 release details here. */}
+The main fixes improve request handling, telemetry, and process cleanup:
+
+- Provider routing checks access before using Relay-held credentials. Plugin
+  integrity and signature failures always prevent activation.
+- Request codecs preserve provider fields across multiple edits. LangChain
+  tool schema edits now reach the model call.
+- Framework tool results retain content and handled error status. Manual LLM
+  completion preserves an explicit error status.
+- OpenAI Responses streams retain usage and report missing terminal events.
+  Gemini cost estimates account for thinking and supported tool-use tokens.
+- Agent Trajectory Interchange Format (ATIF) output uses valid content parts.
+  Text-only step messages use strings. Delivery-failure warnings identify the
+  affected trajectory.
+- Logging overrides preserve configured file sinks. Go bindings retain native
+  handles for the duration of foreign function interface (FFI) calls.
+- Daemon, worker, and hook paths use less memory or avoid repeated work. Worker
+  cancellation and session-lock cleanup release resources when calls end.
+
+For upgrade actions and links to each affected workflow, refer to the
+[Migration Guides](/reference/migration-guides).
 
 ## Known Issues in 0.11.0
 

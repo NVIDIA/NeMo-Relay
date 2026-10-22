@@ -40,6 +40,168 @@ fn test_http_client_no_redirect() -> Client {
         .expect("test client configuration is valid")
 }
 
+#[tokio::test]
+async fn raw_passthrough_stream_records_body_outcomes_without_counting_cancellation() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_RAW_STREAM_DIAGNOSTICS";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // Installing the process-wide context must not affect other gateway tests.
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "gateway::tests::raw_passthrough_stream_records_body_outcomes_without_counting_cancellation",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("raw-stream diagnostics test timed out")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let runtime = diag::install_role(
+        crate::configuration::RuntimeDiagnosticsConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        "cli",
+        crate::daemon::diagnostics::CollectorConfig::default(),
+    )
+    .unwrap();
+    let mut expected_headers = 0;
+    let mut expected_completed = 0;
+    let mut expected_failures = 0;
+    #[derive(Clone, Copy, Debug)]
+    enum Outcome {
+        Complete,
+        Truncated,
+        Cancelled,
+    }
+    for with_operational in [false, true] {
+        for outcome in [Outcome::Complete, Outcome::Truncated, Outcome::Cancelled] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let request_body = br#"{"stream":true}"#;
+            let (release, released) = oneshot::channel();
+            let upstream = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request
+                        .windows(4)
+                        .position(|v| v == b"\r\n\r\n")
+                        .is_some_and(|end| request.len() >= end + 4 + request_body.len())
+                    {
+                        break;
+                    }
+                }
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n",
+                    )
+                    .await
+                    .unwrap();
+                match outcome {
+                    Outcome::Complete => socket.write_all(b"0\r\n\r\n").await.unwrap(),
+                    Outcome::Truncated => {} // Close before the terminal HTTP chunk.
+                    Outcome::Cancelled => released.await.unwrap(),
+                }
+            });
+            let config = GatewayConfig {
+                openai_base_url: format!("http://{address}/v1"),
+                ..Default::default()
+            };
+            let mut state = AppState::new(config.clone());
+            state.http = Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let request = Request::post("/v1/images/generations")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(request_body.as_slice()))
+                .unwrap();
+            let mut authorization = environment_authorization();
+            authorization.allow_environment_provider_auth = false;
+            let prepared =
+                prepare_gateway_request(&config, request, authorization, "/v1/images/generations")
+                    .await
+                    .unwrap();
+            assert!(prepared.streaming);
+            let operational = with_operational.then(OperationalContext::new);
+            let response = passthrough_streaming(state, prepared, operational)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut body = response.into_body();
+            match outcome {
+                Outcome::Complete => assert_eq!(body.collect().await.unwrap().to_bytes(), "hello"),
+                Outcome::Truncated => assert!(body.collect().await.is_err()),
+                Outcome::Cancelled => {
+                    let frame = body.frame().await.unwrap().unwrap();
+                    assert_eq!(frame.into_data().unwrap(), "hello");
+                    drop(body);
+                }
+            }
+            let _ = release.send(());
+            tokio::time::timeout(Duration::from_secs(5), upstream)
+                .await
+                .unwrap()
+                .unwrap();
+            expected_headers += 1;
+            expected_completed += usize::from(matches!(outcome, Outcome::Complete));
+            expected_failures += usize::from(matches!(outcome, Outcome::Truncated));
+            let snapshot = runtime
+                .context
+                .snapshot(&nemo_relay::diagnostics::DiagnosticQuery {
+                    component_key: Some("cli.upstream".into()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            for (code, expected) in [
+                ("cli.upstream.headers_received", expected_headers),
+                ("cli.upstream.body_completed", expected_completed),
+                ("cli.upstream.response_failed", expected_failures),
+            ] {
+                assert_eq!(
+                    snapshot
+                        .events
+                        .iter()
+                        .filter(|event| event.code() == code)
+                        .count(),
+                    expected,
+                    "{outcome:?}, operational={with_operational}, {code}"
+                );
+            }
+            assert_eq!(
+                snapshot.components[0]
+                    .lifetime
+                    .totals
+                    .failures_total
+                    .value
+                    .get(),
+                expected_failures as u64
+            );
+        }
+    }
+}
+
 fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthorization {
     crate::provider_auth::ProviderRequestAuthorization {
         source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
@@ -592,6 +754,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
 #[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/v1/".into(),
@@ -648,6 +811,7 @@ fn chatgpt_shaped_responses_path_is_a_responses_route() {
 #[test]
 fn openai_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -689,6 +853,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
 #[test]
 fn anthropic_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -968,7 +1133,7 @@ async fn cross_protocol_target_uses_only_binding_owned_authentication() {
         headers: Map::from_iter([
             (
                 INTERNAL_DISPATCH_URL_HEADER.to_string(),
-                json!("http://anthropic-target.invalid/v1/messages"),
+                json!("https://anthropic-target.invalid/v1/messages"),
             ),
             (
                 INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
@@ -1000,7 +1165,7 @@ async fn cross_protocol_target_uses_only_binding_owned_authentication() {
     );
 
     let built = inject_provider_auth(
-        test_http_client().post("http://anthropic-target.invalid/v1/messages"),
+        test_http_client().post("https://anthropic-target.invalid/v1/messages"),
         effective.target_route,
         false,
         &auth_test_config(effective.target_route, None),
@@ -2005,7 +2170,7 @@ async fn injects_openai_bearer_when_inbound_has_no_auth() {
     )]);
     // Foreground gateway mode retains the convenience of supplying its own provider key.
     let http = test_http_client();
-    let builder = http.get("http://upstream/v1/responses");
+    let builder = http.get("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2024,7 +2189,7 @@ async fn injects_anthropic_x_api_key_for_anthropic_routes() {
         Some(std::ffi::OsStr::new("sk-ant-test")),
     )]);
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/messages");
+    let builder = http.post("https://upstream/v1/messages");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::AnthropicMessages,
@@ -2066,7 +2231,7 @@ async fn configured_auth_headers_are_provider_specific_and_precede_environment_k
         ),
     ] {
         let built = inject_provider_auth(
-            test_http_client().post("http://upstream"),
+            test_http_client().post("https://upstream"),
             route,
             true,
             &auth_test_config(route, forwarding.configured_auth_header(route)),
@@ -2113,7 +2278,7 @@ async fn configured_openai_auth_replaces_chatgpt_jwt() {
     );
 
     let request = inject_provider_auth(
-        test_http_client().post("http://upstream"),
+        test_http_client().post("https://upstream"),
         ProviderRoute::OpenAiResponses,
         true,
         &auth_test_config(ProviderRoute::OpenAiResponses, configured_auth_header),
@@ -2136,7 +2301,7 @@ async fn skips_injection_when_inbound_already_has_authorization() {
         "authorization",
         HeaderValue::from_static("Bearer agent-supplied"),
     );
-    let builder = http.post("http://upstream/v1/responses").headers(inbound);
+    let builder = http.post("https://upstream/v1/responses").headers(inbound);
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2152,7 +2317,7 @@ async fn skips_injection_when_inbound_already_has_authorization() {
 async fn skips_injection_when_env_var_unset() {
     let _env = crate::test_support::EnvScope::set(&[("OPENAI_API_KEY", None)]);
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/responses");
+    let builder = http.post("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2167,7 +2332,7 @@ async fn skips_injection_when_env_var_unset() {
 #[tokio::test]
 async fn managed_sidecar_never_injects_forwarded_provider_credentials() {
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/responses");
+    let builder = http.post("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2466,6 +2631,7 @@ fn chatgpt_backend_url_omits_v1_prefix() {
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -2484,6 +2650,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -2492,6 +2659,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -2517,6 +2685,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
 #[tokio::test]
 async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -2535,6 +2704,7 @@ async fn models_rejects_non_get_requests_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -2543,6 +2713,7 @@ async fn models_rejects_non_get_requests_directly() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3141,6 +3312,7 @@ fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
 #[tokio::test]
 async fn models_refuses_an_unusable_named_upstream() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         // Nothing must reach this. If the refusal fell back to configured routing, the request
@@ -3161,6 +3333,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -3171,6 +3344,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3481,6 +3655,7 @@ async fn helper_authentication_reaches_gateway_upstream_on_each_dispatch() {
             let response = forward_upstream_request(
                 &http,
                 &http,
+                &http,
                 UpstreamForwardRequest {
                     method: &Method::POST,
                     url: &url,
@@ -3728,7 +3903,7 @@ async fn unmanaged_routes_never_inject_configured_or_environment_credentials() {
     ] {
         for config in &configs {
             let request = inject_provider_auth(
-                test_http_client().post("http://upstream"),
+                test_http_client().post("https://upstream"),
                 route,
                 true,
                 config,
@@ -3864,6 +4039,64 @@ async fn custom_upstream_routes_apply_managed_or_passthrough_auth_policy() {
                     assert!(prepared.upstream_url.ends_with("?client_version=0.163.0"));
                 }
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn http_model_hosts_final_dispatch_blocks_rewrites_and_strips_custom_auth() {
+    let config = GatewayConfig {
+        openai_base_url: "http://model.test:8000/custom/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+            "other.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    let error = websocket_passthrough(
+        State(AppState::new(config.clone())),
+        Request::get("/v1/realtime")
+            .header("authorization", "Bearer caller-secret")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("WebSocket upstreams require HTTPS or loopback"),
+        "{error}"
+    );
+    let http = Client::new();
+    for (url, allowed) in [
+        ("http://model.test:8000/custom/v1/responses", true),
+        ("http://other.test:8000/responses", false),
+        ("http://model.test:9000/responses", false),
+        ("http://unlisted.test/responses", false),
+    ] {
+        let request = inject_provider_auth(
+            http.post(url)
+                .header("authorization", "Bearer middleware-secret")
+                .header("cookie", "session=secret")
+                .header("x-custom-token", "secret")
+                .header("content-encoding", "gzip")
+                .header("content-type", "application/json")
+                .body("opaque-compressed-body"),
+            ProviderRoute::OpenAiResponses,
+            true,
+            &config,
+        )
+        .await;
+        assert_eq!(request.is_ok(), allowed, "{url}");
+        if let Ok(request) = request {
+            assert_eq!(request.headers()["content-encoding"], "gzip");
+            assert_eq!(request.headers().len(), 2);
+            assert_eq!(
+                request.body().unwrap().as_bytes().unwrap(),
+                b"opaque-compressed-body"
+            );
         }
     }
 }
