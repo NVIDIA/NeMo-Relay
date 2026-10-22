@@ -60,6 +60,9 @@ fn embedded_query_is_bounded_and_rejects_unknown_fields() {
     assert_eq!(decode_query("{}").unwrap(), DiagnosticQuery::default());
     assert!(decode_query("{\"health\":true}").is_err());
     assert!(decode_query("[]").is_err());
+    for query in [r#"{"ownership":true}"#, r#"{"continuation":true}"#] {
+        assert_eq!(decode_query(query).unwrap_err().reason(), "invalid_query");
+    }
     assert!(decode_query(&" ".repeat(MAX_BINDING_QUERY_BYTES + 1)).is_err());
     assert!(decode_query("{\"after_sequence\":9007199254740993}").is_err());
     assert_eq!(
@@ -70,6 +73,89 @@ fn embedded_query_is_bounded_and_rejects_unknown_fields() {
             .get(),
         u64::MAX
     );
+}
+
+#[test]
+fn nested_query_selectors_reject_unknown_fields_without_changing_response_models() {
+    let ownership = ComponentOwnership {
+        subscriber_instance_id: Some(uuid::Uuid::now_v7()),
+        plugin_instance_id: Some(uuid::Uuid::now_v7()),
+        configuration_id: Some("selected-config".into()),
+        responsibility: Some("selected-runtime".into()),
+    };
+    let cursor = DiagnosticCursor {
+        source_instance_id: uuid::Uuid::now_v7(),
+        sequence: 1.into(),
+        component_offset: 0.into(),
+        event_offset: 0.into(),
+        scope: 1.into(),
+    };
+    for (selector, value) in [
+        ("ownership", serde_json::to_value(&ownership).unwrap()),
+        ("continuation", serde_json::to_value(&cursor).unwrap()),
+    ] {
+        let query = serde_json::json!({ (selector): value });
+        let decoded = decode_query(&query.to_string()).unwrap();
+        if selector == "ownership" {
+            assert_eq!(decoded.ownership, ownership);
+        } else {
+            assert_eq!(decoded.continuation, Some(cursor.clone()));
+        }
+        let mut unknown_only = serde_json::json!({ (selector): {"configuration_typo": "PRIVATE"} });
+        assert!(matches!(
+            decode_query(&unknown_only.to_string()),
+            Err(EmbeddedDiagnosticError::Core(DiagnosticError::InvalidQuery))
+        ));
+        unknown_only[selector] = query[selector].clone();
+        unknown_only[selector]["future_field"] = serde_json::json!("PRIVATE");
+        let error = decode_query(&unknown_only.to_string()).unwrap_err();
+        assert_eq!(error.reason(), "invalid_query");
+        assert!(!error.to_string().contains("PRIVATE"));
+        // The same models remain extensible as snapshot response fields.
+        if selector == "ownership" {
+            assert_eq!(
+                serde_json::from_value::<ComponentOwnership>(unknown_only[selector].clone())
+                    .unwrap(),
+                ownership
+            );
+        } else {
+            assert_eq!(
+                serde_json::from_value::<DiagnosticCursor>(unknown_only[selector].clone()).unwrap(),
+                cursor
+            );
+        }
+    }
+    assert_eq!(
+        decode_query(r#"{"ownership":{},"continuation":null}"#).unwrap(),
+        DiagnosticQuery::default()
+    );
+}
+
+#[test]
+fn ownership_query_typos_cannot_broaden_embedded_snapshot_selection() {
+    let service = service();
+    let mut registration = ComponentRegistration::new("example", &[]);
+    registration.ownership.configuration_id = Some("actual-config".into());
+    let _component = service.context.register_component(registration).unwrap();
+    for query in [
+        r#"{"ownership":{"configuration_typo":"other-config"}}"#,
+        r#"{"ownership":{"configuration_id":"actual-config","configuration_typo":"other-config"}}"#,
+    ] {
+        assert!(matches!(
+            service.reader.snapshot_json(query),
+            Err(EmbeddedDiagnosticError::Core(DiagnosticError::InvalidQuery))
+        ));
+    }
+    for (query, expected) in [
+        ("{}", 1),
+        (r#"{"ownership":{}}"#, 1),
+        (r#"{"ownership":{"configuration_id":"actual-config"}}"#, 1),
+        (r#"{"ownership":{"configuration_id":"other-config"}}"#, 0),
+    ] {
+        let page = service.reader.snapshot_json(query).unwrap();
+        let snapshot: DiagnosticSnapshot = serde_json::from_str(page.as_str()).unwrap();
+        assert_eq!(snapshot.components.len(), expected, "{query}");
+    }
 }
 
 #[test]
