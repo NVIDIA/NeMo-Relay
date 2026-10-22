@@ -270,8 +270,9 @@ Managed provider requests and model discovery now use the same credential
 rules. A configured API key helper replaces the caller's provider credential.
 Without a helper, Relay keeps caller-provided API keys. It can replace native
 ChatGPT credentials with an administrator's OpenAI credential on managed
-routes. Review deployments that use a helper or an administrator credential to
-choose the provider account. Refer to
+routes. If Relay has no replacement, OpenAI requests keep the caller's ChatGPT
+credential. Review deployments that use a helper or an administrator credential
+to choose the provider account. For the credential selection order, refer to
 [Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
 
 `GET /models` and `GET /v1/models` use Anthropic when the request includes

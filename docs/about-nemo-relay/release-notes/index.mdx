@@ -112,15 +112,15 @@ For upgrade actions and links to each affected workflow, refer to the
 
 The following known issues and limitations apply to NeMo Relay 0.11.0:
 
-- ChatGPT voice sidebands are separate connections used to control a voice
-  call. Routing them through Relay can fail when Relay has a replacement
-  OpenAI credential. Call creation at
-  `POST /backend-api/codex/realtime/calls` keeps the caller's ChatGPT credential
-  and uses the ChatGPT backend. Attachment at `/live/CALL_ID` or
-  `/v1/live/CALL_ID` instead uses the replacement credential and configured API
-  upstream, which cannot find that ChatGPT call. Connect the sideband directly
-  to OpenAI for this setup. Codex Desktop's default direct sideband avoids
-  this issue. Refer to [Codex](/nemo-relay-cli/codex).
+- ChatGPT voice calls and sidebands use separate upstream settings. Call
+  creation uses the ChatGPT backend and keeps the caller's ChatGPT credential.
+  Sideband attachment uses `openai_base_url` and never receives Relay's provider
+  credentials. A custom OpenAI upstream might not support a call created on
+  ChatGPT. Relay also removes recognized ChatGPT tokens and `chatgpt-account-id`
+  from unmanaged voice sideband requests to that custom upstream. Use a sideband destination that can
+  access the call without relying on the caller's ChatGPT credential. Codex
+  Desktop connects its sideband directly to OpenAI by default. Refer to
+  [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
 - OTLP collectors can return a successful response while rejecting individual
   spans, log records, or metric data points. Relay does not report these partial
   successes in runtime diagnostics, and flush or shutdown can still succeed.
