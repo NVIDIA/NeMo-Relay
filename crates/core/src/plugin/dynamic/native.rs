@@ -15,7 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll};
 
@@ -2102,6 +2102,47 @@ fn flow_error_from_plugin_status(
         );
     }
     report_native_http_error(flow_error_from_status(status, fallback), Some(user_data))
+}
+
+fn flow_error_from_plugin_status_with_next_provenance(
+    status: NemoRelayStatus,
+    fallback: &str,
+    user_data: &NativeCallbackUserData,
+    next_status: i32,
+) -> FlowError {
+    if is_propagated_next_status(status, next_status) {
+        report_native_http_error(flow_error_from_status(status, fallback), Some(user_data))
+    } else {
+        flow_error_from_plugin_status(status, fallback, user_data)
+    }
+}
+
+fn is_propagated_next_status(status: NemoRelayStatus, next_status: i32) -> bool {
+    status as i32 == next_status
+}
+
+/// Per-invocation `next` state; callback ABI statuses are the only provenance
+/// signal available when native code returns a status to Relay.
+struct NativeNextContext<N> {
+    next: N,
+    last_downstream_status: AtomicI32,
+}
+impl<N> NativeNextContext<N> {
+    fn new(next: N) -> Self {
+        Self {
+            next,
+            last_downstream_status: AtomicI32::new(-1),
+        }
+    }
+
+    fn clear_downstream_status(&self) {
+        self.last_downstream_status.store(-1, Ordering::Relaxed);
+    }
+
+    fn record_downstream_status(&self, status: NemoRelayStatus) {
+        self.last_downstream_status
+            .store(status as i32, Ordering::Relaxed);
+    }
 }
 
 struct NativeCallbackUserDataGuard {
@@ -5868,7 +5909,7 @@ fn wrap_tool_execution_fn(
                 .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
             let args_string = native_string_from_json(&args)
                 .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
-            let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
+            let next_ctx = Box::into_raw(Box::new(NativeNextContext::new(next))) as *mut c_void;
             let mut out_outcome = ptr::null_mut();
             let status = unsafe {
                 cb(
@@ -5880,8 +5921,15 @@ fn wrap_tool_execution_fn(
                     &mut out_outcome,
                 )
             };
+            let next_status = unsafe {
+                let context = &*(next_ctx as *const NativeNextContext<ToolExecutionNextFn>);
+                let next_status = context.last_downstream_status.load(Ordering::Relaxed);
+                drop(Box::from_raw(
+                    next_ctx as *mut NativeNextContext<ToolExecutionNextFn>,
+                ));
+                next_status
+            };
             unsafe {
-                drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn));
                 native_string_free(name_string);
                 native_string_free(args_string);
             }
@@ -5889,10 +5937,11 @@ fn wrap_tool_execution_fn(
                 if !out_outcome.is_null() {
                     unsafe { native_string_free(out_outcome) };
                 }
-                return Err(flow_error_from_plugin_status(
+                return Err(flow_error_from_plugin_status_with_next_provenance(
                     status,
                     "native tool execution failed",
                     &user_data,
+                    next_status,
                 ));
             }
             let outcome_json = take_json_from_native_string(
@@ -5924,7 +5973,7 @@ fn wrap_tool_execution_context_fn(
             clear_native_last_error();
             let context = native_string_from_json(&context)
                 .ok_or_else(|| FlowError::Internal("failed to allocate native context".into()))?;
-            let next_context = Box::into_raw(Box::new(next)) as *mut c_void;
+            let next_context = Box::into_raw(Box::new(NativeNextContext::new(next))) as *mut c_void;
             let mut outcome = ptr::null_mut();
             let status = unsafe {
                 cb(
@@ -5935,18 +5984,27 @@ fn wrap_tool_execution_context_fn(
                     &mut outcome,
                 )
             };
-            unsafe {
-                drop(Box::from_raw(next_context as *mut ToolExecutionNextFn));
-                native_string_free(context);
-            }
+            let next_status = unsafe {
+                let next_context_ref =
+                    &*(next_context as *const NativeNextContext<ToolExecutionNextFn>);
+                let next_status = next_context_ref
+                    .last_downstream_status
+                    .load(Ordering::Relaxed);
+                drop(Box::from_raw(
+                    next_context as *mut NativeNextContext<ToolExecutionNextFn>,
+                ));
+                next_status
+            };
+            unsafe { native_string_free(context) };
             if status != NemoRelayStatus::Ok {
                 if !outcome.is_null() {
                     unsafe { native_string_free(outcome) };
                 }
-                return Err(flow_error_from_plugin_status(
+                return Err(flow_error_from_plugin_status_with_next_provenance(
                     status,
                     "native tool execution failed",
                     &user_data,
+                    next_status,
                 ));
             }
             let outcome = take_json_from_native_string(
@@ -5969,11 +6027,13 @@ unsafe extern "C" fn native_tool_next(
         set_native_last_error("native tool next received null pointer");
         return NemoRelayStatus::NullPointer;
     }
+    let next_context = unsafe { &*(next_ctx as *const NativeNextContext<ToolExecutionNextFn>) };
+    next_context.clear_downstream_status();
     let args = match parse_json_arg(args_json, "native tool next args") {
         Ok(args) => args,
         Err(status) => return status,
     };
-    let next = unsafe { (*(next_ctx as *const ToolExecutionNextFn)).clone() };
+    let next = next_context.next.clone();
     let context = MiddlewareContinuationContext::capture();
     let result = spawn_with_continuation_context(context, move || next(args)).join();
     match result {
@@ -5984,9 +6044,14 @@ unsafe extern "C" fn native_tool_next(
                 NemoRelayStatus::Internal
             }
         },
-        Ok(Err(err)) => status_from_flow_error(err),
+        Ok(Err(err)) => {
+            let status = status_from_flow_error(err);
+            next_context.record_downstream_status(status);
+            status
+        }
         Err(_) => {
             set_native_last_error("native tool next panicked");
+            next_context.record_downstream_status(NemoRelayStatus::Internal);
             NemoRelayStatus::Internal
         }
     }
@@ -6340,7 +6405,7 @@ fn call_llm_execution_callback(
         .map_err(|err| FlowError::Internal(format!("failed to serialize LLM request: {err}")))?;
     let request_string = native_string_from_json(&request_json)
         .ok_or_else(|| FlowError::Internal("failed to allocate native LLM request".into()))?;
-    let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
+    let next_ctx = Box::into_raw(Box::new(NativeNextContext::new(next))) as *mut c_void;
     let mut out = ptr::null_mut();
     let status = native_context.with_native_context(|context| unsafe {
         cb(
@@ -6354,8 +6419,15 @@ fn call_llm_execution_callback(
         )
     });
     drop(native_context);
+    let next_status = unsafe {
+        let next_context = &*(next_ctx as *const NativeNextContext<LlmExecutionNextFn>);
+        let next_status = next_context.last_downstream_status.load(Ordering::Relaxed);
+        drop(Box::from_raw(
+            next_ctx as *mut NativeNextContext<LlmExecutionNextFn>,
+        ));
+        next_status
+    };
     unsafe {
-        drop(Box::from_raw(next_ctx as *mut LlmExecutionNextFn));
         native_string_free(name_string);
         native_string_free(request_string);
     }
@@ -6363,10 +6435,11 @@ fn call_llm_execution_callback(
         if !out.is_null() {
             unsafe { native_string_free(out) };
         }
-        return Err(flow_error_from_plugin_status(
+        return Err(flow_error_from_plugin_status_with_next_provenance(
             status,
             "native LLM execution failed",
             user_data,
+            next_status,
         ));
     }
     take_json_from_native_string(out, "native LLM execution returned null")
@@ -6381,18 +6454,25 @@ unsafe extern "C" fn native_llm_next(
         set_native_last_error("native LLM next received null pointer");
         return NemoRelayStatus::NullPointer;
     }
+    let next_context = unsafe { &*(next_ctx as *const NativeNextContext<LlmExecutionNextFn>) };
+    next_context.clear_downstream_status();
     let request = match parse_llm_request_arg(request_json, "native LLM next request") {
         Ok(request) => request,
         Err(status) => return status,
     };
-    let next = unsafe { (*(next_ctx as *const LlmExecutionNextFn)).clone() };
+    let next = next_context.next.clone();
     let context = MiddlewareContinuationContext::capture();
     let result = spawn_with_continuation_context(context, move || next(request)).join();
     match result {
         Ok(Ok(result)) => write_native_json(&result, out_json),
-        Ok(Err(err)) => status_from_flow_error(err),
+        Ok(Err(err)) => {
+            let status = status_from_flow_error(err);
+            next_context.record_downstream_status(status);
+            status
+        }
         Err(_) => {
             set_native_last_error("native LLM next panicked");
+            next_context.record_downstream_status(NemoRelayStatus::Internal);
             NemoRelayStatus::Internal
         }
     }

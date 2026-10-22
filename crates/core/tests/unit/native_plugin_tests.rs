@@ -7426,6 +7426,41 @@ unsafe extern "C" fn tool_execution_error(
 }
 
 #[cfg(unix)]
+unsafe extern "C" fn tool_execution_propagates_next(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    _out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let mut out = ptr::null_mut();
+    let status = unsafe { next_fn(args_json, next_ctx, &mut out) };
+    if !out.is_null() {
+        unsafe { native_string_free(out) };
+    }
+    status
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn llm_execution_propagates_next(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
+    next_fn: NemoRelayNativeLlmNextFn,
+    next_ctx: *mut c_void,
+    _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let mut out = ptr::null_mut();
+    let status = unsafe { next_fn(request_json, next_ctx, &mut out) };
+    if !out.is_null() {
+        unsafe { native_string_free(out) };
+    }
+    status
+}
+
+#[cfg(unix)]
 unsafe extern "C" fn llm_request_intercept_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
@@ -7783,6 +7818,119 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         .to_string()
         .contains("LLM stream execution failed")
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_callback_diagnostics_exclude_propagated_next_failures() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+
+    let context = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let diagnostics = super::super::diagnostics::PluginDiagnostics::new(
+        &context,
+        "test.native.provenance",
+        crate::diagnostics::PluginExecution::NativeAbi,
+        Uuid::now_v7(),
+    );
+    let instance = Arc::new(NativePluginInstance {
+        diagnostics,
+        plugin_kind: "test.native.provenance".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
+    });
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "test"}),
+    };
+
+    let tool = wrap_tool_execution_fn(
+        Arc::clone(&instance),
+        tool_execution_propagates_next,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        tool(
+            ToolExecutionContext::new("tool", json!({})),
+            tool_next(Err(FlowError::NotFound("downstream tool failure".into()))),
+        )
+        .await
+        .is_err()
+    );
+
+    let llm = wrap_llm_execution_fn(
+        Arc::clone(&instance),
+        llm_execution_propagates_next,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        llm(
+            "model",
+            request.clone(),
+            LlmExecutionContext::default(),
+            llm_next(Err(FlowError::GuardrailRejected(
+                "downstream LLM failure".into(),
+            ))),
+        )
+        .await
+        .is_err()
+    );
+
+    let snapshot = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 0);
+
+    let tool = wrap_tool_execution_fn(
+        Arc::clone(&instance),
+        tool_execution_error,
+        ptr::null_mut(),
+        None,
+    );
+    assert!(
+        tool(
+            ToolExecutionContext::new("tool", json!({})),
+            tool_next(Ok(Json::Null)),
+        )
+        .await
+        .is_err()
+    );
+    let llm = wrap_llm_execution_fn(instance, llm_execution_error, ptr::null_mut(), None);
+    assert!(
+        llm(
+            "model",
+            request,
+            LlmExecutionContext::default(),
+            llm_next(Ok(Json::Null)),
+        )
+        .await
+        .is_err()
+    );
+
+    let snapshot = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 2);
 }
 
 #[cfg(unix)]
@@ -8407,6 +8555,19 @@ fn llm_next(output: FlowResult<Json>) -> LlmExecutionNextFn {
         let output = output.lock().unwrap().take().unwrap();
         Box::pin(async move { output })
     })
+}
+
+#[test]
+fn native_callback_status_provenance_identifies_propagated_next_failures() {
+    assert!(is_propagated_next_status(
+        NemoRelayStatus::NotFound,
+        NemoRelayStatus::NotFound as i32,
+    ));
+    assert!(!is_propagated_next_status(
+        NemoRelayStatus::InvalidArg,
+        NemoRelayStatus::NotFound as i32,
+    ));
+    assert!(!is_propagated_next_status(NemoRelayStatus::NotFound, -1));
 }
 
 #[test]
