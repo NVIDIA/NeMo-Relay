@@ -32,13 +32,12 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v8 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Preserves v7 callbacks; adds scope inspection and a size-discovered diagnostics extension. |
+| Native ABI v7 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Relay 0.10 adds request and response codec context to LLM execution callbacks and requires native plugins to rebuild against that layout. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
-| Legacy runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
-| Canonical native diagnostics | `PluginRuntime::diagnostics()` provides bounded authoring and separately authorized canonical snapshot and memory reads. |
+| Runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` snapshot. Entries are ordered and available through `get(code)`. |
 
 ## Installation
 
@@ -159,125 +158,3 @@ ABI-v2 compatibility tables cannot use runtime diagnostics.
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit
 that scope context.
-
-## Canonical Native Diagnostics
-
-`PluginRuntime::diagnostics()` records plugin-internal observations into the
-host's selected diagnostics context. It shares core's counters, bounded circular
-history, and detail pool. It does not start another service. The host resolves
-runtime enablement through the existing configuration layers.
-
-The SDK exposes three distinct diagnostic operations:
-
-| API | Purpose | Read permission |
-|---|---|---|
-| `runtime_diagnostics()` | Read the existing legacy host report. | Retains its existing access contract. |
-| `diagnostics().component_lazy(...)` and component `try_record_lazy(...)` | Register and record plugin-internal observations in the canonical store. | Recording does not require a context read grant. |
-| `diagnostics().reader()` | Read canonical discovery, snapshots, and memory views. | Requires the host's whole-context `native_diagnostics_read_context` grant. |
-
-The [native SDK guide](../../docs/build-plugins/native/runtime-events-and-scopes.mdx#record-internal-diagnostics)
-covers authoring and reads. The [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension)
-defines table discovery, buffer ownership, and compatibility behavior.
-
-```rust
-use nemo_relay_plugin::diagnostics::{
-    ComponentDeclaration, DiagnosticCode, DiagnosticOutcome, FailureClass, Observation,
-};
-use std::num::NonZeroU64;
-
-let diagnostics = ctx.runtime().diagnostics();
-let codes = [DiagnosticCode::Extension {
-    name: "lookup_failed",
-    description: "An internal lookup failed",
-    outcome: DiagnosticOutcome::Failure,
-    allowed_classes: &[FailureClass::Unavailable],
-}];
-let backend = diagnostics.component_lazy(|| ComponentDeclaration {
-    name: "backend",
-    codes: &codes,
-});
-// Keep the component for the registration's lifetime. Diagnostic admission
-// must not replace the operation's execution result.
-if let Ok(backend) = &backend {
-    let _ = backend.try_record_lazy(|| Observation::failure(
-        1, // One-based position in the declared vocabulary.
-        FailureClass::Unavailable,
-        "Internal lookup unavailable",
-        NonZeroU64::MIN,
-    ));
-}
-```
-
-Disabled and unsupported facades skip both factories. Enabled calls return an
-acceptance receipt or a bounded adapter error. A count is an input delta: two
-calls with counts 2 and 3 record five occurrences. Evidence eviction does not
-undo acceptance. `delivery_stats()` reports local admission failures, explicit
-host refusals, and uncertain internal failures separately; never retry an
-uncertain recording automatically.
-
-Use extensions for distinct internal operations. Common plugin built-in failure
-codes are also accepted, with their declared failure classes. Relay continues to
-own loading, validation, registration, and callback observations. Native-authored
-observations are state-only: detail and correlation are never automatically
-forwarded to operational logs, legacy reports, marks, subscribers, or exporters.
-Native plugins remain trusted, in-process code, not a sandbox.
-
-A component closes when its last clone is dropped or `close()` is called. Host
-activation teardown revokes every handle and releases adapter backing; retained
-counts remain subject to core retention. The service lifetime is host-owned.
-
-### Concurrent Calls
-
-Clones share four SDK registration/recording/read slots per activation and one
-in-flight read query/output-buffer pair. Concurrent callbacks can record; a read
-can overlap recording. Same-thread recursion into the same activation, nesting
-beyond 32 activations per thread, and exhausted admission return `Busy`. Nesting
-uses fixed thread-local storage. Guards release slots on return, error, or
-producer panic. Host calls retain their separate four process-wide permits.
-See the [native SDK guide](../../docs/build-plugins/native/runtime-events-and-scopes.mdx#concurrent-calls)
-for admission, accounting, and cleanup behavior.
-
-### Authorized Reads
-
-The host can separately grant whole-context canonical reads:
-
-```toml
-[plugins.policy.overrides."example.native"]
-native_diagnostics_read_context = true
-```
-
-The key is the manifest plugin ID. The default is false, and the setting never
-grants worker reads. A granted `diagnostics.reader()` exposes `discovery()`,
-`snapshot(&query)`, `inspect_memory(&query)`, and JSON snapshot/memory methods,
-using the shared diagnostics models and read reasons. This authority includes
-other components' retained restricted data in the selected context. The host
-checks permission and activation liveness on every read. Existing
-`runtime_diagnostics()` remains the legacy host report reader.
-
-### Bounds and Compatibility
-
-The native adapter admits at most 32 concurrent authoring sessions per host
-process, 8 live components per session, 32 codes per component, and 16 extension
-codes plus 16 KiB of declaration text over a session's lifetime. Closing a
-component releases its slot but does not replenish the cumulative declaration
-allowance. Four process-wide data-call permits bound concurrent host work.
-
-Registration and recording borrow fixed descriptors and UTF-8 spans. Aggregate
-text is capped at 16 KiB per call; no recording JSON buffer or delivery queue is
-created. Core reports detail/correlation truncation. Larger requests fail
-explicitly instead of being silently shortened. Queries use core's query-byte
-limit; reads allocate at most the advertised page cap before decoding. Returned
-pages and arbitrary producer allocations are outside host memory budgets.
-
-`capabilities()` reports limits, maximum session layout bytes, this activation's
-current session backing, and registration parsing-array bytes. These exclude
-allocator overhead, call frames, the bounded query decoder, core storage, SDK
-buffers, and process RSS. Admission or allocation failure affects diagnostics,
-not the existing plugin execution contract.
-
-The host appends a size-discovered pointer to `NativeDiagnosticsApiV1` after the
-frozen ABI-8 prefix. The diagnostics table has its own version and size; existing
-ABI-7/8 plugins remain compatible and `compat.native_api = "1"` is unchanged.
-A new SDK on a host without this extension exposes an unsupported inert facade.
-Plugins that require diagnostics should declare a compatible Relay release range
-that includes its availability; optional instrumentation can tolerate older hosts.
