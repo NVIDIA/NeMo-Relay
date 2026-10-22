@@ -68,15 +68,16 @@ impl BenchmarkClient {
         let mut http = HttpConnector::new();
         http.enforce_http(false);
         http.set_nodelay(true);
+        // Workspace builds can enable multiple Rustls providers; select ours per connector.
         let connector = match protocol {
             Protocol::Http1 => HttpsConnectorBuilder::new()
-                .with_native_roots()
+                .with_provider_and_native_roots(rustls::crypto::ring::default_provider())
                 .context("failed to load native TLS roots")?
                 .https_or_http()
                 .enable_http1()
                 .wrap_connector(http),
             Protocol::Http2 => HttpsConnectorBuilder::new()
-                .with_native_roots()
+                .with_provider_and_native_roots(rustls::crypto::ring::default_provider())
                 .context("failed to load native TLS roots")?
                 .https_or_http()
                 .enable_http2()
