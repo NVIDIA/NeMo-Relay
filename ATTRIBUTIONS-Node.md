@@ -9600,7 +9600,7 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.```
 
-## ip-address - 10.7.2
+## ip-address - 10.7.4
 **Repository URL**: https://github.com/beaugunderson/ip-address
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
