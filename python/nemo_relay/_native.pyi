@@ -2895,11 +2895,11 @@ class DiagnosticsReader:
         ...
 
     def inspect_memory_json(self, query_json: str = "{}") -> str:
-        """Return canonical JSON using a bounded canonical query."""
+        """Return canonical memory-page JSON using a bounded canonical query."""
         ...
 
     def inspect_memory(self, query_json: str = "{}") -> dict[str, object]:
-        """Return a snapshot dictionary with lossless integer values."""
+        """Return a memory-page dictionary with lossless integer values."""
         ...
 
     def info(self) -> dict[str, object]:
