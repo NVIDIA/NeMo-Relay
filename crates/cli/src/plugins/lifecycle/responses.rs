@@ -112,6 +112,7 @@ pub(super) struct InspectResponse {
     status: Value,
     environment_state: DynamicPluginCheckState,
     policy_state: DynamicPluginCheckState,
+    native_diagnostics_read_context: bool,
     startup_class: Option<DynamicPluginStartupClass>,
     attestation_mode: Option<DynamicPluginAttestationMode>,
     host_config_status: DynamicPluginHostConfigStatus,
@@ -129,6 +130,7 @@ pub(super) struct ValidateResponse {
     manifest_ref: String,
     kind: DynamicPluginKind,
     policy_state: DynamicPluginCheckState,
+    native_diagnostics_read_context: bool,
     integrity_state: DynamicPluginCheckState,
     environment_state: DynamicPluginCheckState,
     authenticity_state: DynamicPluginCheckState,
@@ -203,11 +205,12 @@ pub(super) fn inspect_success(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
     host_config: Option<&ResolvedDynamicPluginConfig>,
+    policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> ResponseEnvelope<InspectResponse> {
     success(
         command,
         Some(target),
-        inspect_data(entry, manifest, manifest_ref, host_config),
+        inspect_data(entry, manifest, manifest_ref, host_config, policy),
     )
 }
 
@@ -216,6 +219,7 @@ pub(super) fn inspect_data(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
     host_config: Option<&ResolvedDynamicPluginConfig>,
+    policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> InspectResponse {
     let record = &entry.record;
     let receipt = receipt_for(entry);
@@ -246,6 +250,7 @@ pub(super) fn inspect_data(
             .expect("dynamic plugin status serializes to JSON"),
         environment_state: record.status.validation.environment,
         policy_state: record.status.validation.policy_satisfied,
+        native_diagnostics_read_context: policy.native_diagnostics_read_context,
         startup_class: record.status.startup_class,
         attestation_mode: record.status.attestation_mode,
         host_config_status: host_config
@@ -311,6 +316,7 @@ pub(super) fn validate_success(
             manifest_ref: input.manifest_ref.into(),
             kind: input.manifest.plugin.kind,
             policy_state: input.policy.check_state(),
+            native_diagnostics_read_context: input.policy.native_diagnostics_read_context,
             integrity_state: input.trust.integrity,
             environment_state,
             authenticity_state: input.trust.authenticity,

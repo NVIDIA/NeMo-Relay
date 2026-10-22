@@ -152,6 +152,16 @@ persists its result for a registered plugin; `add`, `enable`, `disable`, and
 `remove` persist their explicit lifecycle changes. Gateway startup also checks
 plugin status without writing shared lifecycle state.
 
+`plugins inspect` and `plugins validate` also report
+`native_diagnostics_read_context` in text and JSON output. This boolean is the
+whole-context read permission resolved from the current host policy: defaults,
+ordered matching rules, then plugin-ID overrides. Omission defaults to false;
+an explicit false overrides an earlier grant. Workers always report false.
+The value describes permission, independently of service enablement, plugin
+activation, or handle availability. Configuration values remain redacted, and
+policy details are not included in this field. For grant configuration and the
+SDK reader, see [canonical native diagnostics](/build-plugins/native/runtime-events-and-scopes#inspect-canonical-diagnostics).
+
 To share a Python worker across users, register it in the system scope with
 `nemo-relay plugins add --global <manifest>` from an account that can write the
 system configuration directory. Ensure the system `plugins.toml`, lifecycle
