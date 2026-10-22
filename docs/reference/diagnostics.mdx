@@ -402,15 +402,12 @@ and notice describe the observation kind and do not determine its owner.
 Daemon operation successes belong to Daemon. Logging owns its three success
 codes. Native and worker lifecycle successes belong to Plugin/Operations (`PluginDiagnosticFamily::Operations`), alongside
 the mechanism-specific `PluginOperationFailureCode` entries. The
-configuration-inheritance notice belongs to Plugin/Common. The selector methods
-match each entry explicitly, so adding a success or notice requires an intentional domain and
-family mapping.
+configuration-inheritance notice belongs to Plugin/Common. Use each entry's
+reported domain and family when selecting observations, regardless of whether
+its outcome is success, failure, or unspecified.
 
-When integrating a producer that needs a new code, update its canonical name,
-domain, optional plugin family, catalogue listing, and selector tests together.
-A plugin success selects Plugin ownership and its applicable family. It does
-not inherit Logging ownership from its observation kind. Add those codes
-with their production recording sites in the owning integration.
+For catalogue changes, refer to the contributor guidance on
+[diagnostic producer contracts](/contribute/runtime-contract-docs#diagnostic-producer-contracts).
 
 ### Plugin Producer Boundaries
 

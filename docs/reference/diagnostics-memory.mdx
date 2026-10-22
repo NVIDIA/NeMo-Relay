@@ -137,8 +137,7 @@ once per component. It holds diagnostic state only while copying bounded data;
 serialization, resource access, language conversion, and network delivery occur
 after that lock is released. Byte-cap sizing can visit copied rows repeatedly.
 
-Focused allocation checks after a warm-up read found no steady-state capture
-allocations. First-use runtime helpers can allocate outside the retained backing.
+First-use runtime helpers can allocate outside the retained backing.
 Both memory and ordinary snapshot leases offer allocation-free borrowed row
 iterators over copied storage. Their lifetimes are tied to the lease; they do not
 pin history. JSON access also borrows admitted output. Owned decoding is explicit

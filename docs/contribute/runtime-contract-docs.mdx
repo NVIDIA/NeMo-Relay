@@ -124,3 +124,23 @@ Before landing a change that touches shared runtime wording, check:
   readers need the complete view.
 - Generated API reference pages are not used as the only explanation for runtime
   ownership, ordering, cleanup, or failure behavior.
+
+## Diagnostic Producer Contracts
+
+When integrating a producer that needs a new built-in code, update its canonical
+name, domain, optional plugin family, catalogue listing, and selector tests
+alongside its production recording site. Domain and family belong to each entry;
+observation kind does not determine ownership. For example, a plugin success
+belongs to Plugin and its applicable family, rather than inheriting Logging
+ownership from other success codes.
+
+Keep consumer-facing ownership and compatibility rules in
+[Runtime Diagnostics](/reference/diagnostics). Keep shared query, pagination,
+error, numeric-encoding, and access-control rules in the
+[Diagnostics API](/reference/diagnostics-api). Deployment and binding guides
+should link to those contracts and document their specific lifecycle, authority,
+and conversion behavior.
+
+Describe allocation guarantees separately from benchmark or test results.
+Validation reports should identify the revision, workload, build target, and
+measurement method; an observed allocation result is not a portable API guarantee.

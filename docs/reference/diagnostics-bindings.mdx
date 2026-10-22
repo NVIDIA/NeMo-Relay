@@ -182,13 +182,12 @@ are preserved.
 
 ### Bounded Pagination
 
-A snapshot is one page. Keep the query selectors unchanged and pass the returned
-opaque `continuation` to the next call. Native continuations can be passed directly
-back to their binding; do not convert Node `bigint` cursor fields to `number`.
-A cursor refers to the same source revision and selection. If evidence changes,
-`invalid_cursor` means the caller must decide whether to restart from the first
-page with a fresh caller budget. Reads reset no counters. Lifetime totals remain
-context-wide and cumulative on every page; do not sum them across pages.
+Follow the shared [pagination contract](/reference/diagnostics-api#continue-or-restart-a-read):
+keep selectors and limits unchanged, pass the returned continuation, and restart
+with a fresh caller budget if the source revision changes. Native continuations
+can be passed directly back to their binding; do not convert Node `bigint` cursor
+fields to `number`. Context lifetime totals repeat across pages and must not be
+summed.
 
 The examples below limit the caller to 32 pages and consume each page immediately.
 The runnable examples report page-budget exhaustion explicitly. In a live service,
