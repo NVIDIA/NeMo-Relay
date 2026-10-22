@@ -5,10 +5,14 @@ use crate::error::CliError;
 use clap::Args;
 use std::{io::Write, process::ExitCode};
 
+const DEFAULT_INSPECTOR_RESPONSE_BYTES: u32 = crate::daemon::broker::collection::PAGE_BYTES as u32;
+const DEFAULT_WORKER_RESPONSE_BYTES: u32 = crate::daemon::broker::collection::RESPONSE_BYTES as u32;
+const MAX_INSPECTOR_RESPONSE_BYTES: u32 = 32 * 1024 * 1024;
+
 #[derive(Debug, Clone, Args)]
 pub(crate) struct InspectCommand {
     /// Existing local gateway address. Missing listeners are reported as unavailable.
-    #[arg(long, default_value = "http://127.0.0.1:47632")]
+    #[arg(long, default_value = crate::bootstrap::DEFAULT_URL)]
     gateway_url: String,
     /// Inspect an existing local daemon using its pinned TLS identity and operator credential.
     #[arg(long, conflicts_with = "gateway_url")]
@@ -23,16 +27,16 @@ pub(crate) struct InspectCommand {
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
     /// Maximum response bytes accepted by this inspector, independent of the server.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(4096..=33554432))]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(4096..=MAX_INSPECTOR_RESPONSE_BYTES))]
     max_response_bytes: Option<u32>,
 }
 pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliError> {
     let max_bytes = command
         .max_response_bytes
         .unwrap_or(if command.worker.is_some() {
-            262144
+            DEFAULT_WORKER_RESPONSE_BYTES
         } else {
-            131072
+            DEFAULT_INSPECTOR_RESPONSE_BYTES
         });
     let daemon = command.daemon_url.is_some();
     let url = command.daemon_url.unwrap_or(command.gateway_url);
