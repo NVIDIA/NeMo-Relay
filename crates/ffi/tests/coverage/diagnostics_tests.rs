@@ -15,6 +15,43 @@ fn query_byte_limit_matches_core_contract() {
     );
 }
 
+#[test]
+fn initialization_and_validation_preserve_configuration_parse_details() {
+    let config = CString::new(r#"{"diagnostics":{"enabled":"true"}}"#).unwrap();
+    let mut activation = std::ptr::null_mut();
+    let mut report = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            nemo_relay_plugin_initialize(
+                config.as_ptr(),
+                std::ptr::null(),
+                &mut activation,
+                &mut report,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(activation.is_null());
+    assert!(report.is_null());
+    let initialization_error = unsafe { CStr::from_ptr(crate::error::nemo_relay_last_error()) }
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(initialization_error.starts_with("invalid plugin config:"));
+    assert!(initialization_error.contains("expected a boolean"));
+    assert_eq!(
+        unsafe { nemo_relay_plugin_validate(config.as_ptr(), std::ptr::null(), &mut report) },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(report.is_null());
+    assert_eq!(
+        unsafe { CStr::from_ptr(crate::error::nemo_relay_last_error()) }
+            .to_str()
+            .unwrap(),
+        initialization_error
+    );
+}
+
 #[tokio::test]
 async fn reader_owns_strings_and_survives_plugin_close() {
     let mut reader = std::ptr::null_mut();

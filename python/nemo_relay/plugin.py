@@ -545,14 +545,20 @@ def validate_exact(config: PluginConfig | JsonObject) -> PluginHostReport:
 
     Unlike :func:`validate`, this does not discover or merge ``plugins.toml``
     files. Use it for component-specific validation when ``config`` is the
-    complete document to check.
+    complete document to check. Host-only ``diagnostics`` settings are rejected;
+    use :func:`validate` to validate those settings.
 
     Args:
         config: Complete static plugin configuration.
 
     Returns:
         The static validation report with no dynamic plugin results.
+
+    Raises:
+        ValueError: If ``config`` contains host-only diagnostics settings.
     """
+    if isinstance(config, dict) and "diagnostics" in config:
+        raise ValueError("diagnostics is a host-only setting; use layered validation")
     return cast(PluginHostReport, _validate_exact(_normalize_object(config)))
 
 

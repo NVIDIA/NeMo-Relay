@@ -2898,6 +2898,10 @@ class DiagnosticsReader:
         """Return core/adapter budgets, memory usage, and integration coverage."""
         ...
 
+def _diagnostics_query_contract() -> str:
+    """Return the internal core query contract consumed by the Python adapter."""
+    ...
+
 def diagnostics_reader() -> DiagnosticsReader:
     """Obtain inspection authority without initializing diagnostics."""
     ...

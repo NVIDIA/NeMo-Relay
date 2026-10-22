@@ -198,19 +198,11 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match c_str_to_json(config_json)
-        .ok_or(NemoRelayStatus::InvalidJson)
-        .and_then(|value| {
-            serde_json::from_value::<nemo_relay::plugin::dynamic::PluginHostConfig>(value).map_err(
-                |_| {
-                    set_last_error("invalid plugin host configuration");
-                    NemoRelayStatus::InvalidJson
-                },
-            )
-        }) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
+    let config =
+        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
+            Ok(config) => config,
+            Err(status) => return status,
+        };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {
@@ -378,7 +370,8 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
 /// Validate only the supplied static plugin configuration.
 ///
 /// This entry point does not discover or merge `plugins.toml` layers. The
-/// returned host report therefore has no dynamic-plugin reports.
+/// returned host report therefore has no dynamic-plugin reports. Host-only
+/// `diagnostics` settings are rejected; use `nemo_relay_plugin_validate` instead.
 ///
 /// # Safety
 /// `config_json` must be a valid C string and `out_report_json` must be a valid
@@ -400,9 +393,20 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate_exact(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config::<PluginConfig>(config_json) {
+    let value = match c_str_to_json(config_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    if value.get("diagnostics").is_some() {
+        set_last_error("diagnostics is a host-only setting; use layered validation");
+        return NemoRelayStatus::InvalidJson;
+    }
+    let config: PluginConfig = match serde_json::from_value(value) {
         Ok(config) => config,
-        Err(status) => return status,
+        Err(error) => {
+            set_last_error(&format!("invalid plugin config: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
     };
     match serde_json::to_value(validate_exact(config)) {
         Ok(report) => {

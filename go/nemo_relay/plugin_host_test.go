@@ -4,6 +4,7 @@
 package nemo_relay
 
 import (
+	"strings"
 	"sync"
 	"testing"
 )
@@ -56,6 +57,18 @@ func TestValidateExactUsesExactHostReport(t *testing.T) {
 	}
 	if len(report.DynamicPlugins) != 1 || report.DynamicPlugins[0].PluginID != "fixture.dynamic" {
 		t.Fatalf("expected complete exact host report, got %#v", report)
+	}
+}
+
+func TestValidateExactRejectsHostDiagnostics(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		_, err := ValidateExact(PluginConfig{
+			Version:     1,
+			Diagnostics: &DiagnosticsSettings{Enabled: enabled},
+		})
+		if err == nil || !strings.Contains(err.Error(), "diagnostics is a host-only setting; use layered validation") {
+			t.Fatalf("expected host diagnostics rejection, got %v", err)
+		}
 	}
 }
 

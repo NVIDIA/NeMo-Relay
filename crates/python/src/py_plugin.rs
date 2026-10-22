@@ -1064,7 +1064,13 @@ fn validate_py(
 #[pyfunction(name = "validate_exact")]
 #[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
 fn validate_exact_py(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
+    let value = py_to_json(config)?;
+    if value.get("diagnostics").is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "diagnostics is a host-only setting; use layered validation",
+        ));
+    }
+    let config: PluginConfig = serde_json::from_value(value)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let report = serde_json::to_value(validate_exact(config))
         .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;

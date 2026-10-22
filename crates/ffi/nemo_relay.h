@@ -2457,7 +2457,8 @@ NemoRelayStatus nemo_relay_plugin_validate(const char *config_json,
  * Validate only the supplied static plugin configuration.
  *
  * This entry point does not discover or merge `plugins.toml` layers. The
- * returned host report therefore has no dynamic-plugin reports.
+ * returned host report therefore has no dynamic-plugin reports. Host-only
+ * `diagnostics` settings are rejected; use `nemo_relay_plugin_validate` instead.
  *
  * # Safety
  * `config_json` must be a valid C string and `out_report_json` must be a valid

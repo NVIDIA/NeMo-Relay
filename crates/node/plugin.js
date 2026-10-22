@@ -88,7 +88,8 @@ function validate(config, additionalPluginsToml) {
  *
  * Unlike `validate`, this does not discover or merge `plugins.toml` files.
  * Use it for component-specific validation when `config` is the complete
- * document to check.
+ * document to check. Host-only `diagnostics` settings are rejected; use
+ * `validate` to validate those settings.
  *
  * @param {object} config - Complete static plugin configuration.
  * @returns {PluginHostReport} Static validation results with no dynamic plugins.

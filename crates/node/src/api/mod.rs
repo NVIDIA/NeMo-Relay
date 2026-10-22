@@ -6839,6 +6839,11 @@ pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::
 /// Validate only the supplied static plugin configuration.
 #[napi]
 pub fn validate_exact(config: Json) -> napi::Result<Json> {
+    if config.get("diagnostics").is_some() {
+        return Err(napi::Error::from_reason(
+            "diagnostics is a host-only setting; use layered validation",
+        ));
+    }
     let config: PluginConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     serde_json::to_value(validate_exact_impl(config))

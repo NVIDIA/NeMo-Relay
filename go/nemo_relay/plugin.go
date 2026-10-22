@@ -466,6 +466,7 @@ func Validate(config PluginConfig, additionalPluginsTOML *string) (PluginHostRep
 
 // ValidateExact validates only the supplied static plugin configuration.
 // Unlike Validate, it does not discover or merge plugins.toml files.
+// Host-only Diagnostics settings are rejected; use Validate to validate them.
 func ValidateExact(config PluginConfig) (PluginHostReport, error) {
 	payload, err := marshalPluginHostActivationConfig(config)
 	if err != nil {
