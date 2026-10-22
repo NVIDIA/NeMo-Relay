@@ -117,7 +117,7 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
   Sideband attachment uses `openai_base_url` and never receives Relay's provider
   credentials. A custom OpenAI upstream might not support a call created on
   ChatGPT. Relay also removes recognized ChatGPT tokens and `chatgpt-account-id`
-  from requests to that custom upstream. Use a sideband destination that can
+  from unmanaged voice sideband requests to that custom upstream. Use a sideband destination that can
   access the call without relying on the caller's ChatGPT credential. Codex
   Desktop connects its sideband directly to OpenAI by default. Refer to
   [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
