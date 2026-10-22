@@ -4,6 +4,7 @@
 //! Single-flight delivery with one immutable request and bounded retry attempts.
 
 use super::*;
+use nemo_relay_worker_proto::DIAGNOSTIC_NOT_CONSUMED_METADATA;
 
 struct Queue {
     receiver: mpsc::Receiver<Pending>,
@@ -99,6 +100,7 @@ async fn deliver(
         return Err(DiagnosticDeliveryError::Invalid);
     }
     let mut result = Err(DiagnosticDeliveryError::Uncertain);
+    let mut acceptance_uncertain = false;
     for _ in 0..policy.retry_attempts {
         if state.stopped.load(Ordering::Acquire) {
             break;
@@ -129,10 +131,21 @@ async fn deliver(
                 }
                 break;
             }
-            Ok(Err(error)) if error.code() == Code::InvalidArgument => {
-                increment(&state.rejected);
-                result = Err(DiagnosticDeliveryError::NotConsumed);
-                break;
+            Ok(Err(error))
+                if error.code() == Code::InvalidArgument
+                    || (error.code() == Code::ResourceExhausted
+                        && error
+                            .metadata()
+                            .get(DIAGNOSTIC_NOT_CONSUMED_METADATA)
+                            .is_some_and(|value| value == "1")) =>
+            {
+                // Admission rejected this attempt. A previous attempt may still
+                // have been accepted: keep retrying the identical request then.
+                if !acceptance_uncertain {
+                    increment(&state.rejected);
+                    result = Err(DiagnosticDeliveryError::NotConsumed);
+                    break;
+                }
             }
             Ok(Err(error))
                 if matches!(
@@ -146,7 +159,7 @@ async fn deliver(
             {
                 break;
             }
-            _ => {}
+            _ => acceptance_uncertain = true,
         }
     }
     result

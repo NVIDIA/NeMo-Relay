@@ -43,6 +43,8 @@ _LOCAL_LIFECYCLE_TIMEOUT = 2.0
 _SUBMISSION_ENVELOPE_ALLOWANCE_BYTES = 256
 _MIN_SUBMISSION_BYTES = 2
 _MAX_COUNT = (1 << 64) - 1
+# Host admission metadata; client-side RESOURCE_EXHAUSTED does not prove rejection.
+_NOT_CONSUMED_METADATA = ("nemo-relay-diagnostic-not-consumed", "1")
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,7 @@ class WorkerDiagnostics:
                 if request is None:
                     pass
                 else:
+                    acceptance_uncertain = False
                     try:
                         for _ in range(policy.retry_attempts):
                             try:
@@ -301,10 +304,18 @@ class WorkerDiagnostics:
                                     request, timeout=policy.retry_timeout
                                 )
                             except grpc.RpcError as failure:
-                                if failure.code() == grpc.StatusCode.INVALID_ARGUMENT:
-                                    self._increment("rejected")
-                                    error = DiagnosticDeliveryError("not_consumed")
-                                    break
+                                not_consumed = failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
+                                    failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
+                                    and _NOT_CONSUMED_METADATA in tuple(failure.trailing_metadata() or ())
+                                )
+                                if not_consumed:
+                                    # This attempt was rejected; earlier attempts may have
+                                    # been accepted despite losing their response.
+                                    if not acceptance_uncertain:
+                                        self._increment("rejected")
+                                        error = DiagnosticDeliveryError("not_consumed")
+                                        break
+                                    continue
                                 if failure.code() in (
                                     grpc.StatusCode.PERMISSION_DENIED,
                                     grpc.StatusCode.UNAUTHENTICATED,
@@ -313,6 +324,7 @@ class WorkerDiagnostics:
                                     grpc.StatusCode.ALREADY_EXISTS,
                                 ):
                                     break
+                                acceptance_uncertain = True
                                 continue
                             if result.ByteSize() > policy.max_response_bytes:
                                 result = None

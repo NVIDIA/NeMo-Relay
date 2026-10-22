@@ -12,6 +12,7 @@ struct Host {
     requests: Arc<Mutex<Vec<wire::DiagnosticSubmission>>>,
     failures: Arc<AtomicUsize>,
     invalid_arguments: Arc<AtomicUsize>,
+    record_errors: Arc<Mutex<std::collections::VecDeque<Status>>>,
     slow: Arc<AtomicBool>,
     oversized_response: Arc<AtomicBool>,
     disabled: bool,
@@ -62,6 +63,13 @@ impl RelayDiagnostics for Host {
     ) -> Result<Response<wire::DiagnosticReceipt>, Status> {
         let request = request.into_inner();
         self.requests.lock().unwrap().push(request.clone());
+        if matches!(
+            &request.operation,
+            Some(wire::diagnostic_submission::Operation::Record(_))
+        ) && let Some(error) = self.record_errors.lock().unwrap().pop_front()
+        {
+            return Err(error);
+        }
         if self.slow.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -409,4 +417,95 @@ async fn closing_aborts_a_blocked_queue_within_deadline() {
     );
     assert!(handle.await.unwrap_err().is_cancelled());
     assert!(facade.state.stopped.load(Ordering::Acquire));
+}
+
+fn admission_rejection() -> Status {
+    let mut status = Status::resource_exhausted("at capacity");
+    status.metadata_mut().insert(
+        nemo_relay_worker_proto::DIAGNOSTIC_NOT_CONSUMED_METADATA,
+        "1".parse().unwrap(),
+    );
+    status
+}
+
+#[tokio::test]
+async fn capacity_rejection_counts_loss_and_keeps_delivery_open() {
+    let host = Host::default();
+    host.record_errors
+        .lock()
+        .unwrap()
+        .push_back(admission_rejection());
+    let (facade, _server) = connect(host.clone()).await;
+    let component = facade.component("internal", vec![]).await.unwrap();
+    component.try_record_lazy(observation).unwrap();
+    facade.flush(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(facade.delivery_stats().rejected, 1);
+    assert_eq!(facade.delivery_stats().uncertain, 0);
+    let mut next = observation();
+    next.count = 3;
+    component.try_record_lazy(|| next).unwrap();
+    facade.flush(Duration::from_secs(2)).await.unwrap();
+    let requests = host.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].sequence, requests[2].sequence);
+    assert_ne!(requests[1], requests[2]);
+}
+
+#[tokio::test]
+async fn rejection_cannot_erase_an_earlier_unknown_acceptance() {
+    for rejection in [
+        admission_rejection(),
+        Status::invalid_argument("invalid observation"),
+    ] {
+        for recover in [true, false] {
+            let host = Host::default();
+            let mut errors = vec![Status::unavailable("lost receipt"), rejection.clone()];
+            if !recover {
+                errors.push(rejection.clone());
+            }
+            host.record_errors.lock().unwrap().extend(errors);
+            let (facade, _server) = connect(host.clone()).await;
+            let component = facade.component("internal", vec![]).await.unwrap();
+            component.try_record_lazy(observation).unwrap();
+            let flushed = facade.flush(Duration::from_secs(2)).await;
+            assert_eq!(facade.delivery_stats().rejected, 0);
+            if recover {
+                flushed.unwrap();
+                assert_eq!(facade.delivery_stats().uncertain, 0);
+                component.try_record_lazy(observation).unwrap();
+                facade.flush(Duration::from_secs(2)).await.unwrap();
+            } else {
+                assert_eq!(flushed, Err(DiagnosticDeliveryError::Uncertain));
+                assert_eq!(facade.delivery_stats().uncertain, 1);
+                assert_eq!(
+                    component.try_record_lazy(observation),
+                    Err(DiagnosticDeliveryError::Closed)
+                );
+            }
+            let requests = host.requests.lock().unwrap();
+            assert_eq!(requests[1], requests[2]);
+            assert_eq!(requests[2], requests[3]);
+            if recover {
+                assert_eq!(requests[4].sequence, requests[3].sequence + 1);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn unmarked_resource_errors_do_not_claim_nonacceptance() {
+    let host = Host::default();
+    host.record_errors
+        .lock()
+        .unwrap()
+        .extend((0..3).map(|_| Status::resource_exhausted("local receive limit")));
+    let (facade, _server) = connect(host).await;
+    let component = facade.component("internal", vec![]).await.unwrap();
+    component.try_record_lazy(observation).unwrap();
+    assert_eq!(
+        facade.flush(Duration::from_secs(2)).await,
+        Err(DiagnosticDeliveryError::Uncertain)
+    );
+    assert_eq!(facade.delivery_stats().rejected, 0);
+    assert_eq!(facade.delivery_stats().uncertain, 1);
 }

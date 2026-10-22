@@ -5,6 +5,7 @@
 //! through response-body delivery; execution/log RPCs do not use these limits.
 
 use http_body::{Body, Frame};
+use nemo_relay_worker_proto::DIAGNOSTIC_NOT_CONSUMED_METADATA;
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -21,6 +22,14 @@ use tower::Service;
 static REQUESTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static READS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 const DEADLINE: Duration = Duration::from_secs(2);
+
+fn capacity_rejection(message: &'static str) -> Status {
+    let mut status = Status::resource_exhausted(message);
+    status
+        .metadata_mut()
+        .insert(DIAGNOSTIC_NOT_CONSUMED_METADATA, "1".parse().unwrap());
+    status
+}
 
 #[derive(Clone)]
 pub(super) struct BoundedService<S> {
@@ -72,18 +81,17 @@ where
         let service = self.inner.clone();
         Box::pin(async move {
             let (Ok(permit), read_permit) = (permit, read_permit) else {
-                return Ok(Status::resource_exhausted(
-                    "diagnostic transport capacity; not consumed",
-                )
-                .into_http());
+                return Ok(
+                    capacity_rejection("diagnostic transport capacity; not consumed").into_http(),
+                );
             };
             let read_permit = match read_permit.transpose() {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Status::resource_exhausted(
-                        "diagnostic response capacity; not consumed",
-                    )
-                    .into_http());
+                    return Ok(
+                        capacity_rejection("diagnostic response capacity; not consumed")
+                            .into_http(),
+                    );
                 }
             };
             let response =

@@ -81,6 +81,13 @@ delivery retains its permit until the body is polled to its deadline or dropped.
 `delivery_stats` reports local dropped, rejected, and uncertain totals separately
 from host occurrences. Rejected includes an explicit `INVALID_ARGUMENT` response,
 even when the host leaves its sequence available for a corrected submission.
+Host admission capacity rejections use `RESOURCE_EXHAUSTED` with
+`nemo-relay-diagnostic-not-consumed: 1` status metadata. The SDK counts a definite
+rejection and preserves the sequence so later submissions can continue. This
+metadata certifies only that attempt. After an earlier ambiguous failure, the SDK
+continues retrying the identical request within its policy; without a receipt,
+delivery remains uncertain and is fenced. A client-side or unmarked capacity
+error is also treated as uncertain. No decision relies on error-message text.
 `flush` waits for earlier queued work; uncertainty is an
 error and counters expose known losses. `close` bounds drain and releases queued
 work within the shutdown allowance. Activation teardown fences submissions and

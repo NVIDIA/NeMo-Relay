@@ -46,6 +46,7 @@ async fn request_permits_are_reserved_before_decoder_and_retained_by_response() 
         .await
         .unwrap();
     assert_eq!(rejected.headers()["grpc-status"], "8");
+    assert_eq!(rejected.headers()[DIAGNOSTIC_NOT_CONSUMED_METADATA], "1");
     assert_eq!(decoder.0.load(Ordering::Relaxed), 0);
     drop(requests);
     let response = service

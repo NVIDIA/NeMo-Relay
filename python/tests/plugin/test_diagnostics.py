@@ -13,8 +13,12 @@ from nemo_relay_plugin._diagnostics import DiagnosticDeliveryError, WorkerDiagno
 
 
 class RpcFailure(grpc.RpcError):
-    def __init__(self, code):
+    def __init__(self, code, metadata=()):
         self._code = code
+        self._metadata = grpc.aio.Metadata(*metadata)
+
+    def trailing_metadata(self):
+        return self._metadata
 
     def code(self):
         return self._code
@@ -310,5 +314,63 @@ def test_rejections_and_sequence_consumption(status, consumed):
         assert pb.DiagnosticSubmission.FromString(host.requests[-1]).sequence == (3 if consumed else 2)
         assert facade.delivery_stats().rejected == 1
         await facade.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("scenario", ["rejected", "recovered", "uncertain", "unmarked"])
+@pytest.mark.parametrize("code", [grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.INVALID_ARGUMENT])
+def test_admission_rejections_preserve_acceptance_and_sequence(scenario, code):
+    marker = (("nemo-relay-diagnostic-not-consumed", "1"),)
+
+    class CapacityHost(Host):
+        def __init__(self):
+            super().__init__()
+            capacity = RpcFailure(code, marker)
+            self.errors = {
+                "rejected": [capacity],
+                "recovered": [RpcFailure(grpc.StatusCode.UNAVAILABLE), capacity],
+                "uncertain": [RpcFailure(grpc.StatusCode.UNAVAILABLE), capacity, capacity],
+                "unmarked": [RpcFailure(grpc.StatusCode.RESOURCE_EXHAUSTED)] * 3,
+            }[scenario]
+
+        async def SubmitDiagnostic(self, request, **kwargs):
+            if request.WhichOneof("operation") == "record" and self.errors:
+                self.requests.append(request.SerializeToString())
+                raise self.errors.pop(0)
+            return await super().SubmitDiagnostic(request, **kwargs)
+
+    async def run():
+        host = CapacityHost()
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        component = await facade.component("internal", [])
+        component.try_record_lazy(observation)
+        if scenario in ("uncertain", "unmarked"):
+            with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+                await facade.flush()
+            assert facade.delivery_stats().uncertain == 1
+            with pytest.raises(DiagnosticDeliveryError, match="closed"):
+                component.try_record_lazy(observation)
+        else:
+            await facade.flush()
+            assert facade.delivery_stats().uncertain == 0
+            next_observation = observation()
+            next_observation.count = 3
+            component.try_record_lazy(lambda: next_observation)
+            await facade.flush()
+        assert facade.delivery_stats().rejected == int(scenario == "rejected")
+        requests = [pb.DiagnosticSubmission.FromString(raw) for raw in host.requests[1:]]
+        if scenario == "rejected":
+            assert [request.sequence for request in requests] == [2, 2]
+            assert requests[1].record.count == 3
+        else:
+            assert requests[0] == requests[1] == requests[2]
+            if scenario == "recovered":
+                assert requests[3].sequence == 3
+        if scenario in ("uncertain", "unmarked"):
+            with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+                await facade.close()
+        else:
+            await facade.close()
 
     asyncio.run(run())
