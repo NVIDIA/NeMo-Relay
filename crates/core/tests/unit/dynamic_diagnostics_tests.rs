@@ -303,23 +303,27 @@ fn plugin_observers_remain_inert_when_collection_or_registration_is_unavailable(
             assert_eq!(after.reserved_bytes, 0);
             continue;
         }
-        let view = context
-            .snapshot(&DiagnosticQuery::default())
-            .unwrap()
-            .to_snapshot()
-            .unwrap();
-        assert_eq!(view.components.len(), 1);
-        assert_eq!(view.components[0].identity.key, "application.untouched");
-        assert_eq!(view.lifetime.totals.failures_total.value.get(), 0);
-        assert_eq!(view.lifetime.totals.successes_total.value.get(), 0);
-        assert!(view.events.is_empty());
-        assert_eq!(view.coverage.loss.components_rejected.value.get(), 2);
-        assert_eq!(
-            view.coverage.loss.keys_rejected.value.get(),
-            if mode == "counters" { 2 } else { 0 }
-        );
-        assert_eq!(view.coverage.loss.observations_rejected.value.get(), 0);
+        assert_unavailable_plugin_observer_snapshot(&context, mode);
     }
+}
+
+fn assert_unavailable_plugin_observer_snapshot(context: &Diagnostics, mode: &str) {
+    let view = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.components.len(), 1);
+    assert_eq!(view.components[0].identity.key, "application.untouched");
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 0);
+    assert_eq!(view.lifetime.totals.successes_total.value.get(), 0);
+    assert!(view.events.is_empty());
+    assert_eq!(view.coverage.loss.components_rejected.value.get(), 2);
+    assert_eq!(
+        view.coverage.loss.keys_rejected.value.get(),
+        if mode == "counters" { 2 } else { 0 }
+    );
+    assert_eq!(view.coverage.loss.observations_rejected.value.get(), 0);
 }
 
 #[test]
@@ -376,29 +380,48 @@ fn replacement_plugin_observers_preserve_separate_instance_attribution() {
         assert_eq!(view.lifetime.totals.failures_total.value.get(), 4);
         assert_eq!(view.lifetime.totals.successes_total.value.get(), 1);
         assert_eq!(view.events.len(), 5);
-        for event in &view.events {
-            let expected_owner = if event.component == old_component.identity {
-                old_instance
+        assert_replacement_plugin_events(
+            &view,
+            old_component,
+            new_component,
+            (old_instance, new_instance),
+            execution,
+            success,
+        );
+    }
+}
+
+fn assert_replacement_plugin_events(
+    view: &crate::diagnostics::DiagnosticSnapshot,
+    old_component: &crate::diagnostics::ComponentSnapshot,
+    new_component: &crate::diagnostics::ComponentSnapshot,
+    instances: (Uuid, Uuid),
+    execution: PluginExecution,
+    success: SuccessCode,
+) {
+    let (old_instance, new_instance) = instances;
+    for event in &view.events {
+        let expected_owner = if event.component == old_component.identity {
+            old_instance
+        } else {
+            assert_eq!(event.component, new_component.identity);
+            new_instance
+        };
+        assert_eq!(
+            event.origin.ownership.plugin_instance_id,
+            Some(expected_owner)
+        );
+        assert_eq!(
+            event.context.execution.as_ref().unwrap().as_str(),
+            execution.as_str()
+        );
+        assert_eq!(
+            event.context.phase.as_ref().unwrap().as_str(),
+            if event.code() == success.canonical_name() {
+                "activation"
             } else {
-                assert_eq!(event.component, new_component.identity);
-                new_instance
-            };
-            assert_eq!(
-                event.origin.ownership.plugin_instance_id,
-                Some(expected_owner)
-            );
-            assert_eq!(
-                event.context.execution.as_ref().unwrap().as_str(),
-                execution.as_str()
-            );
-            assert_eq!(
-                event.context.phase.as_ref().unwrap().as_str(),
-                if event.code() == success.canonical_name() {
-                    "activation"
-                } else {
-                    "runtime"
-                }
-            );
-        }
+                "runtime"
+            }
+        );
     }
 }

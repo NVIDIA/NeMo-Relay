@@ -9619,7 +9619,7 @@ async fn native_async_rejection_observations_exclude_duplicate_and_cancelled_set
             );
             let error = wait.receive().await.unwrap_err();
             assert!(
-                matches!(error, FlowError::Upstream(failure) if failure.status == Some(404) && failure.body == "missing model" && !failure.is_retryable())
+                matches!(error, FlowError::Upstream(failure) if failure.status == Some(404) && failure.body == "Reported by plugin 'test.native.accounting': missing model" && !failure.is_retryable())
             );
             drop(wait);
             assert!(!completion.cancelled.load(Ordering::Acquire));
@@ -9679,7 +9679,7 @@ async fn native_async_rejection_observations_exclude_duplicate_and_cancelled_set
             );
             let error = receiver.next().await.unwrap().unwrap_err();
             assert!(
-                matches!(error, FlowError::Upstream(failure) if failure.status == Some(503) && failure.body == "unavailable" && !failure.is_retryable())
+                matches!(error, FlowError::Upstream(failure) if failure.status == Some(503) && failure.body == "Reported by plugin 'test.native.accounting': unavailable" && !failure.is_retryable())
             );
             assert!(receiver.next().await.is_none());
             assert_eq!(

@@ -759,56 +759,7 @@ fn trust_failures_disqualify_both_runtime_kinds_under_each_startup_class() {
                 "missing_signature",
                 "invalid_signature",
             ] {
-                let compatibility = if kind == "rust_dynamic" {
-                    "native_api = \"1\""
-                } else {
-                    "worker_protocol = \"grpc-v1\""
-                };
-                let load = if kind == "rust_dynamic" {
-                    "library = \"artifact.bin\"\nsymbol = \"never_load\""
-                } else {
-                    "runtime = \"command\"\nentrypoint = \"artifact.bin\""
-                };
-                let capability = if kind == "rust_dynamic" {
-                    "plugin_native"
-                } else {
-                    "plugin_worker"
-                };
-                let integrity = match failure {
-                    "missing_digest" => String::new(),
-                    "digest_mismatch" => format!(
-                        "[integrity]\nsha256 = {:?}\n",
-                        format!("sha256:{}", "0".repeat(64))
-                    ),
-                    "missing_signature" => format!("[integrity]\nsha256 = {digest:?}\n"),
-                    _ => {
-                        format!("[integrity]\nsha256 = {digest:?}\nsignature = \"artifact.sig\"\n")
-                    }
-                };
-                fs::write(
-                    &manifest_path,
-                    format!(
-                        r#"
-manifest_version = 1
-[plugin]
-id = "fixture.trust"
-kind = {kind:?}
-[compat]
-relay = ">=0.8.0,<1.0"
-{compatibility}
-[defaults]
-enabled = false
-[capabilities]
-items = ["{capability}"]
-[source]
-artifact = "artifact.bin"
-[load]
-{load}
-{integrity}
-"#
-                    ),
-                )
-                .unwrap();
+                write_trust_failure_manifest(&manifest_path, &digest, kind, failure);
                 fs::write(
                     &plugins_toml,
                     format!(
@@ -866,49 +817,111 @@ manifest = "relay-plugin.toml"
                     }
                     _ => panic!("diagnostics changed resolution for {kind}/{startup}/{failure}"),
                 }
-                // Required failures return early, but their evidence must survive
-                // in the process-owned context just as optional exclusions do.
-                let snapshot = context
-                    .snapshot(&crate::diagnostics::DiagnosticQuery::default())
-                    .unwrap()
-                    .to_snapshot()
-                    .unwrap();
-                assert_eq!(snapshot.events.len(), 1, "{kind}/{startup}/{failure}");
-                assert_eq!(snapshot.components.len(), 1);
-                assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
-                assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
-                let event = &snapshot.events[0];
-                assert_eq!(event.code(), "plugin.artifact_verification_failed");
-                assert_eq!(event.count.get(), 1);
-                assert_eq!(
-                    event.classification.failure_class(),
-                    Some(match failure {
-                        "digest_mismatch" => "authentication",
-                        "invalid_signature" => "unknown",
-                        _ => "invalid_input",
-                    }),
-                );
-                assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "validation");
-                assert_eq!(
-                    event.context.execution.as_ref().unwrap().as_str(),
-                    if kind == "rust_dynamic" {
-                        "native_abi"
-                    } else {
-                        "worker_protocol"
-                    },
-                );
-                assert_eq!(event.component, snapshot.components[0].identity);
-                let instance = event.origin.ownership.plugin_instance_id.unwrap();
-                assert_eq!(
-                    snapshot.components[0]
-                        .since_refresh
-                        .ownership
-                        .plugin_instance_id,
-                    Some(instance),
-                );
+                assert_trust_failure_evidence(&context, kind, startup, failure);
             }
         }
     }
+}
+
+fn write_trust_failure_manifest(manifest_path: &Path, digest: &str, kind: &str, failure: &str) {
+    let compatibility = if kind == "rust_dynamic" {
+        "native_api = \"1\""
+    } else {
+        "worker_protocol = \"grpc-v1\""
+    };
+    let load = if kind == "rust_dynamic" {
+        "library = \"artifact.bin\"\nsymbol = \"never_load\""
+    } else {
+        "runtime = \"command\"\nentrypoint = \"artifact.bin\""
+    };
+    let capability = if kind == "rust_dynamic" {
+        "plugin_native"
+    } else {
+        "plugin_worker"
+    };
+    let integrity = match failure {
+        "missing_digest" => String::new(),
+        "digest_mismatch" => format!(
+            "[integrity]\nsha256 = {:?}\n",
+            format!("sha256:{}", "0".repeat(64))
+        ),
+        "missing_signature" => format!("[integrity]\nsha256 = {digest:?}\n"),
+        _ => {
+            format!("[integrity]\nsha256 = {digest:?}\nsignature = \"artifact.sig\"\n")
+        }
+    };
+    fs::write(
+        manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+[plugin]
+id = "fixture.trust"
+kind = {kind:?}
+[compat]
+relay = ">=0.8.0,<1.0"
+{compatibility}
+[defaults]
+enabled = false
+[capabilities]
+items = ["{capability}"]
+[source]
+artifact = "artifact.bin"
+[load]
+{load}
+{integrity}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn assert_trust_failure_evidence(
+    context: &crate::diagnostics::Diagnostics,
+    kind: &str,
+    startup: &str,
+    failure: &str,
+) {
+    // Required failures return early, but their evidence must survive
+    // in the process-owned context just as optional exclusions do.
+    let snapshot = context
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1, "{kind}/{startup}/{failure}");
+    assert_eq!(snapshot.components.len(), 1);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.artifact_verification_failed");
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(
+        event.classification.failure_class(),
+        Some(match failure {
+            "digest_mismatch" => "authentication",
+            "invalid_signature" => "unknown",
+            _ => "invalid_input",
+        }),
+    );
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "validation");
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        if kind == "rust_dynamic" {
+            "native_abi"
+        } else {
+            "worker_protocol"
+        },
+    );
+    assert_eq!(event.component, snapshot.components[0].identity);
+    let instance = event.origin.ownership.plugin_instance_id.unwrap();
+    assert_eq!(
+        snapshot.components[0]
+            .since_refresh
+            .ownership
+            .plugin_instance_id,
+        Some(instance),
+    );
 }
 
 #[test]
@@ -1126,25 +1139,32 @@ fn multiple_validation_failures_preserve_report_precedence_and_skipped_checks() 
                 ("plugin.schema_validation_failed", "unknown", "validation"),
             ]
         };
-        let instance = snapshot.events[0]
-            .origin
-            .ownership
-            .plugin_instance_id
+        assert_validation_failure_attribution(&snapshot, &expected);
+    }
+}
+
+fn assert_validation_failure_attribution(
+    snapshot: &crate::diagnostics::DiagnosticSnapshot,
+    expected: &[(&str, &str, &str)],
+) {
+    let instance = snapshot.events[0]
+        .origin
+        .ownership
+        .plugin_instance_id
+        .unwrap();
+    for &(code, class, phase) in expected {
+        let event = snapshot
+            .events
+            .iter()
+            .find(|event| event.code() == code)
             .unwrap();
-        for (code, class, phase) in expected {
-            let event = snapshot
-                .events
-                .iter()
-                .find(|event| event.code() == code)
-                .unwrap();
-            assert_eq!(event.classification.failure_class(), Some(class));
-            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
-            assert_eq!(
-                event.context.execution.as_ref().unwrap().as_str(),
-                "worker_protocol"
-            );
-            assert_eq!(event.count.get(), 1);
-            assert_eq!(event.origin.ownership.plugin_instance_id, Some(instance));
-        }
+        assert_eq!(event.classification.failure_class(), Some(class));
+        assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+        assert_eq!(
+            event.context.execution.as_ref().unwrap().as_str(),
+            "worker_protocol"
+        );
+        assert_eq!(event.count.get(), 1);
+        assert_eq!(event.origin.ownership.plugin_instance_id, Some(instance));
     }
 }
