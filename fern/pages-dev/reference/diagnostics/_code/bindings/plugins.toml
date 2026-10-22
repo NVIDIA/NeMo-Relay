@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# plugins.toml: uses the existing user/explicit and system file layers.
+[diagnostics]
+enabled = true
+
+[diagnostics.limits]
+max_events = 256
+max_snapshot_bytes = 131072

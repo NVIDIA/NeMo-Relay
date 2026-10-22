@@ -1,0 +1,224 @@
+---
+title: "Embedded Diagnostics"
+description: "Configure process-owned diagnostics and inspect bounded snapshots from Rust, Python, and Node.js."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+## Embedded Language Runtimes
+
+Rust, Python, and Node.js initialize diagnostics before
+validating or activating plugins. Use the existing `plugin.initialize` entry
+point and configure diagnostics in `plugins.toml`. You can pass an explicit file
+through the existing file argument. No separate setup call is needed. Embedded
+diagnostics does not need CLI configuration, a listener, an exporter, or a framework
+adapter.
+
+<Code src="_code/bindings/plugins.toml" language="toml" title="plugins.toml" lines="4-10" showLineNumbers={false} />
+
+Configuration files merge field by field in the existing resolver's order.
+If your code omits `diagnostics`, the service uses the merged file settings.
+If your code supplies `diagnostics`, that profile replaces all file settings for
+the service. Omitted fields in that profile use core defaults.
+
+Service settings do not enter plugin component configuration, execution
+fingerprints, or legacy plugin reports. Invalid settings fail startup without
+falling back to another profile. `validate` checks the profile without starting
+the service.
+
+The first initialization selects the process-owned service, enabled or disabled.
+Repeated initialization with equivalent settings reuses it. Changed settings return
+`diagnostics: configuration_conflict`. The selected context and existing activation
+remain intact. Change service settings by restarting the process. Plugin failure,
+close, replacement, and reload do not erase the service or its lifetime counters.
+The service does not keep the process alive and does not persist evidence after exit.
+
+Importing Python or registering a Node environment does not select a diagnostic
+default. Existing logging behavior stays the same. When diagnostics starts, a
+Relay-owned default logger attaches once. It uses its existing sinks, queues, and
+rate limits, and does not replay earlier logs. Application-owned loggers stay in
+place. Reader metadata reports logging coverage separately.
+
+Node runtime environments share the service. Unloading one does not close another
+environment's logger. After `fork`, inherited diagnostic handles return
+`fork_requires_exec` before taking service locks. Start a fresh executable process
+to use diagnostics in the child.
+
+### Optional Readers
+
+A reader grants access to detail that can contain unsanitized data. Query filters
+do not restrict that authority. Snapshots also contain totals for the whole context.
+If your application serves reads to other clients, it must authorize each client.
+Snapshots do not flow into subscribers, exporters, legacy reports, exception
+attachments, or operational logs. OpenTelemetry (OTel) integration is not yet
+supported. Among embedded application bindings, only the Rust runtime API creates
+custom components and recorders. Native Rust and Rust/Python worker SDKs also
+support plugin-internal recording through their separate diagnostic facades.
+Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for those APIs. The
+[recording and classifier guide](/reference/diagnostics) describes direct Rust
+runtime producers.
+
+The supported embedded reader operations are:
+
+| Operation | Python | Node.js | Rust embedded adapter |
+| --- | --- | --- | --- |
+| Obtain an existing service reader | `diagnostics.reader()` | `diagnostics.reader()` | `embedded::reader()` |
+| Capture with a native query | `reader.snapshot(query)` | `reader.snapshot(query)` | `reader.snapshot(&query)` |
+| Capture canonical JSON | `reader.snapshot_json(query)` | `reader.snapshotJson(query)` | `reader.snapshot_json(query_json)` |
+| Inspect budgets, occupancy, and logging coverage | `reader.info()` | `reader.info()` | `reader.info()` |
+| Release a reader or page | Release Python references | Release JavaScript references | Drop the reader or page |
+
+Python returns caller-owned dictionaries with canonical `snake_case` keys and
+Python `int` diagnostic integers. Node.js returns caller-owned `camelCase` objects
+and `bigint` diagnostic integers. For entry and component accounting and resource
+context, use the
+[memory reader operations](/reference/diagnostics/memory#detailed-memory-inspection).
+These representations also apply to memory pages and aggregate memory gauges.
+Rust returns an adapter-owned canonical page.
+`page.as_str()` borrows it, and `serde_json::from_str::<DiagnosticSnapshot>()`
+decodes a separate caller-owned value. Drop each Rust page after use to return its
+copy permit. Dropping a reader does not stop the service in any binding.
+
+### Startup, Snapshots, and Metadata
+
+These examples use a complete programmatic diagnostics profile. Omit it to use
+the existing file resolver. `validate` checks the selected host profile without
+starting the service. `initialize` selects the process service. The exact plugin
+validation APIs accept component configuration only and reject a top-level
+`diagnostics` field. Use ordinary host `validate` for service settings.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/bindings/startup.py" language="python" title="startup.py" lines="4-27" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/bindings/startup.js" language="javascript" title="startup.js" lines="4-26" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/bindings/startup.rs" language="rust" title="startup.rs" lines="4-27" showLineNumbers={false} />
+</Tab>
+</Tabs>
+
+`JSON.stringify` cannot serialize Node's native `bigint` values. Use
+`snapshotJson()` for portable JSON or `inspectMemoryJson()` for a memory page.
+Canonical JSON uses `snake_case` keys and decimal strings for 64-bit integers in
+every language.
+
+Native query helpers use these numeric types:
+
+- Python accepts `int` for 64-bit fields such as `after_sequence`.
+- Node requires `bigint` for 64-bit fields such as `afterSequence`. A JavaScript
+  `number` is rejected in those fields.
+- Rust uses `DiagnosticNumber` for 64-bit query fields.
+
+Row caps such as `max_events` and `maxEvents` remain small integers. Unknown code,
+failure-class, execution, and phase names stay strings. Conversion preserves
+saturation markers and missing optional values.
+
+### Bounded Pagination
+
+Follow the shared [pagination contract](/reference/diagnostics/api#continue-or-restart-a-read):
+keep selectors and limits unchanged, pass the returned continuation, and restart
+with a fresh caller budget if the source revision changes. Native continuations
+can be passed directly back to their binding. Do not convert Node `bigint` cursor
+fields to `number`. Context lifetime totals repeat across pages and must not be
+summed.
+
+The examples below limit the caller to 32 pages and consume each page immediately.
+The runnable examples report page-budget exhaustion explicitly. In a live service,
+also handle `busy` and `invalid_cursor` using the error contract below.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/bindings/paginate.py" language="python" title="paginate.py" lines="4-15" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/bindings/paginate.js" language="javascript" title="paginate.js" lines="4-15" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/bindings/paginate.rs" language="rust" title="paginate.rs" lines="4-22" showLineNumbers={false} />
+</Tab>
+</Tabs>
+
+### Handle Reader Errors
+
+Branch on stable reasons rather than exception text. A reader error contains no
+query text or retained detail. This invalid-query example demonstrates the error
+surface without logging any snapshot.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/bindings/handle_error.py" language="python" title="handle_error.py" lines="4-11" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/bindings/handle_error.js" language="javascript" title="handle_error.js" lines="4-10" showLineNumbers={false} />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/bindings/handle_error.rs" language="rust" title="handle_error.rs" lines="4-8" showLineNumbers={false} />
+</Tab>
+</Tabs>
+
+Complete runnable Python, Node.js, and Rust examples are maintained in the
+[embedded diagnostics examples](https://github.com/NVIDIA/NeMo-Relay/tree/c88f30af19a92b492122e1301c3acf38f690837b/examples/diagnostics).
+The Python and Node examples run through their binding test suites. Build and run
+the Rust example with `cargo run -p nemo-relay --example embedded_diagnostics`.
+Direct Rust owners can also compose explicit `Diagnostics` contexts and core
+readers as shown in [Runtime Diagnostics](/reference/diagnostics#rust-context-startup).
+
+### Availability, Budgets, and Copy Ownership
+
+Calling `reader()` before configuration returns `not_initialized`. It does not
+create a disabled default. A configured disabled reader exposes metadata, but
+snapshot reads return `disabled`.
+
+Other errors have stable reasons:
+
+- `busy` indicates that all read slots are in use.
+- `query_disabled` indicates that no snapshot workspaces are configured.
+- `invalid_query` and `invalid_cursor` identify invalid read requests.
+- `snapshot_capacity` indicates that the requested page cannot fit.
+- `unsupported_schema` identifies an unsupported snapshot version.
+- `allocation_failed` reports an allocation failure.
+- `fork_requires_exec` indicates that an inherited handle cannot be used after
+  `fork`.
+
+Python and Node.js helper errors expose `.reason`. No failure contains query text
+or retained detail.
+
+`info()` reports core limits,
+core memory occupancy, logging coverage, and the independent adapter budget:
+
+| Resource | Bound |
+| --- | --- |
+| Encoded query | Up to 4,096 UTF-8 bytes. Duplicate or unknown fields are rejected, including nested selectors. |
+| Simultaneous snapshot/memory copies and conversions | Two per service, shared by all reader clones |
+| Payload per copy | Configured core `max_snapshot_bytes` |
+| Default copy reservation | 262,144 bytes: two 131,072-byte pages |
+| Waiting queue | There is no waiting queue. A read returns `busy` when all slots are in use. |
+
+Disabled services and services with `max_queries = 0` allocate no copy payload
+buffers. Enabled services reserve the copy payloads during startup. Those bytes
+are additional to core `max_owned_bytes`.
+After copying a canonical page, the adapter releases the core query workspace.
+It keeps its own copy permit until language conversion succeeds or fails.
+
+The service's payload budgets exclude the following memory:
+
+- JSON strings kept by callers.
+- Decoded objects.
+- Python and JavaScript object overhead.
+- Allocator metadata.
+
+These budgets do not limit total process memory or resident set size (RSS).
+
+Reads are synchronous and bounded. They do not create background tasks or wait
+queues. A reader does not reset counters, infer readiness, or supply an empty
+snapshot when evidence is unavailable. The separate [memory view](/reference/diagnostics/memory#detailed-memory-inspection)
+provides entry and component backing attribution and existing resource-sample context.

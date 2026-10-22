@@ -7,7 +7,7 @@ position: 30
 SPDX-License-Identifier: Apache-2.0 */}
 
 A worker plugin runs outside the Relay process and implements the stable `grpc-v1`
-service contract. It can register the same 15 subscriber and middleware surfaces as
+service contract. It can register the same 16 subscriber and middleware surfaces as
 an in-process plugin, call continuations back in the host, use invocation-scoped codecs,
 and emit marks or manage scope stacks through host-runtime RPCs.
 
@@ -29,7 +29,11 @@ remains `grpc-v1`.
 
 Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
 measurements, and read the current host-level runtime diagnostics. These diagnostics are
-ordered by code and are not attributed to a particular plugin.
+ordered by code and are not attributed to a particular plugin. They are the legacy
+report, not canonical snapshots. Rust and Python workers can also record internal
+observations through the canonical diagnostics delivery API. Refer to
+[Plugin Diagnostics](/build-plugins/diagnostics) for matching examples and delivery
+limits. Worker recording does not grant canonical read access.
 
 Choose a worker when process or dependency isolation is worth the gRPC dispatch,
 JSON-envelope conversion, and scheduling cost on callback paths. The boundary limits the
