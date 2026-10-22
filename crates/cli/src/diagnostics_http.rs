@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) const PREFIX: &str = "/_nemo_relay/v1/diagnostics";
 pub(crate) const AUTH_HEADER: &str = "x-nemo-relay-diagnostics-read";
-const MAX_QUERY_BYTES: usize = MAX_DIAGNOSTIC_QUERY_BYTES;
+pub(crate) const MAX_QUERY_BYTES: usize = MAX_DIAGNOSTIC_QUERY_BYTES;
 const DISCOVERY_BYTES: usize = 8192;
 
 #[derive(Clone)]
