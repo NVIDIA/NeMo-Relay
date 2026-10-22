@@ -14,7 +14,10 @@ listeners and lifecycle; they never start or recover a runtime.
 ## CLI Startup and Inspection
 
 Diagnostics is compiled in and disabled by default. Configure it through the
-existing CLI configuration layers:
+existing CLI configuration layers in `config.toml`. This is separate from the
+`plugins.toml` profile used by [embedded runtimes](/reference/diagnostics-bindings).
+Refer to [Shared Configuration](/nemo-relay-cli/basic-usage#shared-configuration)
+for user/system file discovery and precedence. For example:
 
 ```toml
 [diagnostics]
@@ -45,6 +48,53 @@ For an explicit local view after command completion and logging teardown, use
 `--diagnostics-final`. It writes one bounded canonical JSON page to stderr and
 does not change command stdout or exit codes. Restricted detail appears only
 because the caller requested inspection. Pre-context failures cannot be retained.
+
+### Start and Inspect a Gateway
+
+1. Save the configuration above as `diagnostics-config.toml`. An explicit file
+   replaces the user file; system configuration still takes precedence.
+2. Start a gateway on an unused local address in one terminal:
+
+   ```bash
+   nemo-relay --config ./diagnostics-config.toml --bind 127.0.0.1:4040 gateway start
+   ```
+
+3. In another terminal, discover its effective settings and request a page:
+
+   ```bash
+   nemo-relay diagnostics --gateway-url http://127.0.0.1:4040 --capabilities
+   nemo-relay diagnostics --gateway-url http://127.0.0.1:4040
+   ```
+
+   Check `collection_enabled` and `queries_enabled` in discovery. The inspector
+   reads the running owner; passing startup settings to an inspection command
+   does not reconfigure that owner. Use the same local account with access to
+   the gateway's private credentials.
+
+### Apply Settings to an Existing Gateway
+
+Diagnostic settings are selected at startup. To change a persistent gateway:
+
+1. Close the coding-agent sessions and MCP clients using that gateway so they
+   cannot restart it with the old settings during the change.
+2. Update the owner's `config.toml`. Managed integrations use user/system files;
+   an explicit file in an unrelated terminal does not change their profile.
+3. Stop the gateway at its actual bind address. For the usual managed shared
+   gateway address, run:
+
+   ```bash
+   nemo-relay --bind 127.0.0.1:47632 gateway stop
+   ```
+
+4. Reopen the managed client to acquire a new gateway. For a manually started
+   gateway, rerun its original `gateway start` command with the updated file.
+5. Run `diagnostics --gateway-url URL --capabilities` against the new gateway
+   to confirm its effective settings. Use its actual address in place of `URL`.
+
+Stopping the gateway interrupts its users and discards its in-memory diagnostic
+history. The default manual gateway address is `127.0.0.1:4040`; always pass the
+same bind address when starting and stopping a custom endpoint. Inspection alone
+never performs this restart.
 
 ### Existing Gateway Reads
 
