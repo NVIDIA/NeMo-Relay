@@ -293,6 +293,12 @@ two calls. An accepted receipt reports retained, truncated, or dropped evidence;
 core's counters survive history eviction. Keep the execution result independent
 of diagnostic admission, and do not automatically retry uncertain failures.
 
+Set optional request/session IDs through `observation.correlation`, using the
+shared `DiagnosticCorrelation` type re-exported by the SDK. Its identifiers can
+be borrowed (`Some("request-id".into())`) or owned (`Some(request_id.into())`
+when `request_id` is a `String`). Constructors default to no correlation. The adapter borrows both identifiers for
+the host call and counts their bytes toward the same aggregate request limit.
+
 Retain a component for its registration lifetime. Last drop or `close()` closes
 it; activation teardown revokes all handles. Common plugin failure codes and
 admitted extensions share core's existing storage and classification rules.

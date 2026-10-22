@@ -192,6 +192,22 @@ impl NativePlugin for NativeDiagnosticsPlugin {
             })
             .unwrap();
         }
+        // Neither identifier alone exceeds the cap; their combined text does.
+        let mut oversized = sdk::Observation::failure(
+            1,
+            sdk::FailureClass::Unavailable,
+            "restricted",
+            NonZeroU64::MIN,
+        );
+        assert_eq!(oversized.correlation, sdk::DiagnosticCorrelation::default());
+        oversized.correlation = sdk::DiagnosticCorrelation {
+            request_id: Some("r".repeat(abi::MAX_REQUEST_BYTES / 2).into()),
+            session_id: Some("s".repeat(abi::MAX_REQUEST_BYTES / 2).into()),
+        };
+        assert_eq!(
+            c.try_record_lazy(|| oversized),
+            Err(sdk::DiagnosticError::Capacity)
+        );
         assert_eq!(ACCEPTED.load(Ordering::SeqCst), 5);
         let cloned = c.clone();
         c.close().unwrap();
@@ -205,7 +221,7 @@ impl NativePlugin for NativeDiagnosticsPlugin {
             d.reader(),
             Err(sdk::DiagnosticError::PermissionDenied)
         ));
-        assert_eq!(d.delivery_stats().dropped, 3); // empty declaration, busy call, closed handle
+        assert_eq!(d.delivery_stats().dropped, 4); // empty declaration, busy call, oversized text, closed handle
         Ok(())
     }
 }

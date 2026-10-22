@@ -11,10 +11,10 @@ use crate::PluginRuntime;
 use abi::{Bytes, NativeDiagnosticsApiV1};
 pub use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, ClassificationError, CommonPluginFailureCode,
-    DiagnosticAvailability, DiagnosticClassifier, DiagnosticCount, DiagnosticDiscovery,
-    DiagnosticMemoryPage, DiagnosticOutcome, DiagnosticQuery, DiagnosticReadReason,
-    DiagnosticSeverity, DiagnosticSnapshot, EvidenceDisposition, FailureClass, FailureCode,
-    PluginFailureCode, RecordOutcome, RecordReceipt,
+    DiagnosticAvailability, DiagnosticClassifier, DiagnosticCorrelation, DiagnosticCount,
+    DiagnosticDiscovery, DiagnosticMemoryPage, DiagnosticOutcome, DiagnosticQuery,
+    DiagnosticReadReason, DiagnosticSeverity, DiagnosticSnapshot, EvidenceDisposition,
+    FailureClass, FailureCode, PluginFailureCode, RecordOutcome, RecordReceipt,
 };
 use std::num::NonZeroU64;
 use std::sync::{
@@ -151,7 +151,7 @@ pub struct ComponentDeclaration<'a> {
     /// Complete bounded vocabulary; code handles are one-based positions.
     pub codes: &'a [DiagnosticCode<'a>],
 }
-/// Borrowed typed observation of one internal operation or positive occurrence delta.
+/// Typed observation with borrowed detail and shared caller correlation.
 pub struct Observation<'a> {
     /// One-based code position returned by registration.
     pub code: u32,
@@ -165,10 +165,8 @@ pub struct Observation<'a> {
     pub count: NonZeroU64,
     /// Restricted diagnostic-only detail; core reports any truncation.
     pub detail: &'a str,
-    /// Optional request correlation.
-    pub request_id: Option<&'a str>,
-    /// Optional trajectory correlation.
-    pub session_id: Option<&'a str>,
+    /// Optional request/session identifiers, excluded from aggregation keys.
+    pub correlation: DiagnosticCorrelation<'a>,
 }
 impl<'a> Observation<'a> {
     /// Author a failed internal operation with error severity.
@@ -180,8 +178,7 @@ impl<'a> Observation<'a> {
             failure_class: Some(class),
             count,
             detail,
-            request_id: None,
-            session_id: None,
+            correlation: DiagnosticCorrelation::default(),
         }
     }
     /// Author independent successful evidence.
@@ -193,8 +190,7 @@ impl<'a> Observation<'a> {
             failure_class: None,
             count,
             detail,
-            request_id: None,
-            session_id: None,
+            correlation: DiagnosticCorrelation::default(),
         }
     }
 }
@@ -448,8 +444,8 @@ impl DiagnosticComponent {
         let _guard = d.enter().map_err(|e| d.refused_locally(e))?;
         let value = make();
         let class = value.failure_class.map_or("", FailureClass::as_str);
-        let request = value.request_id.unwrap_or("");
-        let session = value.session_id.unwrap_or("");
+        let request = value.correlation.request_id.as_deref().unwrap_or("");
+        let session = value.correlation.session_id.as_deref().unwrap_or("");
         if [
             value.detail.len(),
             request.len(),

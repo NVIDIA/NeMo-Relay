@@ -3018,6 +3018,17 @@ registration_failure = {failure}
                 .filter(|e| e.message() == Some("native-private-sentinel"))
                 .collect();
             assert_eq!(evidence.len(), 3);
+            for (event, session) in evidence[..2]
+                .iter()
+                .zip(["native-session-2", "native-session-3"])
+            {
+                assert_eq!(
+                    event.correlation.request_id.as_deref(),
+                    Some("native-request")
+                );
+                assert_eq!(event.correlation.session_id.as_deref(), Some(session));
+            }
+            assert_eq!(evidence[2].correlation, DiagnosticCorrelation::default());
             assert_eq!(
                 evidence[0].context.phase.as_ref().unwrap().as_str(),
                 "activation"

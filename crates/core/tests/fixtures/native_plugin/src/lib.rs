@@ -1963,12 +1963,17 @@ fn register_diagnostics_fixture(
     for delta in [2, 3] {
         component
             .try_record_lazy(|| {
-                Observation::failure(
+                let mut observation = Observation::failure(
                     1,
                     FailureClass::Unavailable,
                     "native-private-sentinel",
                     NonZeroU64::new(delta).unwrap(),
-                )
+                );
+                observation.correlation = DiagnosticCorrelation {
+                    request_id: Some("native-request".into()),
+                    session_id: Some(format!("native-session-{delta}").into()),
+                };
+                observation
             })
             .map_err(|e| e.to_string())?;
     }
