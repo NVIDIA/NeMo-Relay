@@ -15,20 +15,44 @@ server, and cooperative task cancellation.
 
 ## Internal Diagnostic Observations
 
-Use `await runtime.diagnostics()` to set up diagnostic delivery with the host.
-Keep a component handle for internal operations that the host cannot observe.
-The host already records callback completion, so do not record it again. The
-worker does not create a separate diagnostic store or configuration.
+Use `await runtime.diagnostics()` to obtain diagnostics for the activation.
+The SDK negotiates delivery once and reuses the host's selected context. It does
+not create a worker-local store or enable diagnostic collection.
 
-This example records an internal failure after that operation fails:
+This example matches the Rust native and Rust worker example. Register its
+component once during setup, then retain it in the callbacks that perform lookups.
+Python supports `async def register`, so that hook can await the helper using
+`ctx.runtime`. Keep both returned handles for the activation.
+It declares separate failure and success codes, records positive occurrence counts,
+and attaches a request ID. Call the failure helper only after observing an
+unavailable backend. Call the success helper only after a completed lookup.
 
-<Code src="_code/internal_diagnostics.py" language="python" title="internal_diagnostics.py" lines="4-38" showLineNumbers={false} />
+<Code src="_code/internal_diagnostics.py" language="python" title="Lookup diagnostics" lines="4-72" showLineNumbers={false} />
 
-Catch `DiagnosticDeliveryError` separately from execution failures. If collection
-is disabled or the queue is full, the helper skips the lazy factory.
-`delivery_stats()` reports losses. `await flush(timeout)` waits for earlier queued
-work. During shutdown, the SDK limits drain time and closes delivery tasks.
-Refer to [delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
+Handle registration and recording failures separately from execution failures.
+Python raises `DiagnosticDeliveryError`, whose `kind` field identifies the error.
+The helpers expose those errors so the caller can apply its delivery policy.
+Do not propagate an optional diagnostic failure as the lookup's result.
+
+`try_record_lazy` returns `None` after local queue admission. It does not return a
+host acceptance receipt. An inactive component returns without recording. Disabled
+or unsupported collection skips the observation factory. A full queue also skips
+the factory. `diagnostics.availability` reports negotiated availability.
+
+Check `diagnostics.delivery_stats()` for dropped, rejected, and uncertain work.
+Use `await diagnostics.flush(timeout)` to wait for earlier queue work.
+The timeout is in seconds. Flush does not return per-record receipts or acknowledge
+disk storage. Never replay uncertain observations into a new session.
+
+Use `await component.close()` when the component's work ends. SDK shutdown
+limits diagnostic drain time and closes delivery tasks. Explicit delivery shutdown
+uses `await diagnostics.close(timeout)`. Canonical snapshot and memory reads are
+not available to workers, even when a native plugin has a read grant.
+
+Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for the shared pattern,
+built-in code declarations, and native/worker API differences. The
+[delivery protocol](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+defines host limits, retries, and session authority.
 
 ## Test the Package
 

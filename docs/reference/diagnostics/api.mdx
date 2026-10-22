@@ -24,6 +24,7 @@ runtime you want to inspect:
 | Runtime | Reader |
 | --- | --- |
 | Rust-owned context | `DiagnosticsReader` |
+| Rust native plugin with a host-policy grant | `runtime.diagnostics().reader()` |
 | Existing CLI gateway | `nemo-relay diagnostics` or authorized diagnostics HTTP routes |
 | Daemon broker or managed Relay worker | Use authorized diagnostics HTTP routes. The broker also exposes cached worker pages. |
 | Embedded Python or Node.js | Optional diagnostics reader with native objects or canonical JSON |
@@ -32,7 +33,10 @@ Refer to [CLI and Daemon Diagnostics](/reference/diagnostics/cli) or
 [Embedded Diagnostics](/reference/diagnostics/bindings) for startup configuration
 and language examples. A dynamic-plugin worker submits observations to its host. Its
 recording permission does not grant access to host snapshots. The plugin host's
-reader remains available after a plugin closes or fails.
+reader remains available after a plugin closes or fails. Native SDK readers are
+activation-scoped and require a separate whole-context policy grant. Refer to
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics#read-host-evidence)
+for that permission and its lifecycle.
 
 ## Discover Capabilities and Limits
 
@@ -213,7 +217,10 @@ continuations. Query an authorized source reader when you need filtered pages.
 
 Python and Node.js errors expose `.reason`. Rust maps `DiagnosticError` through
 `read_reason()` to `DiagnosticReadReason`. Include a fallback arm when matching
-that non-exhaustive Rust enum.
+that non-exhaustive Rust enum. Native SDK readers expose stable labels through
+`nemo_relay_plugin::diagnostics::DiagnosticError::reason()`. A denied native read
+returns `permission_denied`. A revoked activation returns `closed`. These are
+separate from the HTTP status mapping below.
 
 | Reason | HTTP Status | Action |
 | --- | --- | --- |

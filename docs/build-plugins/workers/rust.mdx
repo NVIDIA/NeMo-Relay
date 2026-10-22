@@ -9,30 +9,51 @@ SPDX-License-Identifier: Apache-2.0 */}
 The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
 [Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 0.11.0,
 implements `WorkerPlugin`, registers all
-15 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
+16 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
 create the authenticated `grpc-v1` server from the
 activation environment Relay provides.
 
 ## Internal Diagnostic Observations
 
-Use `runtime.diagnostics().await` to set up delivery through the host's selected
-context and session policy. Register diagnostic components separately from
-execution components. Keep a handle for internal operations that the host cannot
-observe. The host already records callback completion, so do not record it again.
+Use `runtime.diagnostics().await` to obtain diagnostics for the activation.
+The SDK negotiates delivery once and reuses the host's selected context. It does
+not create a worker-local store or enable diagnostic collection.
 
-This example records an internal failure after that operation fails. It uses
-`nemo_relay_types` directly. Add that crate as a dependency when using its catalogue
-types:
+This example matches the Rust native and Python worker example. Register its
+component once from asynchronous code, then retain it for later lookups.
+`WorkerPlugin::register` is synchronous. Capture the runtime and shared state in
+an asynchronous callback, then initialize the helper once with a Tokio `OnceCell`.
+Cache initialization failure as well to avoid repeated registration attempts.
+It declares separate failure and success codes, records positive occurrence counts,
+and attaches a request ID. Call the failure helper only after observing an
+unavailable backend. Call the success helper only after a completed lookup.
 
-<Code src="_code/internal_diagnostics.rs" language="rust" title="internal_diagnostics.rs" lines="4-32" showLineNumbers={false} />
+<Code src="_code/internal_diagnostics.rs" language="rust" title="Lookup diagnostics" lines="4-69" showLineNumbers={false} />
 
-If diagnostic registration fails, continue without that optional component.
-A recording failure must also preserve the operation's original result. This
-example discards the optional delivery error. If collection is disabled or the
-queue is full, the helper skips the lazy factory. `delivery_stats()` reports losses.
-`flush(Duration)` waits for earlier queued work. The SDK limits diagnostic drain
-time during shutdown. Refer to
-[delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
+Handle registration and recording failures separately from execution failures.
+Rust returns `DiagnosticDeliveryError` variants.
+The helpers expose those errors so the caller can apply its delivery policy.
+Do not propagate an optional diagnostic failure as the lookup's result.
+
+`try_record_lazy` returns `Ok(())` after local queue admission. It does not return a
+host acceptance receipt. An inactive component returns without recording. Disabled
+or unsupported collection skips the observation factory. A full queue also skips
+the factory. `diagnostics.availability()` reports negotiated availability.
+
+Check `diagnostics.delivery_stats()` for dropped, rejected, and uncertain work.
+Use `diagnostics.flush(Duration).await` to wait for earlier queue work.
+The timeout is a `std::time::Duration`. Flush does not return per-record receipts
+or acknowledge disk storage. Never replay uncertain observations into a new session.
+
+Use `component.close().await` when the component's work ends. SDK shutdown
+limits diagnostic drain time and closes delivery tasks. Explicit delivery shutdown
+uses `diagnostics.close(Duration).await`. Canonical snapshot and memory reads are
+not available to workers, even when a native plugin has a read grant.
+
+Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for the shared pattern,
+built-in code declarations, and native/worker API differences. The
+[delivery protocol](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+defines host limits, retries, and session authority.
 
 ## Configure the Snapshot Location
 

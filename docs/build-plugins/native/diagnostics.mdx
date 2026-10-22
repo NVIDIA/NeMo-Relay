@@ -37,33 +37,179 @@ to a native operation's failure count as if they were separate failed activation
 Refer to [producer boundaries](/reference/diagnostics#plugin-producer-boundaries)
 for ownership across the two layers.
 
+## Record Internal Observations
+
+The native SDK exposes canonical diagnostics through `runtime.diagnostics()`.
+Obtain the runtime from the `PluginContext` supplied during registration. Retain
+its diagnostic component in callbacks that perform the internal operation.
+
+Use the same lookup example as the Rust and Python worker guides. It declares
+one failure code and one success code, then records the observed outcome with a
+request ID. Registration runs once for that responsibility. Refer to
+[Plugin Diagnostics](/build-plugins/diagnostics) for the shared recording pattern
+and the differences between host acceptance and queue admission.
+
+<Code src="_code/internal_diagnostics.rs" language="rust" title="Native lookup diagnostics" lines="4-64" showLineNumbers={false} />
+
+`component_lazy` registers the complete code list together. Disabled or unsupported
+facades skip its factory and return an inactive component. Inactive components
+skip observation factories too. A code position is one-based within that list.
+Extensions declare their outcome and allowed failure classes. Common plugin
+failure codes can also be selected with `DiagnosticCode::Builtin`.
+
+Each successful record returns `RecordOutcome::Recorded`. Its receipt contains
+these fields:
+
+- `sequence` identifies the accepted source update.
+- `code_total` holds the updated code count when available.
+- `evidence` is `Retained`, `Truncated`, or `Dropped`.
+
+`RecordOutcome::Disabled` means no observation or loss count was produced.
+A dropped or truncated evidence payload does not undo accepted counts.
+Keep diagnostic errors separate from callback results. Do not retry an uncertain
+record automatically, since the host might already have counted it.
+
+`diagnostics.delivery_stats()` reports SDK-local dropped, rejected, and uncertain
+submission totals. These are separate from host occurrence counts and retention
+loss. `diagnostics.availability()` reports collection availability.
+`diagnostics.capabilities()` reports the adapter limits and read grant without
+exposing diagnostic evidence.
+
+### Correlation and Lifetime
+
+`Observation::failure` and `Observation::success` default to no correlation.
+Set request or session IDs through `observation.correlation`. The shared
+`DiagnosticCorrelation` type accepts borrowed and owned strings. Correlation
+never becomes a counter key and counts toward the input-text budget.
+
+Native recording is synchronous. There is no delivery queue or flush call.
+Concurrent SDK calls on the same runtime can return `DiagnosticError::Busy`.
+Explicit `component.close()` fences all clones. Last drop also closes the
+registration. Activation teardown revokes handles and releases adapter backing.
+
+Closing a registration does not reset context totals or imply recovery.
+Closing live components frees their slots, but cumulative extension and declaration
+text budgets remain consumed for the session. Register a stable vocabulary once
+instead of creating a new component for each request.
+
 ## Read Host Evidence
 
-Use an authorized host reader to inspect component counts and retained events.
-Follow the [Diagnostics API](/reference/diagnostics/api) for filters, pagination,
-and coverage checks. Filters help select evidence. They do not limit the reader's
-permission to inspect the whole context.
+The canonical reader can inspect every component in the host's selected context.
+Reads require the host's explicit `native_diagnostics_read_context` grant.
+The default is false. Recording does not require this grant.
 
-Closing a plugin closes its registrations. The host context and its lifetime
-totals remain available. Event storage is limited, so old events can be replaced.
-Check coverage fields before treating an empty event list as a complete history.
+Set the grant in host policy using the manifest plugin ID. This example uses the
+checked native example's ID:
 
-Native observations use state-only recording. Restricted detail and correlation
-stay out of logs, marks, subscribers, exporters, and legacy reports.
+<Code src="_code/diagnostics-policy.toml" language="toml" title="Host policy" lines="4-5" showLineNumbers={false} />
+
+Resolve the setting through the existing host configuration layers. Within policy,
+defaults apply first, followed by ordered matching rules and plugin-ID overrides.
+An explicit false can override an earlier grant. A plugin manifest or component
+configuration cannot grant access. Workers always receive no grant.
+
+`plugins inspect <id>` and `plugins validate <id-or-path>` report the effective
+`native_diagnostics_read_context` permission in text and JSON. The value describes
+policy, not whether collection is enabled or an activation is live. Configuration
+values stay redacted. Apply policy changes through the existing owner-controlled
+reload or reactivation path.
+
+This example reads discovery, a snapshot, and a separate memory page:
+
+<Code src="_code/read_diagnostics.rs" language="rust" title="Authorized native reads" lines="4-31" showLineNumbers={false} />
+
+The reader exposes these operations:
+
+| Method | Result |
+| --- | --- |
+| `discovery()` | Canonical capabilities for the selected host context. |
+| `snapshot(&query)` | An independently owned `DiagnosticSnapshot`. |
+| `snapshot_json(&query)` | Canonical snapshot JSON with exact decimal-string counts. |
+| `inspect_memory(&query)` | An independently owned `DiagnosticMemoryPage`. |
+| `inspect_memory_json(&query)` | Canonical memory-page JSON. |
+
+Every read checks live activation and read authority. Without a grant, `reader()`
+returns `permission_denied`. After teardown, handles return `closed`. An authorized
+read can still fail if collection or queries are disabled, a cursor is invalid,
+or the page cannot fit. Use `DiagnosticError::reason()` for stable error labels.
+
+Follow the [Diagnostics API](/reference/diagnostics/api) for query fields, precision,
+pagination, and coverage. Snapshot and memory pages have separate cursors and
+are captured independently. Decoded pages and SDK buffers belong to the caller
+and use memory outside the core budget. A short output buffer never yields a
+usable partial page. Reads do not start a service or resource collector.
+
+A read grant exposes other components' restricted detail too. Filters select
+results but do not narrow permission. Keep returned data within the authorized
+inspection boundary. Snapshot reads never automatically feed logs or exporters.
+
+### Handle SDK Errors
+
+Use stable reason labels to handle adapter errors:
+
+| Reason | Meaning and Response |
+| --- | --- |
+| `unsupported` | The host has no compatible diagnostics extension. Continue without optional diagnostics. |
+| `unavailable` | Adapter session storage could not be admitted. Keep the operation's original result. |
+| `closed` | The activation or registration is closed. Stop using its handles. |
+| `permission_denied` | Host policy did not grant whole-context reads. Recording can still be available. |
+| `busy` | Concurrent admission is full. Native recording does not retry automatically. |
+| `capacity` | A declaration or request exceeds an adapter limit. Reduce its size or vocabulary. |
+| `invalid` | An input value or handle is invalid. Check code positions, outcomes, and failure classes. |
+| `conflict` | A local component name is already registered. Reuse its existing handle. |
+| `buffer_too_small` | A caller-owned output buffer cannot fit the complete response. Ignore the output. |
+| `internal` | Adapter acceptance is uncertain. Do not automatically replay the observation. |
+
+`DiagnosticError::Read` carries a canonical read reason, such as `disabled`,
+`query_disabled`, `invalid_cursor`, or `snapshot_capacity`. Refer to the
+[shared read errors](/reference/diagnostics/api#handle-read-errors) for their meaning.
+Include a fallback when matching the non-exhaustive Rust error enum.
+
+## Admission Limits
+
+Native adapter limits apply in addition to core diagnostic storage limits:
+
+| Resource | Limit |
+| --- | --- |
+| Authoring sessions | Up to 32 per host process. |
+| Live components | Up to eight per session. |
+| Codes | Up to 32 per component. |
+| Extension declarations | Up to 16 over the session's lifetime. |
+| Declaration text | Up to 16 KiB over the session's lifetime. |
+| Aggregate input text | Up to 16 KiB per call, including detail and correlation. |
+| Concurrent host data calls | Up to four per process. Cleanup does not need a data permit. |
+| Queries and responses | The selected context's query and page limits. |
+
+Extension names allow 32 UTF-8 bytes. Descriptions allow 256 UTF-8 bytes.
+Core detail and correlation limits still apply and can truncate accepted evidence.
+Capacity errors during registration do not disable existing recorders. Full event
+history can evict older evidence while counters keep updating.
+
+Capabilities report adapter layout bounds and the current activation's session
+bytes separately from core storage. These values do not measure total process RSS
+or allocator overhead. Caller-owned read results have their own memory cost.
 
 ## SDK and ABI Boundaries
 
-The native SDK does not expose the canonical diagnostic recorder or snapshot
-reader through its C ABI. Keep core recorders and Rust objects inside the host.
-This diagnostics support does not change native ABI layouts. Plugin code should
-return its normal callback result. The host owns recording that callback's failure.
+The optional `NativeDiagnosticsApiV1` table follows the frozen execution ABI-8
+prefix. The SDK checks the table's size and independent contract version before
+using it. Execution ABI 8, ABI-7 negotiation, and manifest native API 1 remain
+unchanged. This adds an optional tail to the native host table.
 
-`PluginRuntime::runtime_diagnostics()` remains the older host-level report exposed
-by ABI v4. It is ordered by code and does not identify the plugin that recorded an
-entry. It does not return canonical diagnostic snapshots or fall back to them.
+Core recorders and Rust-owned objects stay inside the host. Registration and
+recording cross the ABI as fixed layouts with borrowed UTF-8 spans. The host
+retains no plugin input pointers. A compatible host without the extension exposes
+an unsupported facade and keeps existing execution behavior.
+
+`PluginRuntime::runtime_diagnostics()` remains the older host-level report from
+ABI v4. It is ordered by code and does not identify the plugin that recorded an
+entry. It does not return canonical snapshots or fall back to them.
 Refer to [Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes#emit-typed-telemetry-and-read-diagnostics)
-for that SDK API.
+for that older API, and the
+[native ABI reference](/build-plugins/native/native-abi-reference#native-diagnostics-extension)
+for table ownership and compatibility details.
 
-gRPC workers have a separate delivery API for internal observations. Refer to
-[worker diagnostic delivery](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
-when authoring a worker plugin.
+A plugin that requires canonical diagnostics must declare a Relay compatibility
+range that includes this extension. Do not treat `compat.native_api = "1"` as proof
+that every compatible host exposes it. Native code remains trusted and shares
+the host process.

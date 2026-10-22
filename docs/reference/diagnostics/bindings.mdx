@@ -52,9 +52,12 @@ do not restrict that authority. Snapshots also contain totals for the whole cont
 If your application serves reads to other clients, it must authorize each client.
 Snapshots do not flow into subscribers, exporters, legacy reports, exception
 attachments, or operational logs. OpenTelemetry (OTel) integration is not yet
-supported. Only the Rust API can create custom components and recorders.
-The [recording and classifier guide](/reference/diagnostics) describes the Rust
-producer APIs.
+supported. Among embedded application bindings, only the Rust runtime API creates
+custom components and recorders. Native Rust and Rust/Python worker SDKs also
+support plugin-internal recording through their separate diagnostic facades.
+Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for those APIs. The
+[recording and classifier guide](/reference/diagnostics) describes direct Rust
+runtime producers.
 
 The supported embedded reader operations are:
 

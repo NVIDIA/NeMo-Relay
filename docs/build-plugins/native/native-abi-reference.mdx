@@ -56,7 +56,7 @@ function signatures and field order are defined by the public
 | v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
 | v6 extension | Host-routed operational logging with structured fields. |
 | Frozen v7 extension | Codec context for raw and typed LLM execution callbacks, an execution-specific asynchronous non-streaming registration, context on the asynchronous stream-execution callback, and stream retain plus stream-scoped request decode and encode operations. |
-| Current v8 extension | `current_scope_stack_snapshot`: owned root-to-top UUID/type JSON, with an unchanged v7 prefix. |
+| Current v8 extension | `current_scope_stack_snapshot`: owned root-to-top UUID/type JSON, with an unchanged v7 prefix. A size-discovered diagnostics-table pointer follows the frozen v8 prefix. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -271,3 +271,69 @@ initialized to null before the read.
 The [typed getter](/build-plugins/native/runtime-events-and-scopes#inspect-scope-identities)
 returns a detached value. The host releases its read lock before encoding and
 returns no pointers into stack handles, registries, or Rust containers.
+
+## Native Diagnostics Extension
+
+`NativeHostApiV8WithDiagnostics` preserves the complete ABI-8 prefix and appends
+an immutable pointer to `NativeDiagnosticsApiV1`. Read the pointer only when
+`abi_version == 8` and `struct_size` includes the full tail. Then check the
+pointed table's size and independent `contract_version` before copying callbacks.
+A missing, null, truncated, or unknown table is unsupported. The execution ABI
+remains 8, ABI-7 negotiation is retained, and `compat.native_api = "1"` is unchanged.
+
+The existing `get_runtime_diagnostics` callback keeps its original position and
+legacy host-report JSON contract. The diagnostics extension supplies separate
+registration, recording, and canonical-read callbacks. It does not replace that
+reader. Existing plugins continue to use the frozen host prefix. A new SDK on a
+compatible host without the extension exposes an unsupported facade and skips
+recording factories while preserving execution and legacy-reader behavior. A
+plugin that requires the extension must declare a Relay compatibility range that
+includes its availability. Refer to the [native SDK guide](/build-plugins/native/runtime-events-and-scopes#record-internal-diagnostics)
+for the authoring and reader APIs.
+
+The table provides capabilities, component registration, recording, closure,
+and canonical reads. Registration and recording use fixed C layouts and borrowed
+UTF-8 byte spans, never Rust-owned objects. Arrays and outputs must be aligned
+and valid for the call. The host retains no input pointers. Code handles are
+one-based declaration positions. Component tokens are activation-scoped and
+never reused. Recording is synchronous and state-only, with a fixed acceptance
+receipt and no exporter projection or retry queue.
+
+Diagnostics uses its own numeric statuses, defined by
+`diagnostics::DiagnosticError::from_status`, independently of `NemoRelayStatus`.
+Zero means accepted. One means disabled for registration/recording. Unknown
+statuses are internal failures, not success. Adapter errors contain bounded
+reason labels and never place input detail in the legacy last-error channel.
+
+The native adapter has these limits:
+
+| Resource | Limit |
+| --- | --- |
+| Authoring sessions | 32 per host process. |
+| Live components | Eight per session. |
+| Codes | 32 per component. |
+| Extension declarations | 16 over the session's lifetime. |
+| Declaration text | 16 KiB over the session's lifetime. |
+| Aggregate input text | 16 KiB per call. |
+| Concurrent host data calls | Four per process. Cleanup needs no data permit. |
+
+Registration exhaustion can reject new components. Full core history evicts
+evidence without disabling existing recorders.
+
+Capabilities report adapter layout bounds and current activation session bytes
+separately from core storage. They are not process RSS or allocator measurements.
+
+Reads check activation and the host's `native_diagnostics_read_context` grant
+before parsing queries or capturing data. Query input uses core's existing byte
+limit. The host uses the selected context's canonical read leases and copies
+complete JSON into caller-owned output up to the configured page cap. It releases
+the lease before returning. `written` is zero on any failure. Callers must ignore
+all output bytes on failure. A short buffer never yields a usable partial page.
+Decoded pages and SDK buffers belong to the caller and are outside core's bound.
+
+The grant includes whole-context restricted data and defaults to false. It does
+not grant worker reads. Registration/read failures do not change execution or
+legacy-report semantics. Teardown fences recording, closes component owners,
+and releases session backing and strong context references through the existing
+native runtime cleanup. Retained diagnostic evidence contains only host-owned
+data and cannot keep plugin code loaded.

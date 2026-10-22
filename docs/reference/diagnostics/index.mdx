@@ -20,7 +20,7 @@ decides whether it is healthy and how to recover from failures.
 | Configure and read diagnostics from a language-hosted application | [Embedded Diagnostics](/reference/diagnostics/bindings) |
 | Discover capabilities, query snapshots, and handle errors | [Diagnostics API](/reference/diagnostics/api) |
 | Inspect retained entry and component storage and resource context | [Diagnostic Memory Inspection](/reference/diagnostics/memory) |
-| Record distinct internal observations in a plugin worker | [Rust worker](/build-plugins/workers/rust#internal-diagnostic-observations), [Python worker](/build-plugins/workers/python#internal-diagnostic-observations), and [delivery protocol](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery) |
+| Record internal observations in native or worker plugins | [Plugin Diagnostics](/build-plugins/diagnostics) |
 
 The sections below explain how Rust records and stores diagnostics. A *producer*
 is the part of Relay that records an operation's outcome. A *context* owns the
@@ -98,8 +98,16 @@ requires provenance contract 1.
 All dynamic-plugin observations use state-only recording. Restricted detail and
 correlation stay in diagnostic storage. Logging and event export paths never
 receive them. Legacy reports also exclude them.
-Existing emitters and legacy reports retain their contracts. Native ABI layouts
-are unchanged. Core recorders and Rust objects never cross that boundary.
+Existing emitters and legacy reports retain their contracts. The optional native
+diagnostics table follows the frozen execution ABI-8 prefix. Execution ABI 8 and
+manifest native API 1 remain unchanged. Fixed layouts and borrowed byte spans
+cross that boundary. Core recorders and Rust-owned objects remain inside the host.
+
+The native SDK can record internal observations and return synchronous acceptance
+receipts. An explicit host-policy grant also permits whole-context snapshot and
+memory reads. The grant defaults to false. Refer to
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics) for recording,
+read authority, limits, and cleanup.
 
 Worker recording permission does not grant whole-context snapshot access.
 `can_read_context` is false and canonical worker reads return `PERMISSION_DENIED`.
@@ -422,6 +430,7 @@ integrations. It outlives individual plugin activations.
 | Shared host configuration | One canonical inheritance notice per contributing ambient file, preserving existing warnings/reports |
 | Native ABI and dynamic trust/policy | Records failures in policy, artifact, and schema checks. Also records native load, validation, registration, and callback failures. |
 | Worker host lifecycle and execution | Launch, handshake, validation, registration, callback and transport failures, cancellation, shutdown, exit, and process cleanup |
+| Native SDK observations | Synchronous internal recording with acceptance receipts and optional authorized canonical reads. |
 | Worker SDK observations | Bounded authenticated delivery of distinct internal observations into the host's selected context |
 
 Each adapter identifies the operation it records:
