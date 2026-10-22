@@ -140,7 +140,7 @@ async function main() {
       const result = await llmCallExecute(
         "demo-provider",
         request,
-        async (req) => ({
+        (req) => ({
           text: "hello",
           messages: req.content.messages,
         }),
@@ -155,7 +155,6 @@ async function main() {
     });
   } finally {
     await flushSubscribers();
-    await new Promise((resolve) => setImmediate(resolve));
     deregisterSubscriber("llm-check");
   }
 }
@@ -243,7 +242,8 @@ Check both behavior and instrumentation:
 
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
-and then one event-loop turn. Do this before validating printed output.
+before validating printed output. If a subscriber callback emits a native event,
+await `flushSubscribers()` again to observe that event.
 
 - LLM start input contains the request after request intercepts and
   sanitize-request guardrails. Each owning agent scope starts fresh, and a

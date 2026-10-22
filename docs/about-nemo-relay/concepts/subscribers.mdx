@@ -189,8 +189,10 @@ observe side effects from callbacks that were already queued before the barrier:
 - Rust: `nemo_relay::api::subscriber::flush_subscribers()?`
 - Python: `nemo_relay.subscribers.flush()` from synchronous code, or
   `await nemo_relay.subscribers.flush_async()` from an `asyncio` task
-- Node.js: `await flushSubscribers()`, then await an event-loop tick for JavaScript
-  callback side effects
+- Node.js: `await flushSubscribers()` waits for queued JavaScript subscriber
+  callbacks and their returned promises to finish. Native events emitted by
+  those callbacks are separate publications; flush again if those events must
+  also be observed.
 - FFI: `nemo_relay_flush_subscribers()`
 
 Events emitted concurrently after the flush barrier are not covered by that
