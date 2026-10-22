@@ -107,6 +107,7 @@ pub(crate) fn post_verified(
         max_response_bytes,
         false,
         None,
+        false,
     )
 }
 
@@ -138,6 +139,7 @@ pub(crate) fn post_verified_preflight(
         max_response_bytes,
         false,
         Some(HEALTHZ_TIMEOUT),
+        false,
     )
 }
 
@@ -159,6 +161,35 @@ pub(crate) fn post_daemon_verified(
         max_response_bytes,
         true,
         None,
+        false,
+    )
+}
+
+/// Inspect an existing listener over pinned TLS without health polling, acquisition,
+/// compatibility checks, or bootstrap-state creation.
+pub(crate) fn get_diagnostics(
+    url: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    if !path.starts_with(crate::diagnostics_http::PREFIX)
+        || path.bytes().any(|b| b == b'\r' || b == b'\n')
+    {
+        return Err(VerifiedHttpError::before_payload(
+            "invalid diagnostic route",
+        ));
+    }
+    post_authenticated(
+        url,
+        "diagnostics-read/v1",
+        path,
+        &[],
+        &[],
+        Duration::from_secs(5),
+        max_bytes,
+        false,
+        None,
+        true,
     )
 }
 
@@ -173,6 +204,7 @@ fn post_authenticated(
     max_response_bytes: usize,
     daemon: bool,
     readiness_timeout: Option<Duration>,
+    inspection: bool,
 ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
     let (host, port) = parse_loopback_url(url).map_err(VerifiedHttpError::after_payload)?;
     let addresses = (host.as_str(), port).to_socket_addrs().map_err(|error| {
@@ -214,10 +246,18 @@ fn post_authenticated(
     let key = if daemon {
         None
     } else {
-        Some(cached_bootstrap_challenge_key().map_err(|error| {
-            VerifiedHttpError::before_payload(format!(
-                "failed to load the Relay bootstrap challenge key: {error}"
-            ))
+        let key = if inspection {
+            BootstrapChallengeKey::load_existing()
+                .map_err(|error| error.to_string())
+                .and_then(|key| {
+                    key.map(Arc::new)
+                        .ok_or_else(|| "diagnostic credentials unavailable".to_owned())
+                })
+        } else {
+            cached_bootstrap_challenge_key()
+        };
+        Some(key.map_err(|_| {
+            VerifiedHttpError::before_payload("Relay bootstrap credentials unavailable")
         })?)
     };
     // A daemon may run under another account and serve a certificate its administrator
@@ -299,7 +339,7 @@ fn post_authenticated(
     let mut stream = rustls::StreamOwned::new(connection, stream);
 
     // Only gateway delivery loads the challenge key, so this block never runs for a daemon.
-    if let Some(key) = key.as_deref() {
+    if !inspection && let Some(key) = key.as_deref() {
         let challenge = format!(
             "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
         );
@@ -341,7 +381,8 @@ fn post_authenticated(
         }
     }
 
-    let mut request = format!("POST {path} HTTP/1.1\r\nHost: {authority}\r\n");
+    let method = if inspection { "GET" } else { "POST" };
+    let mut request = format!("{method} {path} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in headers {
         if !daemon && name.eq_ignore_ascii_case(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
             continue;
@@ -352,9 +393,17 @@ fn post_authenticated(
         request.push_str("\r\n");
     }
     if let Some(key) = key.as_deref() {
-        request.push_str(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+        request.push_str(if inspection {
+            crate::diagnostics_http::AUTH_HEADER
+        } else {
+            BOOTSTRAP_CLIENT_TOKEN_HEADER
+        });
         request.push_str(": ");
-        request.push_str(&key.client_token());
+        request.push_str(&if inspection {
+            key.diagnostics_token()
+        } else {
+            key.client_token()
+        });
         request.push_str("\r\n");
     }
     request.push_str(&format!(

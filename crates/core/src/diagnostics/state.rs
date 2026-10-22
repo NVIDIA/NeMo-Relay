@@ -668,7 +668,10 @@ mod tests {
             Diagnostics::default().source().clone(),
             DiagnosticsSettings {
                 enabled: true,
-                ..Default::default()
+                limits: DiagnosticLimits {
+                    max_counters: 64 * BuiltinDiagnosticCode::all().len(),
+                    ..Default::default()
+                },
             },
         )
         .unwrap();

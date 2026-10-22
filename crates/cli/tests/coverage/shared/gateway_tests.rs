@@ -40,6 +40,164 @@ fn test_http_client_no_redirect() -> Client {
         .expect("test client configuration is valid")
 }
 
+#[tokio::test]
+async fn raw_passthrough_stream_records_body_outcomes_without_counting_cancellation() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_RAW_STREAM_DIAGNOSTICS";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // Installing the process-wide context must not affect other gateway tests.
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "gateway::tests::raw_passthrough_stream_records_body_outcomes_without_counting_cancellation",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("raw-stream diagnostics test timed out")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let runtime = diag::install(crate::configuration::RuntimeDiagnosticsConfig {
+        enabled: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut expected_headers = 0;
+    let mut expected_completed = 0;
+    let mut expected_failures = 0;
+    #[derive(Clone, Copy, Debug)]
+    enum Outcome {
+        Complete,
+        Truncated,
+        Cancelled,
+    }
+    for with_operational in [false, true] {
+        for outcome in [Outcome::Complete, Outcome::Truncated, Outcome::Cancelled] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let request_body = br#"{"stream":true}"#;
+            let (release, released) = oneshot::channel();
+            let upstream = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request
+                        .windows(4)
+                        .position(|v| v == b"\r\n\r\n")
+                        .is_some_and(|end| request.len() >= end + 4 + request_body.len())
+                    {
+                        break;
+                    }
+                }
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n",
+                    )
+                    .await
+                    .unwrap();
+                match outcome {
+                    Outcome::Complete => socket.write_all(b"0\r\n\r\n").await.unwrap(),
+                    Outcome::Truncated => {} // Close before the terminal HTTP chunk.
+                    Outcome::Cancelled => released.await.unwrap(),
+                }
+            });
+            let config = GatewayConfig {
+                openai_base_url: format!("http://{address}/v1"),
+                ..Default::default()
+            };
+            let mut state = AppState::new(config.clone());
+            state.http = Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let request = Request::post("/v1/images/generations")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(request_body.as_slice()))
+                .unwrap();
+            let mut authorization = environment_authorization();
+            authorization.allow_environment_provider_auth = false;
+            let prepared =
+                prepare_gateway_request(&config, request, authorization, "/v1/images/generations")
+                    .await
+                    .unwrap();
+            assert!(prepared.streaming);
+            let operational = with_operational.then(OperationalContext::new);
+            let response = passthrough_streaming(state, prepared, operational)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut body = response.into_body();
+            match outcome {
+                Outcome::Complete => assert_eq!(body.collect().await.unwrap().to_bytes(), "hello"),
+                Outcome::Truncated => assert!(body.collect().await.is_err()),
+                Outcome::Cancelled => {
+                    let frame = body.frame().await.unwrap().unwrap();
+                    assert_eq!(frame.into_data().unwrap(), "hello");
+                    drop(body);
+                }
+            }
+            let _ = release.send(());
+            tokio::time::timeout(Duration::from_secs(5), upstream)
+                .await
+                .unwrap()
+                .unwrap();
+            expected_headers += 1;
+            expected_completed += usize::from(matches!(outcome, Outcome::Complete));
+            expected_failures += usize::from(matches!(outcome, Outcome::Truncated));
+            let snapshot = runtime
+                .context
+                .snapshot(&nemo_relay::diagnostics::DiagnosticQuery {
+                    component_key: Some("cli.upstream".into()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            for (code, expected) in [
+                ("cli.upstream.headers_received", expected_headers),
+                ("cli.upstream.body_completed", expected_completed),
+                ("cli.upstream.response_failed", expected_failures),
+            ] {
+                assert_eq!(
+                    snapshot
+                        .events
+                        .iter()
+                        .filter(|event| event.code() == code)
+                        .count(),
+                    expected,
+                    "{outcome:?}, operational={with_operational}, {code}"
+                );
+            }
+            assert_eq!(
+                snapshot.components[0]
+                    .lifetime
+                    .totals
+                    .failures_total
+                    .value
+                    .get(),
+                expected_failures as u64
+            );
+        }
+    }
+}
+
 fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthorization {
     crate::provider_auth::ProviderRequestAuthorization {
         source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
@@ -2488,6 +2646,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -2541,6 +2700,7 @@ async fn models_rejects_non_get_requests_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -3169,6 +3329,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,

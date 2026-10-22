@@ -4,14 +4,11 @@
 //! Bounded publication workspaces, subscription lifetimes, and delivery.
 
 use super::{
-    Backend, CapturedOrigin, Classification, ComponentIdentity, ComponentOwnership, ComponentSlot,
-    DiagnosticCorrelation, DiagnosticDetail, DiagnosticError, DiagnosticEvent, DiagnosticLimits,
-    DiagnosticOrigin, DiagnosticOutcome, DiagnosticSeverity, ID_BYTES, Inner, Observation,
-    ObservationTime, PluginObservationContext, ProjectionError, State, StoredCode,
-    StoredFailureClass, StoredPluginContext, SuccessCode, empty_slots, lock,
+    Backend, Classification, DiagnosticError, DiagnosticLimits, DiagnosticOutcome,
+    DiagnosticOutputSummary, DiagnosticSeverity, Inner, Observation, ObservationTime,
+    ProjectionError, StoredCode, StoredFailureClass, SuccessCode, empty_slots, lock,
 };
 use chrono::Utc;
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
 use std::panic::AssertUnwindSafe;
@@ -23,7 +20,7 @@ use uuid::Uuid;
 const MAX_PROJECTION_DEPTH: usize = 32;
 
 pub(super) type Projection =
-    Arc<dyn Fn(&DiagnosticEvent) -> Result<(), ProjectionError> + Send + Sync + 'static>;
+    Arc<dyn Fn(&DiagnosticOutputSummary) -> Result<(), ProjectionError> + Send + Sync + 'static>;
 pub(super) struct Projections {
     pub(super) next_id: u64,
     pub(super) slots: Box<[Option<(u64, Projection)>]>,
@@ -73,197 +70,69 @@ impl Drop for ProjectionGuard {
 }
 
 pub(super) struct PublicationWorkspace {
-    pub(super) event: DiagnosticEvent,
-    pub(super) code: String,
-    pub(super) detail: String,
-    pub(super) class: String,
-    pub(super) session: String,
-    pub(super) request: String,
-    pub(super) origin_configuration: String,
-    pub(super) origin_responsibility: String,
+    pub(super) event: DiagnosticOutputSummary,
     pub(super) callbacks: Box<[Option<Projection>]>,
     pub(super) ready: bool,
 }
-pub(super) fn reserved_string(capacity: usize) -> Result<String, DiagnosticError> {
-    let mut value = String::new();
-    value
-        .try_reserve_exact(capacity)
-        .map_err(|_| DiagnosticError::Allocation)?;
-    Ok(value)
-}
 impl PublicationWorkspace {
     pub(super) fn required_bytes(limits: &DiagnosticLimits) -> Result<usize, DiagnosticError> {
-        let text = ID_BYTES
-            .checked_mul(4)
-            .and_then(|v| v.checked_add(32))
-            .and_then(|v| v.checked_add(limits.max_detail_bytes))
-            .and_then(|v| v.checked_add(limits.max_correlation_bytes.checked_mul(2)?))
-            .ok_or(DiagnosticError::InvalidLimits)?;
-        text.checked_add(
-            limits
-                .max_projections
-                .checked_mul(size_of::<Option<Projection>>())
-                .ok_or(DiagnosticError::InvalidLimits)?,
-        )
-        .ok_or(DiagnosticError::InvalidLimits)
+        limits
+            .max_projections
+            .checked_mul(size_of::<Option<Projection>>())
+            .ok_or(DiagnosticError::InvalidLimits)
     }
     pub(super) fn new(limits: &DiagnosticLimits) -> Result<Self, DiagnosticError> {
         Ok(Self {
-            event: DiagnosticEvent {
+            event: DiagnosticOutputSummary {
                 sequence: 0.into(),
                 observed_at: Utc::now(),
-                component: ComponentIdentity {
-                    key: reserved_string(ID_BYTES)?,
-                    instance_id: Uuid::nil(),
-                    generation: 0.into(),
-                },
-                origin: DiagnosticOrigin {
-                    refresh_generation: 0.into(),
-                    ownership: ComponentOwnership::default(),
-                },
+                component_instance_id: Uuid::nil(),
                 classification: Classification::success(SuccessCode::LoggingInitialized),
                 severity: DiagnosticSeverity::Info,
                 outcome: DiagnosticOutcome::Unknown,
-                context: PluginObservationContext::default(),
-                detail: None,
                 count: 0.into(),
-                correlation: DiagnosticCorrelation::default(),
             },
-            code: reserved_string(ID_BYTES)?,
-            detail: reserved_string(limits.max_detail_bytes)?,
-            class: reserved_string(32)?,
-            session: reserved_string(limits.max_correlation_bytes)?,
-            request: reserved_string(limits.max_correlation_bytes)?,
-            origin_configuration: reserved_string(ID_BYTES)?,
-            origin_responsibility: reserved_string(ID_BYTES)?,
             callbacks: empty_slots(limits.max_projections)?,
             ready: false,
         })
     }
     pub(super) fn reserved_bytes(&self) -> usize {
-        self.event.component.key.capacity()
-            + self.code.capacity()
-            + self.detail.capacity()
-            + self.class.capacity()
-            + self.session.capacity()
-            + self.request.capacity()
-            + self.origin_configuration.capacity()
-            + self.origin_responsibility.capacity()
-            + self.callbacks.len() * size_of::<Option<Projection>>()
+        self.callbacks.len() * size_of::<Option<Projection>>()
     }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Copy validated observation fields into the existing projection workspace."
-    )]
     pub(super) fn fill(
         &mut self,
-        state: &State,
-        component: &ComponentSlot,
-        origin: CapturedOrigin,
+        component_instance_id: Uuid,
         code: StoredCode,
         class: Option<StoredFailureClass>,
         sequence: u64,
         observed_at: ObservationTime,
         observation: &Observation<'_>,
-        context: StoredPluginContext,
-        detail: Option<&str>,
-        truncated: bool,
-        session: Option<&str>,
-        request: Option<&str>,
-    ) {
-        self.event.sequence = sequence.into();
-        self.event.observed_at = observed_at;
-        self.event.component.key.clear();
-        self.event.component.key.push_str(component.key.as_str());
-        self.event.component.instance_id = component.instance_id;
-        self.event.component.generation = component.handle.generation.into();
-        self.event.origin.refresh_generation = origin.generation.into();
-        self.event.origin.ownership.subscriber_instance_id =
-            origin.ownership.subscriber_instance_id;
-        self.event.origin.ownership.plugin_instance_id = origin.ownership.plugin_instance_id;
-        if let Some(value) = origin.ownership.configuration_id {
-            self.origin_configuration.clear();
-            self.origin_configuration.push_str(value.as_str());
-            self.event.origin.ownership.configuration_id =
-                Some(std::mem::take(&mut self.origin_configuration));
-        }
-        if let Some(value) = origin.ownership.responsibility {
-            self.origin_responsibility.clear();
-            self.origin_responsibility.push_str(value.as_str());
-            self.event.origin.ownership.responsibility =
-                Some(std::mem::take(&mut self.origin_responsibility));
-        }
-        self.code.clear();
-        self.code
-            .push_str(state.code_name(code).expect("admitted code"));
-        let failure_class = class.map(|class| {
-            self.class.clear();
-            self.class
-                .push_str(state.class_name(class).expect("admitted class"));
-            Cow::Owned(std::mem::take(&mut self.class))
-        });
-        self.event.classification = Classification::from_opaque_names(
-            Cow::Owned(std::mem::take(&mut self.code)),
-            failure_class,
-        );
-        self.event.context = context.into();
-        self.event.severity = observation.severity;
-        self.event.outcome = observation.outcome;
-        self.event.count = observation.count.get().into();
-        if let Some(detail) = detail {
-            self.detail.clear();
-            self.detail.push_str(detail);
-            self.event.detail = Some(DiagnosticDetail {
-                message: std::mem::take(&mut self.detail),
-                truncated,
-            });
-        }
-        if let Some(value) = session {
-            self.session.clear();
-            self.session.push_str(value);
-            self.event.correlation.session_id = Some(Cow::Owned(std::mem::take(&mut self.session)));
-        }
-        if let Some(value) = request {
-            self.request.clear();
-            self.request.push_str(value);
-            self.event.correlation.request_id = Some(Cow::Owned(std::mem::take(&mut self.request)));
-        }
+    ) -> bool {
+        // This branch never reads detail, names, ownership, or original correlations.
+        let StoredCode::Builtin(code) = code else {
+            return false;
+        };
+        let class = match class {
+            Some(StoredFailureClass::Builtin(class)) => Some(class),
+            Some(StoredFailureClass::Extension { .. }) => return false,
+            None => None,
+        };
+        let Ok(classification) = Classification::new(code, class) else {
+            return false;
+        };
+        self.event = DiagnosticOutputSummary {
+            sequence: sequence.into(),
+            observed_at,
+            component_instance_id,
+            classification,
+            severity: observation.severity,
+            outcome: observation.outcome,
+            count: observation.count.get().into(),
+        };
         self.ready = true;
+        true
     }
     pub(super) fn reset(&mut self) {
-        if let Some(value) = self.event.origin.ownership.configuration_id.take() {
-            self.origin_configuration = value;
-            self.origin_configuration.clear();
-        }
-        if let Some(value) = self.event.origin.ownership.responsibility.take() {
-            self.origin_responsibility = value;
-            self.origin_responsibility.clear();
-        }
-        if let Some(value) = self.event.detail.take() {
-            self.detail = value.message;
-            self.detail.clear();
-        }
-        let (code, class) = std::mem::replace(
-            &mut self.event.classification,
-            Classification::success(SuccessCode::LoggingInitialized),
-        )
-        .into_names();
-        if let Cow::Owned(code) = code {
-            self.code = code;
-            self.code.clear();
-        }
-        if let Some(value) = class {
-            self.class = value.into_owned();
-            self.class.clear();
-        }
-        if let Some(value) = self.event.correlation.session_id.take() {
-            self.session = value.into_owned();
-            self.session.clear();
-        }
-        if let Some(value) = self.event.correlation.request_id.take() {
-            self.request = value.into_owned();
-            self.request.clear();
-        }
         for callback in &mut self.callbacks {
             *callback = None;
         }
@@ -379,11 +248,6 @@ mod publication_tests {
             let mut lease = take_publication(backend).unwrap();
             assert!(take_publication(backend).is_none());
             let workspace = lease.workspace_mut();
-            workspace.detail.push_str("retained payload");
-            workspace.event.detail = Some(DiagnosticDetail {
-                message: std::mem::take(&mut workspace.detail),
-                truncated: false,
-            });
             workspace.ready = true;
             panic!("unwind while holding a publication permit");
         }));
@@ -391,9 +255,6 @@ mod publication_tests {
         let mut lease = take_publication(backend).unwrap();
         let workspace = lease.workspace_mut();
         assert!(!workspace.ready);
-        assert!(workspace.event.detail.is_none());
-        assert!(workspace.detail.is_empty());
-        assert!(workspace.detail.capacity() >= diagnostics.limits().max_detail_bytes);
         drop(lease);
         assert_eq!(diagnostics.memory_usage().projection_workspaces, 0);
         assert_eq!(diagnostics.memory_usage().reserved_bytes, reserved);

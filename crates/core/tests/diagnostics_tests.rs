@@ -1247,7 +1247,7 @@ fn captured_origin_survives_many_refreshes_without_growing_backing_storage() {
     let captured = Arc::clone(&projected);
     let _projection = service
         .subscribe_projection(move |event| {
-            captured.lock().unwrap().push(event.origin.clone());
+            captured.lock().unwrap().push(event.count);
         })
         .unwrap();
     // Construct caller-owned input strings before counting backend allocations.
@@ -1325,21 +1325,10 @@ fn assert_latest_refresh_totals_include_late_observations(
 
 fn assert_captured_origin_evidence(
     view: &DiagnosticSnapshot,
-    projected: &Mutex<Vec<DiagnosticOrigin>>,
+    projected: &Mutex<Vec<DiagnosticNumber>>,
     old_generation: DiagnosticNumber,
 ) {
-    assert_eq!(projected.lock().unwrap().len(), 1);
-    assert_eq!(
-        projected.lock().unwrap()[0].refresh_generation,
-        old_generation
-    );
-    assert_eq!(
-        projected.lock().unwrap()[0]
-            .ownership
-            .configuration_id
-            .as_deref(),
-        Some("old")
-    );
+    assert_eq!(projected.lock().unwrap().as_slice(), &[3.into()]);
     let late = view
         .events
         .iter()
@@ -3037,27 +3026,13 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
         execution: Some(PluginExecution::NativeAbi.into()),
         phase: Some(PluginPhase::Policy.into()),
     };
-    let expected_context = context.clone();
     let delivered = Arc::new(AtomicUsize::new(0));
     let callback = Arc::clone(&delivered);
     let _guard = service
         .subscribe_projection(move |event| {
             assert_eq!(event.code(), WRITE.canonical_name());
-            let owner = &event.origin.ownership;
-            if event.component.key == "attributed" {
-                assert_eq!(event.context, expected_context);
-                assert_eq!(owner.subscriber_instance_id, Some(Uuid::nil()));
-                assert_eq!(owner.plugin_instance_id, Some(Uuid::nil()));
-                assert_eq!(owner.configuration_id.as_deref(), Some("configuration"));
-                assert_eq!(owner.responsibility.as_deref(), Some("responsibility"));
-            } else {
-                assert_eq!(event.context, PluginObservationContext::default());
-                assert!(owner.subscriber_instance_id.is_none());
-                assert!(owner.plugin_instance_id.is_none());
-                assert!(owner.configuration_id.is_none());
-                assert!(owner.responsibility.is_none());
-            }
-            serde_json::to_writer(std::io::sink(), &event.context).unwrap();
+            assert_ne!(event.component_instance_id, Uuid::nil());
+            serde_json::to_writer(std::io::sink(), event).unwrap();
             callback.fetch_add(1, Ordering::Relaxed);
         })
         .unwrap();
@@ -3110,35 +3085,7 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
         .subscribe_projection(move |event| {
             assert_eq!(event.classification.code(), "logging.sink.write_failed");
             assert_eq!(event.classification.failure_class(), Some("unknown"));
-            assert_eq!(
-                event
-                    .context
-                    .execution
-                    .as_ref()
-                    .map(PluginExecutionName::as_str),
-                Some("native_abi")
-            );
-            assert_eq!(
-                event.context.phase.as_ref().map(PluginPhaseName::as_str),
-                Some("policy")
-            );
-            assert!(matches!(
-                event
-                    .context
-                    .execution
-                    .clone()
-                    .map(PluginExecutionName::into_name),
-                Some(Cow::Borrowed(_))
-            ));
-            assert!(matches!(
-                event.context.phase.clone().map(PluginPhaseName::into_name),
-                Some(Cow::Borrowed(_))
-            ));
-            assert_eq!(event.correlation.session_id.as_deref(), Some("session-42"));
-            assert_eq!(event.correlation.request_id.as_deref(), Some("request-42"));
-            serde_json::to_writer(std::io::sink(), &event.classification).unwrap();
-            serde_json::to_writer(std::io::sink(), &event.context).unwrap();
-            serde_json::to_writer(std::io::sink(), &event.correlation).unwrap();
+            serde_json::to_writer(std::io::sink(), event).unwrap();
             captured.fetch_add(1, Ordering::Relaxed);
         })
         .unwrap();
@@ -3295,7 +3242,7 @@ fn extension_and_class_handles_cannot_resolve_in_an_independent_context() {
 }
 
 #[test]
-fn typed_plugin_context_survives_projection_and_shared_history_without_extra_counters() {
+fn typed_plugin_context_stays_in_history_while_counts_reach_projection() {
     let service = diagnostics(DiagnosticLimits {
         max_events: 1,
         ..limits()
@@ -3319,7 +3266,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
     let projected = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&projected);
     let _guard = service
-        .subscribe_projection(move |event| captured.lock().unwrap().push(event.context.clone()))
+        .subscribe_projection(move |event| captured.lock().unwrap().push(event.count))
         .unwrap();
     for (context, count) in contexts.iter().zip([2, 3]) {
         recorder
@@ -3340,7 +3287,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
             .unwrap();
     }
     let expected_contexts = contexts;
-    assert_eq!(projected.lock().unwrap().as_slice(), &expected_contexts[..]);
+    assert_eq!(projected.lock().unwrap().as_slice(), &[2.into(), 3.into()]);
     let page = snapshot(&service, DiagnosticQuery::default());
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.events[0].context, expected_contexts[1]);
@@ -4661,4 +4608,43 @@ fn profile_block_geometries() {
         assert_eq!(view.events[0].message(), Some(payload.as_str()));
         assert_eq!(view.coverage.loss.events_evicted.value.get(), 1000);
     }
+}
+
+#[test]
+fn extension_names_cannot_authorize_operational_output() {
+    let service = diagnostics(limits());
+    let component = register(&service, "private.component");
+    let extension = component
+        .register_extension(ExtensionRegistration {
+            namespace: "private",
+            name: "secret_name",
+            description: "private description",
+            allowed_classes: &[FailureClass::Unknown],
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let callback = delivered.clone();
+    let _projection = service
+        .subscribe_projection(move |_| {
+            callback.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    component
+        .record_lazy(|| {
+            Observation::extension(
+                extension,
+                Some(FailureClass::Unknown),
+                DiagnosticOutcome::Failure,
+                "private evidence",
+                NonZeroU64::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(delivered.load(Ordering::Relaxed), 0);
+    let page = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(page.events[0].code(), "private.secret_name");
+    assert_eq!(page.events[0].message(), Some("private evidence"));
+    assert_eq!(page.coverage.loss.projections_suppressed.value.get(), 1);
 }

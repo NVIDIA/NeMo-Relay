@@ -10,6 +10,7 @@ mod commands;
 mod configuration;
 mod daemon;
 mod diagnostics;
+mod diagnostics_http;
 mod error;
 mod events;
 mod filesystem;
@@ -19,6 +20,7 @@ mod installation;
 mod mcp;
 mod mcp_environment;
 mod operational;
+mod runtime_diagnostics;
 
 #[cfg(test)]
 #[path = "../tests/coverage/shared/operational_tests.rs"]

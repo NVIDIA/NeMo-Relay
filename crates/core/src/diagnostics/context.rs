@@ -5,8 +5,8 @@
 
 use super::{
     CapturedOrigin, ComponentHandle, ComponentIdentity, ComponentOwnership, ComponentRegistration,
-    DiagnosticAvailability, DiagnosticError, DiagnosticEvent, DiagnosticLimits,
-    DiagnosticMemoryUsage, DiagnosticNumber, DiagnosticQuery, DiagnosticsSettings,
+    DiagnosticAvailability, DiagnosticError, DiagnosticLimits, DiagnosticMemoryUsage,
+    DiagnosticNumber, DiagnosticOutputSummary, DiagnosticQuery, DiagnosticsSettings,
     ExtensionClassHandle, ExtensionHandle, ExtensionRegistration, ID_BYTES, MAX_DETAIL_BYTES,
     Observation, Projection, ProjectionError, ProjectionGuard, Projections, PublicationLease,
     PublicationWorkspace, RecordOutcome, SnapshotLease, SourceIdentity, State, bounded_str,
@@ -141,7 +141,7 @@ impl ComponentOwner {
 ///
 /// A refresh never invalidates this recorder. Observations update lifetime and
 /// current since-refresh totals at recording time while preserving their origin
-/// on retained events and projections. Closing the registration remains explicit.
+/// on retained events. Closing the registration remains explicit.
 #[derive(Clone, Debug)]
 pub struct OriginRecorder {
     pub(super) recorder: ComponentRecorder,
@@ -351,14 +351,15 @@ impl Diagnostics {
             },
         ))
     }
-    /// Attach a bounded synchronous subscriber to future accepted typed events.
+    /// Attach a bounded subscriber to approved operational summaries.
+    /// Restricted retained evidence is never supplied to projection callbacks.
     ///
     /// Callbacks run outside the store lock, may run concurrently, and have isolated
     /// panics. Disabled mode retains no callback and returns an inert guard.
     /// Arbitrary callback captures and retained copies remain caller-owned.
     pub fn subscribe_projection(
         &self,
-        callback: impl Fn(&DiagnosticEvent) + Send + Sync + 'static,
+        callback: impl Fn(&DiagnosticOutputSummary) + Send + Sync + 'static,
     ) -> Result<ProjectionGuard, DiagnosticError> {
         self.subscribe_fallible_projection(move |event| {
             callback(event);
@@ -372,7 +373,10 @@ impl Diagnostics {
     /// no callback and returns an inert guard.
     pub fn subscribe_fallible_projection(
         &self,
-        callback: impl Fn(&DiagnosticEvent) -> Result<(), ProjectionError> + Send + Sync + 'static,
+        callback: impl Fn(&DiagnosticOutputSummary) -> Result<(), ProjectionError>
+        + Send
+        + Sync
+        + 'static,
     ) -> Result<ProjectionGuard, DiagnosticError> {
         let Some(backend) = &self.inner.backend else {
             return Ok(ProjectionGuard {
@@ -421,6 +425,28 @@ impl Default for Diagnostics {
     }
 }
 impl DiagnosticsReader {
+    /// Discover configured capabilities without a snapshot lease or state mutation.
+    pub fn discovery(&self) -> super::DiagnosticDiscovery {
+        let limits = &self.inner.limits;
+        let enabled = self.inner.backend.is_some();
+        super::DiagnosticDiscovery {
+            discovery_version: 1,
+            snapshot_version: super::DIAGNOSTIC_SCHEMA_VERSION,
+            catalogue_version: super::DIAGNOSTIC_CATALOGUE_VERSION,
+            source: self.inner.source.clone(),
+            collection_enabled: enabled,
+            queries_enabled: enabled && limits.max_queries > 0,
+            max_components: (limits.max_components as u64).into(),
+            max_events: (limits.max_events as u64).into(),
+            detail_pool_bytes: (limits.detail_pool_bytes as u64).into(),
+            max_queries: (limits.max_queries as u64).into(),
+            max_snapshot_bytes: (limits.max_snapshot_bytes as u64).into(),
+            max_owned_bytes: (limits.max_owned_bytes as u64).into(),
+            memory_inspection: true,
+            restricted_detail: true,
+        }
+    }
+
     /// Inspect reserved backing bytes and occupancy without modifying evidence.
     pub fn memory_usage(&self) -> DiagnosticMemoryUsage {
         diagnostic_memory_usage(&self.inner)

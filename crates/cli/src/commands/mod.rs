@@ -17,11 +17,11 @@ mod model_pricing;
 mod plugins;
 pub(crate) mod root;
 mod run;
+mod runtime_diagnostics;
 mod serve;
 
 use std::process::ExitCode;
 
-#[cfg(test)]
 #[cfg(test)]
 use self::model_pricing::PricingCommand;
 #[cfg(test)]
@@ -30,7 +30,7 @@ use self::root::{Cli, Command};
 use self::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::{
-    configuration as runtime_configuration, diagnostics as runtime_diagnostics, error, server,
+    configuration as runtime_configuration, diagnostics as doctor_diagnostics, error, server,
 };
 
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
@@ -98,7 +98,13 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
     }
 
     let (config, fallback_error) = resolve_command_logging_config(cli)?;
-    let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+    let runtime = match crate::runtime_diagnostics::runtime() {
+        Some(runtime) => nemo_relay::logging::LoggingRuntime::configure_with_diagnostics(
+            config,
+            &runtime.context,
+        )?,
+        None => nemo_relay::logging::LoggingRuntime::configure(config)?,
+    };
     if let Some(error) = fallback_error.as_ref() {
         log::warn!(
             target: "nemo_relay.cli",
@@ -118,32 +124,36 @@ fn resolve_command_logging_config(
     cli: &Cli,
 ) -> Result<(nemo_relay::logging::LoggingConfig, Option<error::CliError>), error::CliError> {
     let mut fallback_error = None;
-    let config = match cli.command.as_ref() {
-        // Persistent integration maintenance uses saved integration state, not Relay runtime
-        // configuration. Preserve direct logging settings while avoiding ambient config discovery
-        // that could block cleanup or an upgrade refresh.
-        Some(Command::Uninstall(_) | Command::Integrations(_)) => {
-            cli.logging.resolve_without_ambient_config()
+    let config = if let Some(prepared) = &cli.server.prepared {
+        cli.logging.resolve_with_base(|| prepared.logging())
+    } else {
+        match cli.command.as_ref() {
+            // Persistent integration maintenance uses saved integration state, not Relay runtime
+            // configuration. Preserve direct logging settings while avoiding ambient config discovery
+            // that could block cleanup or an upgrade refresh.
+            Some(Command::Uninstall(_) | Command::Integrations(_)) => {
+                cli.logging.resolve_without_ambient_config()
+            }
+            Some(Command::Gateway(command)) if command.is_stop() => {
+                cli.logging.resolve_without_ambient_config()
+            }
+            Some(Command::Mcp) => cli.logging.resolve(None),
+            Some(Command::Daemon(command))
+                if matches!(
+                    command.command.as_ref(),
+                    Some(daemon::DaemonSubcommand::Mcp(_) | daemon::DaemonSubcommand::Hook(_))
+                ) =>
+            {
+                cli.logging.resolve_without_ambient_config()
+            }
+            Some(Command::Daemon(command)) if command.command.is_none() => {
+                cli.logging.resolve_daemon(cli.server.config.as_deref())
+            }
+            Some(Command::Run(command)) => cli
+                .logging
+                .resolve(command.config.as_deref().or(cli.server.config.as_deref())),
+            _ => cli.logging.resolve(cli.server.config.as_deref()),
         }
-        Some(Command::Gateway(command)) if command.is_stop() => {
-            cli.logging.resolve_without_ambient_config()
-        }
-        Some(Command::Mcp) => cli.logging.resolve(None),
-        Some(Command::Daemon(command))
-            if matches!(
-                command.command.as_ref(),
-                Some(daemon::DaemonSubcommand::Mcp(_) | daemon::DaemonSubcommand::Hook(_))
-            ) =>
-        {
-            cli.logging.resolve_without_ambient_config()
-        }
-        Some(Command::Daemon(command)) if command.command.is_none() => {
-            cli.logging.resolve_daemon(cli.server.config.as_deref())
-        }
-        Some(Command::Run(command)) => cli
-            .logging
-            .resolve(command.config.as_deref().or(cli.server.config.as_deref())),
-        _ => cli.logging.resolve(cli.server.config.as_deref()),
     };
     let config = match config {
         Ok(config) => config,
@@ -157,7 +167,7 @@ fn resolve_command_logging_config(
 }
 
 async fn dispatch(
-    cli: Cli,
+    mut cli: Cli,
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, error::CliError> {
     let command_name = cli
@@ -166,7 +176,14 @@ async fn dispatch(
         .map(Command::log_name)
         .unwrap_or("default");
 
-    let logging = configure_logging(&cli)?;
+    let diagnostic_setup = prepare_diagnostics(&mut cli)?;
+    let logging = match configure_logging(&cli) {
+        Ok(logging) => logging,
+        Err(error) => {
+            render_final_diagnostics(cli.diagnostics_final);
+            return Err(error);
+        }
+    };
 
     log::info!(
         target: "nemo_relay.cli",
@@ -228,7 +245,100 @@ async fn dispatch(
             "CLI command failed"
         ),
     }
+    if diagnostic_setup {
+        use crate::runtime_diagnostics::{self as diag, CliErrorClassifier, Operation};
+        use nemo_relay::diagnostics::*;
+        let classification = match &result {
+            Ok(code) if *code == ExitCode::SUCCESS => {
+                Classification::success(SuccessCode::CliCommandCompleted)
+            }
+            Ok(_) => Classification::notice(NoticeCode::CliNonzeroExit),
+            Err(error) if error.guardrail_rejection_reason().is_some() => {
+                Classification::notice(NoticeCode::CliPolicyRejected)
+            }
+            Err(error) => CliErrorClassifier(CliFailureCode::Command).classify(error),
+        };
+        diag::record(Operation::Command, classification);
+    }
+    drop(logging); // Detach projections and drain sinks before an explicitly requested final read.
+    render_final_diagnostics(cli.diagnostics_final);
     result
+}
+
+fn render_final_diagnostics(requested: bool) {
+    if !requested {
+        return;
+    }
+    use std::io::Write;
+    if let Some(runtime) = crate::runtime_diagnostics::runtime() {
+        match runtime.context.snapshot(&Default::default()) {
+            Ok(page) => {
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(page.as_bytes());
+                let _ = stderr.write_all(b"\n");
+            }
+            Err(error) => eprintln!("Diagnostic inspection unavailable: {error}"),
+        }
+    }
+}
+
+fn prepare_diagnostics(cli: &mut Cli) -> Result<bool, error::CliError> {
+    let Some(config) = prepare_diagnostic_configuration(cli)? else {
+        return Ok(false);
+    };
+    crate::runtime_diagnostics::install(config)?;
+    Ok(true)
+}
+
+fn prepare_diagnostic_configuration(
+    cli: &mut Cli,
+) -> Result<Option<runtime_configuration::RuntimeDiagnosticsConfig>, error::CliError> {
+    // Daemon composition remains Phase 3; never consume its process default here.
+    if matches!(cli.command, Some(Command::Daemon(_))) {
+        return Ok(None);
+    }
+    let no_ambient = cli.command.as_ref().is_some_and(|c| c.skips_logging())
+        || matches!(
+            cli.command,
+            Some(Command::Uninstall(_) | Command::Integrations(_))
+        );
+    let mut selected = runtime_configuration::RuntimeDiagnosticsConfig::default();
+    let setup_pending = matches!(&cli.command, Some(Command::Claude(command) | Command::Codex(command) | Command::Pi(command)) if !command.dry_run)
+        && cli.server.config.is_none()
+        && !runtime_configuration::any_config_file_exists();
+    if !no_ambient && !setup_pending {
+        let explicit = match &cli.command {
+            Some(Command::Run(command)) => {
+                command.config.as_deref().or(cli.server.config.as_deref())
+            }
+            Some(Command::Mcp) => None,
+            _ => cli.server.config.as_deref(),
+        };
+        let prepared = runtime_configuration::PreparedConfig::load(explicit);
+        match prepared {
+            Ok(prepared) => {
+                selected = prepared.diagnostics.clone();
+                cli.server.prepared = Some(std::sync::Arc::new(prepared));
+            }
+            // Preserve the doctor's existing error/fallback report path.
+            Err(_) if matches!(cli.command, Some(Command::Doctor(_))) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
+    if let Some(enabled) = cli.diagnostics {
+        selected.enabled = enabled;
+    }
+    if let Some(http_read) = cli.diagnostics_http {
+        selected.http_read = http_read;
+    }
+    if let Err(error) = selected.validate() {
+        if matches!(cli.command, Some(Command::Doctor(_))) {
+            cli.server.prepared = None;
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    Ok(Some(selected))
 }
 
 async fn run_command(
@@ -238,6 +348,7 @@ async fn run_command(
     bootstrap_shutdown_token: Option<String>,
 ) -> Result<ExitCode, error::CliError> {
     match command {
+        Command::Diagnostics(command) => runtime_diagnostics::inspect(command).await,
         Command::Daemon(command) => daemon::execute(command, server).await,
         Command::HookForward(command) => {
             hook_forward::execute(command).await?;
@@ -260,7 +371,7 @@ async fn run_command(
         Command::Doctor(command) => {
             diagnostics::execute(command, server, logging_fallback_error).await
         }
-        Command::Agents(command) => runtime_diagnostics::run_agents(command.json).await,
+        Command::Agents(command) => doctor_diagnostics::run_agents(command.json).await,
         Command::Completions(command) => completions::execute(command),
     }
 }
@@ -289,10 +400,10 @@ async fn run_default(
     if runtime_args.requested_daemon_mode() {
         serve_gateway(server_args, bootstrap_shutdown_token).await
     } else if runtime_configuration::any_config_file_exists() {
-        runtime_diagnostics::run_doctor(
+        doctor_diagnostics::run_doctor(
             None,
             false,
-            runtime_diagnostics::DoctorProbeMode::Live,
+            doctor_diagnostics::DoctorProbeMode::Live,
             &runtime_args,
             None,
         )
@@ -347,3 +458,7 @@ fn run_pricing(command: PricingCommand) -> Result<ExitCode, error::CliError> {
 #[cfg(test)]
 #[path = "../../tests/coverage/commands/main_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/coverage/commands/runtime_diagnostic_tests.rs"]
+mod runtime_diagnostic_tests;

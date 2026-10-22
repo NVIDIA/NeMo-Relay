@@ -15,7 +15,7 @@ use crate::diagnostics::{
 };
 use crate::error::{FlowError, Result};
 use nemo_relay_types::diagnostics::{
-    BuiltinDiagnosticCode, Classification, DiagnosticClassifier, DiagnosticEvent,
+    BuiltinDiagnosticCode, Classification, DiagnosticClassifier, DiagnosticOutputSummary,
     DiagnosticSeverity, FailureClass, FailureCode, LoggingFailureCode, SuccessCode,
 };
 
@@ -311,7 +311,7 @@ impl io::Write for ProjectionBuffer {
 
 fn project_event(
     logger: Arc<Logger>,
-    event: &DiagnosticEvent,
+    event: &DiagnosticOutputSummary,
 ) -> std::result::Result<(), ProjectionError> {
     let facade_level = match event.severity {
         DiagnosticSeverity::Trace => log::Level::Trace,
@@ -336,7 +336,7 @@ fn project_event(
         });
     }
     let json = buffer.as_str()?;
-    let message = event.message().unwrap_or("Diagnostic observation");
+    let message = "Diagnostic observation";
     // Native backend fields borrow the capped buffer through synchronous delivery.
     // The backend formats the payload once; asynchronous sinks make their own
     // required ownership copies before this buffer goes out of scope.

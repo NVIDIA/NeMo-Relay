@@ -266,7 +266,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
         diagnostics.source().instance_id.to_string()
     );
     assert_eq!(
-        records[0]["fields"]["diagnostic"]["component"]["instance_id"],
+        records[0]["fields"]["diagnostic"]["component_instance_id"],
         producer.identity().unwrap().instance_id.to_string()
     );
     assert!(!output.contains("plugin.configuration_inherited"));

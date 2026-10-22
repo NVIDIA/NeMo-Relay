@@ -95,6 +95,7 @@ impl GatewayConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
+    pub(crate) diagnostics: super::RuntimeDiagnosticsConfig,
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) logging: LoggingConfig,

@@ -89,18 +89,19 @@ use lifecycle::{close_component, refresh_component, register_component, register
 pub use memory::DiagnosticMemoryUsage;
 use memory::{context_layout_bytes, diagnostic_memory_usage};
 pub use nemo_relay_types::diagnostics::{
-    BuiltinDiagnosticCode, Classification, ClassificationError, CommonPluginFailureCode,
-    ComponentIdentity, ComponentOwnership, ComponentSnapshot, DIAGNOSTIC_CATALOGUE_VERSION,
-    DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAvailability, DiagnosticCapability, DiagnosticClassifier,
-    DiagnosticCorrelation, DiagnosticCount, DiagnosticCounter, DiagnosticCoverage,
-    DiagnosticCursor, DiagnosticDetail, DiagnosticDomain, DiagnosticEvent,
-    DiagnosticLifetimeSummary, DiagnosticLoss, DiagnosticNumber, DiagnosticOrigin,
-    DiagnosticOutcome, DiagnosticQuery, DiagnosticRefreshSummary, DiagnosticRetention,
-    DiagnosticSeverity, DiagnosticSnapshot, DiagnosticSummaryScope, DiagnosticTotals,
-    DiagnosticWindow, DiagnosticWindowBucket, DiagnosticWindowCoverage, FailureClass, FailureCode,
-    LoggingFailureCode, NoticeCode, ObservationTime, PluginDiagnosticFamily, PluginExecution,
-    PluginExecutionName, PluginFailureCode, PluginObservationContext, PluginPhase, PluginPhaseName,
-    SourceIdentity, SuccessCode,
+    BuiltinDiagnosticCode, Classification, ClassificationError, CliFailureCode,
+    CommonPluginFailureCode, ComponentIdentity, ComponentOwnership, ComponentSnapshot,
+    DIAGNOSTIC_CATALOGUE_VERSION, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAvailability,
+    DiagnosticCapability, DiagnosticClassifier, DiagnosticCorrelation, DiagnosticCount,
+    DiagnosticCounter, DiagnosticCoverage, DiagnosticCursor, DiagnosticDetail, DiagnosticDiscovery,
+    DiagnosticDomain, DiagnosticEvent, DiagnosticLifetimeSummary, DiagnosticLoss, DiagnosticNumber,
+    DiagnosticOrigin, DiagnosticOutcome, DiagnosticOutputSummary, DiagnosticQuery,
+    DiagnosticRefreshSummary, DiagnosticRetention, DiagnosticSeverity, DiagnosticSnapshot,
+    DiagnosticSummaryScope, DiagnosticTotals, DiagnosticWindow, DiagnosticWindowBucket,
+    DiagnosticWindowCoverage, FailureClass, FailureCode, LoggingFailureCode, NoticeCode,
+    ObservationTime, PluginDiagnosticFamily, PluginExecution, PluginExecutionName,
+    PluginFailureCode, PluginObservationContext, PluginPhase, PluginPhaseName, SourceIdentity,
+    SuccessCode,
 };
 pub use read::SnapshotLease;
 use state::{

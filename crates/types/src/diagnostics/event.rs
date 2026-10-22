@@ -42,7 +42,7 @@ pub enum DiagnosticOutcome {
     Failure,
 }
 
-/// Optional safe correlation identifiers, excluded from aggregation keys.
+/// Optional caller correlation identifiers, excluded from aggregation keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DiagnosticCorrelation<'a> {
@@ -142,11 +142,11 @@ impl Classification {
     }
 }
 
-/// Safe optional recent evidence, independent of the accepted numeric summary.
+/// Restricted optional recent evidence, independent of the accepted numeric summary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DiagnosticDetail {
-    /// Producer-approved text, copied only within admitted byte capacity.
+    /// Text copied within admitted byte capacity; bounding does not sanitize it.
     pub message: String,
     /// Whether the original text exceeded its retained byte allowance.
     pub truncated: bool,
@@ -177,7 +177,7 @@ pub struct DiagnosticEvent {
     pub detail: Option<DiagnosticDetail>,
     /// Input occurrence delta represented by this recording call.
     pub count: DiagnosticNumber,
-    /// Safe correlation, excluded from aggregation identity.
+    /// Restricted caller correlation, excluded from aggregation identity.
     pub correlation: DiagnosticCorrelation<'static>,
 }
 
@@ -191,5 +191,35 @@ impl DiagnosticEvent {
     #[must_use]
     pub fn message(&self) -> Option<&str> {
         self.detail.as_ref().map(|detail| detail.message.as_str())
+    }
+}
+
+/// Allowlisted operational output, constructed independently of retained detail.
+///
+/// This payload deliberately has no message, caller correlation, component name,
+/// plugin context, or configuration attribution. Unknown/extension codes are not
+/// automatically authorized for output by the recording service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticOutputSummary {
+    /// Source-local sequence of the accepted observation.
+    pub sequence: DiagnosticNumber,
+    /// Time at the recording boundary.
+    pub observed_at: ObservationTime,
+    /// Service-generated registration identity, without its caller-supplied name.
+    pub component_instance_id: uuid::Uuid,
+    /// Validated built-in code and cause only.
+    pub classification: Classification,
+    /// Approved enum severity.
+    pub severity: DiagnosticSeverity,
+    /// Observed enum outcome.
+    pub outcome: DiagnosticOutcome,
+    /// Original occurrence delta.
+    pub count: DiagnosticNumber,
+}
+impl DiagnosticOutputSummary {
+    /// Stable built-in catalogue name.
+    pub fn code(&self) -> &str {
+        self.classification.code()
     }
 }

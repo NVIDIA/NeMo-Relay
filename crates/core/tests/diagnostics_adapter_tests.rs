@@ -232,14 +232,41 @@ fn windows_rotation_sharing_violation_records_once_without_projection_recursion(
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["message"], "first record");
+    assert_eq!(rows[0]["message"], "Diagnostic observation");
+    assert_eq!(rows[0]["event"], "plugin.internal");
+    assert!(rows[0]["fields"]["diagnostic"].get("detail").is_none());
+    assert!(!output.contains("first record"));
+    assert!(!output.contains("rotation fails"));
     assert!(sink.closed_at.is_some());
     drop(locked);
     file_logging(&service, path).shutdown();
 }
 
+fn read_closed_summary_log(path: &std::path::Path, excluded_details: &[&str]) -> Vec<Value> {
+    let output = std::fs::read_to_string(path).unwrap();
+    // JSON escaping must not hide raw detail leaking into the log file.
+    for message in excluded_details {
+        assert!(!output.contains(&serde_json::to_string(message).unwrap()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // An exclusive open verifies all worker-owned file handles closed.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
+            .unwrap();
+    }
+    output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 #[test]
-fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown() {
+fn unicode_paths_preserve_summary_logs_and_retained_details_through_rotation_and_shutdown() {
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     for rotation in [None, Some(FileLogRotationConfig::new(1, 2).unwrap())] {
         let service = enabled();
@@ -280,32 +307,17 @@ fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown(
         } else {
             vec![path.clone()]
         };
-        let mut rows = Vec::<Value>::new();
-        for file in files {
-            let output = std::fs::read_to_string(&file).unwrap();
-            rows.extend(
-                output
-                    .lines()
-                    .map(|line| serde_json::from_str::<Value>(line).unwrap()),
-            );
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                // An exclusive open verifies all worker-owned file handles closed.
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .share_mode(0)
-                    .open(&file)
-                    .unwrap();
-            }
-        }
+        let rows: Vec<Value> = files
+            .iter()
+            .flat_map(|file| read_closed_summary_log(file, &messages))
+            .collect();
         assert_eq!(rows.len(), messages.len());
-        for (row, message) in rows.iter().zip(messages) {
-            assert_eq!(row["message"], message);
-            assert_eq!(row["fields"]["diagnostic"]["detail"]["message"], message);
+        for row in &rows {
+            assert_eq!(row["message"], "Diagnostic observation");
+            assert_eq!(row["event"], "plugin.internal");
+            assert!(row["fields"]["diagnostic"].get("detail").is_none());
             assert_eq!(
-                row["fields"]["diagnostic"]["component"]["instance_id"],
+                row["fields"]["diagnostic"]["component_instance_id"],
                 producer.identity().unwrap().instance_id.to_string()
             );
         }
@@ -314,6 +326,17 @@ fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown(
             .unwrap()
             .to_snapshot()
             .unwrap();
+        let retained: Vec<_> = view
+            .events
+            .iter()
+            .filter(|event| event.component.instance_id == producer.identity().unwrap().instance_id)
+            .collect();
+        assert_eq!(retained.len(), messages.len());
+        for (event, message) in retained.iter().zip(messages) {
+            let detail = event.detail.as_ref().unwrap();
+            assert_eq!(detail.message, message);
+            assert!(!detail.truncated);
+        }
         assert!(
             !view
                 .events
@@ -488,14 +511,15 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
         .filter(|record: &Value| record["event"] == "plugin.internal")
         .collect();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["message"], "One projected observation");
+    assert_eq!(records[0]["message"], "Diagnostic observation");
+    assert!(!output.contains("One projected observation"));
     assert_eq!(records[0]["target"], "nemo_relay.diagnostics");
     assert_eq!(
         records[0]["fields"]["diagnostic"]["classification"]["canonical_code"],
         "plugin.internal"
     );
     assert_eq!(
-        records[0]["fields"]["diagnostic"]["component"]["instance_id"],
+        records[0]["fields"]["diagnostic"]["component_instance_id"],
         producer.identity().unwrap().instance_id.to_string()
     );
     assert_eq!(
@@ -528,7 +552,7 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
 }
 
 #[test]
-fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs() {
+fn restricted_detail_does_not_consume_logging_projection_payload_budget() {
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     let service = enabled();
     let producer = service
@@ -537,7 +561,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("capped.jsonl");
     let runtime = file_logging(&service, path.clone());
-    // JSON escaping exceeds the adapter's fixed serialization ceiling despite bounded input.
+    // Raw detail stays in retention; its escaping cost cannot exhaust output payloads.
     let message = "\u{1}".repeat(4096);
     producer.record_lazy(|| internal(&message)).unwrap();
     log::error!(target: "nemo_relay.test", event = "operational_after_projection_limit"; "The ordinary logger still works");
@@ -571,7 +595,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     assert_eq!(page.events.len(), 1);
     assert_eq!(
         page.coverage.loss.projection_deliveries_omitted.value.get(),
-        1
+        0
     );
     let output = std::fs::read_to_string(path).unwrap();
     assert!(
@@ -580,7 +604,8 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
             .any(|line| serde_json::from_str::<Value>(line).unwrap()["event"]
                 == "operational_after_projection_limit")
     );
-    assert!(!output.contains("plugin.internal"));
+    assert!(output.contains("plugin.internal"));
+    assert!(!output.contains("\\u0001"));
 }
 
 #[test]

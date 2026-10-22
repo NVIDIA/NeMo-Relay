@@ -8,6 +8,8 @@ use clap::Args;
 
 #[derive(Debug, Clone, Default, Args)]
 pub(crate) struct ServerArgs {
+    #[arg(skip)]
+    pub(crate) prepared: Option<std::sync::Arc<crate::configuration::PreparedConfig>>,
     /// Path replacing the user config layer; system config still applies
     #[arg(long)]
     pub(super) config: Option<PathBuf>,
@@ -40,6 +42,7 @@ pub(crate) struct ServerArgs {
 impl ServerArgs {
     pub(super) fn to_runtime(&self) -> crate::server::GatewayOverrides {
         crate::server::GatewayOverrides {
+            prepared: self.prepared.clone(),
             config: self.config.clone(),
             bind: self.bind,
             openai_base_url: self.openai_base_url.clone(),
