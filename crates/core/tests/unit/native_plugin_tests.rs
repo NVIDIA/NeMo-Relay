@@ -8578,7 +8578,9 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         unsafe { native_tool_next(args, ptr::null_mut(), &mut out) },
         NemoRelayStatus::NullPointer
     );
-    let next = Box::into_raw(Box::new(tool_next(Ok(json!({"result": 2}))))) as *mut c_void;
+    let next = Box::into_raw(Box::new(NativeNextContext::new(tool_next(Ok(json!({
+        "result": 2
+    })))))) as *mut c_void;
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::Ok
@@ -8587,27 +8589,39 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         take_json_from_native_string(out, "unused").unwrap(),
         json!({"result": {"result": 2}})
     );
-    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
+    unsafe {
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<ToolExecutionNextFn>,
+        ))
+    };
 
-    let next = Box::into_raw(Box::new(tool_next(Err(FlowError::NotFound(
-        "missing".into(),
+    let next = Box::into_raw(Box::new(NativeNextContext::new(tool_next(Err(
+        FlowError::NotFound("missing".into()),
     ))))) as *mut c_void;
     out = ptr::null_mut();
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::NotFound
     );
-    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
+    unsafe {
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<ToolExecutionNextFn>,
+        ))
+    };
 
     let panicking_next: ToolExecutionNextFn =
         Arc::new(|_| Box::pin(async { panic!("tool next panic") }));
-    let next = Box::into_raw(Box::new(panicking_next)) as *mut c_void;
+    let next = Box::into_raw(Box::new(NativeNextContext::new(panicking_next))) as *mut c_void;
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::Internal
     );
     assert_last_error_contains("native tool next panicked");
-    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
+    unsafe {
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<ToolExecutionNextFn>,
+        ))
+    };
     unsafe { native_string_free(args) };
 
     let request = LlmRequest {
@@ -8615,7 +8629,9 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         content: json!({"model": "test"}),
     };
     let request_json = native_string_from_json(&serde_json::to_value(&request).unwrap()).unwrap();
-    let next = Box::into_raw(Box::new(llm_next(Ok(json!({"answer": 42}))))) as *mut c_void;
+    let next = Box::into_raw(Box::new(NativeNextContext::new(llm_next(Ok(json!({
+        "answer": 42
+    })))))) as *mut c_void;
     out = ptr::null_mut();
     assert_eq!(
         unsafe { native_llm_next(request_json, next, &mut out) },
@@ -8625,28 +8641,38 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         take_json_from_native_string(out, "unused").unwrap(),
         json!({"answer": 42})
     );
-    unsafe { drop(Box::from_raw(next as *mut LlmExecutionNextFn)) };
+    unsafe {
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<LlmExecutionNextFn>,
+        ))
+    };
 
-    let next = Box::into_raw(Box::new(llm_next(Err(FlowError::GuardrailRejected(
-        "blocked".into(),
+    let next = Box::into_raw(Box::new(NativeNextContext::new(llm_next(Err(
+        FlowError::GuardrailRejected("blocked".into()),
     ))))) as *mut c_void;
     out = ptr::null_mut();
     assert_eq!(
         unsafe { native_llm_next(request_json, next, &mut out) },
         NemoRelayStatus::GuardrailRejected
     );
-    unsafe { drop(Box::from_raw(next as *mut LlmExecutionNextFn)) };
+    unsafe {
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<LlmExecutionNextFn>,
+        ))
+    };
 
     let panicking_next: LlmExecutionNextFn =
         Arc::new(|_| Box::pin(async { panic!("LLM next panic") }));
-    let next = Box::into_raw(Box::new(panicking_next)) as *mut c_void;
+    let next = Box::into_raw(Box::new(NativeNextContext::new(panicking_next))) as *mut c_void;
     assert_eq!(
         unsafe { native_llm_next(request_json, next, &mut out) },
         NemoRelayStatus::Internal
     );
     assert_last_error_contains("native LLM next panicked");
     unsafe {
-        drop(Box::from_raw(next as *mut LlmExecutionNextFn));
+        drop(Box::from_raw(
+            next as *mut NativeNextContext<LlmExecutionNextFn>,
+        ));
         native_string_free(request_json);
     }
 }
