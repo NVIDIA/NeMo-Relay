@@ -46,6 +46,48 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     }
 
     fn register(&self, ctx: &mut PluginContext, config: &Json) -> nemo_relay_worker::Result<()> {
+        if fixture_flag(config, "emit_internal_diagnostics") {
+            let runtime = ctx.runtime().expect("host runtime");
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    use nemo_relay_worker::diagnostics::{
+                        DiagnosticExtensionDefinition, DiagnosticObservation,
+                        DiagnosticObservationOutcome, DiagnosticObservationSeverity,
+                        extension_code,
+                    };
+                    let diagnostics = runtime.diagnostics().await;
+                    let component = diagnostics
+                        .component(
+                            "fixture.internal",
+                            vec![extension_code(DiagnosticExtensionDefinition {
+                                name: "internal_attempt_failed".into(),
+                                description: "Internal fixture operation".into(),
+                                outcome: DiagnosticObservationOutcome::Failure as i32,
+                                allowed_failure_classes: vec!["unknown".into()],
+                            })],
+                        )
+                        .await
+                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                    for count in [2, 3] {
+                        component
+                            .try_record_lazy(|| DiagnosticObservation {
+                                code: 1,
+                                count,
+                                outcome: DiagnosticObservationOutcome::Failure as i32,
+                                severity: DiagnosticObservationSeverity::Error as i32,
+                                failure_class: Some("unknown".into()),
+                                detail: Some("restricted-worker-fixture-evidence".into()),
+                                ..Default::default()
+                            })
+                            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                    }
+                    diagnostics
+                        .flush(std::time::Duration::from_secs(2))
+                        .await
+                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))
+                })
+            })?;
+        }
         if fixture_flag(config, "discover_observability") {
             let runtime = ctx.runtime().expect("host runtime should be available");
             let registrations = tokio::task::block_in_place(|| {

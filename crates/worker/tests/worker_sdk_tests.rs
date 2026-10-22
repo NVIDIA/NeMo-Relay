@@ -4012,6 +4012,7 @@ fn worker_error(message: &str) -> WorkerError {
         code: "mock.error".into(),
         message: message.into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 

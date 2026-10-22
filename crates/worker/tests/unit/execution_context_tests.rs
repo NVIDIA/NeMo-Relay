@@ -83,6 +83,7 @@ fn disconnected_runtime() -> PluginRuntime {
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }
 }
@@ -255,6 +256,7 @@ fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
         code: "worker.cancelled".into(),
         message: "HTTP 403: denied".into(),
         retryable: false,
+        downstream_continuation_id: None,
     };
     let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
     assert!(

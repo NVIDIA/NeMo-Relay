@@ -91,6 +91,12 @@ async fn run_with(
     }
     .await;
 
+    crate::runtime_diagnostics::result(
+        crate::runtime_diagnostics::Operation::Hook,
+        nemo_relay::diagnostics::CliFailureCode::HookForward,
+        Some(nemo_relay::diagnostics::SuccessCode::CliHookForwarded),
+        &result,
+    );
     match result {
         Ok(()) => {
             operational::hook_completed(&operational, "daemon_hook_forward", "completed");

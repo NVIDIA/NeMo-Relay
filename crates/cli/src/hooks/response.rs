@@ -3,6 +3,9 @@
 
 //! Gateway response handling for forwarded lifecycle hooks.
 
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::{CliFailureCode, DiagnosticClassifier, SuccessCode};
+
 #[cfg(test)]
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -147,6 +150,7 @@ pub(super) fn handle_hook_forward_status_with_context(
     if !body.is_empty() {
         println!("{body}");
     }
+    diag::success(Operation::Hook, SuccessCode::CliHookForwarded);
     Ok(HookDeliveryOutcome::Completed)
 }
 
@@ -163,6 +167,10 @@ fn handle_hook_failure(
     status_code: Option<u16>,
     operational: &OperationalContext,
 ) -> Result<HookDeliveryOutcome, CliError> {
+    diag::record(
+        Operation::Hook,
+        diag::CliErrorClassifier(CliFailureCode::HookForward).classify(&error),
+    );
     let mode = if fail_closed {
         "fail_closed"
     } else {

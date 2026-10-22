@@ -48,6 +48,19 @@ This model keeps plugin dependencies and crashes outside the Relay process, whil
 SDK retains the shared runtime contract and manages authentication, cancellation, and
 shutdown.
 
+## Propagating Continuation Errors
+
+Propagate an unchanged `ToolNext`, `LlmNext`, or `LlmStreamNext` error with `?`
+to preserve its downstream origin. `WorkerSdkError::Downstream` carries the
+original SDK error and the host-issued continuation identity. Its display and
+existing wire error text remain unchanged. Construct a new callback error only
+when reporting a distinct plugin failure.
+
+The host uses this identity to exclude forwarded errors from plugin callback
+failure counts. The same contract covers stream-opening errors and error chunks.
+It adds no retained error ledger. Older SDKs may discard the additive provenance;
+missing or mismatched identity retains the existing attribution behavior.
+
 ## Installation
 
 Add the SDK and Tokio to the worker project:

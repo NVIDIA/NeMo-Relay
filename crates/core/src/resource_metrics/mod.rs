@@ -8,3 +8,5 @@ pub(crate) mod network;
 #[path = "../../tests/support/resource_metrics_snapshot.rs"]
 pub(crate) mod snapshot_fixture;
 pub(crate) mod units;
+
+mod memory;

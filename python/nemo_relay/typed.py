@@ -314,7 +314,11 @@ class BestEffortAnyCodec(Codec[object]):
         Plain JSON values stay untagged.
 
         With ``tool_result=True``, the codec places the encoded value in the
-        wrapper's ``result`` field.
+        wrapper's ``result`` field. Replay is enabled for JSON values, allowed
+        dataclass and Pydantic types, and supported builtin pickle values.
+        Tagged values must restore with the same type and compare equal to
+        the original. Unsupported or changed values and string fallbacks are
+        marked non-replayable so the cache runs the tool again.
         """
         encoded = self._encode_value(value)
         if not self._tool_result or projected_tool_result(encoded) is not None:
@@ -327,7 +331,27 @@ class BestEffortAnyCodec(Codec[object]):
             for part in encoded
         ):
             content = [{"type": "text", "text": part} if isinstance(part, str) else part for part in encoded]
-        return {"schema": TOOL_RESULT_SCHEMA, "content": content, "is_error": False, "result": encoded}
+        return {
+            "schema": TOOL_RESULT_SCHEMA,
+            "content": content,
+            "is_error": False,
+            "result": encoded,
+            "cache": {"replayable": self._is_replayable_value(value, encoded)},
+        }
+
+    def _is_replayable_value(self, value: object, encoded: Json) -> bool:
+        """Require tagged values to round-trip with their original type and value."""
+        if not isinstance(encoded, dict) or "data" not in encoded:
+            return True
+        if any(tag in encoded for tag in ("__nv_pydantic__", "__nv_dataclass__", "__nv_pickle__")):
+            try:
+                restored = self.from_json(encoded)
+                return type(restored) is type(value) and bool(restored == value)
+            except Exception:
+                # Reconstruction and equality are application-owned operations.
+                # An uncertain replay must not make best-effort encoding fail.
+                return False
+        return "__nv_fallback_str__" not in encoded
 
     def _encode_value(self, value: object) -> Json:
         """Encode the value before adding any tool-result wrapper."""

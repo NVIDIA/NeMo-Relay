@@ -39,6 +39,7 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -50,6 +51,7 @@ use crate::operational::{
     self, OperationalContext, UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
     UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS,
 };
+use crate::runtime_diagnostics::{self as diag, Operation};
 use crate::server::AppState;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
@@ -522,7 +524,7 @@ async fn run_unmanaged_gateway(
     {
         operational::upstream_status(operational, status.as_u16());
     }
-    let bytes = match response.bytes().await {
+    let bytes = match diagnostic_response_body(response).await {
         Ok(bytes) => bytes,
         Err(error) => {
             if let Some(operational) = operational.as_ref() {
@@ -789,7 +791,7 @@ fn build_buffered_func(
                 operational::upstream_status(&operational, status.as_u16());
             }
             let response_headers = response_headers(response.headers());
-            let bytes = match response.bytes().await {
+            let bytes = match diagnostic_response_body(response).await {
                 Ok(bytes) => bytes,
                 Err(error) if retry_aware => {
                     operational::upstream_failed(&operational, "response_read");
@@ -1075,7 +1077,7 @@ fn build_streaming_func(
             }
             let response_headers = response_headers(response.headers());
             if !status.is_success() {
-                let bytes = match response.bytes().await {
+                let bytes = match diagnostic_response_body(response).await {
                     Ok(bytes) => bytes,
                     Err(error) if retry_aware => {
                         operational::upstream_failed(&operational, "response_read");
@@ -1190,6 +1192,11 @@ fn sse_json_stream_with_thresholds(
                                 yield Ok(event.data);
                             }
                             Err(error) => {
+                                diag::failure(
+                                    Operation::Upstream,
+                                    CliFailureCode::UpstreamResponse,
+                                    FailureClass::Unknown,
+                                );
                                 operational::upstream_stream_read_failed(&operational);
                                 yield Err(error);
                                 return;
@@ -1198,6 +1205,11 @@ fn sse_json_stream_with_thresholds(
                     }
                 }
                 Err(error) => {
+                    diag::failure(
+                        Operation::Upstream,
+                        CliFailureCode::UpstreamResponse,
+                        FailureClass::Unknown,
+                    );
                     operational::upstream_stream_read_failed(&operational);
                     yield Err(FlowError::Internal(error.to_string()));
                     return;
@@ -1213,11 +1225,17 @@ fn sse_json_stream_with_thresholds(
             }
             Ok(None) => {}
             Err(error) => {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 operational::upstream_stream_read_failed(&operational);
                 yield Err(error);
                 return;
             }
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         operational::upstream_completed(&operational, true);
     };
     LlmJsonStream::new(stream)
@@ -1460,9 +1478,20 @@ async fn forward_upstream_request(
         } else {
             operational::upstream_failed(operational, "transport");
         }
-        response.map_err(CliError::from)
+        response
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     } else {
-        http.execute(upstream).await.map_err(CliError::from)
+        http.execute(upstream)
+            .await
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     }
 }
 
@@ -1748,6 +1777,11 @@ async fn passthrough_streaming(
         let mut guard = UpstreamStreamGuard::new(operational_for_stream);
         while let Some(chunk) = bytes.next().await {
             if chunk.is_err() {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 if let Some(operational) = guard.context.as_ref() {
                     operational::upstream_stream_read_failed(operational);
                 }
@@ -1757,6 +1791,7 @@ async fn passthrough_streaming(
             }
             yield chunk;
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         guard.complete();
     });
     build_response(status, headers, body)
@@ -2025,9 +2060,26 @@ pub(crate) async fn models(
     } else {
         http
     };
-    let upstream_response = http.execute(upstream).await?;
+    let upstream_response = http
+        .execute(upstream)
+        .await
+        .inspect(|_| diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived))
+        .inspect_err(diag::transport_error)?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
-    let bytes = upstream_response.bytes().await?;
+    let bytes = diagnostic_response_body(upstream_response).await?;
     build_response(status, headers, Body::from(bytes))
+}
+
+async fn diagnostic_response_body(response: reqwest::Response) -> Result<Bytes, reqwest::Error> {
+    let result = response.bytes().await;
+    match &result {
+        Ok(_) => diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted),
+        Err(_) => diag::failure(
+            Operation::Upstream,
+            CliFailureCode::UpstreamResponse,
+            FailureClass::Unknown,
+        ),
+    }
+    result
 }

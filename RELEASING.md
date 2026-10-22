@@ -328,10 +328,15 @@ npm trusted publishing has its own registry-side constraints:
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
-Stable docs versioning is managed through Fern configuration, not the release
-tag workflow. Update the Fern version entries when introducing a stable
-documentation version; prerelease tags do not publish a separate documentation
-artifact from CI.
+The Fern Docs workflow snapshots tagged documentation onto `docs-website`.
+On release publication and dev sync, it retains the highest patch for each
+major/minor version, then keeps only the five newest versions by numeric version
+order. It removes older entries from `fern/docs.yml` and deletes their
+`fern/pages-v*` directories and `fern/versions/v*.yml` files. `dev` is retained
+separately, and `latest` points to the highest retained stable version (or the
+default returns to `dev` if no stable version remains). Beta and RC tags share
+their base version's snapshot and count toward the five-version limit; alpha
+tags are skipped.
 
 ## Publish The GitHub Release Entry
 

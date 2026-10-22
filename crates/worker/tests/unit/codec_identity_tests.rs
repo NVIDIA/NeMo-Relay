@@ -48,6 +48,7 @@ async fn conditional_callback_name_is_released_when_host_connection_fails() {
         auth_token: "token".into(),
         host_endpoint: "unsupported://host".into(),
         host_channel: Arc::new(OnceCell::new()),
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
 

@@ -20,6 +20,66 @@ async fn daemon(pass: bool) -> (Arc<DaemonState>, String, tokio::task::JoinHandl
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (state, origin, task)
 }
+
+#[tokio::test]
+async fn diagnostic_revocation_emits_acknowledged_worker_event() {
+    let hub = Hub::default();
+    let (sender, mut receiver) = mpsc::channel(1);
+    lock(&hub.peers).insert(
+        key(ComponentRole::Worker, "worker"),
+        Peer {
+            generation: "connection".into(),
+            sender: Some(sender),
+            cancel: Arc::new(ControlCancellation::new()),
+            disconnected: None,
+            ready: true,
+            acknowledgments: HashMap::new(),
+            last_acknowledged: None,
+            drain: None,
+        },
+    );
+
+    hub.revoke_diagnostics("worker", true);
+
+    let Some(Message::Text(text)) = receiver.recv().await else {
+        panic!("expected diagnostic revocation message");
+    };
+    let Event::DiagnosticRevoked { request_id } = serde_json::from_str(&text).unwrap() else {
+        panic!("expected diagnostic revocation event");
+    };
+    assert!(!request_id.is_empty());
+    assert!(
+        lock(&hub.peers)
+            .get(&key(ComponentRole::Worker, "worker"))
+            .unwrap()
+            .acknowledgments
+            .contains_key(&request_id)
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_revocation_skips_workers_without_negotiated_support() {
+    let hub = Hub::default();
+    let (sender, mut receiver) = mpsc::channel(1);
+    lock(&hub.peers).insert(
+        key(ComponentRole::Worker, "legacy-worker"),
+        Peer {
+            generation: "connection".into(),
+            sender: Some(sender),
+            cancel: Arc::new(ControlCancellation::new()),
+            disconnected: None,
+            ready: true,
+            acknowledgments: HashMap::new(),
+            last_acknowledged: None,
+            drain: None,
+        },
+    );
+
+    hub.revoke_diagnostics("legacy-worker", false);
+
+    assert!(receiver.try_recv().is_err());
+}
+
 async fn mcp(
     client: &Client,
     origin: &str,
@@ -214,7 +274,16 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     )
     .await
     .unwrap();
+    let diagnostic_offer = Some(crate::daemon::diagnostics::DiagnosticOffer {
+        source: uuid::Uuid::now_v7(),
+        schema_version: nemo_relay::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+        enabled: false,
+        query_available: false,
+        whole_context_read: false,
+        max_page_bytes: 0,
+    });
     let mut register = WorkerRegisterRequest {
+        diagnostics: diagnostic_offer.clone(),
         proof: handshake.proof,
         worker_id: "worker".into(),
         endpoint: endpoint.clone(),
@@ -367,6 +436,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let recovered: WorkerRegisterResponse = restored
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: diagnostic_offer,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -405,6 +475,11 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
         .await
         .unwrap();
     let event = restored.next().await.unwrap();
+    let Event::DiagnosticRevoked { request_id } = event else {
+        panic!("expected diagnostic revocation before drain, got {event:?}");
+    };
+    restored.acknowledge(request_id).await.unwrap();
+    let event = restored.next().await.unwrap();
     assert!(matches!(event, Event::Drain { .. }));
     if let Event::Drain { request_id, .. } = event {
         restored.acknowledge(request_id).await.unwrap();
@@ -440,6 +515,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let _: WorkerRegisterResponse = draining
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint,
@@ -506,6 +582,7 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
     .unwrap();
     let worker_registration: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "cancelled-worker".into(),
             endpoint,
@@ -940,6 +1017,7 @@ async fn recovering_worker() -> RecoveryFixture {
     .unwrap();
     let registration: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -1033,6 +1111,7 @@ async fn recovering_worker() -> RecoveryFixture {
     .unwrap();
     let recovered: WorkerRegisterResponse = restored
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -1162,6 +1241,7 @@ async fn slow_probe_does_not_block_other_control_sessions_or_stale_publication()
     .unwrap();
     let _: WorkerRegisterResponse = replacement
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: fixture.target.endpoint().into(),
@@ -1415,6 +1495,7 @@ async fn worker_setup_failure_releases_staged_sessions_before_disconnect_grace()
     .unwrap();
     let staged: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: worker_id.into(),
             endpoint: "http://127.0.0.1:41000".into(),

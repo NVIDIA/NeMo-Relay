@@ -6,3 +6,5 @@
 pub(crate) mod lifecycle;
 pub(crate) mod registry;
 pub(crate) mod server;
+
+pub(crate) mod collection;
