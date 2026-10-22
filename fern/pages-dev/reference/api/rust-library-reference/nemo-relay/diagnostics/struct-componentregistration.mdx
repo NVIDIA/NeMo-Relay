@@ -1,0 +1,66 @@
+---
+title: "Struct Component Registration"
+sidebar-title: "ComponentRegistration"
+description: "Expected codes and attribution are admitted together with the summary."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ComponentRegistration&lt;'a&gt; &#123;\n    pub key: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub builtin_codes: &amp;'a [<a href=\"enum-builtindiagnosticcode\">BuiltinDiagnosticCode</a>],\n    pub ownership: <a href=\"struct-componentownership\">ComponentOwnership</a>,\n    pub window: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-windowsettings\">WindowSettings</a>&gt;,\n&#125;"}} /></pre>
+
+Expected codes and attribution are admitted together with the summary.
+
+## Fields
+
+### `key: &'a str`
+
+Stable logical responsibility, excluding request and session identifiers.
+
+### `builtin_codes: &'a [BuiltinDiagnosticCode]`
+
+Complete built-in vocabulary whose counters are reserved at admission.
+
+### `ownership: ComponentOwnership`
+
+Initial configuration attribution, bounded on admission.
+
+### `window: Option<WindowSettings>`
+
+Optional fixed-resolution outcome series admitted with the component.
+
+## Implementations
+
+### `impl<'a> ComponentRegistration<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(key: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, builtin_codes: &amp;'a [<a href=\"enum-builtindiagnosticcode\">BuiltinDiagnosticCode</a>]) -&gt; Self"}} /></pre>
+
+Declare a vocabulary with empty attribution and no outcome window.
+
+## Trait Implementations
+
+### `impl<'a> Clone for ComponentRegistration<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Debug for ComponentRegistration<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

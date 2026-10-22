@@ -1,0 +1,58 @@
+---
+title: "Struct Extension Registration"
+sidebar-title: "ExtensionRegistration"
+description: "Extension vocabulary is scoped to a producer namespace and admitted once."
+position: 38
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ExtensionRegistration&lt;'a&gt; &#123;\n    pub namespace: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub name: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub description: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub allowed_classes: &amp;'a [<a href=\"enum-failureclass\">FailureClass</a>],\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n&#125;"}} /></pre>
+
+Extension vocabulary is scoped to a producer namespace and admitted once.
+
+## Fields
+
+### `namespace: &'a str`
+
+Producer namespace outside reserved built-in namespaces.
+
+### `name: &'a str`
+
+Stable local name combined with the namespace at admission.
+
+### `description: &'a str`
+
+Safe bounded explanation retained once in registration metadata.
+
+### `allowed_classes: &'a [FailureClass]`
+
+Permitted causes; successful or unspecified extensions admit no class.
+
+### `outcome: DiagnosticOutcome`
+
+Declared outcome used to validate extension class requirements.
+
+## Trait Implementations
+
+### `impl<'a> Clone for ExtensionRegistration<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-extensionregistration\">ExtensionRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-extensionregistration\">ExtensionRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Debug for ExtensionRegistration<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-extensionregistration\">ExtensionRegistration</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

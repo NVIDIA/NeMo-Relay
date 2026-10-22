@@ -1,0 +1,68 @@
+---
+title: "Enum Diagnostic Detail Ref"
+sidebar-title: "DiagnosticDetailRef"
+description: "Borrowed producer-approved detail. A Display source is formatted into capped storage only when the enabled recorder invokes its lazy observation factory."
+position: 52
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum DiagnosticDetailRef&lt;'a&gt; &#123;\n    None,\n    Text(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>),\n    Display(&amp;'a dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a>),\n&#125;"}} /></pre>
+
+Borrowed producer-approved detail. A Display source is formatted into capped storage only when the enabled recorder invokes its lazy observation factory.
+
+## Variants
+
+### `None`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "None"}} /></pre>
+
+Supply no optional text evidence.
+
+### `Text(&'a str)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Text(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>)"}} /></pre>
+
+Borrow already-safe text for a capped copy; bounding does not redact secrets.
+
+### `Display(&'a dyn Display)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Display(&amp;'a dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a>)"}} /></pre>
+
+Format into capped scratch only when enabled; retain no source value.
+
+## Trait Implementations
+
+### `impl<'a> Clone for DiagnosticDetailRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DiagnosticDetailRef<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'_&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'a> From<&'a str> for DiagnosticDetailRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt; for <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; Self"}} /></pre>
+
+### `impl<'a> Copy for DiagnosticDetailRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;"}} /></pre>

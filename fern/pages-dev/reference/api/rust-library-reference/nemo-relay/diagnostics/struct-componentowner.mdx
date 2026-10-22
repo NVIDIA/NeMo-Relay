@@ -1,0 +1,38 @@
+---
+title: "Struct Component Owner"
+sidebar-title: "ComponentOwner"
+description: "Restricted lifecycle capability returned only to the registration owner."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ComponentOwner { /* private fields */ }
+```
+
+Restricted lifecycle capability returned only to the registration owner.
+
+## Implementations
+
+### `impl ComponentOwner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-componentowner\">ComponentOwner</a>"}} /></pre>
+
+#### `close`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn close(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Close this registration without erasing retained evidence.
+
+Returns false for already closed/unavailable or disabled handles. Later recording receives an explicit closed-handle failure.
+
+#### `refresh`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn refresh(\n    &amp;self,\n    ownership: <a href=\"struct-componentownership\">ComponentOwnership</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Reset the current since-refresh summary after a committed reload.
+
+Lifetime totals, code counters, rolling windows, and retained evidence remain available. The generation marks the new observation-time period; captured operations retain their original attribution. Disabled handles return None without allocating or changing diagnostic state.

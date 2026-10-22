@@ -61,6 +61,14 @@ A runtime middleware/subscriber registration failed.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
+### `impl DiagnosticClassifier<PluginError> for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../diagnostics/trait-diagnosticclassifier\">DiagnosticClassifier</a>&lt;<a href=\"enum-pluginerror\">PluginError</a>&gt; for <a href=\"../diagnostics/classifiers/struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `classify`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../diagnostics/trait-diagnosticclassifier\">classify</a>(&amp;self, error: &amp;<a href=\"enum-pluginerror\">PluginError</a>) -&gt; <a href=\"../diagnostics/struct-classification\">Classification</a>"}} /></pre>
+
 ### `impl Display for PluginError`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-pluginerror\">PluginError</a>"}} /></pre>

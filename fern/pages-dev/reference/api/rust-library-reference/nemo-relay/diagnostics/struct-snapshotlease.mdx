@@ -1,0 +1,52 @@
+---
+title: "Struct Snapshot Lease"
+sidebar-title: "SnapshotLease"
+description: "A bounded serialized page. Dropping the lease returns its workspace permit; it owns copied bytes and never pins retained history or a component lease."
+position: 46
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct SnapshotLease { /* private fields */ }
+```
+
+A bounded serialized page. Dropping the lease returns its workspace permit; it owns copied bytes and never pins retained history or a component lease.
+
+## Implementations
+
+### `impl SnapshotLease`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-snapshotlease\">SnapshotLease</a>"}} /></pre>
+
+#### `as_bytes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_bytes(&amp;self) -&gt; &amp;[<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>]"}} /></pre>
+
+Borrow the canonical JSON response while retaining its workspace permit.
+
+#### `to_snapshot`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_snapshot(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticsnapshot\">DiagnosticSnapshot</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+Decode an independently owned snapshot. These new allocations belong to the caller and are outside the diagnostic service's storage guarantee.
+
+## Trait Implementations
+
+### `impl Debug for SnapshotLease`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-snapshotlease\">SnapshotLease</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Drop for SnapshotLease`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-snapshotlease\">SnapshotLease</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

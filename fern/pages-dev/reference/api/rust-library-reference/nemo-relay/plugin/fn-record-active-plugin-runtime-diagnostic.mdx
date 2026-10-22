@@ -1,7 +1,7 @@
 ---
 title: "Function record_active_plugin_runtime_diagnostic"
 sidebar-title: "record_active_plugin_runtime_diagnostic"
-description: "Record a bounded runtime diagnostic against the active plugin report."
+description: "Updates the existing active-only runtime report."
 position: 21
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,4 +11,6 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn record_active_plugin_runtime_diagnostic(diagnostic: <a href=\"struct-runtimediagnostic\">RuntimeDiagnostic</a>)"}} /></pre>
 
-Record a bounded runtime diagnostic against the active plugin report.
+Updates the existing active-only runtime report.
+
+This legacy view also serves OTel consumers whose canonical migration is deferred. It never registers components or records into the canonical diagnostics service. Typed operation owners record through their injected [`ComponentRecorder`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-componentrecorder) instead.

@@ -1,0 +1,136 @@
+---
+title: "Struct Diagnostic Event"
+sidebar-title: "DiagnosticEvent"
+description: "One recent observation with its actual class and original configuration attribution."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticEvent &#123;\n    pub sequence: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub observed_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub component: <a href=\"struct-componentidentity\">ComponentIdentity</a>,\n    pub origin: <a href=\"struct-diagnosticorigin\">DiagnosticOrigin</a>,\n    pub classification: <a href=\"struct-classification\">Classification</a>,\n    pub context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticdetail\">DiagnosticDetail</a>&gt;,\n    pub count: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'static&gt;,\n&#125;"}} /></pre>
+
+One recent observation with its actual class and original configuration attribution.
+
+## Fields
+
+### `sequence: DiagnosticNumber`
+
+Unique source-local update sequence; it is not an occurrence counter.
+
+### `observed_at: ObservationTime`
+
+Source observation time, preserved through projections.
+
+### `component: ComponentIdentity`
+
+Registration that owned the original observation.
+
+### `origin: DiagnosticOrigin`
+
+Original configuration attribution, preserved through component refresh.
+
+### `classification: Classification`
+
+Canonical event classification; never reconstructed from a latest message.
+
+### `context: PluginObservationContext`
+
+Bounded plugin-operation wire facts, excluded from aggregation keys.
+
+### `severity: DiagnosticSeverity`
+
+Evidence severity, independent of its observed operation outcome.
+
+### `outcome: DiagnosticOutcome`
+
+Explicit observed operation outcome.
+
+### `detail: Option<DiagnosticDetail>`
+
+Bounded optional evidence; absence does not imply a missing counter.
+
+### `count: DiagnosticNumber`
+
+Input occurrence delta represented by this recording call.
+
+### `correlation: DiagnosticCorrelation<'static>`
+
+Safe correlation, excluded from aggregation identity.
+
+## Implementations
+
+### `impl DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn code(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Borrow the canonical code without allocating a second representation.
+
+#### `message`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn message(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Borrow retained detail, when available.
+
+## Trait Implementations
+
+### `impl Clone for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-diagnosticevent\">DiagnosticEvent</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Eq for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>

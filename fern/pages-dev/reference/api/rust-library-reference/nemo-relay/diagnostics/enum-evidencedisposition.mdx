@@ -1,0 +1,86 @@
+---
+title: "Enum Evidence Disposition"
+sidebar-title: "EvidenceDisposition"
+description: "Evidence retention is separate from numeric acceptance and output delivery."
+position: 58
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub enum EvidenceDisposition {
+    Retained,
+    Truncated,
+    Dropped,
+}
+```
+
+Evidence retention is separate from numeric acceptance and output delivery.
+
+## Variants
+
+### `Retained`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retained"}} /></pre>
+
+The header and supplied optional evidence fit retention budgets.
+
+### `Truncated`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Truncated"}} /></pre>
+
+The retained event has shortened or omitted optional detail/correlation.
+
+### `Dropped`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Dropped"}} /></pre>
+
+Numeric acceptance succeeded without retaining an incoming event header.
+
+## Trait Implementations
+
+### `impl Clone for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-evidencedisposition\">EvidenceDisposition</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+### `impl Eq for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>
+
+### `impl StructuralPartialEq for EvidenceDisposition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>"}} /></pre>

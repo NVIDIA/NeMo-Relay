@@ -62,7 +62,7 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [DynamicPluginCapability](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincapability): Relay-enforced capability declared by a dynamic plugin.
 - [DynamicPluginCheckState](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincheckstate): High-level verification state for one validation axis.
 - [DynamicPluginCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicplugincompatibility): Lane-specific compatibility declarations and resolved compatibility facts.
-- [DynamicPluginFailurePhase](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginfailurephase): Recent failure phase for diagnostics and operator UX.
+- [DynamicPluginFailurePhase](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginfailurephase): Recent failure phase or policy-gate context for diagnostics and operator UX.
 - [DynamicPluginHostPolicyFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginhostpolicyfailure): A policy refusal.
 - [DynamicPluginKind](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginkind): Plugin execution lane.
 - [DynamicPluginLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/enum-dynamicpluginloadcontract): Runtime entry contract for the resolved plugin.
@@ -82,6 +82,7 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [evaluate_dynamic_plugin_host_policy](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-evaluate-dynamic-plugin-host-policy): Evaluates a dynamic plugin manifest against a resolved host policy.
 - [evaluate_dynamic_plugin_trust](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-evaluate-dynamic-plugin-trust): Validates the manifest artifact under the already-evaluated host policy.
 - [initialize](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-initialize): Initializes the process-wide static and dynamic plugin host.
+- [initialize_with_diagnostics](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-initialize-with-diagnostics): Initializes the plugin host using an explicitly selected diagnostic context.
 - [load_native_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-native-plugins): Loads native dynamic plugins and registers their plugin kinds.
 - [load_worker_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-worker-plugins): Loads gRPC worker plugins and registers their plugin kinds.
 - [read_bounded_regular_file](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-read-bounded-regular-file): Reads a regular file without following a Unix symlink and with a fixed byte budget.

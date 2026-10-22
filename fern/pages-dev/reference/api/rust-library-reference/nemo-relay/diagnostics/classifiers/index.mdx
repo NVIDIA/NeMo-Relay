@@ -1,0 +1,18 @@
+---
+title: "Module classifiers"
+sidebar-title: "classifiers"
+description: "Producer-owned pure mappings from existing typed errors to catalogue values. Pure classification for the integrated plugin-operation producer."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Producer-owned pure mappings from existing typed errors to catalogue values. Pure classification for the integrated plugin-operation producer.
+
+This adapter never records, formats source errors, infers causes from messages, alters execution behavior, or assigns application health. Producers call it inside lazy recording factories so disabled diagnostics does no extra work.
+
+## Structs
+
+- [PluginErrorClassifier](/reference/api/rust-library-reference/nemo-relay/diagnostics/classifiers/struct-pluginerrorclassifier): Plugin-operation mapping before errors are flattened into reports or SDK strings.

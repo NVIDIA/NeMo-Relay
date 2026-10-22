@@ -2,7 +2,7 @@
 title: "Module plugin"
 sidebar-title: "plugin"
 description: "Generic plugin infrastructure for NeMo Relay runtimes."
-position: 8
+position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -55,7 +55,7 @@ This module owns:
 - [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Registers core-provided plugin kinds.
 - [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Lists registered plugin kinds in sorted order.
 - [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Looks up a registered plugin by kind.
-- [record_active_plugin_runtime_diagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/fn-record-active-plugin-runtime-diagnostic): Record a bounded runtime diagnostic against the active plugin report.
+- [record_active_plugin_runtime_diagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/fn-record-active-plugin-runtime-diagnostic): Updates the existing active-only runtime report.
 - [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Registers a plugin by kind.
 - [rollback_registrations](/reference/api/rust-library-reference/nemo-relay/plugin/fn-rollback-registrations): Rolls back registrations in reverse order.
 
