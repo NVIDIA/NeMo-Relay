@@ -150,6 +150,7 @@ async fn hook_forward_uses_the_exact_agent_path_and_one_route_header() {
         &options,
         b"{\"hook_event_name\":\"Stop\"}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -180,6 +181,72 @@ async fn hook_forward_uses_the_exact_agent_path_and_one_route_header() {
 }
 
 #[tokio::test]
+async fn hook_forward_sends_the_launcher_trace_context() {
+    let traceparent = "00-aaaabbbbccccddddeeeeffff00001111-1111222233334444-01";
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    let (daemon_address, captured, server) = capture_server(response.to_vec());
+    let options = Options {
+        agent: CodingAgent::Codex,
+        daemon_address,
+        failure_policy: HookFailurePolicy::FailClosed,
+    };
+    let trace_headers = crate::hooks::launcher_trace_headers_from(|name| match name {
+        crate::hooks::TRACEPARENT_ENV => Some(format!(" {traceparent} ")),
+        crate::hooks::TRACESTATE_ENV => Some("vendor=value".into()),
+        _ => None,
+    });
+
+    forward(
+        &options,
+        b"{\"hook_event_name\":\"SessionStart\"}".to_vec(),
+        route_token(&valid_token()).unwrap(),
+        &trace_headers,
+        &crate::operational::OperationalContext::new(),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+
+    let request = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    let header = |name: &str| {
+        request.lines().find_map(|line| {
+            line.split_once(':')
+                .filter(|(header, _)| header.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+    };
+    assert_eq!(
+        header("traceparent").as_deref(),
+        Some(traceparent),
+        "{request}"
+    );
+    assert_eq!(
+        header("tracestate").as_deref(),
+        Some("vendor=value"),
+        "{request}"
+    );
+}
+
+#[test]
+fn launcher_trace_headers_require_header_safe_traceparent() {
+    let headers = |traceparent: Option<&str>, tracestate: Option<&str>| {
+        crate::hooks::launcher_trace_headers_from(|name| match name {
+            crate::hooks::TRACEPARENT_ENV => traceparent.map(ToOwned::to_owned),
+            crate::hooks::TRACESTATE_ENV => tracestate.map(ToOwned::to_owned),
+            _ => None,
+        })
+    };
+
+    assert!(headers(None, Some("vendor=value")).is_empty());
+    assert!(headers(Some("  "), Some("vendor=value")).is_empty());
+    assert!(headers(Some("00-a\r\nx-injected: 1"), None).is_empty());
+    assert_eq!(
+        headers(Some("00-trace"), Some("bad\nstate")),
+        vec![("traceparent", "00-trace".to_owned())]
+    );
+}
+
+#[tokio::test]
 async fn guardrail_rejections_are_never_failed_open() {
     let body = r#"{"error":{"type":"nemo_relay_guardrail_rejected","reason":"blocked"}}"#;
     let response = format!(
@@ -198,6 +265,7 @@ async fn guardrail_rejections_are_never_failed_open() {
         &options,
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -270,6 +338,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -293,6 +362,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -493,6 +563,7 @@ fn hook_forward_ignores_proxy_environment_for_the_daemon_address() {
             &options,
             b"{\"hook_event_name\":\"PreToolUse\"}".to_vec(),
             route_token(&valid_token()).unwrap(),
+            &[],
             &crate::operational::OperationalContext::new(),
         ))
         .expect("delivery to the daemon must not go through the configured proxy");

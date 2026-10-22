@@ -282,6 +282,7 @@ async fn send_verified_hook_forward_request_with_context(
         command.gateway_mode,
     )?;
     attach_internal_hook_credentials(command, &mut headers)?;
+    attach_launcher_trace_context(&mut headers)?;
     operational.attach_header(&mut headers);
     let headers = headers
         .iter()
@@ -345,6 +346,7 @@ pub(super) async fn send_hook_forward_request(
         command.gateway_mode,
     )?;
     attach_internal_hook_credentials(command, &mut headers)?;
+    attach_launcher_trace_context(&mut headers)?;
     operational.attach_header(&mut headers);
     Ok(reqwest::Client::builder()
         .no_proxy()
@@ -390,6 +392,15 @@ fn attach_internal_hook_credentials(
             crate::configuration::HOOK_CLIENT_TOKEN_HEADER,
             Some(&token),
         )?;
+    }
+    Ok(())
+}
+
+// Forwards the W3C trace context the agent inherited from its launcher, so the session this hook
+// opens can join the launcher's trace.
+fn attach_launcher_trace_context(headers: &mut HeaderMap) -> Result<(), CliError> {
+    for (name, value) in super::launcher_trace_headers() {
+        insert_header(headers, name, Some(&value))?;
     }
     Ok(())
 }

@@ -294,6 +294,10 @@ The hook process performs the following actions:
    certificate against the trusted certificates on your system. It sends the
    payload to the agent's hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
+   When the agent inherited `TRACEPARENT` and optional `TRACESTATE` from the
+   process that launched it, the hook also sends them as W3C `traceparent`
+   and `tracestate` headers. Refer to
+   [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
 

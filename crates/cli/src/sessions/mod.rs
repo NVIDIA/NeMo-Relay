@@ -12,7 +12,8 @@ use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmReques
 #[cfg(test)]
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::{
-    ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
+    PropagationContext, ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack,
+    create_scope_stack_from_propagation, task_scope_push,
 };
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
@@ -486,6 +487,9 @@ pub(super) struct Session {
     /// Set by `start_tool` when a request intercept rewrote the arguments; taken by the routing
     /// layer once the event batch has been applied, so the hook response can carry it back.
     tool_argument_transform: Option<ToolArgumentTransform>,
+    /// Remote W3C parent imported from the hook that created this session. Every scope stack the
+    /// session opens starts below it, so subagent work stays in the launcher's trace.
+    launcher_trace_parent: Option<PropagationContext>,
     scope_stack: ScopeStackHandle,
     session_started: bool,
     pending_start_mark: bool,
@@ -849,7 +853,9 @@ impl SessionManager {
     ) -> Result<HookEffects, CliError> {
         let mut effects = HookEffects::default();
         let mut subscriber_deliveries = Vec::new();
-        let config = self.default_config.session_config_from_headers(headers);
+        let config = self
+            .default_config
+            .hook_session_config_from_headers(headers);
         let authenticated = AuthenticatedRouting::new(
             authenticated_owner,
             &self.authenticated_owners,
@@ -1634,16 +1640,43 @@ fn set_tool_metadata_default(
         .insert(canonical.to_string(), json!(default));
 }
 
+/// Import the launcher's W3C context from the hook that creates a session.
+///
+/// The context is rootless: Relay still roots the session at its first local Agent scope, while
+/// OpenTelemetry exports that scope as a child of the launcher's span. Invalid headers are logged
+/// and ignored by the runtime, leaving the session in a new trace.
+fn launcher_trace_parent(config: &SessionConfig) -> Option<PropagationContext> {
+    let launcher = config.launcher_trace_context.as_ref()?;
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: None,
+        parent_uuid: uuid::Uuid::now_v7(),
+        traceparent: Some(launcher.traceparent.clone()),
+        tracestate: launcher.tracestate.clone(),
+    }
+    .normalized();
+    context.traceparent.is_some().then_some(context)
+}
+
+/// Open a session or subagent scope stack below the launcher's trace when one was imported.
+fn session_scope_stack(launcher_trace_parent: Option<&PropagationContext>) -> ScopeStackHandle {
+    launcher_trace_parent
+        .and_then(|context| create_scope_stack_from_propagation(context).ok())
+        .unwrap_or_else(create_scope_stack)
+}
+
 impl Session {
     // Constructs per-session runtime state without creating a scope yet. The root agent scope is
     // opened lazily on the first event or gateway LLM call so sessions created from hints and pure
     // gateway traffic share the same initialization path.
     fn new(session_id: String, agent_kind: AgentKind, config: SessionConfig) -> Self {
+        let launcher_trace_parent = launcher_trace_parent(&config);
         Self {
             agent_kind,
             session_id,
             tool_argument_transform: None,
-            scope_stack: create_scope_stack(),
+            scope_stack: session_scope_stack(launcher_trace_parent.as_ref()),
+            launcher_trace_parent,
             session_started: false,
             pending_start_mark: false,
             session_metadata: Value::Null,
@@ -2868,7 +2901,7 @@ impl Session {
             event.metadata,
             json!({ "nemo_relay_scope_role": "subagent" }),
         );
-        let subagent_stack = create_scope_stack();
+        let subagent_stack = session_scope_stack(self.launcher_trace_parent.as_ref());
         let scope = TASK_SCOPE_STACK
             .scope(subagent_stack.clone(), async {
                 if let Some(agent_scope) = agent_scope {

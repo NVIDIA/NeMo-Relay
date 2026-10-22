@@ -1051,6 +1051,27 @@ These flags control delivery and metadata:
 - `--fail-closed` returns a failure when delivery fails or Relay rejects the
   hook.
 
+### Continue the Launcher Trace
+
+A host process can launch Claude Code or Codex with the standard
+OpenTelemetry `TRACEPARENT` and optional `TRACESTATE` environment variables.
+The agent runs its hook commands with that environment. `hook-forward` and
+`nemo-relay daemon hook` send the values as W3C `traceparent` and `tracestate`
+request headers.
+
+The hook that creates a session sets the session's remote parent. Top-level
+session scopes, such as the Codex `codex-task` scope or a Claude Code turn,
+export as children of the launcher's span. Their child spans stay in the
+launcher's trace. Later hooks for an open session do not change its parent.
+When the session ends, the next hook starts a new session with the context
+it carries.
+
+Relay validates the pair as described in
+[Cross-Process Propagation](/about-nemo-relay/concepts/scopes#cross-process-propagation).
+It ignores an invalid `traceparent` and keeps the session in a new trace
+without failing the hook. Relay ignores trace headers on provider requests for
+this purpose, because they describe a single request, not the launcher.
+
 ## Agent Guides
 
 Use the per-agent guide for end-to-end setup, smoke tests, and GUI or
