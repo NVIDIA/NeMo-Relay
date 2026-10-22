@@ -139,8 +139,7 @@ auditwheel = true
 [tool.uv]
 default-groups = ["dev", "test"]
 package = true
-override-dependencies = ["opentelemetry-api>=1.39", "opentelemetry-sdk>=1.39"]
-constraint-dependencies = ["opentelemetry-api>=1.45.1", "opentelemetry-sdk>=1.45.1"]
+override-dependencies = ["opentelemetry-api>=1.45.1", "opentelemetry-sdk>=1.45.1"]
 
 [tool.uv.sources]
 nemo-relay-cli-bin = { path = "python/cli-bin" }
