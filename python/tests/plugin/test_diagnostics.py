@@ -24,28 +24,47 @@ class Host:
     def __init__(self, enabled=True):
         self.enabled = enabled
         self.requests = []
+        self.timeouts = []
         self.retry = False
         self.fail = False
+        self.failures_before_success = 0
+        self.delay = 0.0
+        self.oversized_response = False
         self.gate = None
-
-    async def GetDiagnosticCapabilities(self, request, **kwargs):
-        return pb.DiagnosticCapabilities(
-            enabled=self.enabled,
+        self.open_calls = 0
+        self.capabilities = pb.DiagnosticCapabilities(
+            enabled=enabled,
             protocol_version=1,
             snapshot_version=1,
             provenance_version=1,
             max_request_bytes=16384,
+            max_response_bytes=131072,
             max_pending_submissions=32,
+            retry_attempts=3,
+            retry_timeout_millis=2000,
         )
 
+    async def GetDiagnosticCapabilities(self, request, **kwargs):
+        return self.capabilities
+
     async def OpenDiagnosticSession(self, request, **kwargs):
-        return pb.DiagnosticSession(session_id=b"s" * 16)
+        self.open_calls += 1
+        return pb.DiagnosticSession(session_id=b"s" * 16, capabilities=self.capabilities)
 
     async def SubmitDiagnostic(self, request, **kwargs):
         self.requests.append(request.SerializeToString())
+        self.timeouts.append(kwargs.get("timeout"))
         if self.gate is not None:
             await self.gate.wait()
-        if self.fail or self.retry:
+        if self.delay:
+            timeout = kwargs["timeout"]
+            if timeout < self.delay:
+                await asyncio.sleep(timeout)
+                raise RpcFailure(grpc.StatusCode.DEADLINE_EXCEEDED)
+            await asyncio.sleep(self.delay)
+        if self.fail or self.retry or self.failures_before_success:
+            if self.failures_before_success:
+                self.failures_before_success -= 1
             self.retry = False
             raise RpcFailure(grpc.StatusCode.UNAVAILABLE)
         operation = request.WhichOneof("operation")
@@ -55,7 +74,10 @@ class Host:
             "close_session": pb.DIAGNOSTIC_RECEIPT_STATUS_CLOSED,
             "close_component": pb.DIAGNOSTIC_RECEIPT_STATUS_CLOSED,
         }[operation]
-        return pb.DiagnosticReceipt(submission_sequence=request.sequence, status=status, component=1)
+        response = pb.DiagnosticReceipt(submission_sequence=request.sequence, status=status, component=1)
+        if self.oversized_response and operation == "record":
+            response.reason = "x" * 5000
+        return response
 
 
 def observation():
@@ -115,6 +137,81 @@ def test_runtime_shutdown_cancels_pending_negotiation():
         await runtime._close_diagnostics()
         inert = await runtime.diagnostics()
         assert inert.availability == "unavailable"
+
+    asyncio.run(run())
+
+
+def test_applies_host_delivery_policy_and_rejects_invalid_policy_inertly():
+    async def run():
+        host = Host()
+        host.capabilities.max_request_bytes = 1024
+        host.capabilities.max_response_bytes = 4096
+        host.capabilities.max_pending_submissions = 2
+        host.capabilities.retry_attempts = 2
+        host.capabilities.retry_timeout_millis = 25
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        assert facade.availability == "available"
+        assert facade._policy == facade._policy.__class__(1024, 4096, 2, 2, 0.025)
+        assert facade._queue is not None and facade._queue.maxsize == 2
+
+        component = await facade.component("internal", [])
+        over_limit = observation()
+        over_limit.detail = "x" * 800
+        with pytest.raises(DiagnosticDeliveryError, match="invalid"):
+            component.try_record_lazy(lambda: over_limit)
+        valid = observation()
+        valid.detail = "x" * 600
+        component.try_record_lazy(lambda: valid)
+        await facade.flush(timeout=1)
+        assert pb.DiagnosticSubmission.FromString(host.requests[1]).ByteSize() <= 1024
+
+        host.delay = 0.1
+        component.try_record_lazy(observation)
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.flush(timeout=1)
+        assert host.timeouts[-2:] == [0.025, 0.025]
+        assert len(host.requests) == 4  # register, record, and two policy-bounded attempts
+
+        oversized_host = Host()
+        oversized_host.capabilities.max_response_bytes = 4096
+        oversized_host.capabilities.retry_attempts = 1
+        oversized_host.oversized_response = True
+        oversized = await WorkerDiagnostics.connect(oversized_host, "activation", "token")
+        oversized_component = await oversized.component("internal", [])
+        oversized_component.try_record_lazy(observation)
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await oversized.flush(timeout=1)
+        assert oversized.delivery_stats().uncertain == 1
+
+        invalid_host = Host()
+        invalid_host.capabilities.retry_attempts = 0
+        invalid = await WorkerDiagnostics.connect(invalid_host, "activation", "token")
+        assert invalid.availability == "unsupported"
+        assert invalid_host.open_calls == 0
+        component = await invalid.component("internal", [])
+        component.try_record_lazy(lambda: pytest.fail("invalid policy facade was not inert"))
+        assert invalid_host.requests == []
+
+        class OldHost:
+            async def GetDiagnosticCapabilities(self, request, **kwargs):
+                raise RpcFailure(grpc.StatusCode.UNIMPLEMENTED)
+
+        old = await WorkerDiagnostics.connect(OldHost(), "activation", "token")
+        assert old.availability == "unsupported"
+        old_component = await old.component("internal", [])
+        old_component.try_record_lazy(lambda: pytest.fail("unsupported facade was not inert"))
+
+        changed_session_host = Host()
+        original_open = changed_session_host.OpenDiagnosticSession
+
+        async def changed_session(request, **kwargs):
+            opened = await original_open(request, **kwargs)
+            opened.capabilities.retry_attempts = 2
+            return opened
+
+        changed_session_host.OpenDiagnosticSession = changed_session
+        changed = await WorkerDiagnostics.connect(changed_session_host, "activation", "token")
+        assert changed.availability == "unsupported"
 
     asyncio.run(run())
 

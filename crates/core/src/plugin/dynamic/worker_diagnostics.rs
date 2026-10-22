@@ -29,11 +29,17 @@ const COMPONENTS: usize = 8;
 const EXTENSIONS: usize = 16;
 const CODES: usize = 32;
 const METADATA_BYTES: usize = 16 * 1024;
+// SDK queue policy and host-side session admission are independent budgets.
+const MAX_PENDING_SUBMISSIONS: usize = 32;
+const MAX_CONCURRENT_SESSIONS: usize = 32;
+const SUBMISSION_ATTEMPTS: u32 = 3;
+const SUBMISSION_TIMEOUT_MILLIS: u32 = 2000;
 static SESSIONS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 pub(super) struct WorkerDiagnostics {
     pub(super) context: Diagnostics,
     activation: Uuid,
+    capabilities: wire::DiagnosticCapabilities,
     state: Mutex<SessionState>,
 }
 
@@ -71,9 +77,11 @@ enum Code {
 
 impl WorkerDiagnostics {
     pub(super) fn new(context: Diagnostics, activation: Uuid) -> Self {
+        let capabilities = Self::capabilities_for(&context);
         Self {
             context,
             activation,
+            capabilities,
             state: Mutex::new(SessionState {
                 revoked: false,
                 session: None,
@@ -91,26 +99,30 @@ impl WorkerDiagnostics {
         }
     }
 
-    fn capabilities(&self) -> wire::DiagnosticCapabilities {
+    fn capabilities_for(context: &Diagnostics) -> wire::DiagnosticCapabilities {
         wire::DiagnosticCapabilities {
             protocol_version: 1,
             snapshot_version: crate::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
             catalogue_version: crate::diagnostics::DIAGNOSTIC_CATALOGUE_VERSION,
             provenance_version: 1,
-            enabled: self.context.reader().availability()
+            enabled: context.reader().availability()
                 == crate::diagnostics::DiagnosticAvailability::Available,
             can_read_context: false,
             max_components: COMPONENTS as u32,
             max_extensions: EXTENSIONS as u32,
             max_metadata_bytes: METADATA_BYTES as u32,
             max_request_bytes: REQUEST_BYTES as u32,
-            max_detail_bytes: self.context.limits().max_detail_bytes as u32,
-            max_correlation_bytes: self.context.limits().max_correlation_bytes as u32,
+            max_detail_bytes: context.limits().max_detail_bytes as u32,
+            max_correlation_bytes: context.limits().max_correlation_bytes as u32,
             max_response_bytes: RESPONSE_BYTES as u32,
-            max_pending_submissions: 32,
-            retry_attempts: 3,
-            retry_timeout_millis: 2000,
+            max_pending_submissions: MAX_PENDING_SUBMISSIONS as u32,
+            retry_attempts: SUBMISSION_ATTEMPTS,
+            retry_timeout_millis: SUBMISSION_TIMEOUT_MILLIS,
         }
+    }
+
+    fn capabilities(&self) -> wire::DiagnosticCapabilities {
+        self.capabilities.clone()
     }
 
     fn open(
@@ -141,7 +153,7 @@ impl WorkerDiagnostics {
         }
         if state.session.is_none() {
             let permit = SESSIONS
-                .get_or_init(|| Arc::new(Semaphore::new(32)))
+                .get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_SESSIONS)))
                 .clone()
                 .try_acquire_owned()
                 .map_err(|_| Status::resource_exhausted("diagnostic session capacity"))?;
@@ -176,7 +188,7 @@ impl WorkerDiagnostics {
                 "invalid diagnostic submission; not consumed",
             ));
         }
-        if request.encoded_len() > REQUEST_BYTES {
+        if request.encoded_len() > self.capabilities.max_request_bytes as usize {
             return Err(Status::invalid_argument(
                 "diagnostic frame too large; not consumed",
             ));

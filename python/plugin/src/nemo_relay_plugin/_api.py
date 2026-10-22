@@ -1690,7 +1690,7 @@ class PluginRuntime:
                 self._diagnostics_task = inert
                 return
             try:
-                await self._diagnostics_task.result().close(timeout=2.0)
+                await self._diagnostics_task.result().close()
             except DiagnosticDeliveryError:
                 pass  # Delivery cannot postpone or fail plugin termination.
 

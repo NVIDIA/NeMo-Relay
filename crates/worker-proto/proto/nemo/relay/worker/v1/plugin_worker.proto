@@ -63,12 +63,17 @@ message DiagnosticCapabilities {
   uint32 max_components = 6;
   uint32 max_extensions = 7;
   uint32 max_metadata_bytes = 8;
+  // Maximum encoded DiagnosticSubmission size, including credentials/session/sequence fields.
   uint32 max_request_bytes = 9;
   uint32 max_detail_bytes = 10;
   uint32 max_correlation_bytes = 11;
+  // Maximum encoded diagnostic response size for this session.
   uint32 max_response_bytes = 12;
+  // SDK queue slots; the single in-flight request and host session capacity are separate.
   uint32 max_pending_submissions = 13;
+  // Maximum SubmitDiagnostic attempts, including the initial attempt.
   uint32 retry_attempts = 14;
+  // Per-attempt SubmitDiagnostic deadline; bootstrap and lifecycle drain use local bounds.
   uint32 retry_timeout_millis = 15;
   // Version 1 retains authenticated remote provenance in canonical event pages.
   uint32 provenance_version = 16;

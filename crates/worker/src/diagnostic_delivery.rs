@@ -39,6 +39,7 @@ pub(super) async fn run(
     session_id: Vec<u8>,
     receiver: mpsc::Receiver<Pending>,
     state: Arc<DeliveryState>,
+    policy: DeliveryPolicy,
 ) {
     let mut queue = Queue {
         receiver,
@@ -72,7 +73,7 @@ pub(super) async fn run(
                 request.session_id = session_id.clone();
                 request.sequence = sequence;
                 queue.in_flight = true;
-                let result = deliver(&mut client, &request, &state, &mut sequence).await;
+                let result = deliver(&mut client, &request, &state, &mut sequence, policy).await;
                 if result == Err(DiagnosticDeliveryError::Uncertain) {
                     increment(&state.uncertain);
                     state.stopped.store(true, Ordering::Release);
@@ -91,17 +92,25 @@ async fn deliver(
     request: &wire::DiagnosticSubmission,
     state: &DeliveryState,
     sequence: &mut u64,
+    policy: DeliveryPolicy,
 ) -> Result<DiagnosticReceipt, DiagnosticDeliveryError> {
+    if request.encoded_len() > policy.max_request_bytes {
+        increment(&state.dropped);
+        return Err(DiagnosticDeliveryError::Invalid);
+    }
     let mut result = Err(DiagnosticDeliveryError::Uncertain);
-    for _ in 0..3 {
+    for _ in 0..policy.retry_attempts {
         if state.stopped.load(Ordering::Acquire) {
             break;
         }
         let mut rpc = tonic::Request::new(request.clone());
-        rpc.set_timeout(TIMEOUT);
-        match tokio::time::timeout(TIMEOUT, client.submit_diagnostic(rpc)).await {
+        rpc.set_timeout(policy.retry_timeout);
+        match tokio::time::timeout(policy.retry_timeout, client.submit_diagnostic(rpc)).await {
             Ok(Ok(response)) if response.get_ref().submission_sequence == *sequence => {
                 let response = response.into_inner();
+                if response.encoded_len() > policy.max_response_bytes {
+                    break;
+                }
                 let valid = DiagnosticReceiptStatus::try_from(response.status)
                     .is_ok_and(|s| s != DiagnosticReceiptStatus::Unspecified);
                 if !valid {

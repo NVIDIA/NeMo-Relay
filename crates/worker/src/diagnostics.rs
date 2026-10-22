@@ -22,9 +22,55 @@ pub use wire::{
     DiagnosticObservation, DiagnosticObservationOutcome, DiagnosticObservationSeverity,
     DiagnosticReceipt, DiagnosticReceiptStatus,
 };
-const FRAME_BYTES: usize = 16 * 1024;
-const QUEUE_SLOTS: usize = 32;
-const TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_RESPONSE_BYTES: usize = 128 * 1024;
+const MIN_RESPONSE_BYTES: usize = 256;
+const MAX_PENDING_SUBMISSIONS: usize = 32;
+const MAX_RETRY_ATTEMPTS: u32 = 8;
+const MAX_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Space reserved in the submission frame for credentials, session identity,
+/// sequence ordering, and protobuf field framing. The hydrated request is also
+/// checked against the exact host-provided frame limit before it is sent.
+const SUBMISSION_ENVELOPE_ALLOWANCE_BYTES: usize = 256;
+const MIN_SUBMISSION_BYTES: usize = 2;
+
+#[derive(Debug, Clone, Copy)]
+struct DeliveryPolicy {
+    max_request_bytes: usize,
+    max_response_bytes: usize,
+    max_pending_submissions: usize,
+    retry_attempts: u32,
+    retry_timeout: Duration,
+}
+impl DeliveryPolicy {
+    fn from_capabilities(capabilities: &wire::DiagnosticCapabilities) -> Option<Self> {
+        let max_request_bytes = usize::try_from(capabilities.max_request_bytes).ok()?;
+        let max_response_bytes = usize::try_from(capabilities.max_response_bytes).ok()?;
+        let max_pending_submissions = usize::try_from(capabilities.max_pending_submissions).ok()?;
+        let retry_timeout = Duration::from_millis(u64::from(capabilities.retry_timeout_millis));
+        if max_request_bytes < SUBMISSION_ENVELOPE_ALLOWANCE_BYTES + MIN_SUBMISSION_BYTES
+            || max_request_bytes > MAX_REQUEST_BYTES
+            || max_response_bytes < MIN_RESPONSE_BYTES
+            || max_response_bytes > MAX_RESPONSE_BYTES
+            || max_pending_submissions == 0
+            || max_pending_submissions > MAX_PENDING_SUBMISSIONS
+            || capabilities.retry_attempts == 0
+            || capabilities.retry_attempts > MAX_RETRY_ATTEMPTS
+            || retry_timeout.is_zero()
+            || retry_timeout > MAX_RETRY_TIMEOUT
+        {
+            return None;
+        }
+        Some(Self {
+            max_request_bytes,
+            max_response_bytes,
+            max_pending_submissions,
+            retry_attempts: capabilities.retry_attempts,
+            retry_timeout,
+        })
+    }
+}
 
 /// Delivery outcome, independent of plugin execution or health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -92,6 +138,7 @@ pub struct WorkerDiagnostics {
     sender: Option<mpsc::Sender<Pending>>,
     state: Arc<DeliveryState>,
     task: Option<Arc<DeliveryTask>>,
+    policy: Option<DeliveryPolicy>,
 }
 impl WorkerDiagnostics {
     pub(crate) async fn connect(
@@ -104,19 +151,21 @@ impl WorkerDiagnostics {
             sender: None,
             state: Arc::new(DeliveryState::default()),
             task: None,
+            policy: None,
         };
         let Ok(channel) = channel else {
             return facade;
         };
-        let mut client = wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel)
-            .max_encoding_message_size(FRAME_BYTES)
-            .max_decoding_message_size(128 * 1024);
+        let mut client =
+            wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel.clone())
+                .max_encoding_message_size(MAX_REQUEST_BYTES)
+                .max_decoding_message_size(MAX_RESPONSE_BYTES);
         let credentials = wire::DiagnosticCredentials {
             activation_id,
             auth_token,
         };
         let capabilities = match tokio::time::timeout(
-            TIMEOUT,
+            BOOTSTRAP_TIMEOUT,
             client.get_diagnostic_capabilities(credentials.clone()),
         )
         .await
@@ -135,14 +184,16 @@ impl WorkerDiagnostics {
         if capabilities.protocol_version != 1
             || capabilities.provenance_version != 1
             || capabilities.snapshot_version != 1
-            || capabilities.max_request_bytes < FRAME_BYTES as u32
-            || capabilities.max_pending_submissions < QUEUE_SLOTS as u32
         {
             facade.availability = DiagnosticAvailability::Unsupported;
             return facade;
         }
+        if DeliveryPolicy::from_capabilities(&capabilities).is_none() {
+            facade.availability = DiagnosticAvailability::Unsupported;
+            return facade;
+        }
         let opened = match tokio::time::timeout(
-            TIMEOUT,
+            BOOTSTRAP_TIMEOUT,
             client.open_diagnostic_session(wire::DiagnosticOpenRequest {
                 credentials: Some(credentials.clone()),
                 protocol_version: 1,
@@ -155,18 +206,39 @@ impl WorkerDiagnostics {
             Ok(Ok(response)) => response.into_inner(),
             _ => return facade,
         };
+        let Some(session_capabilities) = opened.capabilities.as_ref() else {
+            facade.availability = DiagnosticAvailability::Unsupported;
+            return facade;
+        };
+        if !session_capabilities.enabled {
+            facade.availability = DiagnosticAvailability::Disabled;
+            return facade;
+        }
+        if session_capabilities != &capabilities {
+            facade.availability = DiagnosticAvailability::Unsupported;
+            return facade;
+        }
+        let Some(policy) = DeliveryPolicy::from_capabilities(session_capabilities) else {
+            facade.availability = DiagnosticAvailability::Unsupported;
+            return facade;
+        };
         if opened.session_id.len() != 16 {
             return facade;
         }
-        let (sender, receiver) = mpsc::channel(QUEUE_SLOTS);
+        let client = wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel)
+            .max_encoding_message_size(policy.max_request_bytes)
+            .max_decoding_message_size(policy.max_response_bytes);
+        let (sender, receiver) = mpsc::channel(policy.max_pending_submissions);
         facade.availability = DiagnosticAvailability::Available;
         facade.sender = Some(sender);
+        facade.policy = Some(policy);
         let task = tokio::spawn(delivery::run(
             client,
             credentials,
             opened.session_id,
             receiver,
             facade.state.clone(),
+            policy,
         ));
         facade.task = Some(Arc::new(DeliveryTask(task.abort_handle())));
         facade
@@ -213,14 +285,15 @@ impl WorkerDiagnostics {
     }
     fn freeze(
         operation: wire::diagnostic_submission::Operation,
+        max_request_bytes: usize,
     ) -> Result<Vec<u8>, DiagnosticDeliveryError> {
         let request = wire::DiagnosticSubmission {
             operation: Some(operation),
             ..Default::default()
         };
-        // Credentials/session/sequence have a separate allowance. Queue entries
-        // own encoded bytes, never caller-owned spare string/vector capacity.
-        if request.encoded_len() > FRAME_BYTES - 256 {
+        // Queue entries own encoded bytes, never caller-owned spare string/vector
+        // capacity. Reserve the named session-envelope allowance for delivery.
+        if request.encoded_len() > max_request_bytes - SUBMISSION_ENVELOPE_ALLOWANCE_BYTES {
             return Err(DiagnosticDeliveryError::Invalid);
         }
         Ok(request.encode_to_vec())
@@ -239,7 +312,8 @@ impl WorkerDiagnostics {
         let permit = sender
             .try_reserve()
             .map_err(|_| DiagnosticDeliveryError::Full)?;
-        let frozen = Self::freeze(operation)?;
+        let policy = self.policy.ok_or(DiagnosticDeliveryError::Closed)?;
+        let frozen = Self::freeze(operation, policy.max_request_bytes)?;
         let (receipt, receiver) = oneshot::channel();
         permit.send(Pending::Submission {
             frozen,
@@ -316,14 +390,20 @@ impl DiagnosticComponent {
             increment(&self.diagnostics.state.dropped);
             DiagnosticDeliveryError::Full
         })?;
+        let policy = self
+            .diagnostics
+            .policy
+            .ok_or(DiagnosticDeliveryError::Closed)?;
         let mut observation = make();
         if observation.count == 0 {
             return Err(DiagnosticDeliveryError::Invalid);
         }
         observation.component = self.handle;
-        let frozen =
-            WorkerDiagnostics::freeze(wire::diagnostic_submission::Operation::Record(observation))
-                .inspect_err(|_| increment(&self.diagnostics.state.dropped))?;
+        let frozen = WorkerDiagnostics::freeze(
+            wire::diagnostic_submission::Operation::Record(observation),
+            policy.max_request_bytes,
+        )
+        .inspect_err(|_| increment(&self.diagnostics.state.dropped))?;
         permit.send(Pending::Submission {
             frozen,
             receipt: None,

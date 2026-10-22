@@ -21,10 +21,20 @@ The additive `RelayDiagnostics` service shares the authenticated host endpoint:
 return `UNIMPLEMENTED`. SDKs expose inert unsupported/disabled facades and skip
 lazy factories. Diagnostic admission does not determine whether a plugin executes.
 
-The initial SDK profile requires protocol/schema/provenance 1, at least 16 KiB
-request allowance and 32 pending slots. Recording uses activation credentials;
-canonical reads are separately denied (`can_read_context = false`). Query filters
-do not confer authority. The read RPC reserves an explicit capability boundary.
+The host returns effective delivery settings through `DiagnosticCapabilities`
+both before opening and with the opened session. The SDK validates contract
+versions and local safety ceilings, then uses the session's exact request and
+response limits, queue capacity, retry-attempt count, and per-attempt timeout.
+The two capability values must agree; a mismatch or unsupported limit produces
+an inert `unsupported` facade without affecting plugin execution. SDKs do not
+counteroffer or substitute local delivery defaults. Bootstrap calls retain a
+separately named local safety timeout. Existing flush and shutdown-drain bounds
+also remain local lifecycle limits; they are distinct from the per-attempt RPC
+timeout advertised by the host.
+
+Recording uses activation credentials; canonical reads are separately denied
+(`can_read_context = false`). Query filters do not confer authority. The read RPC
+reserves an explicit capability boundary.
 
 Open is idempotent while the activation's session is live. The host assigns its
 UUID and ownership. Registration returns component and code handles (code handles
@@ -44,8 +54,9 @@ valid admission rejections consume a sequence with a terminal `Rejected` receipt
 `Registered`, `Closed`, and `Disabled` add no occurrences.
 
 SDKs freeze bytes and send one request at a time, retrying the identical request
-up to three times with a two-second deadline per attempt. Uncertain acceptance
-fences delivery; pending observations are never replayed into a new session.
+up to the session's advertised attempt count, with its advertised per-attempt
+deadline. Uncertain acceptance fences delivery; pending observations are never
+replayed into a new session.
 This release admits one session per activation. Closed sessions retain their
 last receipt until activation cleanup; a new session requires a new activation.
 
@@ -55,11 +66,11 @@ last receipt until activation cleanup; a new session requires a new activation.
 | Components | 8 registrations per session, including closed registrations |
 | Extensions / codes | 16 extensions per session; 32 codes per component |
 | Registration metadata | 16 KiB per session, also subject to core capacity |
-| Protobuf frame | 16 KiB; SDK reserves 256 bytes for credentials and ordering |
+| Protobuf frame | Host-advertised maximum; SDKs reserve a named 256-byte submission-envelope allowance for credentials, session identity, sequence ordering, and protobuf framing, then check the hydrated frame against the exact limit |
 | Extension name / description | 32 / 256 UTF-8 bytes |
-| SDK queue | 32 frozen frames plus one in-flight request |
+| SDK queue | Host-advertised queue slots plus one in-flight request; validated against each SDK's supported safety ceiling |
 | Host decode admission | 16 concurrent diagnostic requests, no wait queue |
-| Response ceiling | 128 KiB; two-second response-body deadline |
+| Response ceiling | Host-advertised maximum; validated against each SDK's supported safety ceiling |
 | Replay storage | One digest and bounded receipt per session |
 
 The service semaphore applies before protobuf decoding. These budgets are

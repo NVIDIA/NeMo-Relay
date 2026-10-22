@@ -29,10 +29,58 @@ DiagnosticObservation.__doc__ = (
 DiagnosticObservationOutcome.__doc__ = "Explicit UNKNOWN, SUCCESS, or FAILURE operation outcome."
 DiagnosticObservationSeverity.__doc__ = "Evidence severity: TRACE, DEBUG, INFO, WARNING, or ERROR."
 
-_FRAME_BYTES = 16 * 1024
-_QUEUE_SLOTS = 32
-_TIMEOUT = 2.0
+_MAX_REQUEST_BYTES = 16 * 1024
+_MAX_RESPONSE_BYTES = 128 * 1024
+_MIN_RESPONSE_BYTES = 256
+_MAX_PENDING_SUBMISSIONS = 32
+_MAX_RETRY_ATTEMPTS = 8
+_MAX_RETRY_TIMEOUT = 10.0
+_BOOTSTRAP_TIMEOUT = 2.0
+# Preserve existing flush/shutdown bounds independently of session RPC policy.
+_LOCAL_LIFECYCLE_TIMEOUT = 2.0
+# Reserve room for credentials, session identity, sequence ordering, and
+# protobuf framing. The hydrated request is also checked against the exact cap.
+_SUBMISSION_ENVELOPE_ALLOWANCE_BYTES = 256
+_MIN_SUBMISSION_BYTES = 2
 _MAX_COUNT = (1 << 64) - 1
+
+
+@dataclass(frozen=True)
+class _DeliveryPolicy:
+    max_request_bytes: int
+    max_response_bytes: int
+    max_pending_submissions: int
+    retry_attempts: int
+    retry_timeout: float
+
+    @classmethod
+    def from_capabilities(cls, capability: Any) -> _DeliveryPolicy | None:
+        values = (
+            capability.max_request_bytes,
+            capability.max_response_bytes,
+            capability.max_pending_submissions,
+            capability.retry_attempts,
+            capability.retry_timeout_millis,
+        )
+        if any(not isinstance(value, int) or value <= 0 for value in values):
+            return None
+        if (
+            capability.max_request_bytes < _SUBMISSION_ENVELOPE_ALLOWANCE_BYTES + _MIN_SUBMISSION_BYTES
+            or capability.max_request_bytes > _MAX_REQUEST_BYTES
+            or capability.max_response_bytes < _MIN_RESPONSE_BYTES
+            or capability.max_response_bytes > _MAX_RESPONSE_BYTES
+            or capability.max_pending_submissions > _MAX_PENDING_SUBMISSIONS
+            or capability.retry_attempts > _MAX_RETRY_ATTEMPTS
+            or capability.retry_timeout_millis > _MAX_RETRY_TIMEOUT * 1000
+        ):
+            return None
+        return cls(
+            max_request_bytes=capability.max_request_bytes,
+            max_response_bytes=capability.max_response_bytes,
+            max_pending_submissions=capability.max_pending_submissions,
+            retry_attempts=capability.retry_attempts,
+            retry_timeout=capability.retry_timeout_millis / 1000,
+        )
 
 
 class DiagnosticDeliveryError(RuntimeError):
@@ -60,6 +108,7 @@ class WorkerDiagnostics:
         self._credentials = credentials
         self.availability = "unavailable"
         self._session = b""
+        self._policy: _DeliveryPolicy | None = None
         self._queue: asyncio.Queue[tuple[bytes | None, asyncio.Future[Any] | None]] | None = None
         self._task: asyncio.Task[None] | None = None
         self._stopped = False
@@ -79,7 +128,9 @@ class WorkerDiagnostics:
             facade.availability = "unsupported"
             return facade
         try:
-            capability = await stub.GetDiagnosticCapabilities(facade._credentials, timeout=_TIMEOUT)
+            capability = await stub.GetDiagnosticCapabilities(
+                facade._credentials, timeout=_BOOTSTRAP_TIMEOUT
+            )
             if not capability.enabled:
                 facade.availability = "disabled"
                 return facade
@@ -87,9 +138,11 @@ class WorkerDiagnostics:
                 capability.protocol_version != 1
                 or capability.provenance_version != 1
                 or capability.snapshot_version != 1
-                or capability.max_request_bytes < _FRAME_BYTES
-                or capability.max_pending_submissions < _QUEUE_SLOTS
             ):
+                facade.availability = "unsupported"
+                return facade
+            policy = _DeliveryPolicy.from_capabilities(capability)
+            if policy is None:
                 facade.availability = "unsupported"
                 return facade
             session = await stub.OpenDiagnosticSession(
@@ -99,17 +152,31 @@ class WorkerDiagnostics:
                     snapshot_version=1,
                     provenance_version=1,
                 ),
-                timeout=_TIMEOUT,
+                timeout=_BOOTSTRAP_TIMEOUT,
             )
         except grpc.RpcError as error:
             if error.code() == grpc.StatusCode.UNIMPLEMENTED:
                 facade.availability = "unsupported"
             return facade
+        if not session.HasField("capabilities"):
+            facade.availability = "unsupported"
+            return facade
+        if not session.capabilities.enabled:
+            facade.availability = "disabled"
+            return facade
+        if session.capabilities != capability:
+            facade.availability = "unsupported"
+            return facade
+        session_policy = _DeliveryPolicy.from_capabilities(session.capabilities)
+        if session_policy is None:
+            facade.availability = "unsupported"
+            return facade
         if len(session.session_id) != 16:
             return facade
         facade._session = session.session_id
+        facade._policy = session_policy
         facade.availability = "available"
-        facade._queue = asyncio.Queue(maxsize=_QUEUE_SLOTS)
+        facade._queue = asyncio.Queue(maxsize=session_policy.max_pending_submissions)
         facade._task = asyncio.create_task(facade._deliver())
         return facade
 
@@ -136,7 +203,8 @@ class WorkerDiagnostics:
             raise DiagnosticDeliveryError("closed")
         if self._queue is None:
             return
-        if request.ByteSize() > _FRAME_BYTES - 256:
+        policy = self._policy
+        if policy is None or request.ByteSize() > policy.max_request_bytes - _SUBMISSION_ENVELOPE_ALLOWANCE_BYTES:
             self._increment("dropped")
             raise DiagnosticDeliveryError("invalid")
         # Frozen bytes bound retained payload and isolate subsequent caller edits.
@@ -152,12 +220,13 @@ class WorkerDiagnostics:
         self._enqueue(request, future)
         return await future
 
-    async def flush(self, timeout: float = _TIMEOUT) -> None:
+    async def flush(self, timeout: float | None = None) -> None:
         """Wait for admitted work within a deadline; no exporter acknowledgment."""
         if self._queue is None:
             return
         if self._closed:
             raise DiagnosticDeliveryError("closed")
+        timeout = timeout if timeout is not None else _LOCAL_LIFECYCLE_TIMEOUT
         future = asyncio.get_running_loop().create_future()
         try:
             async with asyncio.timeout(timeout):
@@ -166,10 +235,11 @@ class WorkerDiagnostics:
         except TimeoutError as error:
             raise DiagnosticDeliveryError("uncertain") from error
 
-    async def close(self, timeout: float = _TIMEOUT) -> None:
+    async def close(self, timeout: float | None = None) -> None:
         """Drain diagnostics within the existing plugin shutdown allowance."""
         if self._queue is None or self._closed:
             return
+        timeout = timeout if timeout is not None else _LOCAL_LIFECYCLE_TIMEOUT
         try:
             async with asyncio.timeout(timeout):
                 await self.flush(timeout)
@@ -216,40 +286,53 @@ class WorkerDiagnostics:
                 request.credentials.CopyFrom(self._credentials)
                 request.session_id = self._session
                 request.sequence = sequence
-                try:
-                    for _ in range(3):
-                        try:
-                            result = await self._stub.SubmitDiagnostic(request, timeout=_TIMEOUT)
-                        except grpc.RpcError as failure:
-                            if failure.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                policy = self._policy
+                if policy is None or request.ByteSize() > policy.max_request_bytes:
+                    self._increment("dropped")
+                    error = DiagnosticDeliveryError("invalid")
+                    request = None
+                if request is None:
+                    pass
+                else:
+                    try:
+                        for _ in range(policy.retry_attempts):
+                            try:
+                                result = await self._stub.SubmitDiagnostic(
+                                    request, timeout=policy.retry_timeout
+                                )
+                            except grpc.RpcError as failure:
+                                if failure.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                                    self._increment("rejected")
+                                    error = DiagnosticDeliveryError("not_consumed")
+                                    break
+                                if failure.code() in (
+                                    grpc.StatusCode.PERMISSION_DENIED,
+                                    grpc.StatusCode.UNAUTHENTICATED,
+                                    grpc.StatusCode.FAILED_PRECONDITION,
+                                    grpc.StatusCode.OUT_OF_RANGE,
+                                    grpc.StatusCode.ALREADY_EXISTS,
+                                ):
+                                    break
+                                continue
+                            if result.ByteSize() > policy.max_response_bytes:
+                                result = None
+                                break
+                            if result.submission_sequence != sequence or result.status not in range(1, 6):
+                                result = None
+                                break
+                            sequence += 1
+                            if sequence > _MAX_COUNT:
+                                self._stopped = True
+                            if result.status == pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
                                 self._increment("rejected")
-                                error = DiagnosticDeliveryError("not_consumed")
-                                break
-                            if failure.code() in (
-                                grpc.StatusCode.PERMISSION_DENIED,
-                                grpc.StatusCode.UNAUTHENTICATED,
-                                grpc.StatusCode.FAILED_PRECONDITION,
-                                grpc.StatusCode.OUT_OF_RANGE,
-                                grpc.StatusCode.ALREADY_EXISTS,
-                            ):
-                                break
-                            continue
-                        if result.submission_sequence != sequence or result.status not in range(1, 6):
-                            result = None
+                                error = DiagnosticDeliveryError("rejected")
+                                result = None
                             break
-                        sequence += 1
-                        if sequence > _MAX_COUNT:
-                            self._stopped = True
-                        if result.status == pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
-                            self._increment("rejected")
-                            error = DiagnosticDeliveryError("rejected")
-                            result = None
-                        break
-                except asyncio.CancelledError:
-                    self._increment("uncertain")
-                    if future is not None and not future.done():
-                        future.set_exception(DiagnosticDeliveryError("uncertain"))
-                    raise
+                    except asyncio.CancelledError:
+                        self._increment("uncertain")
+                        if future is not None and not future.done():
+                            future.set_exception(DiagnosticDeliveryError("uncertain"))
+                        raise
             if result is None and error.kind == "uncertain":
                 self._increment("uncertain")
                 self._stopped = True
@@ -258,7 +341,6 @@ class WorkerDiagnostics:
                     future.set_exception(error)
                 else:
                     future.set_result(result)
-
 
 class DiagnosticComponent:
     """Component-scoped producer; host assigns ownership and provenance."""
