@@ -709,7 +709,6 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn stderr_backend_failures_record_once_without_projection_recursion() {
     use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
@@ -717,17 +716,16 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
 
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_STDERR_DIAGNOSTICS_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
-        let (stderr_writer, stderr_reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (stderr_reader, stderr_writer) = std::io::pipe().unwrap();
         drop(stderr_reader);
         let current_thread = std::thread::current();
         let test_name = current_thread.name().expect("test thread should be named");
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test_name, "--nocapture"])
             .env(CHILD_ENV, "1")
-            // A closed peer produces EPIPE; Rust silently ignores EBADF on stderr.
-            .stderr(std::process::Stdio::from(std::os::fd::OwnedFd::from(
-                stderr_writer,
-            )))
+            // A closed pipe reader fails writes on Unix and Windows. An absent
+            // stderr handle would be silently ignored by Rust instead.
+            .stderr(stderr_writer)
             .output()
             .expect("stderr diagnostic child test should start");
         assert!(

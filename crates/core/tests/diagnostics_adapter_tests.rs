@@ -14,7 +14,8 @@ use nemo_relay::diagnostics::{
     PluginErrorClassifier, PluginFailureCode, RecordOutcome,
 };
 use nemo_relay::logging::{
-    FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig, LoggingRuntime,
+    FileLogRotationConfig, FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig,
+    LoggingRuntime,
 };
 use nemo_relay::plugin::PluginError;
 use serde_json::Value;
@@ -66,6 +67,265 @@ fn internal(message: &str) -> Observation<'_> {
         message,
         NonZeroU64::MIN,
     )
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sharing_violation_records_required_sink_initialization_failure_once() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    for rotation in [None, Some(FileLogRotationConfig::new(1, 2).unwrap())] {
+        let service = enabled();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("locked.jsonl");
+        let exclusive = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let error = LoggingRuntime::configure_with_diagnostics(
+            LoggingConfig {
+                stderr_enabled: false,
+                sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                    path: path.clone(),
+                    rotation,
+                    ..Default::default()
+                })],
+                ..Default::default()
+            },
+            &service,
+        )
+        .err()
+        .expect("a required sink locked by another handle must fail startup");
+        assert!(error.to_string().contains("failed to open"), "{error}");
+        let view = service
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        for (key, code) in [
+            ("logging", "logging.initialize_failed"),
+            ("logging.file.0", "logging.sink.initialize_failed"),
+        ] {
+            let component = view
+                .components
+                .iter()
+                .find(|row| row.identity.key == key)
+                .unwrap();
+            assert!(component.closed_at.is_some());
+            assert_eq!(
+                component
+                    .counters
+                    .iter()
+                    .find(|row| row.code == code)
+                    .unwrap()
+                    .occurrences
+                    .value
+                    .get(),
+                1
+            );
+            assert_eq!(
+                view.events
+                    .iter()
+                    .filter(|event| event.component == component.identity && event.code() == code)
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !serde_json::to_string(&view)
+                .unwrap()
+                .contains("locked.jsonl")
+        );
+        drop(exclusive);
+        // A failed initialization must leave the logging facade usable.
+        file_logging(&service, path).shutdown();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_rotation_sharing_violation_records_once_without_projection_recursion() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    let service = enabled();
+    let producer = service
+        .register_component(ComponentRegistration::new("test.producer", &[PLUGIN_ERROR]))
+        .unwrap();
+    let deliveries = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&deliveries);
+    let _projection = service
+        .subscribe_projection(move |_| {
+            captured.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("rotation.jsonl");
+    // Permit normal file writes but deny the delete sharing required by rename.
+    let locked = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&path)
+        .unwrap();
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Error,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                rotation: Some(FileLogRotationConfig::new(1, 2).unwrap()),
+                ..Default::default()
+            })],
+            ..Default::default()
+        },
+        &service,
+    )
+    .unwrap();
+    producer.record_lazy(|| internal("first record")).unwrap();
+    producer.record_lazy(|| internal("rotation fails")).unwrap();
+    // Draining is the synchronization barrier; no scheduler timing assumptions.
+    runtime.shutdown();
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let sink = view
+        .components
+        .iter()
+        .find(|row| row.identity.key == "logging.file.0")
+        .unwrap();
+    assert_eq!(
+        sink.counters
+            .iter()
+            .find(|row| row.code == "logging.sink.write_failed")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        1
+    );
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.component == sink.identity
+                && event.code() == "logging.sink.write_failed")
+            .count(),
+        1
+    );
+    assert_eq!(deliveries.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        view.coverage.loss.projection_deliveries_omitted.value.get(),
+        0
+    );
+    let output = std::fs::read_to_string(&path).unwrap();
+    let rows: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["message"], "first record");
+    assert!(sink.closed_at.is_some());
+    drop(locked);
+    file_logging(&service, path).shutdown();
+}
+
+#[test]
+fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown() {
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    for rotation in [None, Some(FileLogRotationConfig::new(1, 2).unwrap())] {
+        let service = enabled();
+        let producer = service
+            .register_component(ComponentRegistration::new("test.producer", &[PLUGIN_ERROR]))
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        // Canonicalization supplies a verbatim prefix on Windows, so paths over
+        // MAX_PATH work without a machine-wide long-path policy change.
+        let path = std::fs::canonicalize(temp.path())
+            .unwrap()
+            .join("long directory ".repeat(14))
+            .join("logs with spaces 日本語🙂")
+            .join("relay café.jsonl");
+        assert!(path.as_os_str().len() > 260);
+        let runtime = LoggingRuntime::configure_with_diagnostics(
+            LoggingConfig {
+                level: LogLevel::Error,
+                stderr_enabled: false,
+                flush_interval_millis: 0,
+                sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                    path: path.clone(),
+                    rotation,
+                    ..Default::default()
+                })],
+                ..Default::default()
+            },
+            &service,
+        )
+        .unwrap();
+        let messages = ["first\r\n日本語🙂", "second\r\n café"];
+        for message in messages {
+            producer.record_lazy(|| internal(message)).unwrap();
+        }
+        runtime.shutdown();
+        let files = if rotation.is_some() {
+            vec![path.with_file_name("relay café.1.jsonl"), path.clone()]
+        } else {
+            vec![path.clone()]
+        };
+        let mut rows = Vec::<Value>::new();
+        for file in files {
+            let output = std::fs::read_to_string(&file).unwrap();
+            rows.extend(
+                output
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap()),
+            );
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                // An exclusive open verifies all worker-owned file handles closed.
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .share_mode(0)
+                    .open(&file)
+                    .unwrap();
+            }
+        }
+        assert_eq!(rows.len(), messages.len());
+        for (row, message) in rows.iter().zip(messages) {
+            assert_eq!(row["message"], message);
+            assert_eq!(row["fields"]["diagnostic"]["detail"]["message"], message);
+            assert_eq!(
+                row["fields"]["diagnostic"]["component"]["instance_id"],
+                producer.identity().unwrap().instance_id.to_string()
+            );
+        }
+        let view = service
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert!(
+            !view
+                .events
+                .iter()
+                .any(|event| event.code().starts_with("logging.sink.")
+                    && event.classification.failure_class().is_some())
+        );
+        assert_eq!(
+            view.coverage.loss.projection_deliveries_omitted.value.get(),
+            0
+        );
+    }
 }
 
 #[test]
