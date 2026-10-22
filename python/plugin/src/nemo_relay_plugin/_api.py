@@ -1655,7 +1655,7 @@ class PluginRuntime:
         self._auth_token = auth_token
         self._host_stub = host_stub
         self._diagnostic_stub = diagnostic_stub
-        self._diagnostics_task: asyncio.Task[WorkerDiagnostics] | None = None
+        self._diagnostics_task: asyncio.Future[WorkerDiagnostics] | None = None
         self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
 
     async def diagnostics(self) -> WorkerDiagnostics:
@@ -1677,8 +1677,17 @@ class PluginRuntime:
                 try:
                     await self._diagnostics_task
                 except asyncio.CancelledError:
-                    return
+                    pass
             if self._diagnostics_task.cancelled():
+                inert = asyncio.get_running_loop().create_future()
+                inert.set_result(
+                    WorkerDiagnostics.inert(
+                        self._diagnostic_stub,
+                        self._activation_id,
+                        self._auth_token,
+                    )
+                )
+                self._diagnostics_task = inert
                 return
             try:
                 await self._diagnostics_task.result().close(timeout=2.0)

@@ -604,7 +604,9 @@ fn validate_declaration_with_artifact(
         &Json::Object(config.clone()),
     )
     .err();
-    if let Some(context) = diagnostic_context {
+    let has_diagnostic_failure =
+        evaluated_policy.failure().is_some() || trust.failure.is_some() || schema_failure.is_some();
+    if let Some(context) = diagnostic_context.filter(|_| has_diagnostic_failure) {
         use crate::diagnostics::{
             DiagnosticClassifier, FailureClass, PluginOperationFailureCode as Operation,
             PluginPhase,

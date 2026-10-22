@@ -67,6 +67,11 @@ class WorkerDiagnostics:
         self._stats = {"dropped": 0, "rejected": 0, "uncertain": 0}
 
     @classmethod
+    def inert(cls, stub: Any, activation_id: str, auth_token: str) -> WorkerDiagnostics:
+        """Return an unavailable facade after host negotiation was cancelled."""
+        return cls(stub, pb.DiagnosticCredentials(activation_id=activation_id, auth_token=auth_token))
+
+    @classmethod
     async def connect(cls, stub: Any, activation_id: str, auth_token: str) -> WorkerDiagnostics:
         """Negotiate once; old or disabled hosts produce an inert facade."""
         facade = cls(stub, pb.DiagnosticCredentials(activation_id=activation_id, auth_token=auth_token))
@@ -151,6 +156,8 @@ class WorkerDiagnostics:
         """Wait for admitted work within a deadline; no exporter acknowledgment."""
         if self._queue is None:
             return
+        if self._closed:
+            raise DiagnosticDeliveryError("closed")
         future = asyncio.get_running_loop().create_future()
         try:
             async with asyncio.timeout(timeout):

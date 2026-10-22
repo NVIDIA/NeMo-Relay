@@ -36,7 +36,7 @@ impl Service<http::Request<TonicBody>> for Decoder {
 #[tokio::test]
 async fn request_permits_are_reserved_before_decoder_and_retained_by_response() {
     let decoder = Decoder::default();
-    let mut service = BoundedService(decoder.clone());
+    let mut service = BoundedService::with_test_limits(decoder.clone(), 16, 4);
     let requests: Vec<_> = (0..16)
         .map(|_| service.call(http::Request::new(TonicBody::empty())))
         .collect();
@@ -53,7 +53,7 @@ async fn request_permits_are_reserved_before_decoder_and_retained_by_response() 
         .await
         .unwrap();
     assert_eq!(decoder.0.load(Ordering::Relaxed), 1);
-    assert_eq!(REQUESTS.get().unwrap().available_permits(), 15);
+    assert_eq!(service.requests.available_permits(), 15);
     drop(response);
-    assert_eq!(REQUESTS.get().unwrap().available_permits(), 16);
+    assert_eq!(service.requests.available_permits(), 16);
 }

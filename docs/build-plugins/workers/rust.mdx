@@ -18,12 +18,15 @@ activation environment Relay provides.
 Use `runtime.diagnostics().await` to negotiate the host's selected diagnostic
 context. Registration is separate from execution registration. Keep a component
 handle for distinct internal operations; callback completion is already host-owned.
+The example uses `nemo_relay_types` directly, so add that crate as a dependency
+to the plugin that uses these catalogue types.
 
 ```rust
 use nemo_relay_worker::diagnostics::{
     builtin_code, DiagnosticObservation, DiagnosticObservationOutcome,
     DiagnosticObservationSeverity,
 };
+use nemo_relay_worker::WorkerSdkError;
 use nemo_relay_types::diagnostics::{BuiltinDiagnosticCode, CommonPluginFailureCode,
     FailureCode, PluginFailureCode};
 
@@ -32,7 +35,7 @@ let component = diagnostics.component("example.internal", vec![builtin_code(
     BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
         CommonPluginFailureCode::Internal,
     ))),
-)]).await?;
+)]).await.map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
 component.try_record_lazy(|| DiagnosticObservation {
     code: 1,
     count: 1,
@@ -41,7 +44,7 @@ component.try_record_lazy(|| DiagnosticObservation {
     failure_class: Some("internal".into()),
     detail: Some("The internal operation failed".into()),
     ..Default::default()
-})?;
+}).map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
 ```
 
 Handle diagnostic delivery errors separately from callback results. Disabled/full

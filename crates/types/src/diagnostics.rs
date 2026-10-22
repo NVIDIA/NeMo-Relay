@@ -17,7 +17,11 @@
 /// Initial version of the canonical diagnostic snapshot envelope.
 pub const DIAGNOSTIC_SCHEMA_VERSION: u32 = 1;
 
-/// Initial stable typed-catalogue revision, independent of the envelope version.
+/// Stable typed-catalogue revision, independent of the envelope version.
+///
+/// Additive catalogue names do not change this revision: supported envelopes
+/// preserve unknown names opaquely. Increment it only when an existing
+/// catalogue name's meaning or representation changes incompatibly.
 pub const DIAGNOSTIC_CATALOGUE_VERSION: u32 = 1;
 
 mod catalogue;

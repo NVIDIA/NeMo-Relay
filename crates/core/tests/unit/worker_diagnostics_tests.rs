@@ -393,12 +393,14 @@ async fn diagnostic_decode_limit_rejects_oversized_frames_before_acceptance() {
     let mut state = super::super::WorkerHostRuntimeState::new("activation".into(), "secret".into());
     let context = Arc::new(host());
     state.diagnostics = Some(context.clone());
-    let service = super::super::diagnostic_limits::BoundedService(
+    let service = super::super::diagnostic_limits::BoundedService::with_test_limits(
         wire::relay_diagnostics_server::RelayDiagnosticsServer::new(Service {
             state: Arc::new(state),
         })
         .max_decoding_message_size(REQUEST_BYTES)
         .max_encoding_message_size(RESPONSE_BYTES),
+        16,
+        4,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());

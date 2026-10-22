@@ -575,48 +575,74 @@ fn load_one_worker_plugin(
             );
         })?,
     };
-    if manifest.plugin.id.trim() != spec.plugin_id {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin manifest id '{}' does not match expected id '{}'",
-            manifest.plugin.id, spec.plugin_id
-        )));
-    }
-    if manifest.plugin.kind != DynamicPluginKind::Worker {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{}' is kind {}; worker loader only supports worker",
-            spec.plugin_id, manifest.plugin.kind
-        )));
-    }
-    validate_relay_compatibility(manifest.compat.relay.as_deref())?;
-    let relay_compat = manifest
-        .compat
-        .relay
-        .as_deref()
-        .expect("validated worker manifest must declare compat.relay")
-        .to_string();
-    let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
-        unreachable!("validated worker manifest must carry worker load contract");
-    };
-    let runtime = load
-        .runtime
-        .ok_or_else(|| PluginError::InvalidConfig("load.runtime is required".into()))?;
-    let entrypoint = load
-        .entrypoint
-        .as_deref()
-        .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?;
+    let (relay_compat, runtime, entrypoint, callback_timeouts) = (|| {
+        if manifest.plugin.id.trim() != spec.plugin_id {
+            return Err(PluginError::InvalidConfig(format!(
+                "dynamic plugin manifest id '{}' does not match expected id '{}'",
+                manifest.plugin.id, spec.plugin_id
+            )));
+        }
+        if manifest.plugin.kind != DynamicPluginKind::Worker {
+            return Err(PluginError::InvalidConfig(format!(
+                "dynamic plugin '{}' is kind {}; worker loader only supports worker",
+                spec.plugin_id, manifest.plugin.kind
+            )));
+        }
+        validate_relay_compatibility(manifest.compat.relay.as_deref())?;
+        let relay_compat = manifest
+            .compat
+            .relay
+            .as_deref()
+            .expect("validated worker manifest must declare compat.relay")
+            .to_string();
+        let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
+            unreachable!("validated worker manifest must carry worker load contract");
+        };
+        let runtime = load
+            .runtime
+            .ok_or_else(|| PluginError::InvalidConfig("load.runtime is required".into()))?;
+        let entrypoint = load
+            .entrypoint
+            .as_deref()
+            .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?
+            .to_string();
+        let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
+        Ok((relay_compat, runtime, entrypoint, callback_timeouts))
+    })()
+    .inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
+    })?;
 
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));
     std::fs::create_dir_all(&activation_dir)
-        .map_err(|err| PluginError::Internal(format!("worker activation directory: {err}")))?;
+        .map_err(|err| PluginError::Internal(format!("worker activation directory: {err}")))
+        .inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerLaunch,
+                FailureClass::Unknown,
+                PluginPhase::Activation,
+            );
+        })?;
     let mut activation_dir_guard = ActivationDirGuard::new(activation_dir.clone());
     let runtime_handle = OwnedWorkerRuntime::new(
         RuntimeBuilder::new_multi_thread()
             .enable_all()
             .thread_name("nemo-relay-worker-host")
             .build()
-            .map_err(|err| PluginError::Internal(format!("worker runtime: {err}")))?,
+            .map_err(|err| PluginError::Internal(format!("worker runtime: {err}")))
+            .inspect_err(|_| {
+                observer.failure(
+                    Operation::WorkerLaunch,
+                    FailureClass::Unknown,
+                    PluginPhase::Activation,
+                );
+            })?,
     );
     let WorkerEndpoints {
         host_server,
@@ -624,7 +650,13 @@ fn load_one_worker_plugin(
         worker_advertise,
         worker_connect,
         worker_endpoint_file,
-    } = WorkerEndpoints::new(&activation_dir)?;
+    } = WorkerEndpoints::new(&activation_dir).inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerTransport,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        );
+    })?;
     let mut host_state = WorkerHostRuntimeState::new(activation_id.clone(), auth_token.clone());
     host_state.diagnostics = Some(Arc::new(diagnostic_transport::WorkerDiagnostics::new(
         diagnostics.clone(),
@@ -646,7 +678,7 @@ fn load_one_worker_plugin(
             manifest_path: &manifest_path,
             environment_ref: spec.environment_ref.as_deref(),
             plugin_id: &spec.plugin_id,
-            entrypoint,
+            entrypoint: &entrypoint,
             activation_id: &activation_id,
             auth_token: &auth_token,
             host_endpoint: &host_advertise,
@@ -737,7 +769,6 @@ fn load_one_worker_plugin(
         crate::diagnostics::SuccessCode::PluginWorkerHandshakeCompleted,
         PluginPhase::Activation,
     );
-    let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
     host_state.set_gate_callback(WorkerGateCallback {
         callback_timeouts: callback_timeouts.clone(),
         plugin_kind: spec.plugin_id.clone(),
@@ -885,7 +916,7 @@ async fn serve_host_runtime(
     state: Arc<WorkerHostRuntimeState>,
     shutdown: oneshot::Receiver<()>,
 ) {
-    let diagnostics = diagnostic_limits::BoundedService(
+    let diagnostics = diagnostic_limits::BoundedService::new(
         nemo_relay_worker_proto::v1::relay_diagnostics_server::RelayDiagnosticsServer::new(
             diagnostic_transport::Service {
                 state: state.clone(),

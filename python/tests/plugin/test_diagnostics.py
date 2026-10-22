@@ -92,6 +92,8 @@ def test_runtime_negotiates_once_and_closes_without_extending_repeated_shutdown(
         await runtime._close_diagnostics()
         await asyncio.wait_for(runtime._close_diagnostics(), timeout=0.1)
         assert first._task is not None and first._task.done()
+        with pytest.raises(DiagnosticDeliveryError, match="closed"):
+            await first.flush()
 
     asyncio.run(run())
 
@@ -111,6 +113,8 @@ def test_runtime_shutdown_cancels_pending_negotiation():
         with pytest.raises(asyncio.CancelledError):
             await pending
         await runtime._close_diagnostics()
+        inert = await runtime.diagnostics()
+        assert inert.availability == "unavailable"
 
     asyncio.run(run())
 

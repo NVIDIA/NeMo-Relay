@@ -23,7 +23,31 @@ static READS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 const DEADLINE: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
-pub(super) struct BoundedService<S>(pub(super) S);
+pub(super) struct BoundedService<S> {
+    inner: S,
+    requests: Arc<Semaphore>,
+    reads: Arc<Semaphore>,
+}
+impl<S> BoundedService<S> {
+    pub(super) fn new(inner: S) -> Self {
+        Self {
+            inner,
+            requests: REQUESTS
+                .get_or_init(|| Arc::new(Semaphore::new(16)))
+                .clone(),
+            reads: READS.get_or_init(|| Arc::new(Semaphore::new(4))).clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_limits(inner: S, request_limit: usize, read_limit: usize) -> Self {
+        Self {
+            inner,
+            requests: Arc::new(Semaphore::new(request_limit)),
+            reads: Arc::new(Semaphore::new(read_limit)),
+        }
+    }
+}
 impl<S: NamedService> NamedService for BoundedService<S> {
     const NAME: &'static str = S::NAME;
 }
@@ -42,18 +66,10 @@ where
         Poll::Ready(Ok(()))
     }
     fn call(&mut self, request: http::Request<TonicBody>) -> Self::Future {
-        let permit = REQUESTS
-            .get_or_init(|| Arc::new(Semaphore::new(16)))
-            .clone()
-            .try_acquire_owned();
+        let permit = self.requests.clone().try_acquire_owned();
         let read = request.uri().path().ends_with("/ReadDiagnosticPage");
-        let read_permit = read.then(|| {
-            READS
-                .get_or_init(|| Arc::new(Semaphore::new(4)))
-                .clone()
-                .try_acquire_owned()
-        });
-        let service = self.0.clone();
+        let read_permit = read.then(|| self.reads.clone().try_acquire_owned());
+        let service = self.inner.clone();
         Box::pin(async move {
             let (Ok(permit), read_permit) = (permit, read_permit) else {
                 return Ok(Status::resource_exhausted(
