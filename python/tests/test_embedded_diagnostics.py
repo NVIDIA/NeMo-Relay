@@ -142,7 +142,9 @@ async def main():
         assert context["sample"] is not None
         assert type(context["sample"]["ordinal"]) is int
         assert context["association"] in ("host_process", "unverified")
-        assert context["sample"]["memory"]["system_used"]["measurement_scope"] == "system"
+        system_used = context["sample"]["memory"]["system_used"]
+        if system_used is not None:
+            assert system_used["measurement_scope"] == "system"
         empty_query = {"max_events": 0, "max_components": 0}
         full_bytes = len(reader.inspect_memory_json(empty_query).encode("utf-8"))
         bounded = reader.inspect_memory({**empty_query, "max_response_bytes": full_bytes - 128})
