@@ -232,7 +232,7 @@ async fn bounded_query_and_version_errors_are_safe() {
         (
             r#"{"max_events":99999}"#,
             StatusCode::BAD_REQUEST,
-            "invalid_page_limit",
+            "invalid_query",
         ),
         (
             r#"{"ownership":{"configuration_typo":"PRIVATE"}}"#,
