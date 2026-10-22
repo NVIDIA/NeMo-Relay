@@ -69,10 +69,14 @@ async fn raw_passthrough_stream_records_body_outcomes_without_counting_cancellat
         return;
     }
 
-    let runtime = diag::install(crate::configuration::RuntimeDiagnosticsConfig {
-        enabled: true,
-        ..Default::default()
-    })
+    let runtime = diag::install_role(
+        crate::configuration::RuntimeDiagnosticsConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        "cli",
+        crate::daemon::diagnostics::CollectorConfig::default(),
+    )
     .unwrap();
     let mut expected_headers = 0;
     let mut expected_completed = 0;

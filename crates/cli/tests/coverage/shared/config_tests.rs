@@ -5732,7 +5732,11 @@ async fn http_model_hosts_managed_layers_preserve_omission_and_enforce_system_de
         )).unwrap();
         std::fs::write(&system_config, "[upstream]\nresponse_timeout_secs = 15\n").unwrap();
         let resolve_worker = || {
-            resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
+            resolve_managed_worker_config_from_paths(
+                system_config.clone(),
+                system_plugins.clone(),
+                None,
+            )
         };
         let config = resolve_worker().unwrap().resolved.gateway;
         assert!(
