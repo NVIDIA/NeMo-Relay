@@ -23,6 +23,28 @@ test('query adapter matches the shared cross-binding contract fixture', () => {
   assert.deepEqual([...queryContract.NUMERIC_QUERY_FIELDS], fixture.numeric_query_fields);
 });
 
+test('reader preserves native snapshot and metadata failure reasons', () => {
+  for (const reason of ['invalid_snapshot', 'invalid_metadata']) {
+    const reader = new diagnostics.DiagnosticsReader({
+      snapshot() {
+        throw new Error(reason);
+      },
+      snapshotJson() {
+        throw new Error(reason);
+      },
+      info() {
+        throw new Error(reason);
+      },
+    });
+    for (const method of ['snapshot', 'snapshotJson', 'info']) {
+      assert.throws(
+        () => reader[method](),
+        (error) => error instanceof diagnostics.DiagnosticsError && error.reason === reason,
+      );
+    }
+  }
+});
+
 test('configured inspection survives plugin and Node environment cleanup', async () => {
   assert.throws(
     () => diagnostics.reader(),

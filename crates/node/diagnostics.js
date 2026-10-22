@@ -25,6 +25,8 @@ const reasons = new Set([
   'allocation_failed',
   'invalid_limits',
   'invalid_query',
+  'invalid_snapshot',
+  'invalid_metadata',
   'numeric_out_of_range',
 ]);
 function call(operation) {
