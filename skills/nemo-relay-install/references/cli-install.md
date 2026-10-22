@@ -38,9 +38,11 @@ and the [provider-filtering issue](https://github.com/openai/codex/issues/24648)
 Check whether the issue still applies to the user's setup rather than asserting
 that an infrequently updated skill proves a current bug.
 
-When persistent setup changes provider configuration, explain that existing
-Desktop conversations can appear hidden without deletion. Recommend a temporary
-trial first when it satisfies the user's goal.
+When the selected release and setup change provider identity, explain that
+existing Desktop conversations can appear hidden without deletion. Scope that
+warning to affected setups, such as a legacy `nemo-relay-openai` alias; check
+whether the selected installer preserves the built-in `openai` identity.
+Recommend a temporary trial first when it satisfies the user's goal.
 
 Before an explicitly selected persistent installation:
 
@@ -49,8 +51,9 @@ Before an explicitly selected persistent installation:
    `assets/codex-desktop-recovery.md`; confirm its recovery commands against
    the current supported documentation.
 3. Obtain explicit confirmation covering the note and global configuration.
-4. Render `NEMO_RELAY_CODEX_DESKTOP_RECOVERY.md`, record the planned change
-   and available thread ID, and verify that the file is readable.
+4. Render `NEMO_RELAY_CODEX_DESKTOP_RECOVERY.md`, record the resolved Relay
+   release, planned provider identity, change, and available thread ID, and
+   verify that the file is readable.
 5. Run the supported installer and its documented diagnostic check.
 6. Give the user the recovery-file path before any requested Desktop restart.
 

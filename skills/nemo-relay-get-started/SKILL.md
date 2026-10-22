@@ -84,10 +84,13 @@ Stop the initial trial when the guide's success checks pass. Explain the
 observed value and Relay's progression: attach once, then extend supported
 behavior through plugin configuration.
 
-Use the current [plugin overview](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/about)
-and integration documentation to suggest one next plugin for the user's goal.
-Do not repeat Observability setup if the guide already established it, or offer
-capabilities unsupported by the selected integration.
+Resolve plugin and integration documentation for the installed Relay release,
+including any explicit version constraint, before suggesting one next plugin
+for the user's goal. Use the [stable plugin overview](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/about)
+only after confirming compatibility with that release; otherwise use the
+release-matched documentation or official source. Do not repeat Observability
+setup if the guide already established it, or offer capabilities unsupported
+by the selected integration.
 
 Hand broader instrumentation to `nemo-relay-instrument-calls`, unsupported
 framework work to `nemo-relay-integrate-upstream`, and additional export to
