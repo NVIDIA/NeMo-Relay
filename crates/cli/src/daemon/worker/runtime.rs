@@ -334,8 +334,15 @@ async fn initialize_managed_runtime(
     tokio::select! {
         result = ManagedRuntime::initialize(config, dynamic_plugins, fingerprint) => result.map(Arc::new),
         event = registration.next() => {
-            if let Ok(super::super::common::socket::Event::Drain { request_id, .. }) = event {
-                let _ = registration.acknowledge(request_id).await;
+            match event {
+                Ok(super::super::common::socket::Event::Drain { request_id, .. }) => {
+                    let _ = registration.acknowledge(request_id).await;
+                }
+                Ok(super::super::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                    registration.diagnostics = None;
+                    let _ = registration.acknowledge(request_id).await;
+                }
+                _ => {}
             }
             Err(CliError::Launch("worker activation was interrupted during initialization".into()))
         }
@@ -996,6 +1003,11 @@ fn begin_drain(state: &WorkerState, request: &WorkerDrainRequest) {
     }
 }
 
+fn revoke_diagnostic_authority(state: &WorkerState, registration: &mut Registration) {
+    state.diagnostic_authority.replace(None);
+    registration.diagnostics = None;
+}
+
 async fn monitor_control(
     state: Arc<WorkerState>,
     daemon_origin: String,
@@ -1013,6 +1025,12 @@ async fn monitor_control(
             }) => {
                 // The daemon is authenticated by the socket handshake.
                 begin_drain(&state, &request);
+                if registration.acknowledge(request_id).await.is_ok() {
+                    continue;
+                }
+            }
+            Ok(crate::daemon::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                revoke_diagnostic_authority(&state, &mut registration);
                 if registration.acknowledge(request_id).await.is_ok() {
                     continue;
                 }
@@ -1045,13 +1063,19 @@ async fn monitor_control(
                 registration.generation_grant().clone(),
             )
             .await?;
-            if let Some(crate::daemon::common::socket::Event::Drain {
-                request_id,
-                request,
-            }) = next.pending_event().await
-            {
-                begin_drain(&state, &request);
-                next.acknowledge(request_id).await?;
+            match next.pending_event().await {
+                Some(crate::daemon::common::socket::Event::Drain {
+                    request_id,
+                    request,
+                }) => {
+                    begin_drain(&state, &request);
+                    next.acknowledge(request_id).await?;
+                }
+                Some(crate::daemon::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                    next.diagnostics = None;
+                    next.acknowledge(request_id).await?;
+                }
+                _ => {}
             }
             // Install read authority as soon as authenticated recovery completes; this
             // is independent of readiness and remains available while draining.

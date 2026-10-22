@@ -20,6 +20,43 @@ async fn daemon(pass: bool) -> (Arc<DaemonState>, String, tokio::task::JoinHandl
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (state, origin, task)
 }
+
+#[tokio::test]
+async fn diagnostic_revocation_emits_acknowledged_worker_event() {
+    let hub = Hub::default();
+    let (sender, mut receiver) = mpsc::channel(1);
+    lock(&hub.peers).insert(
+        key(ComponentRole::Worker, "worker"),
+        Peer {
+            generation: "connection".into(),
+            sender: Some(sender),
+            cancel: Arc::new(ControlCancellation::new()),
+            disconnected: None,
+            ready: true,
+            acknowledgments: HashMap::new(),
+            last_acknowledged: None,
+            drain: None,
+        },
+    );
+
+    hub.revoke_diagnostics("worker");
+
+    let Some(Message::Text(text)) = receiver.recv().await else {
+        panic!("expected diagnostic revocation message");
+    };
+    let Event::DiagnosticRevoked { request_id } = serde_json::from_str(&text).unwrap() else {
+        panic!("expected diagnostic revocation event");
+    };
+    assert!(!request_id.is_empty());
+    assert!(
+        lock(&hub.peers)
+            .get(&key(ComponentRole::Worker, "worker"))
+            .unwrap()
+            .acknowledgments
+            .contains_key(&request_id)
+    );
+}
+
 async fn mcp(
     client: &Client,
     origin: &str,
@@ -406,6 +443,11 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
         ))
         .await
         .unwrap();
+    let event = restored.next().await.unwrap();
+    let Event::DiagnosticRevoked { request_id } = event else {
+        panic!("expected diagnostic revocation before drain, got {event:?}");
+    };
+    restored.acknowledge(request_id).await.unwrap();
     let event = restored.next().await.unwrap();
     assert!(matches!(event, Event::Drain { .. }));
     if let Event::Drain { request_id, .. } = event {

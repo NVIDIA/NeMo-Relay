@@ -121,6 +121,7 @@ struct WorkerControlSession {
     diagnostic_offer: Option<diag::DiagnosticOffer>,
     diagnostic_grant: Option<diag::DiagnosticReadGrant>,
     diagnostic_connected: bool,
+    diagnostic_revoked: bool,
     diagnostic_poll_stopped: bool,
     fingerprint: Fingerprint,
     worker_id: String,
@@ -1260,7 +1261,9 @@ fn replay_worker_registration(
         return None;
     }
     // Replayed control replies keep authority stable; reconnect/source replacement rotates it.
-    if !session.diagnostic_connected || session.diagnostic_offer.as_ref() != offer {
+    if !session.diagnostic_revoked
+        && (!session.diagnostic_connected || session.diagnostic_offer.as_ref() != offer)
+    {
         session.diagnostic_poll_stopped = false;
         session.diagnostic_offer = offer.cloned();
         session.diagnostic_grant =
@@ -1369,6 +1372,7 @@ fn stage_worker(
             diagnostic_offer,
             diagnostic_grant: diagnostic_grant.clone(),
             diagnostic_connected: false,
+            diagnostic_revoked: false,
             diagnostic_poll_stopped: false,
             fingerprint,
             worker_id,
@@ -2833,11 +2837,24 @@ fn revoke_active_worker_generation(
         }
     };
     if revoked {
-        for session in lock(&state.worker_sessions).values_mut().filter(|s| {
-            s.fingerprint == fingerprint && s.generation_grant.generation_id == generation_id
-        }) {
-            session.diagnostic_grant = None;
-            session.diagnostic_connected = false;
+        let worker_ids = {
+            let mut sessions = lock(&state.worker_sessions);
+            sessions
+                .values_mut()
+                .filter(|s| {
+                    s.fingerprint == fingerprint
+                        && s.generation_grant.generation_id == generation_id
+                })
+                .map(|session| {
+                    session.diagnostic_grant = None;
+                    session.diagnostic_connected = false;
+                    session.diagnostic_revoked = true;
+                    session.worker_id.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        for worker_id in worker_ids {
+            state.sockets.revoke_diagnostics(&worker_id);
         }
     }
     revoked

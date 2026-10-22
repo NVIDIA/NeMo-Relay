@@ -2988,6 +2988,7 @@ pub(super) fn staged_worker_session(
         diagnostic_offer: None,
         diagnostic_grant: None,
         diagnostic_connected: false,
+        diagnostic_revoked: false,
         diagnostic_poll_stopped: false,
         fingerprint: worker.fingerprint(),
         worker_id: worker_id.into(),
@@ -3012,6 +3013,55 @@ pub(super) fn staged_worker_session(
         )
         .expect("generation grant"),
     }
+}
+
+#[test]
+fn generation_revocation_clears_diagnostics_only_for_matching_worker_sessions() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    let mut matching = staged_worker_session("matching-worker", u64::MAX);
+    let fingerprint = matching.fingerprint;
+    let generation_id = matching.generation_grant.generation_id.clone();
+    matching.diagnostic_grant = crate::daemon::diagnostics::DiagnosticReadGrant::issue(
+        uuid::Uuid::now_v7(),
+        &generation_id,
+        1024,
+    );
+    matching.diagnostic_connected = true;
+
+    let mut different_generation = staged_worker_session("other-worker", u64::MAX);
+    different_generation.fingerprint = fingerprint;
+    different_generation.generation_grant.fingerprint = fingerprint;
+    different_generation.generation_grant.generation_id = "different-generation".into();
+    different_generation.diagnostic_grant = crate::daemon::diagnostics::DiagnosticReadGrant::issue(
+        uuid::Uuid::now_v7(),
+        "different-generation",
+        1024,
+    );
+    different_generation.diagnostic_connected = true;
+
+    state
+        .active_worker_generations
+        .publish(fingerprint, &generation_id, None)
+        .expect("publish active worker generation");
+    lock(&state.worker_sessions).extend([
+        (matching.worker_id.clone(), matching),
+        (different_generation.worker_id.clone(), different_generation),
+    ]);
+
+    assert!(revoke_active_worker_generation(
+        &state,
+        fingerprint,
+        &generation_id,
+    ));
+    let sessions = lock(&state.worker_sessions);
+    let revoked = sessions.get("matching-worker").expect("matching session");
+    assert!(revoked.diagnostic_grant.is_none());
+    assert!(!revoked.diagnostic_connected);
+    assert!(revoked.diagnostic_revoked);
+    let untouched = sessions.get("other-worker").expect("other session");
+    assert!(untouched.diagnostic_grant.is_some());
+    assert!(untouched.diagnostic_connected);
+    assert!(!untouched.diagnostic_revoked);
 }
 
 #[test]

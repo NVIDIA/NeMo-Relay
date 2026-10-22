@@ -61,6 +61,9 @@ pub(crate) enum Event {
         request_id: String,
         request: WorkerDrainRequest,
     },
+    DiagnosticRevoked {
+        request_id: String,
+    },
 }
 
 struct Reply {

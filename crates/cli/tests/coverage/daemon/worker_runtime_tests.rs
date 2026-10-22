@@ -134,6 +134,33 @@ fn relative_drain_timeout_does_not_depend_on_the_daemon_wall_clock() {
     assert_eq!(drain_timeout_ms(&request), 321);
 }
 
+#[test]
+fn diagnostic_revocation_clears_authority_but_generic_drain_preserves_it() {
+    let mut registration = control::test_registration("data", "control");
+    let grant = diag::DiagnosticReadGrant::issue(uuid::Uuid::now_v7(), "worker-generation", 1024)
+        .expect("diagnostic read grant");
+    registration.diagnostics = Some(grant.clone());
+    let state = state();
+    state.diagnostic_authority.replace(Some(grant.clone()));
+    let token = grant.token(now_unix_ms());
+    assert!(state.diagnostic_authority.verify(&token));
+
+    begin_drain(
+        &state,
+        &WorkerDrainRequest {
+            worker_id: "worker-one".into(),
+            deadline_unix_ms: now_unix_ms() + 1000,
+            timeout_ms: Some(1000),
+        },
+    );
+    assert!(state.diagnostic_authority.verify(&token));
+    assert!(registration.diagnostics.is_some());
+
+    revoke_diagnostic_authority(&state, &mut registration);
+    assert!(!state.diagnostic_authority.verify(&token));
+    assert!(registration.diagnostics.is_none());
+}
+
 #[tokio::test]
 async fn authenticated_readiness_probe_opens_admission_before_publication() {
     let state = state();

@@ -2027,6 +2027,7 @@ fn lifecycle_daemon_router_with_activation(
                 diagnostic_offer: None,
                 diagnostic_grant: None,
                 diagnostic_connected: false,
+                diagnostic_revoked: false,
                 diagnostic_poll_stopped: false,
                 fingerprint,
                 worker_id: worker_id.clone(),

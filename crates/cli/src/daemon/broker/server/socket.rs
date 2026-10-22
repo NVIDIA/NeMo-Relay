@@ -136,7 +136,9 @@ impl Hub {
     fn emit(peer: &mut Peer, event: Event) {
         let Some(sender) = &peer.sender else { return };
         let request_id = match &event {
-            Event::Directive { request_id, .. } | Event::Drain { request_id, .. } => request_id,
+            Event::Directive { request_id, .. }
+            | Event::Drain { request_id, .. }
+            | Event::DiagnosticRevoked { request_id } => request_id,
             Event::Reply { .. } => return,
         };
         if peer.acknowledgments.len() >= QUEUE_CAPACITY {
@@ -188,6 +190,17 @@ impl Hub {
             );
         }
         self.changed.notify_waiters();
+    }
+
+    pub(super) fn revoke_diagnostics(&self, worker_id: &str) {
+        if let Some(peer) = lock(&self.peers).get_mut(&key(ComponentRole::Worker, worker_id)) {
+            Self::emit(
+                peer,
+                Event::DiagnosticRevoked {
+                    request_id: uuid::Uuid::now_v7().to_string(),
+                },
+            );
+        }
     }
 }
 
