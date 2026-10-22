@@ -330,7 +330,7 @@ core memory occupancy, logging coverage, and the independent adapter budget:
 
 | Resource | Bound |
 | --- | --- |
-| Encoded query | 4,096 UTF-8 bytes; unknown top-level fields rejected |
+| Encoded query | 4,096 UTF-8 bytes; duplicate or unknown fields, including nested selectors, rejected |
 | Simultaneous snapshot/memory copies and conversions | Two per service, shared by all reader clones |
 | Payload per copy | Configured core `max_snapshot_bytes` |
 | Default copy reservation | 262,144 bytes: two 131,072-byte pages |
