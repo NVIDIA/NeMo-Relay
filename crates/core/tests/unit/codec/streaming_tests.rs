@@ -163,3 +163,52 @@ fn resumes_after_a_multibyte_character_in_an_incomplete_frame() {
         json!({"chunk": "café"})
     );
 }
+
+#[test]
+fn preserves_utf8_at_every_chunk_boundary() {
+    for newline in ["\n", "\r\n"] {
+        let input = format!(
+            "event: café🙂{newline}data: {{\"text\":\"é€🙂\"}}{newline}{newline}data: {{\"next\":true}}{newline}{newline}"
+        );
+        for split in 0..=input.len() {
+            let mut decoder = SseEventDecoder::new();
+            let mut events = decoder.push_bytes(&input.as_bytes()[..split]).unwrap();
+            events.extend(decoder.push_bytes(&input.as_bytes()[split..]).unwrap());
+            assert_eq!(events.len(), 2, "split {split}");
+            assert_eq!(events[0].event.as_deref(), Some("café🙂"));
+            assert_eq!(events[0].data, json!({"text": "é€🙂"}), "split {split}");
+            assert_eq!(events[1].data, json!({"next": true}));
+            assert!(decoder.finish().unwrap().is_none());
+        }
+    }
+}
+
+#[test]
+fn preserves_utf8_in_bytewise_frames_and_unterminated_tail() {
+    let input = "data: {\"text\":\"é€🙂\"}\r\n\r\ndata: {\"tail\":\"🙂é\"}";
+    let mut decoder = SseEventDecoder::new();
+    let mut events = Vec::new();
+    for byte in input.as_bytes() {
+        events.extend(decoder.push_bytes(std::slice::from_ref(byte)).unwrap());
+    }
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].data, json!({"text": "é€🙂"}));
+    assert_eq!(
+        decoder.finish().unwrap().unwrap().data,
+        json!({"tail": "🙂é"})
+    );
+}
+
+#[test]
+fn preserves_lossy_decoding_for_invalid_utf8() {
+    let mut decoder = SseEventDecoder::new();
+    let events = decoder
+        .push_bytes(b"data: {\"text\":\"\xff\"}\n\n")
+        .unwrap();
+    assert_eq!(events[0].data, json!({"text": "�"}));
+    decoder.push_bytes(b"data: {\"tail\":\"\xc3\"}").unwrap();
+    assert_eq!(
+        decoder.finish().unwrap().unwrap().data,
+        json!({"tail": "�"})
+    );
+}
