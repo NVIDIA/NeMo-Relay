@@ -2845,15 +2845,19 @@ fn revoke_active_worker_generation(
                         && s.generation_grant.generation_id == generation_id
                 })
                 .map(|session| {
+                    let supports_diagnostic_revocation =
+                        session.diagnostic_offer.is_some() || session.diagnostic_grant.is_some();
                     session.diagnostic_grant = None;
                     session.diagnostic_connected = false;
                     session.diagnostic_revoked = true;
-                    session.worker_id.clone()
+                    (session.worker_id.clone(), supports_diagnostic_revocation)
                 })
                 .collect::<Vec<_>>()
         };
-        for worker_id in worker_ids {
-            state.sockets.revoke_diagnostics(&worker_id);
+        for (worker_id, supports_diagnostic_revocation) in worker_ids {
+            state
+                .sockets
+                .revoke_diagnostics(&worker_id, supports_diagnostic_revocation);
         }
     }
     revoked

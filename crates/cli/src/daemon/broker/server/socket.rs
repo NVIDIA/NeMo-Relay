@@ -192,7 +192,10 @@ impl Hub {
         self.changed.notify_waiters();
     }
 
-    pub(super) fn revoke_diagnostics(&self, worker_id: &str) {
+    pub(super) fn revoke_diagnostics(&self, worker_id: &str, negotiated: bool) {
+        if !negotiated {
+            return;
+        }
         if let Some(peer) = lock(&self.peers).get_mut(&key(ComponentRole::Worker, worker_id)) {
             Self::emit(
                 peer,

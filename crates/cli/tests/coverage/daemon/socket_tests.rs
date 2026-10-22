@@ -39,7 +39,7 @@ async fn diagnostic_revocation_emits_acknowledged_worker_event() {
         },
     );
 
-    hub.revoke_diagnostics("worker");
+    hub.revoke_diagnostics("worker", true);
 
     let Some(Message::Text(text)) = receiver.recv().await else {
         panic!("expected diagnostic revocation message");
@@ -55,6 +55,29 @@ async fn diagnostic_revocation_emits_acknowledged_worker_event() {
             .acknowledgments
             .contains_key(&request_id)
     );
+}
+
+#[tokio::test]
+async fn diagnostic_revocation_skips_workers_without_negotiated_support() {
+    let hub = Hub::default();
+    let (sender, mut receiver) = mpsc::channel(1);
+    lock(&hub.peers).insert(
+        key(ComponentRole::Worker, "legacy-worker"),
+        Peer {
+            generation: "connection".into(),
+            sender: Some(sender),
+            cancel: Arc::new(ControlCancellation::new()),
+            disconnected: None,
+            ready: true,
+            acknowledgments: HashMap::new(),
+            last_acknowledged: None,
+            drain: None,
+        },
+    );
+
+    hub.revoke_diagnostics("legacy-worker", false);
+
+    assert!(receiver.try_recv().is_err());
 }
 
 async fn mcp(
