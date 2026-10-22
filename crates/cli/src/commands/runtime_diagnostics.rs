@@ -28,7 +28,9 @@ pub(crate) struct InspectCommand {
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
     /// Maximum response bytes accepted by this inspector, independent of the server.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(MIN_INSPECTOR_RESPONSE_BYTES..=MAX_INSPECTOR_RESPONSE_BYTES))]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(
+        (MIN_INSPECTOR_RESPONSE_BYTES as i64)..=(MAX_INSPECTOR_RESPONSE_BYTES as i64)
+    ))]
     max_response_bytes: Option<u32>,
 }
 pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliError> {
