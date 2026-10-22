@@ -110,7 +110,6 @@ pub struct ComponentOwner {
 impl ComponentOwner {
     // Roll back an unpublished transport registration. No observer may have
     // recorded through this owner; retained/public registrations use close().
-    #[cfg(feature = "worker-grpc")]
     pub(crate) fn discard_unpublished(&self) {
         if let (Some(inner), Some(handle)) = (self.inner.upgrade(), self.handle)
             && let Some(backend) = &inner.backend
@@ -468,6 +467,7 @@ impl DiagnosticsReader {
                 ("plugin.configuration", true),
                 ("plugin.activation", true),
                 ("plugin.native", true),
+                ("plugin.native.emission", true),
                 ("plugin.policy", true),
                 ("plugin.worker.host", cfg!(feature = "worker-grpc")),
                 ("plugin.worker.emission", cfg!(feature = "worker-grpc")),

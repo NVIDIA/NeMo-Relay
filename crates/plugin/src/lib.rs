@@ -10,6 +10,8 @@
 //! C-compatible tables and host-owned string handles.
 
 mod async_sdk;
+/// Native diagnostic authoring and authorized reads.
+pub mod diagnostics;
 
 pub use async_sdk::{LlmJsonAsyncStream, LlmNext, LlmStreamNext, NativeExecutorConfig, ToolNext};
 
@@ -1806,6 +1808,8 @@ pub type LlmJsonStream = Box<dyn Iterator<Item = Result<Json>> + Send>;
 
 /// Cloneable high-level runtime handle for host APIs available to native plugins.
 pub struct PluginRuntime {
+    diagnostics_api: Option<diagnostics::abi::NativeDiagnosticsApiV1>,
+    diagnostic_state: Arc<diagnostics::SdkState>,
     host: NemoRelayNativeHostApiV1,
     emit_mark_v2: Option<NemoRelayNativeEmitMarkV2Fn>,
     get_runtime_diagnostics: Option<NemoRelayNativeGetRuntimeDiagnosticsFn>,
@@ -1870,6 +1874,8 @@ impl Clone for PluginRuntime {
         }
         Self {
             host: self.host,
+            diagnostics_api: self.diagnostics_api,
+            diagnostic_state: self.diagnostic_state.clone(),
             emit_mark_v2: self.emit_mark_v2,
             get_runtime_diagnostics: self.get_runtime_diagnostics,
             current_scope_stack_snapshot: self.current_scope_stack_snapshot,
@@ -1889,6 +1895,11 @@ impl Drop for PluginRuntime {
 }
 
 impl PluginRuntime {
+    /// Native diagnostic authoring and separately authorized canonical reads.
+    /// The host selects startup enablement; no service is started by this method.
+    pub fn diagnostics(&self) -> diagnostics::Diagnostics {
+        diagnostics::Diagnostics::new(self.clone())
+    }
     /// Creates a runtime handle from the host ABI table.
     pub fn new(host: &NemoRelayNativeHostApiV1) -> Self {
         let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
@@ -1903,8 +1914,30 @@ impl PluginRuntime {
         .then(|| unsafe {
             (*(host as *const _ as *const NemoRelayNativeHostApiV8)).current_scope_stack_snapshot
         });
+        let diagnostics_api = if host.abi_version == 8
+            && host.struct_size
+                >= std::mem::size_of::<diagnostics::abi::NativeHostApiV8WithDiagnostics>()
+        {
+            let api = unsafe {
+                (*(host as *const _ as *const diagnostics::abi::NativeHostApiV8WithDiagnostics))
+                    .diagnostics_api
+            };
+            if !api.is_null()
+                && unsafe { api.cast::<usize>().read() }
+                    >= std::mem::size_of::<diagnostics::abi::NativeDiagnosticsApiV1>()
+                && unsafe { (*api).contract_version } == diagnostics::abi::CONTRACT_VERSION
+            {
+                Some(unsafe { *api })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         Self {
             host: *host,
+            diagnostics_api,
+            diagnostic_state: Arc::new(diagnostics::SdkState::default()),
             current_scope_stack_snapshot,
             emit_mark_v2: v4.map(|host| host.emit_mark_v2),
             get_runtime_diagnostics: v4.map(|host| host.get_runtime_diagnostics),
@@ -2249,7 +2282,9 @@ impl PluginRuntime {
         self.emit_mark_with_options(name, Some(&data), metadata, Some(&data_schema), None)
     }
 
-    /// Return a bounded snapshot of active host runtime diagnostics.
+    /// Return the bounded legacy report for the active host configuration.
+    /// Canonical observations, counters, and memory views use [`Self::diagnostics`]
+    /// and require a separate host read grant.
     pub fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
         let Some(get_runtime_diagnostics) = self.get_runtime_diagnostics else {
             return Err(
@@ -3789,6 +3824,7 @@ impl<'a> OptionalHostJson<'a> {
 }
 
 enum OwnedHostApi {
+    V8Diagnostics(diagnostics::abi::NativeHostApiV8WithDiagnostics),
     V1(NemoRelayNativeHostApiV1),
     V3(NemoRelayNativeHostApiV3),
     V4(NemoRelayNativeHostApiV4),
@@ -3800,7 +3836,14 @@ enum OwnedHostApi {
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_SCOPE_STACK_SNAPSHOT
+        if host.abi_version == 8
+            && host.struct_size
+                >= std::mem::size_of::<diagnostics::abi::NativeHostApiV8WithDiagnostics>()
+        {
+            Self::V8Diagnostics(unsafe {
+                *(host as *const _ as *const diagnostics::abi::NativeHostApiV8WithDiagnostics)
+            })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_SCOPE_STACK_SNAPSHOT
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV8>()
         {
             Self::V8(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV8) })
@@ -3831,6 +3874,7 @@ impl OwnedHostApi {
 
     fn v1(&self) -> &NemoRelayNativeHostApiV1 {
         match self {
+            Self::V8Diagnostics(host) => &host.v8.v7.v6.v5.v4.v3.v1,
             Self::V1(host) => host,
             Self::V3(host) => &host.v1,
             Self::V4(host) => &host.v3.v1,

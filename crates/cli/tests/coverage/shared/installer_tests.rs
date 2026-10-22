@@ -368,6 +368,27 @@ async fn gateway_hook_transport_waits_for_slow_responses_with_either_failure_pol
 }
 
 #[test]
+fn hook_forward_headers_carry_the_launcher_trace_context() {
+    let command = hook_request(CodingAgent::Codex);
+    let operational = crate::operational::OperationalContext::new();
+    let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+    let headers =
+        super::delivery::hook_forward_headers(&command, &operational, |name| match name {
+            crate::hooks::TRACEPARENT_ENV => Some(traceparent.to_owned()),
+            crate::hooks::TRACESTATE_ENV => Some("vendor=value".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(headers["traceparent"], traceparent);
+    assert_eq!(headers["tracestate"], "vendor=value");
+
+    let headers = super::delivery::hook_forward_headers(&command, &operational, |_| None).unwrap();
+    assert!(!headers.contains_key("traceparent"));
+    assert!(!headers.contains_key("tracestate"));
+}
+
+#[test]
 fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
     assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
     assert_eq!(

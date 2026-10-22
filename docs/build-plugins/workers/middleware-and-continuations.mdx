@@ -497,7 +497,8 @@ polls the mapped stream.
 
 Use the following procedure to verify equivalent behavior across the two worker SDKs:
 
-1. Assert that registration returns exactly 15 unique surface and local-name pairs.
+1. Check the expected surface and local-name pairs for the selected configuration.
+   Include optional runtime-event and registration-control callbacks when enabled.
 2. Exercise all three event sanitizers and both tool and LLM sanitizer directions; prove
    that only observability values change.
 3. Block configured tool and model names, rewrite allowed requests, and preserve an
