@@ -122,3 +122,42 @@ fn diagnostic_grants_are_expiring_source_generation_and_policy_bound() {
     authority.replace(DiagnosticReadGrant::issue(grant.source, &generation, 8192));
     assert!(!authority.verify(&current));
 }
+
+#[test]
+fn diagnostic_grants_reject_each_offer_mismatch_and_malformed_token() {
+    let source = uuid::Uuid::now_v7();
+    let generation = uuid::Uuid::now_v7().to_string();
+    let grant = DiagnosticReadGrant::issue(source, &generation, 8192).unwrap();
+    let offer = DiagnosticOffer {
+        source,
+        schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+        enabled: true,
+        query_available: true,
+        whole_context_read: true,
+        max_page_bytes: 8192,
+    };
+    assert!(grant.matches(&offer, &generation));
+    for field in 0..8 {
+        let mut changed = offer.clone();
+        let mut candidate = grant.clone();
+        match field {
+            0 => changed.source = uuid::Uuid::now_v7(),
+            1 => candidate.generation.push('x'),
+            2 => candidate.policy_revision += 1,
+            3 => candidate.key = SensitiveString::new("short").unwrap(),
+            4 => candidate.max_page_bytes = 0,
+            5 => changed.max_page_bytes = 8191,
+            6 => changed.whole_context_read = false,
+            _ => changed.query_available = false,
+        }
+        assert!(!candidate.matches(&changed, &generation), "field {field}");
+    }
+    let mut disabled = offer;
+    disabled.enabled = false;
+    assert!(!grant.matches(&disabled, &generation));
+    for token in ["garbage", "not-a-number.tag", "2000.!", "2000.YQ"] {
+        assert!(!grant.verify(token, 1000));
+    }
+    assert!(DiagnosticReadGrant::issue(source, "", 8192).is_none());
+    assert!(DiagnosticReadGrant::issue(source, &"x".repeat(257), 8192).is_none());
+}

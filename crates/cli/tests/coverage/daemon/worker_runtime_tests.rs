@@ -1440,3 +1440,32 @@ async fn diagnostic_reads_do_not_activate_pending_or_draining_workers_and_revoke
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn diagnostic_recovery_rotates_authority_without_reopening_draining_worker() {
+    let state = state();
+    let mut registration = control::test_registration("recovered-data", "recovered-control");
+    let source = uuid::Uuid::now_v7();
+    let old = crate::daemon::diagnostics::DiagnosticReadGrant::issue(source, "old", 8192).unwrap();
+    let next = crate::daemon::diagnostics::DiagnosticReadGrant::issue(source, "new", 8192).unwrap();
+    let old_token = old.token(now_unix_ms());
+    let next_token = next.token(now_unix_ms());
+    state.diagnostic_authority.replace(Some(old));
+    state.control_lost();
+    assert!(!state.diagnostic_authority.verify(&old_token));
+    assert!(!state.accepting.load(Ordering::Acquire));
+    registration.diagnostics = Some(next);
+    state.control_restored(&registration);
+    assert!(state.diagnostic_authority.verify(&next_token));
+    assert!(!state.diagnostic_authority.verify(&old_token));
+    assert!(state.accepting.load(Ordering::Acquire));
+    state.begin_drain(1000);
+    state.control_lost();
+    state.control_restored(&registration);
+    assert!(state.diagnostic_authority.verify(&next_token));
+    assert!(!state.accepting.load(Ordering::Acquire));
+    revoke_diagnostic_authority(&state, &mut registration);
+    state.control_restored(&registration);
+    assert!(!state.diagnostic_authority.verify(&next_token));
+    assert!(state.draining.load(Ordering::Acquire));
+}

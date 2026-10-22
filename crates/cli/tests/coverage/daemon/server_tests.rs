@@ -5186,3 +5186,41 @@ async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_m
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn diagnostic_activation_deadline_revokes_expired_route_and_is_idempotent() {
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x57_u8; 32]);
+    let credential = RouteCredential::parse(token.clone()).unwrap();
+    let state = test_daemon_state(false, &token, GatewayConfig::default());
+    let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+    let directive = state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: credential.digest(),
+                session_id: McpSessionId::new("deadline-owner").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            WorkerLaunch {
+                activation_id: "expired-diagnostic-worker".into(),
+                activation_token: SensitiveString::new("activation-secret").unwrap(),
+                deadline_unix_ms: 100,
+                bind_ip: Ipv4Addr::LOCALHOST,
+                port: 0,
+                advertise_address: None,
+            },
+        )
+        .unwrap();
+    remember_activation(&state, fingerprint, &directive);
+    expire_activation_routes(&state, 99);
+    assert_eq!(lock(&state.activations).len(), 1);
+    expire_activation_routes(&state, 101);
+    assert!(lock(&state.activations).is_empty());
+    assert!(matches!(
+        state.registry.resolve_target(&credential.digest()),
+        Ok(ResolvedTarget::PassThrough)
+    ));
+    expire_activation_routes(&state, 102);
+    assert!(lock(&state.activations).is_empty());
+}

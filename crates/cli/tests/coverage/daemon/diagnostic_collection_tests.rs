@@ -515,3 +515,92 @@ async fn daemon_collection_scheduler_bounds_in_flight_and_releases_work_on_shutd
     assert!(state.collector.as_ref().unwrap().is_closed());
     server.abort();
 }
+
+#[tokio::test]
+async fn daemon_collection_status_failures_never_publish_a_snapshot() {
+    for (status, outcome) in [
+        (StatusCode::FORBIDDEN, "unauthorized"),
+        (StatusCode::NOT_FOUND, "unsupported"),
+        (StatusCode::TOO_MANY_REQUESTS, "busy"),
+        (StatusCode::UNPROCESSABLE_ENTITY, "envelope_too_small"),
+        (StatusCode::BAD_GATEWAY, "unreachable"),
+    ] {
+        let source = context();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            crate::diagnostics_http::PREFIX,
+            get(move || async move { status }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (state, token) = broker();
+        lock(&state.worker_sessions).insert("worker".into(), session(&source, &endpoint));
+        poll_session(&state).await;
+        let response = wrapper(&state, &token).await;
+        let value: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(value["collection"]["latest_poll"], outcome, "{status}");
+        assert!(value["snapshot"].is_null());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn daemon_collection_read_reports_negotiated_unavailability() {
+    for (scenario, expected) in [
+        ("missing", StatusCode::NOT_FOUND),
+        ("unsupported", StatusCode::NOT_IMPLEMENTED),
+        ("disabled", StatusCode::SERVICE_UNAVAILABLE),
+        ("query_disabled", StatusCode::SERVICE_UNAVAILABLE),
+        ("schema", StatusCode::NOT_ACCEPTABLE),
+        ("http_disabled", StatusCode::SERVICE_UNAVAILABLE),
+        ("collection_disabled", StatusCode::SERVICE_UNAVAILABLE),
+        ("closed", StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let (mut state, token) = broker();
+        if scenario == "http_disabled" {
+            Arc::get_mut(&mut state).unwrap().diagnostics_http = None;
+        }
+        if scenario == "collection_disabled" {
+            Arc::get_mut(&mut state).unwrap().collector = None;
+        }
+        let source = context();
+        let mut session = session(&source, "http://127.0.0.1:1");
+        match scenario {
+            "unsupported" => session.diagnostic_offer = None,
+            "disabled" => session.diagnostic_offer.as_mut().unwrap().enabled = false,
+            "query_disabled" => session.diagnostic_offer.as_mut().unwrap().query_available = false,
+            "schema" => session.diagnostic_offer.as_mut().unwrap().schema_version += 1,
+            "closed" => state.collector.as_ref().unwrap().close(),
+            _ => {}
+        }
+        if scenario != "missing" {
+            lock(&state.worker_sessions).insert("worker".into(), session);
+        }
+        assert_eq!(
+            wrapper(&state, &token).await.status(),
+            expected,
+            "{scenario}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn daemon_diagnostic_lifetime_closes_reader_even_without_a_poll_task() {
+    let (state, token) = broker();
+    let app = state.diagnostics_http.as_ref().unwrap().clone().router();
+    drop(Lifetime::new(&state, None));
+    assert!(state.collector.as_ref().unwrap().is_closed());
+    use tower::ServiceExt as _;
+    let response = app
+        .oneshot(
+            Request::get(crate::diagnostics_http::PREFIX)
+                .header(AUTH_HEADER, token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

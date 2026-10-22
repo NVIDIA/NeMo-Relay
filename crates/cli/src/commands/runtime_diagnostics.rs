@@ -85,3 +85,7 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
         ExitCode::FAILURE
     })
 }
+
+#[cfg(test)]
+#[path = "../../tests/coverage/commands/runtime_inspector_tests.rs"]
+mod tests;
