@@ -47,6 +47,49 @@ def test_reader_rejects_malformed_unicode_queries(method, query):
     assert native.mock_calls == []
 
 
+class _EncodeForbidden(str):
+    def encode(self, *args, **kwargs):
+        pytest.fail("query input was encoded before admission")
+
+
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        {_EncodeForbidden("k" * (MAX_QUERY_FIELD_NAME_BYTES + 1)): ""},
+        {"component_key": _EncodeForbidden("v" * (MAX_QUERY_BYTES + 1))},
+        {"component_key": _EncodeForbidden("v" * (MAX_QUERY_BYTES - len("component_key") + 1))},
+        {"é" * (MAX_QUERY_FIELD_NAME_BYTES // 2 + 1): _EncodeForbidden("")},
+        {"component_key": "é" * ((MAX_QUERY_BYTES - len("component_key")) // 2 + 1)},
+        {"component_key": "\x00" * (MAX_QUERY_BYTES // 6)},
+    ],
+    ids=["key_characters", "value_characters", "remaining_bytes", "key_utf8", "value_utf8", "json_escaping"],
+)
+def test_reader_bounds_query_strings_before_native_calls(method, query):
+    native = Mock()
+    reader = DiagnosticsReader(native)
+    with pytest.raises(DiagnosticsError) as error:
+        getattr(reader, method)(query)
+    assert error.value.reason == "invalid_query"
+    assert native.mock_calls == []
+
+
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+def test_reader_preserves_multibyte_query_at_encoded_size_limit(method):
+    key = "component_key"
+    overhead = len(json.dumps({key: ""}, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    remaining = MAX_QUERY_BYTES - overhead
+    query = {key: "é" * (remaining // 2) + "a" * (remaining % 2)}
+    native = Mock()
+    reader = DiagnosticsReader(native)
+    getattr(reader, method)(query)
+    call = getattr(native, method)
+    call.assert_called_once()
+    encoded = call.call_args.args[0]
+    assert len(encoded.encode("utf-8")) == MAX_QUERY_BYTES
+    assert json.loads(encoded) == query
+
+
 def test_configured_diagnostics_outlives_plugins(tmp_path):
     script = r"""
 import asyncio, json
