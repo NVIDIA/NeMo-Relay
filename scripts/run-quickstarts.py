@@ -11,7 +11,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -23,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from packaging.version import Version
-from quickstarts import agents, build
+from quickstarts import agents, build, shell
 from quickstarts.assets import Assets, host_platform, sha256
 from quickstarts.provider import Fixture
 
@@ -47,7 +46,7 @@ def write_json(path: Path, value: Any) -> None:
 def inventory() -> dict[str, Any]:
     """The contracts own the case list; adapters explicitly declare executable coverage."""
     return {
-        page.stem: CONTRACTS.extract(page, "bash")
+        page.stem: CONTRACTS.extract(page, shell.NAME)
         for page in sorted(CONTRACTS.PAGES.glob("*.mdx"))
         if page.stem != "index"
     }
@@ -74,40 +73,7 @@ def select_cases(cases: str, scenarios: dict[str, Any]) -> list[str]:
     return selected
 
 
-def execute(command: str, cwd: Path, environment: dict[str, str], stdout: Path, stderr: Path, timeout: int) -> None:
-    """Own the whole process group so an expired install cannot leave children running."""
-    with stdout.open("wb") as out, stderr.open("wb") as err:
-        process = subprocess.Popen(
-            ["bash", "-euo", "pipefail", "-c", command],
-            cwd=cwd,
-            env=environment,
-            stdout=out,
-            stderr=err,
-            start_new_session=True,
-        )
-        try:
-            code = process.wait(timeout=timeout)
-        except BaseException:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass
-            # A child can outlive its shell after TERM; KILL the remaining group as well.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise
-        finally:
-            # Helpers started by these commands belong to the disposable invocation.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    if code:
-        raise ValueError(f"Command exited {code}; see {stderr}")
+execute = shell.execute
 
 
 def install_command(block: dict[str, Any], name: str, assets: Assets, resolved: dict[str, Any]) -> str:
@@ -116,19 +82,19 @@ def install_command(block: dict[str, Any], name: str, assets: Assets, resolved: 
     if name in agents.PYTHON_CASES:
         pattern = r"uv add [\"\']?(nemo-relay(?:\[[^\"\']+\])?)==[^\s\"\']+[\"\']?"
         content, count = re.subn(
-            pattern, lambda match: "uv add " + shlex.quote(match[1] + " @ " + resolved["python"].as_uri()), content
+            pattern, lambda match: shell.command("uv", "add", match[1] + " @ " + resolved["python"].as_uri()), content
         )
     elif name == "nodejs":
-        command = "npm install --save-exact --ignore-scripts --omit=optional " + " ".join(
-            shlex.quote(str(path)) for path in resolved["nodejs"]
+        command = shell.command(
+            "npm", "install", "--save-exact", "--ignore-scripts", "--omit=optional", *resolved["nodejs"]
         )
         content, count = re.subn(r"npm install --save-exact nemo-relay-node@\S+", lambda _: command, content)
     else:
         patches = resolved["rust"]
         package = (
-            "cargo add nemo-relay --path " + shlex.quote(patches["nemo-relay"])
+            shell.command("cargo", "add", "nemo-relay", "--path", patches["nemo-relay"])
             if patches
-            else "cargo add " + shlex.quote("nemo-relay@=" + assets.version)
+            else shell.command("cargo", "add", "nemo-relay@=" + assets.version)
         )
         content, count = re.subn(r'cargo add "nemo-relay@=[^\"]+"', lambda _: package, content)
     if count != 1:
@@ -155,6 +121,7 @@ def run_case(
         "commands": [],
         "samples": {},
         "version": assets.version,
+        "shell": shell.NAME,
         "block": "host-setup",
     }
     started = time.monotonic()
@@ -199,7 +166,7 @@ def run_case(
             config.write_text(
                 "[patch.crates-io]\n"
                 + "".join(
-                    f"{json.dumps(package)} = {{ path = {json.dumps(path)} }}\n"
+                    f"{json.dumps(package)} = {{ path = {json.dumps(Path(path).as_posix())} }}\n"
                     for package, path in resolved["rust"].items()
                 )
             )
@@ -245,24 +212,13 @@ def run_case(
                 if content is None:
                     continue
                 # Shell exports persist across blocks in the same declared session.
-                state = work / (".session-" + str(len(outputs)) + ".sh")
-                previous = outputs.get("session:" + block["session"])
-                prefix = "source " + shlex.quote(str(previous)) + "\n" if previous else ""
-                command = (
-                    prefix + "cd " + shlex.quote(str(cwd)) + "\n" + content + "\nexport -p > " + shlex.quote(str(state))
+                state = work / (
+                    ".session-" + str(len(outputs)) + ".json"
+                    if shell.WINDOWS
+                    else ".session-" + str(len(outputs)) + ".sh"
                 )
-                if adaptation == "diagnostic":
-                    # Preserve session exports even when optional doctor checks fail.
-                    command = (
-                        prefix
-                        + "cd "
-                        + shlex.quote(str(cwd))
-                        + "\nset +e\n"
-                        + content
-                        + "\nquickstart_doctor_status=$?\nexport -p > "
-                        + shlex.quote(str(state))
-                        + '\nexit "$quickstart_doctor_status"'
-                    )
+                previous = outputs.get("session:" + block["session"])
+                command = shell.session(content, cwd, state, previous, adaptation == "diagnostic")
                 out, err = folder / (block["id"] + ".stdout.log"), folder / (block["id"] + ".stderr.log")
                 try:
                     execute(command, cwd, environment, out, err, block.get("timeout_seconds", 180))
@@ -283,7 +239,7 @@ def run_case(
                 raise ValueError("The agent did not print the final provider response marker")
         project = work / scenario["cwd"]
         if name in agents.PYTHON_CASES | {"hermes"}:
-            python = work / "hermes-venv/bin/python" if name == "hermes" else project / ".venv/bin/python"
+            python = shell.python(work / "hermes-venv" if name == "hermes" else project / ".venv")
             command = [str(python), "-c", "import importlib.metadata as m; print(m.version('nemo-relay'))"]
             installed = subprocess.check_output(command, text=True, timeout=30).strip()
             if Version(installed) != Version(assets.version):

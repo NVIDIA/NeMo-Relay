@@ -4,6 +4,9 @@
 name: Execute Quick Starts
 
 on:
+  # Temporary fork validation; remove after the new platforms pass.
+  push:
+    branches: [codex/quickstart-e2e-ci]
   workflow_dispatch:
     inputs:
       version:
@@ -35,18 +38,26 @@ on:
 
 jobs:
   execute:
+    if: ${{ github.event_name != 'push' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
     name: Execute (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
       contents: read
       actions: read
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux-amd64
             runner: ubuntu-latest
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: windows-amd64
+            runner: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,11 +67,16 @@ jobs:
 
       - name: Pin execution source
         id: source
-        if: ${{ inputs.source_ref != '' }}
+        if: ${{ github.event_name == 'push' || inputs.source_ref != '' }}
         env:
           REQUESTED_SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            git fetch --no-tags https://github.com/NVIDIA/NeMo-Relay.git main
+            source_ref="$(git rev-parse FETCH_HEAD)"
+          else
+            source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
+          fi
           printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
           printf 'Relay source commit: `%s`\n' "$source_ref" >> "$GITHUB_STEP_SUMMARY"
 
@@ -117,6 +133,11 @@ jobs:
           if [[ "$QUICKSTART_CASES" == all || ",$QUICKSTART_CASES," == *,claude-code,* ]]; then
             npm install --global @anthropic-ai/claude-code@2.1.285
           fi
+
+      - name: Check native execution helpers
+        run: |
+          uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+          uv run --no-sync python -m unittest discover -s scripts/tests -p 'test_quickstart_execution.py'
 
       - name: Execute selected Quick Starts
         env:

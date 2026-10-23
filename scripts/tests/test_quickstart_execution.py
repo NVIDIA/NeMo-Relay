@@ -9,9 +9,12 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -32,6 +35,7 @@ SPEC.loader.exec_module(RUNNER)
 ASSETS = sys.modules["quickstarts.assets"]
 build = sys.modules["quickstarts.build"]
 provider = sys.modules["quickstarts.provider"]
+shell = sys.modules["quickstarts.shell"]
 
 
 class QuickstartExecutionTests(unittest.TestCase):
@@ -90,6 +94,20 @@ class QuickstartExecutionTests(unittest.TestCase):
         path.write_bytes(b"tampered")
         with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
             self.assets().python()
+
+    def test_windows_cli_selection_rejects_a_foreign_platform(self):
+        foreign = self.catalog / "nemo-relay-cli-x86_64-unknown-linux-gnu-0.11.0-rc.2"
+        foreign.write_bytes(b"foreign")
+        assets = self.assets()
+        assets.platform = "windows-amd64"
+        with self.assertRaisesRegex(ValueError, "found 0"):
+            assets.cli()
+        native = self.catalog / "nemo-relay-cli-x86_64-pc-windows-msvc-0.11.0-rc.2.exe"
+        native.write_bytes(b"windows")
+        assets = self.assets()
+        assets.platform = "windows-amd64"
+        with patch.object(ASSETS.subprocess, "check_output", return_value="nemo-relay 0.11.0-rc.2"):
+            self.assertEqual(assets.cli(), native.resolve())
 
     def test_cleanup_failure_preserves_the_case_report(self):
         original_cleanup = tempfile.TemporaryDirectory.cleanup
@@ -151,7 +169,7 @@ class QuickstartExecutionTests(unittest.TestCase):
         events = "".join(json.dumps(dict(identity, scope_category=phase)) + "\n" for phase in ("start", "end"))
         import shlex
 
-        return {
+        scenario = {
             "cwd": "project",
             "inputs": {},
             "fresh": ["logs/events.jsonl"],
@@ -188,6 +206,20 @@ class QuickstartExecutionTests(unittest.TestCase):
                 {"id": "expected", "role": "expected", "cwd": "project", "from": "run", "content": "OK\n"},
             ],
         }
+        if shell.WINDOWS:
+            scenario["blocks"][0]["content"] = (
+                "New-Item -ItemType Directory -Force "
+                "-Path project/logs, project/node_modules/nemo-relay-node | Out-Null\n"
+                "$env:MARKER = 'OK'\n"
+                "[IO.File]::WriteAllText((Join-Path $PWD 'project/node_modules/nemo-relay-node/package.json'), "
+                + shell.quote('{"version":"0.11.0-rc.2"}')
+                + ")\n"
+                + "[IO.File]::WriteAllText((Join-Path $PWD 'project/logs/events.jsonl'), "
+                + shell.quote(events)
+                + ")\n"
+            )
+            scenario["blocks"][1]["content"] = "Write-Output $env:MARKER"
+        return scenario
 
     def test_execution_preserves_exports_and_copies_evidence_outside_checkout(self):
         result = RUNNER.run_case("nodejs", self.scenario(), self.assets(), {}, self.root / "pass")
@@ -197,8 +229,13 @@ class QuickstartExecutionTests(unittest.TestCase):
 
     def test_nonzero_exit_and_missing_scopes_cannot_pass_from_marker_text(self):
         for label, command in [
-            ("exit", "printf 'OK\\n'; exit 7"),
-            ("missing", "printf 'OK\\n'; : > logs/events.jsonl"),
+            ("exit", "Write-Output 'OK'; exit 7" if shell.WINDOWS else "printf 'OK\\n'; exit 7"),
+            (
+                "missing",
+                "Write-Output 'OK'; [IO.File]::WriteAllText((Join-Path $PWD 'logs/events.jsonl'), '')"
+                if shell.WINDOWS
+                else "printf 'OK\\n'; : > logs/events.jsonl",
+            ),
         ]:
             scenario = copy.deepcopy(self.scenario())
             scenario["blocks"][1]["content"] = command
@@ -208,10 +245,59 @@ class QuickstartExecutionTests(unittest.TestCase):
 
     def test_timeout_fails_and_records_the_failing_block(self):
         scenario = self.scenario()
-        scenario["blocks"][1].update(content="sleep 30", timeout_seconds=1)
+        scenario["blocks"][1].update(content="Start-Sleep 30" if shell.WINDOWS else "sleep 30", timeout_seconds=1)
         result = RUNNER.run_case("nodejs", scenario, self.assets(), {}, self.root / "timeout")
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["block"], "run")
+
+    @unittest.skipUnless(shell.WINDOWS, "requires native PowerShell and Windows job objects")
+    def test_powershell_native_failure_cannot_be_hidden_by_later_output(self):
+        with self.assertRaisesRegex(ValueError, "Command exited"):
+            RUNNER.execute(
+                shell.command(sys.executable, "-c", "raise SystemExit(7)") + "\nWrite-Output 'false-success'",
+                self.root,
+                dict(os.environ),
+                self.root / "out.log",
+                self.root / "err.log",
+                30,
+            )
+        self.assertNotIn("false-success", (self.root / "out.log").read_text())
+
+    @unittest.skipUnless(shell.WINDOWS, "requires native PowerShell and Windows job objects")
+    def test_powershell_session_preserves_literal_environment_values(self):
+        state = self.root / "state.json"
+        value = "literal '$env:PATH ` & value"
+        for index, content in enumerate(("$env:ROUNDTRIP = " + shell.quote(value), "Write-Output $env:ROUNDTRIP")):
+            RUNNER.execute(
+                shell.session(content, self.root, state, state if index else None, False),
+                self.root,
+                dict(os.environ),
+                self.root / f"{index}.out",
+                self.root / f"{index}.err",
+                30,
+            )
+        self.assertEqual((self.root / "1.out").read_text().strip(), value)
+
+    @unittest.skipUnless(shell.WINDOWS, "requires native PowerShell and Windows job objects")
+    def test_windows_timeout_kills_descendants(self):
+        marker = self.root / "leaked-child"
+        child = "import time; from pathlib import Path; time.sleep(8); Path(" + repr(str(marker)) + ").touch()"
+        parent = (
+            "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', " + repr(child) + "]); "
+            "print('child-started', flush=True); time.sleep(30)"
+        )
+        with self.assertRaises(subprocess.TimeoutExpired):
+            RUNNER.execute(
+                shell.command(sys.executable, "-c", parent),
+                self.root,
+                dict(os.environ),
+                self.root / "tree.out",
+                self.root / "tree.err",
+                6,
+            )
+        self.assertIn("child-started", (self.root / "tree.out").read_text())
+        time.sleep(9)
+        self.assertFalse(marker.exists(), "Timed-out command left a running child process")
 
     def test_all_requires_adapters_for_every_discovered_case(self):
         cases = RUNNER.inventory()

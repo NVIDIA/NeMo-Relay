@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from quickstarts import shell
+
 TOOL_MARKER = "RELAY_QUICKSTART_TOOL_OK"
 RESPONSE_MARKER = "RELAY_QUICKSTART_RESPONSE_OK"
 SPEC = importlib.util.spec_from_file_location(
@@ -60,13 +62,18 @@ def choose_tool(request: dict[str, Any], project: Path) -> tuple[str, dict[str, 
     for group in request.get("tools", []):
         for declaration in group.get("functionDeclarations", []):
             tools[declaration["name"]] = declaration
+    write_command = (
+        "Set-Content -LiteralPath 'relay-check.txt' -Value '" + TOOL_MARKER + "' -NoNewline"
+        if shell.WINDOWS
+        else "printf '%s' " + TOOL_MARKER + " > relay-check.txt"
+    )
     for name, arguments in (
         ("emit_marker", {}),
         ("Write", {"file_path": str(project / "relay-check.txt"), "content": TOOL_MARKER}),
         ("write_file", {"path": "relay-check.txt", "content": TOOL_MARKER}),
         ("write", {"path": "relay-check.txt", "content": TOOL_MARKER}),
-        ("exec_command", {"cmd": "printf '%s' " + TOOL_MARKER + " > relay-check.txt"}),
-        ("shell_command", {"command": "printf '%s' " + TOOL_MARKER + " > relay-check.txt"}),
+        ("exec_command", {"cmd": write_command}),
+        ("shell_command", {"command": write_command}),
     ):
         if name in tools:
             return name, arguments
