@@ -1025,11 +1025,94 @@ fn llm_start_user_step_message(event: &Event, input: &Json, has_paired_end: bool
     event
         .annotated_request()
         .and_then(|request| atif_message_from_annotated_request(request.as_ref()))
+        .or_else(|| raw_provider_user_message(input))
         .or_else(|| Some(extract_user_messages(input)))
+}
+
+// Display projection only: request signatures must retain native image data.
+fn raw_provider_user_message(input: &Json) -> Option<Json> {
+    if let Some(contents) = input.get("contents").and_then(Json::as_array) {
+        let parts = contents
+            .iter()
+            .rev()
+            .find(|content| {
+                matches!(
+                    content.get("role").and_then(Json::as_str),
+                    Some("user") | None
+                )
+            })?
+            .get("parts")?
+            .as_array()?;
+        return Some(Json::String(
+            parts
+                .iter()
+                .filter(|part| part.get("thought").and_then(Json::as_bool) != Some(true))
+                .filter_map(|part| part.get("text").and_then(Json::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    let request = input.get("chatRequest").unwrap_or(input);
+    if request.get("apiFormat").and_then(Json::as_str) != Some("GENERIC") {
+        return None;
+    }
+    let parts = request
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Json::as_str) == Some("USER"))?
+        .get("content")?
+        .as_array()?;
+    Some(Json::String(
+        parts
+            .iter()
+            .filter(|part| part.get("type").and_then(Json::as_str) == Some("TEXT"))
+            .filter_map(|part| part.get("text").and_then(Json::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ))
+}
+
+fn gemini_contents_turn_state(contents: &[Json]) -> Option<RequestTurnState> {
+    let content = contents.last()?;
+    match content.get("role").and_then(Json::as_str) {
+        Some("model") => Some(RequestTurnState::Continuation),
+        Some("user") | None => {
+            let parts = content.get("parts")?.as_array()?;
+            let has_user_input = parts.iter().any(|part| {
+                part.get("thought").and_then(Json::as_bool) != Some(true)
+                    && ["text", "inlineData", "fileData"]
+                        .iter()
+                        .any(|key| part.get(key).is_some())
+            });
+            let has_tool_response = parts
+                .iter()
+                .any(|part| part.get("functionResponse").is_some());
+            Some(if has_tool_response && !has_user_input {
+                RequestTurnState::Continuation
+            } else {
+                RequestTurnState::FreshUser
+            })
+        }
+        _ => None,
+    }
 }
 
 fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     let object = input.as_object()?;
+    let oci_request = object.get("chatRequest").unwrap_or(input);
+    if oci_request.get("apiFormat").and_then(Json::as_str) == Some("GENERIC")
+        && let Some(messages) = oci_request.get("messages").and_then(Json::as_array)
+    {
+        return messages.iter().rev().find_map(|message| {
+            match message.get("role").and_then(Json::as_str) {
+                Some("USER") => Some(RequestTurnState::FreshUser),
+                Some("ASSISTANT" | "TOOL") => Some(RequestTurnState::Continuation),
+                _ => None,
+            }
+        });
+    }
     if let Some(messages) = object.get("messages").and_then(Json::as_array)
         && let Some(state) = chat_messages_turn_state(messages)
     {
@@ -1037,6 +1120,11 @@ fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     }
     if let Some(input_items) = object.get("input")
         && let Some(state) = openai_responses_turn_state(input_items)
+    {
+        return Some(state);
+    }
+    if let Some(contents) = object.get("contents").and_then(Json::as_array)
+        && let Some(state) = gemini_contents_turn_state(contents)
     {
         return Some(state);
     }

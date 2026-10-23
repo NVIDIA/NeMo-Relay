@@ -7168,3 +7168,190 @@ fn atif_step_conversion_state_covers_tool_correlation_guard_paths() {
     empty_state.steps[0] = cleanup_test_agent_step(empty_message(), &["other"], &[]);
     assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
 }
+
+/// Exercise raw provider payloads through the exporter, including its wrapper handling.
+fn export_raw_provider_request(request: &Json, wrapped: bool) -> Json {
+    let exporter = AtifExporter::new("raw-provider".into(), make_agent_info());
+    let uuid = Uuid::now_v7();
+    let input = if wrapped {
+        json!({"headers": {}, "content": request})
+    } else {
+        request.clone()
+    };
+    let start = event_builder(uuid, EventType::Start)
+        .scope_type(ScopeType::Llm)
+        .input(input)
+        .build();
+    let end = event_builder(uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"content": "answer"}))
+        .build();
+    exporter.state.lock().unwrap().events.extend([start, end]);
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    serde_json::to_value(trajectory).unwrap()
+}
+
+#[test]
+fn raw_provider_display_preserves_images_and_request_signatures() {
+    for image in [
+        json!({"inlineData": {"mimeType": "image/png", "data": "YQ=="}}),
+        json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/a.png"}}),
+    ] {
+        for role in [Some("user"), None] {
+            for text in [true, false] {
+                let mut content = json!({"parts": [image.clone()]});
+                if let Some(role) = role {
+                    content["role"] = json!(role);
+                }
+                if text {
+                    content["parts"].as_array_mut().unwrap().extend([
+                        json!({"text": "inspect"}),
+                        json!({"text": "hidden", "thought": true}),
+                        json!({"text": "carefully"}),
+                    ]);
+                }
+                let request = json!({"contents": [
+                    {"role": "user", "parts": [{"text": "older question"}]}, content
+                ]});
+                let mut different = request.clone();
+                different["contents"][1]["parts"][0] = json!({"inlineData": {
+                    "mimeType": "image/png", "data": "Yg=="
+                }});
+                assert_ne!(
+                    llm_request_signature(&request),
+                    llm_request_signature(&different)
+                );
+                assert_raw_provider_projection(
+                    &request,
+                    if text {
+                        Some("inspect\ncarefully")
+                    } else {
+                        Some("")
+                    },
+                );
+            }
+        }
+    }
+    for text in [true, false] {
+        let mut parts =
+            vec![json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,YQ=="}})];
+        if text {
+            parts.extend([
+                json!({"type": "TEXT", "text": "inspect"}),
+                json!({"type": "TEXT", "text": "carefully"}),
+            ]);
+        }
+        let bare = json!({"apiFormat": "GENERIC", "messages": [
+            {"role": "USER", "content": [{"type": "TEXT", "text": "older question"}]},
+            {"role": "USER", "content": parts}
+        ]});
+        let mut different = bare.clone();
+        different["messages"][1]["content"][0]["imageUrl"]["url"] =
+            json!("data:image/png;base64,Yg==");
+        for envelope in [true, false] {
+            let (request, other) = if envelope {
+                (
+                    json!({"chatRequest": bare}),
+                    json!({"chatRequest": different}),
+                )
+            } else {
+                (bare.clone(), different.clone())
+            };
+            assert_ne!(
+                llm_request_signature(&request),
+                llm_request_signature(&other)
+            );
+            assert_raw_provider_projection(
+                &request,
+                if text {
+                    Some("inspect\ncarefully")
+                } else {
+                    Some("")
+                },
+            );
+        }
+    }
+}
+
+fn assert_raw_provider_projection(request: &Json, expected: Option<&str>) {
+    for wrapped in [false, true] {
+        let trajectory = export_raw_provider_request(request, wrapped);
+        let steps = trajectory["steps"].as_array().unwrap();
+        let messages: Vec<_> = steps
+            .iter()
+            .filter(|step| step["source"] == "user")
+            .map(|step| step["message"].clone())
+            .collect();
+        assert_eq!(
+            messages,
+            expected
+                .into_iter()
+                .map(|text| json!(text))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["extra"]["llm_request"] == *request)
+        );
+    }
+}
+
+#[test]
+fn raw_gemini_tool_continuations_distinguish_fresh_user_parts() {
+    let response = json!({"functionResponse": {"name": "screenshot", "response": {"text": "tool text"},
+        "parts": [{"inlineData": {"mimeType": "image/png", "data": "YQ=="}}]}});
+    for role in [Some("user"), None] {
+        for fresh in [
+            None,
+            Some(json!({"text": "next question"})),
+            Some(json!({"inlineData": {"mimeType": "image/png", "data": "Yg=="}})),
+            Some(json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/b.png"}})),
+        ] {
+            let mut content = json!({"parts": [response.clone()]});
+            if let Some(role) = role {
+                content["role"] = json!(role);
+            }
+            if let Some(part) = &fresh {
+                content["parts"].as_array_mut().unwrap().push(part.clone());
+            }
+            let request = json!({"contents": [
+                {"role": "user", "parts": [{"text": "inspect"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "screenshot", "args": {}}}]},
+                content
+            ]});
+            let expected = fresh
+                .as_ref()
+                .map(|part| part.get("text").and_then(Json::as_str).unwrap_or(""));
+            assert_raw_provider_projection(&request, expected);
+            // An unmatched start retains a user step even for a continuation.
+            let event = event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(request.clone())
+                .build();
+            assert!(llm_start_user_step_message(&event, &request, false).is_some());
+        }
+    }
+}
+
+#[test]
+fn raw_provider_turn_detection_respects_assistant_and_system_roles() {
+    let gemini = json!({"contents": [
+        {"role": "user", "parts": [{"text": "question"}]},
+        {"role": "model", "parts": [{"text": "answer"}]}
+    ]});
+    assert_raw_provider_projection(&gemini, None);
+    for role in ["ASSISTANT", "TOOL"] {
+        let oci = json!({"apiFormat": "GENERIC", "messages": [
+            {"role": "USER", "content": [{"type": "TEXT", "text": "question"}]},
+            {"role": role, "content": [{"type": "TEXT", "text": "answer"}]},
+            {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "instructions"}]}
+        ]});
+        assert_raw_provider_projection(&oci, None);
+        assert_raw_provider_projection(&json!({"chatRequest": oci}), None);
+    }
+    let chat = json!({"messages": [{"role": "user", "content": "unchanged"}]});
+    assert_raw_provider_projection(&chat, Some("unchanged"));
+    assert_eq!(raw_provider_user_message(&chat), None);
+}
