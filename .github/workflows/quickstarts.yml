@@ -52,10 +52,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-amd64
-            runner: ubuntu-latest
-          - platform: macos-arm64
-            runner: macos-15
+          # Linux/macOS are validating the same implementation in run 40014004372.
+          # Restore both entries after the focused Windows retry.
           - platform: windows-amd64
             runner: windows-2022
     steps:

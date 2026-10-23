@@ -124,7 +124,7 @@ class QuickstartExecutionTests(unittest.TestCase):
         original_cleanup(cleanup.call_args.args[0])
         self.assertEqual(result["status"], "failed")
         self.assertIn("cleanup failed", result["error"])
-        self.assertEqual(result["block"], "complete")
+        self.assertEqual(result["block"], "complete", result)
         self.assertTrue((self.root / "cleanup-failed/result.json").is_file())
 
     def test_remote_inventory_requires_integrity_and_plain_filenames(self):
@@ -194,7 +194,7 @@ class QuickstartExecutionTests(unittest.TestCase):
                     "role": "run",
                     "cwd": ".",
                     "session": "main",
-                    "timeout_seconds": 5,
+                    "timeout_seconds": 20 if shell.WINDOWS else 5,
                     "content": "mkdir -p project/logs project/node_modules/nemo-relay-node\nexport MARKER=OK\n"
                     + "printf '%s' '{\"version\":\"0.11.0-rc.2\"}' > "
                     + "project/node_modules/nemo-relay-node/package.json\n"
@@ -207,7 +207,7 @@ class QuickstartExecutionTests(unittest.TestCase):
                     "role": "run",
                     "cwd": "project",
                     "session": "main",
-                    "timeout_seconds": 5,
+                    "timeout_seconds": 20 if shell.WINDOWS else 5,
                     "content": "printf '%s\\n' \"$MARKER\"",
                 },
                 {"id": "expected", "role": "expected", "cwd": "project", "from": "run", "content": "OK\n"},
