@@ -90,7 +90,7 @@ impl OpenTelemetryTlsConfig {
 
     /// Checks the URL scheme and loads the same TLS material as exporter startup.
     pub(crate) fn validate(&self, endpoint: &str) -> Result<()> {
-        let pem = self.load(endpoint)?;
+        let mut pem = self.load(endpoint)?;
         if pem.certificate.is_some() || pem.client_certificate.is_some() {
             // Build without connecting so PEM parsing and key compatibility
             // checks stay aligned with both HTTP and gRPC startup.
