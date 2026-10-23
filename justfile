@@ -656,6 +656,12 @@ set_node_package_version() {
 
 set_project_version() {
     local version="$1"
+    local previous_version=""
+    local python_executable=""
+    previous_version="$(read_workspace_version)"
+    python_executable="$(uv_python_executable)"
+    # Reject drift before any manifest is rewritten by the version bump.
+    "$python_executable" scripts/docs/docs_version_pins.py check
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
     set_example_package_versions "$version"
@@ -666,6 +672,7 @@ set_project_version() {
     cargo metadata --format-version 1 >/dev/null
     # Keep existing dependency pins; allow fetching build backends for dynamic metadata.
     uv lock
+    "$python_executable" scripts/docs/docs_version_pins.py update "$previous_version" "$version"
 }
 
 semver_to_pep440() {
@@ -1025,6 +1032,27 @@ is_true() {
     esac
 }
 '''
+
+# validate quickstart metadata, referenced files, version pins, and checker tests (no guide execution)
+check-quickstarts:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
+    "$python_executable" scripts/docs/docs_version_pins.py check
+    "$python_executable" scripts/check-quickstarts.py check
+
+# Execute credential-free Quick Starts against explicit release, build, or local assets.
+[positional-arguments]
+test-quickstarts *args:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/run-quickstarts.py "$@"
 
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples

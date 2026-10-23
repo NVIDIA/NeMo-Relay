@@ -15,6 +15,192 @@ members. Dependency versions are locked in the repository-root `Cargo.lock` and
 commands with `uv run --package <example-package>` to select the example while
 sharing the root environment.
 
+## Quick Start Contracts
+
+The quick starts store commands and expected output in their MDX pages. Sample
+files are committed beside the pages and displayed with Fern's `Code` component.
+The checker reads the referenced files, so displayed and tested content share
+the same source. From the repository root, validate contracts, check Relay
+version pins, and run the checker unit tests:
+
+```bash
+just check-quickstarts
+```
+
+The existing CI `Check / Run` job runs this command without inference
+credentials. Every guide in `docs/getting-started/quick-start/`, except
+`index.mdx`, must have a contract. Missing contracts and an empty guide
+directory fail validation.
+
+The committed `scripts/quickstarts/schema.json` defines scenario and block
+metadata, including field types, required fields, and permitted values. Unknown
+fields fail validation. The `schema: 1` field versions this testing format,
+not the Relay release; ordinary Relay version bumps do not change it.
+The Python checker additionally validates relationships such as referenced
+files, command IDs, shell variants, and lifecycle assertions.
+
+After installing the dev dependencies with the command above, use
+`uv run --no-sync python scripts/check-quickstarts.py extract <page> --shell bash` to inspect
+its commands. Replace `<page>` with the guide's MDX path.
+
+The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
+output and artifacts after a successful run. These modes do not execute commands,
+provision credentials, or test operating-system compatibility.
+
+Relay installation version pins follow the Cargo workspace version through
+`just set-version`. Check for version drift with this command:
+
+```bash
+uv run --no-sync python scripts/docs/docs_version_pins.py check
+```
+
+The external Switchyard bundle and its tested Relay version are pinned
+independently.
+
+With `jq` installed, the unit tests also exercise the four agent-runtime guides'
+copyable JSON verification expressions against complete and invalid fixtures.
+If `jq` is missing, those tests report a skip. To check multiple locally installed
+versions on Unix without changing your default `jq`, run:
+
+```bash
+QUICKSTART_JQ_BINARIES=/path/to/jq-1.6:/path/to/jq-1.7.1:/path/to/jq-1.8.1 \
+  uv run --no-sync python -m unittest discover -s scripts/tests -p 'test_quickstart_jq.py'
+```
+
+These are document, checker, and JSON-expression tests, not quickstart execution tests.
+A passing check does not establish that packages have been published, that a
+provider accepts the example, or that the guide runs on every supported system.
+Live execution and cross-platform quickstart validation remain separate work.
+
+## Execute Quick Starts
+
+Run all discovered Quick Starts with the same command locally and in the
+`Execute Quick Starts` GitHub Actions workflow. The runner discovers cases from
+the contracts. `all` is the default; `local` selects Python, Node.js, Rust, and
+LangGraph. Individual IDs select a focused run:
+
+```bash
+just test-quickstarts --list
+just test-quickstarts --version 0.11.0-rc.2 --cases local
+just test-quickstarts --version 0.11.0-rc.2 --cases langchain,deep-agents
+```
+
+The version selects exact packages from that tag's GitHub release metadata.
+It does not select the documentation revision: the current checkout supplies
+the commands, sample files, and checks. This is a version override of the
+installation steps; the runner records the original and executed commands.
+The referenced programs and verification expressions run without modification.
+
+For development before release assets exist, fetch the desired branch and pass
+its local Git ref or full commit SHA:
+
+```bash
+git fetch upstream main
+just test-quickstarts --source-ref upstream/main --cases all
+```
+
+The runner resolves the ref once, creates a separate checkout at that commit,
+and builds the selected CLI, Python, and Node.js assets with their production
+features and a development build profile. Rust uses source from that same
+checkout. The commands and sample files also come from that commit. The source
+version is read from its manifest; an optional `--version` must agree. The report
+records the SHA, build commands, profile, and asset hashes. Uncommitted changes
+in the harness checkout are excluded. Do not combine `--source-ref` with external
+asset locations, build-run downloads, or overrides. On GitHub, use `origin/main`
+for the equivalent `source_ref` input.
+To repeat selected cases without rebuilding, point `--asset-location` at that
+run's `packages` directory. Its generated build manifest retains the original
+commit and verifies the reused asset hashes. The current checkout supplies the
+guides for this repeated run.
+
+Hermes, pi, Codex, Claude Code, LangChain, Deep Agents, and Google ADK use a loopback HTTP
+provider implementing their actual model protocol. It requests the documented
+tool action and returns the completion marker after receiving a successful tool
+result. The real agent executes the tool; Relay writes the event stream. The
+fixture writes neither the marker file nor ATOF. No inference credentials are
+needed. Passing establishes the installation, execution, tool, and contracted
+observability path with deterministic responses; it does not establish live
+model quality or provider authentication.
+
+Google ADK uses its native Gemini API through the SDK's base URL override.
+Its adapter supports the guide on development refs that include Google ADK;
+older documentation checkouts retain their own discovered case list.
+
+Install supported Codex and Claude Code hosts before selecting their cases
+locally. CI installs pinned host versions. pi is installed at the guide's exact
+pin in a disposable npm prefix. Hermes is installed in a disposable environment
+from the immutable commit selected by `--hermes-ref` (or the matching workflow
+input). Its selected Relay wheel is explicitly installed after Hermes resolves
+its own dependencies; the report records this candidate compatibility override.
+Agent configuration directories are temporary. The runner records optional
+Hermes provider alternatives as omitted and keeps `hermes doctor` diagnostics;
+the native Relay event and file checks remain mandatory.
+The Codex adapter refuses to run when system-managed configuration forces a
+different provider, because that would bypass the local fixture.
+On Windows, the disposable Codex host enables its native unelevated sandbox so
+the guide's `--sandbox workspace-write` mode can operate. Claude Code uses
+default permission mode with the guide's explicit Write allowlist; its optional
+model-based permission classifier is outside this test. Temporary paths are
+canonicalized before requesting tool actions, and agent output is read as UTF-8.
+
+For prerelease assets elsewhere, supply a GitHub release URL, a local artifact
+directory, or an HTTPS directory containing Relay's `SHA256SUMS` inventory:
+
+```bash
+just test-quickstarts --version 0.11.0-rc.2 --asset-location /path/to/r2-assets
+just test-quickstarts --version 0.11.0-rc.2 --asset-location https://example.com/r2
+```
+
+Use `--run-id BUILD_RUN_ID` instead of an asset location to download artifacts
+from a completed GitHub Actions build. `--repository OWNER/REPO` changes the
+source repository. These paths require the `gh` CLI and appropriate read access.
+Rust crates without supplied `.crate` assets are resolved from crates.io at the
+exact requested version; an unpublished version must have crate assets or an
+explicit local source override.
+
+No configuration file is needed for regular runs. Optional `--overrides FILE`
+accepts `python` (wheel path), `nodejs` (metapackage and native tarball paths),
+and `rust_source` (local `nemo-relay` crate directory). For example, a local
+source test can set `rust_source` to the absolute path of `crates/core` while
+using existing Python and Node.js package artifacts. Selected asset metadata
+must match the requested version. Remote assets require matching SHA-256
+checksums; local artifacts without a checksum inventory have their hashes
+recorded. Python wheel compatibility and the Node.js native platform are
+selected from the available artifacts. Dependencies still require registry
+access unless cached.
+
+Each invocation uses fresh temporary workspaces outside the checkout. The
+runner captures output, verifies exit codes and the contracted ATOF lifecycle,
+records dependency lockfiles, and removes temporary environments. It exits
+nonzero if any selected case fails. System-managed Relay plugin configuration
+still applies; use a clean host when testing the standalone Quick Starts.
+The runner records the system configuration's hash when present.
+
+Results go below the ignored `artifacts/quickstarts/` directory, or a new
+directory supplied by `--output`. `results.json` records each case and failing
+block; `resolved-assets.json` records exact asset locations, versions, hashes,
+and build/source provenance. Logs, sample hashes, dependency locks, and exported
+event files support diagnosis. These JSON files are generated evidence, not
+configuration that needs updating for every run.
+
+The GitHub matrix runs Linux x86-64 and Apple Silicon macOS with Bash, and
+Windows x86-64 with native PowerShell. The runner selects the matching shell
+variants from each guide's contract. Windows uses its `.exe` CLI asset, native
+Node package, and `Scripts` virtual-environment layout. The same runner also
+supports local glibc Linux ARM64 execution.
+
+On Windows, install PowerShell 7.4 or newer and Git for Windows. The repository's
+`just` recipes use Git Bash to launch the Python harness; the guide commands
+execute in native PowerShell. Shell environment changes persist between blocks.
+Native command failures are fatal, and Relay's Windows job controller owns
+the command's child processes so timeouts also clean up agent processes.
+The workflow runs focused helper tests on each platform before the guides,
+including native Windows tests for failure propagation and process cleanup.
+
+The workflow must
+exist on the default branch before GitHub exposes its normal manual trigger;
+select the implementation branch after that workflow has been registered.
+
 ## Testing Rule
 
 Run tests for every language surface whose observable behavior can change. Start
