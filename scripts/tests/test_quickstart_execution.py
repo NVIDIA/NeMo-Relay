@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -279,6 +280,43 @@ class QuickstartExecutionTests(unittest.TestCase):
                 finally:
                     fixture.close()
 
+    def test_gemini_requires_successful_function_response_before_completion(self):
+        fixture = provider.Fixture(self.root, self.root / "requests.jsonl")
+        fixture.start()
+        self.addCleanup(fixture.close)
+
+        def post(payload, streaming=False):
+            route = "streamGenerateContent?alt=sse" if streaming else "generateContent"
+            request = urllib.request.Request(
+                fixture.url + "/v1beta/models/gemini-3.5-flash:" + route,
+                json.dumps(payload).encode(),
+                {"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.read().decode()
+
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": provider.RESPONSE_MARKER}]}],
+            "tools": [{"functionDeclarations": [{"name": "emit_marker", "parameters": {"type": "OBJECT"}}]}],
+        }
+        first = json.loads(post(payload))
+        self.assertEqual(
+            first["candidates"][0]["content"]["parts"][0]["functionCall"], {"name": "emit_marker", "args": {}}
+        )
+        self.assertNotIn(provider.RESPONSE_MARKER, json.dumps(first))
+        function_response: dict[str, Any] = {"name": "emit_marker", "response": {"error": "failed"}}
+        payload["contents"].append({"role": "user", "parts": [{"functionResponse": function_response}]})
+        self.assertNotIn(provider.RESPONSE_MARKER, post(payload))
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            fixture.verify()
+        function_response["response"] = {"result": provider.TOOL_MARKER}
+        self.assertIn(provider.RESPONSE_MARKER, post(payload))
+        streamed = post(payload, streaming=True)
+        self.assertIn(provider.RESPONSE_MARKER, streamed)
+        self.assertNotIn("[DONE]", streamed)
+        fixture.verify()
+        self.assertFalse((self.root / "logs/events.jsonl").exists())
+
     def test_source_build_pins_commit_and_ignores_dirty_work(self):
         import subprocess
 
@@ -295,7 +333,8 @@ class QuickstartExecutionTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(root), "add", "Cargo.toml"], check=True)
         subprocess.run(["git", "-C", str(root), "commit", "-m", "fixture"], check=True, capture_output=True)
         manifest.write_text("uncommitted work")
-        source, version, record = build.prepare(root, "HEAD", self.root, set(), RUNNER.execute)
+        source, version, record = build.checkout(root, "HEAD", self.root)
+        build.prepare(root, source, self.root, set(), RUNNER.execute, record)
         self.assertEqual(version, "0.11.0")
         self.assertEqual(len(record["commit"]), 40)
         self.assertIn("[workspace.package]", (source / "Cargo.toml").read_text())

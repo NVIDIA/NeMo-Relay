@@ -24,6 +24,11 @@ SPEC.loader.exec_module(PROTOCOL)
 
 def tool_result(request: dict[str, Any]) -> bool:
     """Inspect protocol result positions; the prompt itself always contains the marker."""
+    for content in request.get("contents", []):
+        for part in content.get("parts", []):
+            response = part.get("functionResponse", {})
+            if response.get("name") == "emit_marker" and response.get("response") == {"result": TOOL_MARKER}:
+                return True
     for message in request.get("messages", []) + (
         request.get("input", []) if isinstance(request.get("input"), list) else []
     ):
@@ -52,6 +57,9 @@ def tool_result(request: dict[str, Any]) -> bool:
 
 def choose_tool(request: dict[str, Any], project: Path) -> tuple[str, dict[str, Any]]:
     tools = {tool.get("name", tool.get("function", {}).get("name")): tool for tool in request.get("tools", [])}
+    for group in request.get("tools", []):
+        for declaration in group.get("functionDeclarations", []):
+            tools[declaration["name"]] = declaration
     for name, arguments in (
         ("emit_marker", {}),
         ("Write", {"file_path": str(project / "relay-check.txt"), "content": TOOL_MARKER}),
@@ -140,6 +148,30 @@ class Fixture:
                         # A negative capability response leaves its real OpenAI path
                         # intact; this optional probe is not a failed model call.
                         self.send_json({"error": "This is not an Ollama endpoint"}, 404)
+                        return
+                    if ":generateContent" in self.path or ":streamGenerateContent" in self.path:
+                        part = {"text": reply} if text_only else {"functionCall": {"name": name, "args": arguments}}
+                        response = {
+                            "candidates": [
+                                {"content": {"role": "model", "parts": [part]}, "finishReason": "STOP", "index": 0}
+                            ],
+                            "usageMetadata": {
+                                "promptTokenCount": 10,
+                                "candidatesTokenCount": 10,
+                                "totalTokenCount": 20,
+                            },
+                        }
+                        if ":streamGenerateContent" not in self.path:
+                            self.send_json(response)
+                            return
+                        # Gemini SSE terminates at EOF, without OpenAI's [DONE] sentinel.
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.wfile.write(("data: " + json.dumps(response) + "\n\n").encode())
+                        self.wfile.flush()
+                        self.close_connection = True
                         return
                     if self.path.endswith("/responses"):
                         events = (

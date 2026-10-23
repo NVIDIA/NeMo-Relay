@@ -18,7 +18,8 @@ from typing import Any
 from quickstarts.assets import host_platform, sha256
 
 
-def prepare(root: Path, ref: str, output: Path, surfaces: set[str], execute: Any) -> tuple[Path, str, dict[str, Any]]:
+def checkout(root: Path, ref: str, output: Path) -> tuple[Path, str, dict[str, Any]]:
+    """Pin and inspect source before selecting cases or starting expensive builds."""
     commit = subprocess.check_output(
         ["git", "-C", str(root), "rev-parse", "--verify", ref + "^{commit}"], text=True
     ).strip()
@@ -29,12 +30,20 @@ def prepare(root: Path, ref: str, output: Path, surfaces: set[str], execute: Any
     )
     subprocess.run(["git", "-C", str(source), "checkout", "--detach", commit], check=True, capture_output=True)
     version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    record = {"commit": commit, "ref": ref, "profile": "dev", "status": "checked-out"}
+    (output / "build.json").write_text(json.dumps(record, indent=2) + "\n")
+    return source, version, record
+
+
+def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute: Any, record: dict[str, Any]) -> None:
+    packages = output / "packages"
+    version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     environment = dict(os.environ)
     environment.update(UV_PROJECT_ENVIRONMENT=str(source / ".venv"), npm_config_cache=str(output / "npm-cache"))
     environment.setdefault("CARGO_TARGET_DIR", str(root / "target" / "quickstart-build"))
     target = Path(environment["CARGO_TARGET_DIR"]).resolve()
     environment["CARGO_TARGET_DIR"] = str(target)
-    record: dict[str, Any] = {"commit": commit, "ref": ref, "profile": "dev", "status": "building"}
+    record["status"] = "building"
     provenance = output / "build.json"
     provenance.write_text(json.dumps(record, indent=2) + "\n")
     commands = []
@@ -64,7 +73,7 @@ def prepare(root: Path, ref: str, output: Path, surfaces: set[str], execute: Any
             ]
         )
     for name, command in commands:
-        print(f"Building {name} from {commit[:12]}...", flush=True)
+        print(f"Building {name} from {record['commit'][:12]}...", flush=True)
         execute(command, source, environment, output / (name + ".stdout.log"), output / (name + ".stderr.log"), 2400)
     if "cli" in surfaces:
         triples = {
@@ -79,4 +88,3 @@ def prepare(root: Path, ref: str, output: Path, surfaces: set[str], execute: Any
         files={path.name: sha256(path) for path in packages.iterdir() if path.is_file()},
     )
     provenance.write_text(json.dumps(record, indent=2) + "\n")
-    return source, version, record

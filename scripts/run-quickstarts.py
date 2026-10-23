@@ -172,6 +172,8 @@ def run_case(
                 "CLAUDE_",
                 "ANTHROPIC_",
                 "OPENAI_",
+                "GOOGLE_",
+                "GEMINI_",
                 "NVIDIA_",
                 "HERMES_",
                 "PI_CODING_AGENT_",
@@ -399,13 +401,9 @@ def main() -> int:
     report: dict[str, Any] = {"schema": 1, "status": "failed", "requested_version": args.version, "results": []}
     assets = None
     try:
-        scenarios = inventory()
-        selected = select_cases(args.cases, scenarios)
         source = None
         if args.source_ref:
-            source, version, provenance = build.prepare(
-                ROOT, args.source_ref, output, {SURFACES[name] for name in selected}, execute
-            )
+            source, version, provenance = build.checkout(ROOT, args.source_ref, output)
             if args.version and args.version != version:
                 raise ValueError(f"Source version {version} differs from requested {args.version}")
             args.version = version
@@ -415,8 +413,10 @@ def main() -> int:
             # Run the guides belonging to the tested development commit, not stale harness copies.
             setattr(CONTRACTS, "ROOT", source)
             setattr(CONTRACTS, "PAGES", source / "docs/getting-started/quick-start")
-            scenarios = inventory()
-            selected = select_cases(args.cases, scenarios)
+        scenarios = inventory()
+        selected = select_cases(args.cases, scenarios)
+        if source:
+            build.prepare(ROOT, source, output, {SURFACES[name] for name in selected}, execute, report["build"])
         report.update(
             platform=host_platform(),
             cases=selected,
