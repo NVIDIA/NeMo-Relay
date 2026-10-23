@@ -3,6 +3,7 @@
 
 //! TLS certificates and private keys for OTLP endpoints.
 
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
@@ -147,6 +148,14 @@ impl TlsPem {
             builder = builder.timeout(timeout);
         }
         if let Some(pem) = &self.certificate {
+            let mut roots = rustls::RootCertStore::empty();
+            for certificate in CertificateDer::pem_slice_iter(pem) {
+                let certificate =
+                    certificate.map_err(|_| invalid("certificate", "invalid PEM CA bundle"))?;
+                roots
+                    .add(certificate)
+                    .map_err(|_| invalid("certificate", "invalid PEM CA bundle"))?;
+            }
             let certificates = reqwest::Certificate::from_pem_bundle(pem)
                 .map_err(|_| invalid("certificate", "invalid PEM CA bundle"))?;
             if certificates.is_empty() {
@@ -158,15 +167,29 @@ impl TlsPem {
             builder = builder.tls_certs_only(certificates);
         }
         if let Some(cert) = &self.client_certificate {
-            let mut pem = cert.clone();
-            pem.push(b'\n');
-            pem.extend(self.private_key.as_deref().unwrap_or_default());
-            builder = builder.identity(reqwest::Identity::from_pem(&pem).map_err(|_| {
+            let invalid_identity = || {
                 invalid(
                     "client_certificate/private_key",
                     "invalid PEM client identity",
                 )
-            })?);
+            };
+            // PEM decoding alone does not validate DER or certificate/key pairing.
+            let certificates = CertificateDer::pem_slice_iter(cert)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| invalid_identity())?;
+            let key =
+                PrivateKeyDer::from_pem_slice(self.private_key.as_deref().unwrap_or_default())
+                    .map_err(|_| invalid_identity())?;
+            let provider = rustls::crypto::CryptoProvider::get_default()
+                .cloned()
+                .unwrap_or_else(|| rustls::crypto::ring::default_provider().into());
+            rustls::sign::CertifiedKey::from_der(certificates, key, &provider)
+                .map_err(|_| invalid_identity())?;
+            let mut pem = cert.clone();
+            pem.push(b'\n');
+            pem.extend(self.private_key.as_deref().unwrap_or_default());
+            builder = builder
+                .identity(reqwest::Identity::from_pem(&pem).map_err(|_| invalid_identity())?);
         }
         builder.build().map_err(|_| {
             invalid(

@@ -134,6 +134,70 @@ fn tls_rejects_invalid_configuration_and_identity_without_disclosing_pem() {
 }
 
 #[test]
+fn tls_attributes_invalid_material_to_trust_or_identity_without_disclosing_pem() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _entered = runtime.enter();
+    let endpoint = "https://127.0.0.1:4318";
+    let invalid_certificate = "-----BEGIN CERTIFICATE-----\nU0VDUkVU\n-----END CERTIFICATE-----\n";
+    let invalid_key = "-----BEGIN PRIVATE KEY-----\nU0VDUkVU\n-----END PRIVATE KEY-----\n";
+    for (field, contents, diagnostic) in [
+        (
+            "client_certificate",
+            "SECRET INVALID CERTIFICATE".to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            "SECRET INVALID KEY".to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "client_certificate",
+            invalid_certificate.to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            invalid_key.to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            KeyPair::generate().unwrap().serialize_pem(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "certificate",
+            invalid_certificate.to_string(),
+            "tls.certificate: invalid PEM CA bundle",
+        ),
+    ] {
+        let certificates = Certificates::new();
+        let path = match field {
+            "client_certificate" => &certificates.tls.client_certificate,
+            "private_key" => &certificates.tls.private_key,
+            _ => &certificates.tls.certificate,
+        };
+        std::fs::write(path.as_ref().unwrap(), &contents).unwrap();
+        for grpc in [false, true] {
+            let result = if grpc {
+                certificates.tls.grpc_config(endpoint).map(|_| ())
+            } else {
+                certificates.tls.http_client(endpoint, None).map(|_| ())
+            };
+            let error = result.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                format!("failed to build the OTLP exporter: {diagnostic}"),
+                "field={field}, grpc={grpc}"
+            );
+            assert!(!error.contains("SECRET"));
+            assert!(!error.contains(&contents));
+        }
+    }
+}
+
+#[test]
 fn tls_schema_aliases_editor_and_signal_inheritance() {
     let config: OpenTelemetrySectionConfig = serde_json::from_value(json!({
         "enabled": true,
