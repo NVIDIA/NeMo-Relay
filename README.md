@@ -223,7 +223,7 @@ Install Relay for the application language:
 uv add nemo-relay
 
 # Node.js
-# Requires Node.js 24 or newer.
+# Requires Node.js 24.13.1 or newer.
 npm install nemo-relay-node@0.11.0
 
 # Rust
