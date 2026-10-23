@@ -17,14 +17,17 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from plugin_host_test_helper import validate_plugin_config
 
 from nemo_relay import (
+    LLMRequest,
     PropagationContext,
     ScopeType,
     create_scope_stack_from_propagation,
+    llm,
     plugin,
     scope,
     subscribers,
     use_scope_stack,
 )
+from nemo_relay.codecs import AnthropicMessagesCodec
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -531,6 +534,81 @@ class TestObservabilityConfigHelpers:
         }
         atif = AtifConfig(enabled=True, storage=[s3, http])
         assert atif.to_dict()["storage"] == [s3.to_dict(), http.to_dict()]
+
+    @pytest.mark.parametrize("texts", [[], ["inspect this image from the medical chatbot"], ["first", "second"]])
+    @pytest.mark.parametrize("use_codec", [True, False])
+    async def test_atif_inline_image_preserves_model_request(
+        self, tmp_path: Path, texts: list[str], use_codec: bool
+    ) -> None:
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        body = {
+            "model": "claude-sonnet-test",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        *({"type": "text", "text": text} for text in texts),
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": png_base64,
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+        request = LLMRequest({}, body)
+        received = []
+
+        async def model_callback(model_request: LLMRequest):
+            received.append(model_request.content)
+            return {
+                "id": "msg-image",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-test",
+                "content": [{"type": "text", "text": "The image is available."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 4},
+            }
+
+        config = plugin.PluginConfig(
+            components=[
+                ComponentSpec(
+                    ObservabilityConfig(
+                        atif=AtifConfig(enabled=True, output_directory=str(tmp_path)),
+                    )
+                )
+            ]
+        )
+        codec = AnthropicMessagesCodec() if use_codec else None
+        activation = await plugin.initialize(config)
+        try:
+            with scope.scope("image-turn", ScopeType.Agent) as handle:
+                await llm.execute(
+                    "vision-model",
+                    request,
+                    model_callback,
+                    handle=handle,
+                    codec=codec,
+                    response_codec=codec,
+                )
+            await subscribers.flush_async()
+        finally:
+            await activation.close()
+
+        assert received == [body]
+        assert request.content == body
+        [trajectory_file] = list(tmp_path.glob("nemo-relay-atif-*.json"))
+        trajectory = json.loads(trajectory_file.read_text())
+        user = next(step for step in trajectory["steps"] if step["source"] == "user")
+        assert user["message"] == "\n".join(texts)
+        assert png_base64 not in user["message"]
+        assert user["extra"]["llm_request"] == body
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
     async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool) -> None:

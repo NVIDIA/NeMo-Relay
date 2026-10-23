@@ -371,9 +371,17 @@ image parts keep `type` and a `source` with `media_type` and `path`. Fields
 that ATIF does not define, such as `cache_control`, are dropped from the parts
 but remain in the original payload under `extra.llm_request` or
 `extra.llm_response`, or under `extra.tool_result` for tool results. Arrays
-that contain a part ATIF cannot represent, such as a base64 image source, are
-not emitted as content parts, and the original payload remains in the same
-`extra` fields.
+that contain a part ATIF cannot represent are not emitted as content parts
+for assistant messages or observations; the original payload remains in the
+same `extra` fields.
+
+For user messages in chat requests, the exporter keeps supported text and image
+parts in `message` and omits unsupported parts, such as inline base64 images.
+If only text remains, it joins the text with newlines. If no supported parts
+remain, `message` is an empty string. The complete original request, including
+inline image bytes, remains in `extra.llm_request`. This display projection
+does not change the request sent to the LLM. Consumers that reconstruct a
+multimodal request must use `extra.llm_request` rather than the display message.
 
 When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
