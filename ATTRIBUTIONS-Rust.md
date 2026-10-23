@@ -51769,7 +51769,7 @@ freely, subject to the following restrictions:
 
 ```
 
-## tokio - 1.51.1
+## tokio - 1.53.3
 
 **Repository URL**: https://github.com/tokio-rs/tokio
 **License Type(s)**: MIT
