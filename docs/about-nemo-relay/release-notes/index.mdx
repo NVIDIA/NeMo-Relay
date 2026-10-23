@@ -153,7 +153,8 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
   (PII) redaction is active, Relay omits model response payloads from exported
   model end events. Tools run by
   the provider cannot be blocked or changed by Relay. Use `wrap_node` to record
-  full scopes for workflow steps. Refer to
+  full scopes for workflow steps, except steps run with `parallel_worker`.
+  Those steps have completion events rather than full step scopes. Refer to
   [Google ADK Limitations](/supported-integrations/google-adk#limitations).
 - ChatGPT voice calls and sidebands use separate upstream settings. Call
   creation uses the ChatGPT backend and keeps the caller's ChatGPT credential.
