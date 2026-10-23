@@ -655,24 +655,15 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
         std::env::set_var("OTEL_METRICS_EXPORTER", "none");
     }
     let config = plugin_config(json!({"version": 4, "opentelemetry": {"enabled": true}}));
-    let report =
-        futures::executor::block_on(test_initialize_plugin_host_exact(config.clone())).unwrap();
-    let skipped = report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
-        .collect::<Vec<_>>();
-    assert_eq!(skipped.len(), 1, "diagnostics: {:?}", report.diagnostics);
-    for diagnostic in skipped {
-        assert!(diagnostic.message.contains("traces"));
-        assert_eq!(
-            diagnostic.field.as_deref(),
-            Some("OTEL_EXPORTER_OTLP_ENDPOINT")
-        );
-        assert!(diagnostic.message.contains("http://collector.example:4318"));
-        assert!(!diagnostic.message.contains("/private"));
-        assert!(!diagnostic.message.contains("relay-query-secret"));
-    }
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config.clone()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("automatic OpenTelemetry has no active exporter"));
+    assert!(error.contains("OTEL_EXPORTER_OTLP_ENDPOINT"));
+    assert!(error.contains("http://collector.example:4318"));
+    assert!(error.contains("insecure_http_hosts"));
+    assert!(!error.contains("/private"));
+    assert!(!error.contains("relay-query-secret"));
     assert!(
         !global_context()
             .read()
@@ -702,6 +693,53 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
             .unwrap()
             .event_subscribers
             .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry.automatic")
+    );
+    test_close_plugin_host().unwrap();
+}
+
+#[test]
+fn automatic_otel_skip_keeps_a_valid_configured_destination_active() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let variables = [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://collector.example:4318",
+        );
+    }
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": "http://127.0.0.1:4318"}]
+        }
+    }));
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.automatic_otel_signal_skipped"
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry")
     );
     test_close_plugin_host().unwrap();
 }
@@ -867,10 +905,13 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             format!("http://{}", collector.local_addr().unwrap()),
         );
     }
-    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(
         json!({"version": 4}),
     )))
-    .unwrap();
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("automatic OpenTelemetry has no active exporter"));
+    assert!(!error.contains("secret-token"));
     assert!(
         global_context()
             .read()
@@ -878,9 +919,6 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             .event_subscribers
             .is_empty()
     );
-    let agent = push_agent("malformed-header-regression");
-    pop(&agent);
-    flush_subscribers().unwrap();
     crate::plugin::test_close_plugin_host().unwrap();
     assert!(
         matches!(collector.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
