@@ -73,7 +73,8 @@ jobs:
         run: |
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             git fetch --no-tags https://github.com/NVIDIA/NeMo-Relay.git main
-            source_ref="$(git rev-parse FETCH_HEAD)"
+            # Hold the platform experiment on the last buildable development commit.
+            source_ref="$(git rev-parse --verify '33754e38c2edc2c71ca9e40542b43433513c3260^{commit}')"
           else
             source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
           fi
