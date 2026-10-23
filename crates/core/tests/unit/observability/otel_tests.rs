@@ -7344,6 +7344,19 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
 }
 
 #[test]
+fn tls_failure_classification_uses_typed_causes_without_exposing_error_strings() {
+    let error = std::io::Error::other(rustls::Error::InvalidCertificate(
+        rustls::CertificateError::UnknownIssuer,
+    ));
+    assert_eq!(
+        safe_tls_failure_reason(&error),
+        Some("TLS certificate verification failed: unknown issuer; check the configured CA bundle")
+    );
+    let sensitive = std::io::Error::other("TLS certificate Authorization: Bearer secret");
+    assert_eq!(safe_tls_failure_reason(&sensitive), None);
+}
+
+#[test]
 fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
     let runtime = test_tokio_runtime();
     let _runtime_guard = runtime.enter();

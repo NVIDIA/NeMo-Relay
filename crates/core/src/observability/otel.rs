@@ -1428,7 +1428,7 @@ fn build_tracer_provider_with_resource(
             resource_attributes,
         ),
         TraceConfig::Endpoint(endpoint) => provider_with_exporter(
-            otlp_span_exporter(endpoint)?,
+            otlp_span_exporter(endpoint, runtime_diagnostics.clone())?,
             config,
             runtime_diagnostics,
             resource_attributes,
@@ -1437,14 +1437,20 @@ fn build_tracer_provider_with_resource(
 }
 
 /// Builds the OTLP network exporter for an endpoint destination.
-fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter> {
+fn otlp_span_exporter(
+    settings: &OpenTelemetryConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+) -> Result<OtlpSpanExporter> {
     if settings.automatic {
         let builder = OtlpSpanExporter::builder();
         return if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client("TRACES")?)
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
@@ -1458,7 +1464,10 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client("TRACES")?)
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         };
@@ -1476,13 +1485,19 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(settings.timeout);
             if !settings.header_file.is_empty() {
-                builder = builder.with_http_client(HeaderFileHttpClient::new(
-                    client,
-                    HeaderFileResolver::new(settings.header_file.clone()),
-                    settings.plaintext.clone(),
-                ));
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(settings.header_file.clone()),
+                        settings.plaintext.clone(),
+                    ),
+                    diagnostics: runtime_diagnostics,
+                });
             } else {
-                builder = builder.with_http_client(client);
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: client,
+                    diagnostics: runtime_diagnostics,
+                });
             }
             builder =
                 builder.with_endpoint(resolve_http_trace_endpoint(&settings.endpoint).into_owned());
@@ -1605,6 +1620,74 @@ fn canonical_resource_key(attributes: &[KeyValue]) -> String {
     entries.join("\u{1f}")
 }
 
+/// Inspect TLS failures before the OTLP HTTP exporter replaces them with a
+/// generic network error. Only static classifications and URL origins are safe
+/// to report; error strings can contain credentials or collector response data.
+#[derive(Debug)]
+struct DiagnosticTraceHttpClient<C> {
+    inner: C,
+    diagnostics: SignalRuntimeDiagnostics,
+}
+
+#[async_trait::async_trait]
+impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
+    for DiagnosticTraceHttpClient<C>
+{
+    async fn send_bytes(
+        &self,
+        request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        if let Some(reason) = self.diagnostics.trace_tls_failure() {
+            return Err(std::io::Error::other(reason).into());
+        }
+        let endpoint = trace_endpoint_log_identity(&request.uri().to_string());
+        let result = self.inner.send_bytes(request).await;
+        if let Err(error) = &result
+            && let Some(reason) = safe_tls_failure_reason(error.as_ref())
+            && self
+                .diagnostics
+                .stop_trace_exports_after_tls_failure(reason)
+        {
+            let message = format!(
+                "OpenTelemetry trace export to {endpoint} stopped: {reason}; recreate the exporter after correcting TLS configuration"
+            );
+            self.diagnostics
+                .record("otel.tls_failed", message.clone(), 1);
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_tls_failed";
+                "{message}"
+            );
+        }
+        result
+    }
+}
+
+fn safe_tls_failure_reason(mut error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
+    loop {
+        if let Some(error) = error.downcast_ref::<rustls::Error>() {
+            return Some(match error {
+                rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer) => {
+                    "TLS certificate verification failed: unknown issuer; check the configured CA bundle"
+                }
+                rustls::Error::InvalidCertificate(_) => "TLS certificate verification failed",
+                _ => "TLS handshake failed",
+            });
+        }
+        // io::Error's source can skip the wrapped error itself.
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io.get_ref()
+        {
+            error = inner;
+            continue;
+        }
+        error = error.source()?;
+    }
+}
+
 #[derive(Debug)]
 struct CountingSpanExporter<E> {
     inner: E,
@@ -1624,9 +1707,19 @@ impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
             }
             Err(_) => {
                 self.diagnostics.record_export_failure();
+                // The SDK's shutdown drains its final batch and forwards the
+                // export result. Mark this known delivery failure here as well
+                // as in the processor's successful-shutdown path, so cleanup
+                // does not mistake it for an incomplete provider shutdown.
+                let marker = if self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
+                    format!("{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: ")
+                } else {
+                    String::new()
+                };
                 Err(OTelSdkError::InternalFailure(format!(
-                    "OpenTelemetry trace export to {} failed",
-                    self.diagnostics.endpoint
+                    "{marker}OpenTelemetry trace export to {} failed{}",
+                    self.diagnostics.endpoint,
+                    self.diagnostics.failure_reason_suffix()
                 )))
             }
         }
@@ -1669,14 +1762,32 @@ impl TraceDeliveryDiagnostics {
         self.export_failures.fetch_add(1, Ordering::Relaxed);
         self.unresolved_export_failure
             .store(true, Ordering::Relaxed);
-        self.runtime_diagnostics.record(
+        let count = self.runtime_diagnostics.record(
             "otel.traces_export_failed",
             format!(
-                "OpenTelemetry trace export to endpoint {} failed",
-                self.endpoint
+                "OpenTelemetry trace export to endpoint {} failed{}",
+                self.endpoint,
+                self.failure_reason_suffix()
             ),
             1,
         );
+        if self.runtime_diagnostics.trace_tls_failure().is_none()
+            && should_relog_runtime_diagnostic(count)
+        {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_traces_export_failed",
+                endpoint = self.endpoint.as_str();
+                "OpenTelemetry trace export failed"
+            );
+        }
+    }
+
+    fn failure_reason_suffix(&self) -> String {
+        self.runtime_diagnostics
+            .trace_tls_failure()
+            .map(|reason| format!(": {reason}; recreate the exporter to resume HTTP trace exports"))
+            .unwrap_or_default()
     }
 
     fn record_export_success(&self) {
@@ -1690,8 +1801,9 @@ impl TraceDeliveryDiagnostics {
             .then(|| {
                 let failures = self.export_failures.load(Ordering::Relaxed);
                 format!(
-                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered",
-                    self.endpoint
+                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered{}",
+                    self.endpoint,
+                    self.failure_reason_suffix()
                 )
             })
     }
@@ -1809,6 +1921,16 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn on_end(&self, span: SpanData) {
+        // The endpoint is disabled until it is recreated. Keep new spans out
+        // of the batch queue rather than repeatedly invoking a failed exporter.
+        if self
+            .diagnostics
+            .runtime_diagnostics
+            .trace_tls_failure()
+            .is_some()
+        {
+            return;
+        }
         self.completed_spans.fetch_add(1, Ordering::Relaxed);
         self.inner.on_end(span);
     }
