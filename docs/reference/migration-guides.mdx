@@ -30,10 +30,19 @@ Keep the daemon's identity state and existing managed bundle during the upgrade.
 #### Check Provider URLs
 
 Use HTTPS for remote provider base URLs. This includes private Kubernetes
-Service addresses. Plain HTTP is allowed only for loopback hosts, such as
-`localhost`, `127.0.0.1`, and `::1`. Remove user information, query strings, and
+Service addresses. By default, plain HTTP is allowed only for loopback hosts,
+such as `localhost`, `127.0.0.1`, and `::1`. Remove user information, query strings, and
 fragments from base URLs. Relay checks configuration files, environment
 variables, and command-line overrides at startup.
+
+For an unauthenticated OpenAI- or Anthropic-compatible inference gateway, you
+can allow remote HTTP with `[upstream] insecure_http_model_hosts`. List each
+trusted hostname or IP address explicitly. These requests remove credential
+and custom headers, ignore environment API key fallbacks, and do not run API
+key helpers. Startup fails if that provider has a configured API key,
+authentication header, or helper. Prefer HTTPS because HTTP sends model content
+without encryption. Refer to
+[Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
 
 Relay no longer follows upstream redirects. It also removes the `Location`
 header from redirect responses. Set the final provider URL directly. Refer to
@@ -140,6 +149,12 @@ snapshot APIs. Refer to
 [Native ABI Reference](/build-plugins/native/native-abi-reference)
 and [Scope Snapshot Extension](/build-plugins/workers/grpc-v1-protocol#scope-snapshot-extension).
 
+Native plugin diagnostics uses an optional table after the ABI v8 prefix.
+The execution ABI and `compat.native_api = "1"` stay unchanged. Check diagnostic
+capabilities before using the extension. If your plugin requires it, set a
+Relay compatibility range that includes its availability. Refer to
+[Native Diagnostics Extension](/build-plugins/native/native-abi-reference#native-diagnostics-extension).
+
 Failed integrity or signature checks now always prevent plugin activation.
 An optional plugin is skipped. A required plugin stops host startup. Check
 plugin reports and correct artifact digests, signatures, or trusted keys before
@@ -157,6 +172,21 @@ deadline for one callback. The host sets no deadline for execution callbacks.
 When a worker call ends, Relay cancels its active provider futures and streams.
 Check custom providers that need separate cleanup for background work. Refer to
 [Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
+
+#### Handle Worker SDK Errors
+
+Update Rust matches that list every `WorkerSdkError` variant. Handle the new
+`Downstream { source, continuation_id }` variant. Inspect `source` for the
+original error, and propagate the full error with `?` when you do not handle it.
+
+Python downstream errors can now be subclasses of `WorkerSdkError`. Use
+`except WorkerSdkError` or `isinstance` instead of exact-type checks. Re-raise
+the original exception when passing it on.
+
+Preserving the original error keeps downstream failures from being counted as
+separate plugin callback failures. Refer to
+[Rust Worker SDK](/build-plugins/workers/rust) and
+[Python Worker SDK](/build-plugins/workers/python).
 
 #### Review HTTP Error Handling
 
@@ -200,6 +230,34 @@ exception to the plaintext transport checks.
 Refer to [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls)
 and [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
 
+### Enable and Protect Diagnostics
+
+Runtime diagnostics is optional and disabled by default. Existing logging and
+exporters do not enable it. For gateways and daemons, configure `[diagnostics]`
+in `config.toml`. Embedded applications use `plugins.toml` or the diagnostics
+profile passed to `plugin.initialize`.
+
+The first embedded initialization selects the process settings, even when
+collection is disabled. Later initialization with different settings returns
+`diagnostics: configuration_conflict`. Restart the process to change them.
+For an existing gateway, update its owner's configuration and restart it.
+Capture any needed evidence first because shutdown discards the stored history.
+Refer to [Embedded Diagnostics](/reference/diagnostics/bindings) and
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli).
+
+Grant diagnostic read access only to callers allowed to inspect the whole
+context. Detail can contain private data that has not been sanitized. Query
+filters do not restrict a reader's access. Native plugin reads need an explicit
+`native_diagnostics_read_context` policy grant. Worker plugin recording does
+not grant access to host snapshots. Refer to
+[Plugin Diagnostics](/build-plugins/diagnostics).
+
+Diagnostic memory limits cover diagnostic storage, not total process memory.
+Daemon worker caches can contain only part of a snapshot or a stale page.
+Check the returned coverage and freshness fields. Refer to
+[Diagnostic Memory Inspection](/reference/diagnostics/memory) and
+[Diagnostics API](/reference/diagnostics/api).
+
 ### Coding-Agent Integration Changes
 
 #### Refresh Hooks and Restore Credentials
@@ -238,6 +296,13 @@ failures return `0`. Guardrail rejections return `2` under either policy.
 Hook requests now have a 30-second timeout. Leave room for delivery when setting
 guardrail evaluation timeouts. Refer to
 [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+
+Hook sessions now use a valid `TRACEPARENT` from the launching process as their
+OpenTelemetry parent. `TRACESTATE` travels with it. The first hook that creates
+a session sets its parent; later hooks do not change it. Review launch scripts
+that already set these variables. Unset them if each session should start a new
+trace. Refer to
+[Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
 
 Make sure hooks can read `NEMO_RELAY_CLIENT_TOKEN` or the per-user token file.
 If the file is missing, run the following command as the user who runs the

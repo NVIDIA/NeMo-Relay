@@ -38,6 +38,15 @@ of a published version, refer to GitHub Releases.
 
 This release expands plugin control, deployment options, and setup guidance:
 
+- Runtime diagnostics keeps counts and recent events in memory, with storage
+  limits set at startup. Readers can inspect gateways, daemons, and embedded
+  applications. Native and worker plugins can record their own internal work.
+  Memory views show diagnostic storage use and optional resource samples.
+  Collection is disabled by default. Refer to [Diagnostics](/reference/diagnostics).
+- The Python Google Agent Development Kit (ADK) integration records agent runs,
+  model calls, and tool calls. Relay guardrails and intercepts apply to supported
+  model and tool calls. Setup guides include ADK CLI and workflow examples.
+  Refer to [Google ADK](/supported-integrations/google-adk).
 - Daemon workers support the full middleware pipeline for large language model
   (LLM) calls.
   This covers OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
@@ -52,6 +61,13 @@ This release expands plugin control, deployment options, and setup guidance:
 - Provider API key helpers can supply a fresh credential for each request
   attempt. Refer to
   [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
+- OpenAI- and Anthropic-compatible model upstreams can use remote HTTP when
+  their hosts are explicitly trusted. These requests send no credential headers.
+  Prefer HTTPS. Refer to
+  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
+- Codex and Claude Code hook sessions can continue the launcher's trace through
+  `TRACEPARENT` and `TRACESTATE`. Refer to
+  [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
 - New quick starts cover application bindings and supported frameworks and
   coding agents. Plugin setup guidance includes Switchyard. Refer to
   [Quick Starts](/getting-started/quick-start) and
@@ -84,6 +100,12 @@ The main compatibility changes affect these areas:
 - Native plugins can use application binary interface (ABI) v8 scope snapshots.
   Existing v7 callback layouts remain compatible. Worker snapshots require the
   new `grpc-v1` extension.
+- Rust worker SDK error matches must handle `WorkerSdkError::Downstream`.
+  Python worker error checks must allow `WorkerSdkError` subclasses. Preserve
+  the original error so diagnostics can identify where the failure began.
+- Embedded diagnostics settings are fixed by the first initialization.
+  Restart the process to change them. Diagnostic read access can expose private
+  data and needs separate authorization.
 
 ### Fixes and Other Changes
 
@@ -92,11 +114,17 @@ The main fixes improve request handling, telemetry, and process cleanup:
 - Provider routing checks access before using Relay-held credentials. Plugin
   integrity and signature failures always prevent activation.
 - Request codecs preserve provider fields across multiple edits. LangChain
-  tool schema edits now reach the model call.
+  tool schema edits now reach the model call. Gemini request edits preserve
+  text placement, and streamed function-call arguments are merged correctly.
 - Framework tool results retain content and handled error status. Manual LLM
-  completion preserves an explicit error status.
+  completion preserves an explicit error status. Cache replay keeps framework
+  tool result objects and content intact.
+- Tool classification now recognizes `load_skill` as a skill tool.
 - OpenAI Responses streams retain usage and report missing terminal events.
   Gemini cost estimates account for thinking and supported tool-use tokens.
+- Streaming preserves Unicode characters split across transport chunks.
+  Python streams retain pending exceptions through native wakeups. Node.js
+  streams retain errors when closing overlaps a read.
 - Agent Trajectory Interchange Format (ATIF) output uses valid content parts.
   Text-only step messages use strings. Delivery-failure warnings identify the
   affected trajectory.
@@ -112,6 +140,22 @@ For upgrade actions and links to each affected workflow, refer to the
 
 The following known issues and limitations apply to NeMo Relay 0.11.0:
 
+- Diagnostics stores recent evidence in memory and can replace older events
+  when storage fills. It does not keep history after process exit. Diagnostic
+  detail can contain private data that has not been sanitized. Daemon worker
+  caches can return stale or partial pages. Check coverage, freshness, and
+  continuation fields before drawing conclusions. Refer to
+  [Diagnostics](/reference/diagnostics) and
+  [CLI and Daemon Diagnostics](/reference/diagnostics/cli).
+- Google ADK live model calls through `Runner.run_live` or
+  `RunConfig.support_cfc` have no Relay model events or middleware. Relay's
+  response cache skips ADK model calls. While personally identifiable information
+  (PII) redaction is active, Relay omits model response payloads from exported
+  model end events. Tools run by
+  the provider cannot be blocked or changed by Relay. Use `wrap_node` to record
+  full scopes for workflow steps, except steps run with `parallel_worker`.
+  Those steps have completion events rather than full step scopes. Refer to
+  [Google ADK Limitations](/supported-integrations/google-adk#limitations).
 - ChatGPT voice calls and sidebands use separate upstream settings. Call
   creation uses the ChatGPT backend and keeps the caller's ChatGPT credential.
   Sideband attachment uses `openai_base_url` and never receives Relay's provider
