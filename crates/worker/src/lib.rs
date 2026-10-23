@@ -2501,7 +2501,9 @@ impl PluginWorker for WorkerService {
         }
         Ok(Response::new(WorkerAck {
             accepted,
-            message: if request.reason.is_empty() {
+            message: if !accepted {
+                "invocation is not active".into()
+            } else if request.reason.is_empty() {
                 "cancellation accepted".into()
             } else {
                 format!("cancellation accepted: {}", request.reason)

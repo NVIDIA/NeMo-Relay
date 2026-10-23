@@ -6070,7 +6070,11 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
 #[tokio::test]
 async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors() {
     for unread_error in [false, true] {
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(16);
+        let chunk_count = if unread_error { 15 } else { 16 };
+        for index in 0..chunk_count {
+            tx.try_send(Ok(json!({"chunk": index}))).unwrap();
+        }
         if unread_error {
             tx.send(Err(FlowError::Internal("producer failed".into())))
                 .await
@@ -6084,7 +6088,12 @@ async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors
         };
         completion_tx.send_replace(Some(Err("cleanup failed".into())));
         for _ in 0..2 {
-            let error = Pin::new(&mut stream).close().await.unwrap_err();
+            let close = Pin::new(&mut stream).close();
+            assert!(
+                tx.is_closed(),
+                "close must stop new chunks before awaiting cleanup"
+            );
+            let error = close.await.unwrap_err();
             assert!(error.to_string().contains(if unread_error {
                 "producer failed"
             } else {

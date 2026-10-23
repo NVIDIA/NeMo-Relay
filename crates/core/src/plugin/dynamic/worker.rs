@@ -1988,6 +1988,7 @@ impl LlmStreamInner for WorkerForwardedLlmStream {
         // Disconnect before waiting so the forwarder requests worker cancellation.
         if let Some(receiver) = this.receiver.take() {
             let mut receiver = receiver.into_inner();
+            receiver.close();
             while let Ok(item) = receiver.try_recv() {
                 if let Err(error) = item {
                     this.close_result.get_or_insert(Err(error));
