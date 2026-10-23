@@ -13,7 +13,7 @@ Rust SDK for NeMo Relay out-of-process gRPC worker plugins.
 
 ## Invocation cancellation
 
-The `grpc-v1` service tracks active unary and streaming callbacks by the host-provided invocation ID. Relay sends `CancelInvocation` when a managed caller is cancelled, an invocation times out, or a host stream is abandoned. The SDK aborts the matching async callback task and reports `worker.cancelled`; cancellation of an unknown, completed, or already cancelled ID returns a negative acknowledgment.
+The `grpc-v1` service tracks active unary and streaming callbacks by the host-provided invocation ID. Relay sends `CancelInvocation` when a managed caller is cancelled, an invocation times out, or a host stream is abandoned. The SDK aborts the matching async callback task, waits for callback-owned cleanup, and reports `worker.cancelled`; cancellation of an unknown, completed, or already cancelled ID returns a negative acknowledgment.
 
 Cancellation is cooperative. Dropping an async callback future releases its Rust-owned resources, but an accepted acknowledgment does not prove that arbitrary blocking work started by the callback has stopped.
 
