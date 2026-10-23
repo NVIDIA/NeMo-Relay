@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +14,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from quickstarts import shell
 from quickstarts.assets import host_platform, sha256
 
 
@@ -53,11 +53,19 @@ def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute:
         commands.append(
             (
                 "python",
-                shlex.quote(sys.executable)
-                + " -m maturin build --locked --profile dev --interpreter "
-                + shlex.quote(sys.executable)
-                + " --out "
-                + shlex.quote(str(packages)),
+                shell.command(
+                    sys.executable,
+                    "-m",
+                    "maturin",
+                    "build",
+                    "--locked",
+                    "--profile",
+                    "dev",
+                    "--interpreter",
+                    sys.executable,
+                    "--out",
+                    packages,
+                ),
             )
         )
     if "nodejs" in surfaces:
@@ -67,8 +75,17 @@ def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute:
                 ("node-build", "npm run build-debug --workspace=nemo-relay-node"),
                 (
                     "node-pack",
-                    f"{shlex.quote(sys.executable)} scripts/package-node-bin.py --platform {host_platform()} "
-                    f"--version {shlex.quote(version)} --output-dir {shlex.quote(str(packages))} --metapackage",
+                    shell.command(
+                        sys.executable,
+                        "scripts/package-node-bin.py",
+                        "--platform",
+                        host_platform(),
+                        "--version",
+                        version,
+                        "--output-dir",
+                        packages,
+                        "--metapackage",
+                    ),
                 ),
             ]
         )
@@ -80,8 +97,13 @@ def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute:
             "macos-arm64": "aarch64-apple-darwin",
             "linux-amd64": "x86_64-unknown-linux-gnu",
             "linux-arm64": "aarch64-unknown-linux-gnu",
+            "windows-amd64": "x86_64-pc-windows-msvc",
         }
-        shutil.copy2(target / "debug/nemo-relay", packages / f"nemo-relay-cli-{triples[host_platform()]}-{version}")
+        suffix = ".exe" if shell.WINDOWS else ""
+        shutil.copy2(
+            target / ("debug/nemo-relay" + suffix),
+            packages / f"nemo-relay-cli-{triples[host_platform()]}-{version}{suffix}",
+        )
     record.update(
         status="built",
         commands=commands,

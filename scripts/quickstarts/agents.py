@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
-import shlex
+import shutil
 import tomllib
 from pathlib import Path
 from typing import Any
 
+from quickstarts import shell
 from quickstarts.provider import Fixture
 
 PYTHON_CASES = {"python", "langgraph", "langchain", "deep-agents", "google-adk"}
@@ -42,9 +44,12 @@ def prepare(
         return {"provider": "local-chat-completions"}
     binary_dir = work / "bin"
     binary_dir.mkdir()
-    environment["PATH"] = str(binary_dir) + ":" + environment["PATH"]
+    environment["PATH"] = str(binary_dir) + os.pathsep + environment["PATH"]
     if name != "hermes":
-        (binary_dir / "nemo-relay").symlink_to(resolved["cli"])
+        if shell.WINDOWS:
+            shutil.copy2(resolved["cli"], binary_dir / "nemo-relay.exe")
+        else:
+            (binary_dir / "nemo-relay").symlink_to(resolved["cli"])
     if name == "codex":
         managed = Path("/etc/codex/managed_config.toml")
         if managed.is_file() and tomllib.loads(managed.read_text()).get("model_provider"):
@@ -101,10 +106,10 @@ def prepare(
         if not re.fullmatch(r"[0-9a-f]{40}", hermes_ref):
             raise ValueError("Hermes ref must be an immutable full commit SHA")
         source = work / "hermes-source"
-        q = shlex.quote
+        q = shell.quote
         run(
             "hermes-clone",
-            f"git init {q(str(source))}\ngit -C {q(str(source))} remote add origin https://github.com/NousResearch/hermes-agent.git\n"
+            f"git init {q(source)}\ngit -C {q(source)} remote add origin https://github.com/NousResearch/hermes-agent.git\n"
             f"git -C {q(str(source))} fetch --depth 1 origin {hermes_ref}\n"
             f"git -C {q(str(source))} checkout --detach FETCH_HEAD",
         )
@@ -115,11 +120,11 @@ def prepare(
         run(
             "hermes-install",
             f"uv venv --python 3.14 --managed-python {q(str(venv))}\n"
-            f"uv pip install --python {q(str(venv / 'bin/python'))} --editable {q(str(source))}\n"
-            f"uv pip install --python {q(str(venv / 'bin/python'))} --reinstall {q(str(resolved['python']))}",
+            f"uv pip install --python {q(shell.python(venv))} --editable {q(source)}\n"
+            f"uv pip install --python {q(shell.python(venv))} --reinstall {q(resolved['python'])}",
             1200,
         )
-        environment["PATH"] = str(venv / "bin") + ":" + environment["PATH"]
+        environment["PATH"] = str(shell.python(venv).parent) + os.pathsep + environment["PATH"]
         config = work / ".hermes"
         config.mkdir()
         environment.update(HERMES_HOME=str(config), OPENAI_BASE_URL=url + "/v1", OPENAI_API_KEY="quickstart-fixture")
@@ -165,9 +170,8 @@ def command(block: dict[str, Any], name: str, work: Path, fixture: Fixture) -> t
                 raise ValueError("The pi install pin changed; review its unattended adapter")
             prefix = work / "agent-npm"
             return (
-                f"npm install --prefix {shlex.quote(str(prefix))} --ignore-scripts "
-                f"@earendil-works/pi-coding-agent@{match[1]}\n"
-                f'export PATH={shlex.quote(str(prefix / "node_modules/.bin"))}:"$PATH"\n'
+                f"npm install --prefix {shell.quote(prefix)} --ignore-scripts "
+                f"@earendil-works/pi-coding-agent@{match[1]}\n" + shell.prepend(prefix / "node_modules/.bin") + "\n"
                 "pi --version\nnemo-relay --version"
             ), "isolated-install"
         return "nemo-relay --version", "Selected CLI binary replaces the user-level installer"

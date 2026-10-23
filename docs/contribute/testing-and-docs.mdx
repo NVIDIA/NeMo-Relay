@@ -188,9 +188,21 @@ and build/source provenance. Logs, sample hashes, dependency locks, and exported
 event files support diagnosis. These JSON files are generated evidence, not
 configuration that needs updating for every run.
 
-The initial GitHub matrix runs Linux x86-64 with Bash. The same runner also
-supports local glibc Linux ARM64 and Apple Silicon macOS execution. Windows and
-PowerShell do not yet have unattended execution adapters. The workflow must
+The GitHub matrix runs Linux x86-64 and Apple Silicon macOS with Bash, and
+Windows x86-64 with native PowerShell. The runner selects the matching shell
+variants from each guide's contract. Windows uses its `.exe` CLI asset, native
+Node package, and `Scripts` virtual-environment layout. The same runner also
+supports local glibc Linux ARM64 execution.
+
+On Windows, install PowerShell 7.4 or newer and Git for Windows. The repository's
+`just` recipes use Git Bash to launch the Python harness; the guide commands
+execute in native PowerShell. Shell environment changes persist between blocks.
+Native command failures are fatal, and Relay's Windows job controller owns
+the command's child processes so timeouts also clean up agent processes.
+The workflow runs focused helper tests on each platform before the guides,
+including native Windows tests for failure propagation and process cleanup.
+
+The workflow must
 exist on the default branch before GitHub exposes its normal manual trigger;
 select the implementation branch after that workflow has been registered.
 

@@ -30,6 +30,8 @@ def host_platform() -> str:
         ("Linux", "x86_64"): "linux-amd64",
         ("Linux", "aarch64"): "linux-arm64",
         ("Darwin", "arm64"): "macos-arm64",
+        ("Windows", "AMD64"): "windows-amd64",
+        ("Windows", "x86_64"): "windows-amd64",
     }
     key = (platform.system(), platform.machine())
     if key not in hosts or (key[0] == "Linux" and platform.libc_ver()[0] != "glibc"):
@@ -198,8 +200,11 @@ class Assets:
             "macos-arm64": "aarch64-apple-darwin",
             "linux-amd64": "x86_64-unknown-linux-gnu",
             "linux-arm64": "aarch64-unknown-linux-gnu",
+            "windows-amd64": "x86_64-pc-windows-msvc",
         }
-        filename = f"nemo-relay-cli-{triples[self.platform]}-{self.version}"
+        filename = f"nemo-relay-cli-{triples[self.platform]}-{self.version}" + (
+            ".exe" if self.platform.startswith("windows") else ""
+        )
         candidates = [entry for entry in self.entries if entry["name"] == filename]
         if len(candidates) != 1:
             raise ValueError(f"Expected one CLI asset {filename}, found {len(candidates)}")
@@ -211,7 +216,12 @@ class Assets:
         return path
 
     def nodejs(self) -> list[Path]:
-        suffixes = {"linux-amd64": "linux-x64-gnu", "linux-arm64": "linux-arm64-gnu", "macos-arm64": "darwin-arm64"}
+        suffixes = {
+            "linux-amd64": "linux-x64-gnu",
+            "linux-arm64": "linux-arm64-gnu",
+            "macos-arm64": "darwin-arm64",
+            "windows-amd64": "win32-x64-msvc",
+        }
         expected = {"nemo-relay-node", "nemo-relay-node-" + suffixes[self.platform]}
         selected: dict[str, Path] = {}
         for entry in self.entries:
@@ -221,9 +231,12 @@ class Assets:
             if "path" not in entry and not entry["name"].endswith(f"-{self.version}.tgz"):
                 continue
             # Remote inventories can contain seven native variants; only download this host's files.
-            native = {"linux-amd64": "linux-x64", "linux-arm64": "linux-arm64", "macos-arm64": "darwin-arm64"}[
-                self.platform
-            ]
+            native = {
+                "linux-amd64": "linux-x64",
+                "linux-arm64": "linux-arm64",
+                "macos-arm64": "darwin-arm64",
+                "windows-amd64": "win32-x64",
+            }[self.platform]
             if "path" not in entry and entry["name"] not in {
                 f"nemo-relay-node-npm-{self.version}.tgz",
                 f"nemo-relay-node-npm-{native}-{self.version}.tgz",
