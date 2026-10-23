@@ -128,6 +128,10 @@ uv add "nemo-relay[google-adk]"
 pip install "nemo-relay[google-adk]"
 ```
 
+Add `NemoRelayPlugin` to your ADK app to record agent runs, model calls, and
+tool calls. For setup steps and examples, follow the
+[Google ADK Integration Guide](https://docs.nvidia.com/nemo/relay/supported-integrations/google-adk).
+
 #### LangChain NVIDIA Integration
 
 The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.
