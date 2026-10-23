@@ -147,6 +147,11 @@ Hermes provider alternatives as omitted and keeps `hermes doctor` diagnostics;
 the native Relay event and file checks remain mandatory.
 The Codex adapter refuses to run when system-managed configuration forces a
 different provider, because that would bypass the local fixture.
+On Windows, the disposable Codex host enables its native unelevated sandbox so
+the guide's `--sandbox workspace-write` mode can operate. Claude Code uses
+default permission mode with the guide's explicit Write allowlist; its optional
+model-based permission classifier is outside this test. Temporary paths are
+canonicalized before requesting tool actions, and agent output is read as UTF-8.
 
 For prerelease assets elsewhere, supply a GitHub release URL, a local artifact
 directory, or an HTTPS directory containing Relay's `SHA256SUMS` inventory:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +25,24 @@ PROTOCOL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PROTOCOL)
 
 
+def successful_result(content: Any) -> bool:
+    try:
+        parsed = json.loads(content) if isinstance(content, str) else content
+    except ValueError:
+        parsed = content
+    if isinstance(parsed, dict):
+        if parsed.get("error") or parsed.get("is_error"):
+            return False
+        if parsed.get("exit_code", 0) != 0 or parsed.get("metadata", {}).get("exit_code", 0) != 0:
+            return False
+        return successful_result(parsed["output"]) if "output" in parsed else True
+    return isinstance(parsed, str) and not re.search(
+        r"(^error\b|failed:|rejected\b|blocked by policy|permission denied|exited with code [1-9])",
+        parsed,
+        re.IGNORECASE,
+    )
+
+
 def tool_result(request: dict[str, Any]) -> bool:
     """Inspect protocol result positions; the prompt itself always contains the marker."""
     for content in request.get("contents", []):
@@ -38,14 +57,7 @@ def tool_result(request: dict[str, Any]) -> bool:
             message.get("tool_call_id", message.get("call_id")) == "call_quickstart"
         ):
             content = message.get("content", message.get("output", ""))
-            try:
-                parsed = json.loads(content) if isinstance(content, str) else content
-            except ValueError:
-                parsed = content
-            if isinstance(parsed, dict):
-                if not parsed.get("error") and not parsed.get("is_error"):
-                    return True
-            elif isinstance(parsed, str) and not parsed.lower().startswith("error"):
+            if successful_result(content):
                 return True
         for part in message.get("content", []) if isinstance(message.get("content"), list) else []:
             if (

@@ -66,6 +66,8 @@ def prepare(
             '[model_providers.quickstart]\nname = "Local Quick Start fixture"\nwire_api = "responses"\n'
             f'base_url = "{url}/v1"\nenv_key = "OPENAI_API_KEY"\n'
             f'[projects.{json.dumps(str(fixture.project))}]\ntrust_level = "trusted"\n'
+            + ('[windows]\nsandbox = "unelevated"\n' if shell.WINDOWS else ""),
+            encoding="utf-8",
         )
         run("agent-version", "codex --version")
     elif name == "claude-code":
@@ -78,6 +80,9 @@ def prepare(
             ANTHROPIC_AUTH_TOKEN="quickstart-fixture",
         )
         (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "theme": "dark"}))
+        # Use the guide's explicit Write allowlist, without an unrelated model
+        # classifier deciding tool permissions through the fixture provider.
+        (config / "settings.json").write_text(json.dumps({"permissions": {"defaultMode": "default"}}))
         run("agent-version", "claude --version")
     elif name == "pi":
         config = work / ".pi"
@@ -141,7 +146,11 @@ def prepare(
         }
     else:
         raise ValueError(f"No agent provisioner for {name}")
-    version = (folder / "agent-version.stdout.log").read_text().strip() if name != "pi" else "0.84.0 (guide pin)"
+    version = (
+        (folder / "agent-version.stdout.log").read_text(encoding="utf-8-sig").strip()
+        if name != "pi"
+        else "0.84.0 (guide pin)"
+    )
     return {"version": version, "provider": "local-protocol-fixture"}
 
 
