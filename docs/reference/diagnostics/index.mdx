@@ -369,7 +369,7 @@ Diagnostic retention remains independent of these delivery policies. Refer to
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
 OpenTelemetry subscriber delivery diagnostics remain legacy-only. Skipped
-automatic exporters record `plugin.registration_failed` at activation with a
+automatic exporters record `plugin.exporter_initialization_failed` at activation with a
 warning severity and a safe explanation shared with the plugin activation report.
 This uses Plugin/Common ownership and leaves the execution mechanism unset.
 The legacy report is maintained independently; it is not replayed from snapshots.
@@ -470,7 +470,7 @@ caller. Transport adapters must check metadata and payload limits before creatin
 those values. A supported snapshot version can contain future names. Unsupported
 snapshot versions fail compatibility checks.
 
-The common catalogue includes logging failures and successes, six common plugin
+The common catalogue includes logging failures and successes, seven common plugin
 failures, and `ConfigurationInherited`. CLI, daemon, and dynamic plugin integrations
 add their own operation codes.
 

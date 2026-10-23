@@ -874,11 +874,13 @@ For an automatic exporter alone, you can instead list the host in
 `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`.
 
 When runtime diagnostics are enabled, each skipped automatic exporter also records
-one `plugin.registration_failed` observation with activation phase and warning
+one `plugin.exporter_initialization_failed` observation with activation phase and warning
 severity. Its detail uses the same redacted explanation as the activation report.
-Typed header validation failures have cause `invalid_input`; errors whose causes
-have already been flattened by the exporter retain cause `unknown`. Relay does
-not infer causes from error strings or include backend error text in this detail.
+Header validation, invalid endpoint, and invalid TLS configuration failures have
+cause `invalid_input`. Rejected plaintext destinations have cause `policy_rejected`,
+and TLS file-read failures have cause `io`. Backend errors whose causes have
+already been flattened retain cause `unknown`. Relay does not infer causes from
+error strings or include backend error text or TLS file paths in this detail.
 The activation report remains available when runtime diagnostics are disabled.
 This recording does not change plugin activation success or mark the process unhealthy.
 

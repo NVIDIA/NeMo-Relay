@@ -8622,7 +8622,7 @@ fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once()
                 .unwrap();
             assert_eq!(snapshot.events.len(), 3);
             for (event, report) in snapshot.events.iter().zip(reports) {
-                assert_eq!(event.code(), "plugin.registration_failed");
+                assert_eq!(event.code(), "plugin.exporter_initialization_failed");
                 assert_eq!(event.classification.failure_class(), Some("invalid_input"));
                 assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
                 assert_eq!(

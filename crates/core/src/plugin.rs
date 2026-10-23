@@ -443,6 +443,9 @@ const PLUGIN_ACTIVATION_CODES: &[BuiltinDiagnosticCode] = &[
     BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
         CommonPluginFailureCode::RegistrationFailed,
     ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ExporterInitializationFailed,
+    ))),
 ];
 
 impl Default for PluginRegistrationContext {

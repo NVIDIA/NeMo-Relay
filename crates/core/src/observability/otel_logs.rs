@@ -36,7 +36,7 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    has_configured_headers, validate_header_files, validate_header_http_endpoint,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint_typed,
 };
 use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
@@ -282,15 +282,14 @@ impl OpenTelemetryLogConfig {
         }
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
-                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
-                    .map_err(OpenTelemetryError::ExporterBuild)?
+                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")?
                     .ok_or_else(|| {
-                        OpenTelemetryError::ExporterBuild(
+                        OpenTelemetryError::InvalidEndpoint(
                             "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_header_http_endpoint_typed(&endpoint, &self.plaintext)
+                    .map_err(OpenTelemetryError::from)?;
             }
         } else {
             validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
@@ -299,8 +298,8 @@ impl OpenTelemetryLogConfig {
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_header_http_endpoint_typed(&self.endpoint, &self.plaintext)
+                    .map_err(OpenTelemetryError::from)?;
             }
         }
         Ok(())

@@ -2197,6 +2197,22 @@ fn automatic_exporter_failure(
             FailureClass::InvalidInput,
             "invalid metadata promotion prefix configuration",
         ),
+        OpenTelemetryError::InvalidEndpoint(_) => (
+            FailureClass::InvalidInput,
+            "invalid OTLP endpoint; check the URI scheme, host, and surrounding whitespace",
+        ),
+        OpenTelemetryError::PlaintextRejected(_) => (
+            FailureClass::PolicyRejected,
+            "plaintext destination rejected by transport policy; use HTTPS or explicitly permit the intended host in insecure_http_hosts",
+        ),
+        OpenTelemetryError::InvalidTlsConfiguration(_) => (
+            FailureClass::InvalidInput,
+            "invalid TLS configuration or certificate/key material",
+        ),
+        OpenTelemetryError::TlsFileRead { .. } => (
+            FailureClass::Io,
+            "cannot read a configured TLS certificate or key file",
+        ),
         OpenTelemetryError::ExporterBuild(_)
         | OpenTelemetryError::TraceProvider(_)
         | OpenTelemetryError::LogProvider(_)
@@ -2209,11 +2225,11 @@ fn automatic_exporter_failure(
     (
         Classification::failure(
             FailureCode::Plugin(PluginFailureCode::Common(
-                CommonPluginFailureCode::RegistrationFailed,
+                CommonPluginFailureCode::ExporterInitializationFailed,
             )),
             class,
         )
-        .expect("registration failure supports the producer's cause class"),
+        .expect("exporter initialization failure supports the producer's cause class"),
         reason,
     )
 }
@@ -2259,7 +2275,7 @@ fn automatic_subscriber<T>(
                 component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
                 field: Some(endpoint_source.to_string()),
                 message: format!(
-                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped: {reason}. For remote plain HTTP destinations, check insecure_http_hosts."
+                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped: {reason}."
                 ),
             });
             Vec::new()
@@ -4562,6 +4578,7 @@ fn validate_automatic_plaintext_destinations(
         }
         let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_ENDPOINT");
         let validation = super::otel_signal::automatic_signal_endpoint(&endpoint_variable)
+            .map_err(|error| error.to_string())
             .and_then(|endpoint| match endpoint {
                 Some(endpoint) if signal == "traces" => {
                     super::header_file::validate_trace_transport(&endpoint, plaintext)

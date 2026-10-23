@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::OpenTelemetryTlsConfig;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    validate_header_files, validate_trace_transport,
+    validate_header_files, validate_trace_transport_typed,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -163,6 +163,23 @@ pub enum OpenTelemetryError {
         /// Environment variable that was set.
         variable: &'static str,
     },
+    /// A configured endpoint is malformed or uses an unsupported transport scheme.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidEndpoint(String),
+    /// The plaintext transport policy rejected the endpoint's destination.
+    #[error("failed to build the OTLP exporter: {0}")]
+    PlaintextRejected(String),
+    /// TLS settings or certificate/key material failed validation.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidTlsConfiguration(String),
+    /// A TLS material file could not be read. The path is deliberately omitted.
+    #[error("failed to build the OTLP exporter: tls.{field}: cannot read PEM file")]
+    TlsFileRead {
+        /// TLS field whose configured file could not be read.
+        field: String,
+        /// Filesystem cause, retained without the sensitive configured path.
+        kind: std::io::ErrorKind,
+    },
     /// Failed to build the OTLP exporter.
     #[error("failed to build the OTLP exporter: {0}")]
     ExporterBuild(String),
@@ -184,6 +201,19 @@ pub enum OpenTelemetryError {
     /// Registration errors from the core runtime.
     #[error(transparent)]
     Core(#[from] FlowError),
+}
+
+impl From<super::header_file::EndpointTransportError> for OpenTelemetryError {
+    fn from(error: super::header_file::EndpointTransportError) -> Self {
+        match error {
+            super::header_file::EndpointTransportError::InvalidEndpoint(message) => {
+                Self::InvalidEndpoint(message)
+            }
+            super::header_file::EndpointTransportError::PlaintextRejected(message) => {
+                Self::PlaintextRejected(message)
+            }
+        }
+    }
 }
 
 /// Supported OTLP trace transports.
@@ -251,7 +281,7 @@ pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
 pub(super) fn validate_trace_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> Result<()> {
-    validate_trace_transport(endpoint, plaintext).map_err(OpenTelemetryError::ExporterBuild)
+    validate_trace_transport_typed(endpoint, plaintext).map_err(OpenTelemetryError::from)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -955,10 +985,9 @@ impl OpenTelemetrySubscriber {
         }
         if let TraceConfig::Endpoint(endpoint) = &mut config {
             if endpoint.automatic {
-                let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-                    .map_err(OpenTelemetryError::ExporterBuild)?
+                let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?
                     .ok_or_else(|| {
-                        OpenTelemetryError::ExporterBuild(
+                        OpenTelemetryError::InvalidEndpoint(
                             "automatic trace exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )

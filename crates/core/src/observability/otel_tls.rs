@@ -31,7 +31,7 @@ pub struct OpenTelemetryTlsConfig {
 }
 
 fn invalid(field: &str, reason: &str) -> OpenTelemetryError {
-    OpenTelemetryError::ExporterBuild(format!("tls.{field}: {reason}"))
+    OpenTelemetryError::InvalidTlsConfiguration(format!("tls.{field}: {reason}"))
 }
 
 fn invalid_identity() -> OpenTelemetryError {
@@ -131,7 +131,12 @@ impl OpenTelemetryTlsConfig {
 
     fn read(path: &Option<String>, field: &str) -> Result<Option<Vec<u8>>> {
         path.as_ref()
-            .map(|path| std::fs::read(path).map_err(|_| invalid(field, "cannot read PEM file")))
+            .map(|path| {
+                std::fs::read(path).map_err(|error| OpenTelemetryError::TlsFileRead {
+                    field: field.to_owned(),
+                    kind: error.kind(),
+                })
+            })
             .transpose()
     }
 
@@ -229,11 +234,10 @@ impl TlsPem {
             builder = builder
                 .identity(reqwest::Identity::from_pem(&pem).map_err(|_| invalid_identity())?);
         }
-        builder.build().map_err(|_| {
-            invalid(
-                "certificate/client_certificate/private_key",
-                "invalid TLS trust or client identity",
-            )
-        })
+        // The client builder also initializes platform trust and transport state;
+        // its flattened error does not establish a configuration-validation cause.
+        builder.build().map_err(|_| OpenTelemetryError::ExporterBuild(
+            "tls.certificate/client_certificate/private_key: invalid TLS trust or client identity".to_string(),
+        ))
     }
 }

@@ -511,9 +511,7 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
 /// value for transport safety checks; the builder still owns URL derivation.
 /// A value the builder cannot parse is rejected rather than allowed to fall back
 /// to the generic endpoint, which would bypass the check.
-pub(super) fn automatic_signal_endpoint(
-    signal_variable: &str,
-) -> std::result::Result<Option<String>, String> {
+pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Result<Option<String>> {
     for variable in [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"] {
         let Some(value) = std::env::var(variable)
             .ok()
@@ -522,9 +520,9 @@ pub(super) fn automatic_signal_endpoint(
             continue;
         };
         if value.trim() != value || value.parse::<http::Uri>().is_err() {
-            return Err(format!(
+            return Err(OpenTelemetryError::InvalidEndpoint(format!(
                 "{variable} must be a valid URI without surrounding whitespace"
-            ));
+            )));
         }
         return Ok(Some(value));
     }
@@ -594,8 +592,7 @@ pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
 /// Build an automatic HTTP client with TLS settings for one signal.
 /// The client blocks redirects.
 pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client> {
-    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))
-        .map_err(OpenTelemetryError::ExporterBuild)?
+    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))?
         .unwrap_or_else(|| "http://localhost:4318".into());
     super::OpenTelemetryTlsConfig::from_environment(signal)?.http_client(&endpoint, None)
 }
@@ -603,8 +600,7 @@ pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client
 pub(super) fn automatic_otlp_grpc_tls(
     signal: &str,
 ) -> Result<Option<tonic::transport::ClientTlsConfig>> {
-    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))
-        .map_err(OpenTelemetryError::ExporterBuild)?
+    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))?
         .unwrap_or_else(|| "http://localhost:4317".into());
     let tls = super::OpenTelemetryTlsConfig::from_environment(signal)?;
     tls.validate(&endpoint)?;

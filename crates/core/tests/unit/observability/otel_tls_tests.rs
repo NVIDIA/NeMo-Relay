@@ -6,6 +6,7 @@ use crate::api::event::{
     BaseEvent, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
     MarkEvent, ScopeCategory, ScopeEvent,
 };
+use crate::observability::otel::OpenTelemetryError;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
 };
@@ -1149,4 +1150,40 @@ fn tls_automatic_signals_use_independent_trust_roots_and_client_identities() {
             }
         }
     });
+}
+
+#[test]
+fn tls_failures_preserve_validation_and_file_read_causes_without_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("private-certificate.pem");
+    let tls = OpenTelemetryTlsConfig {
+        certificate: Some(path.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let missing = tls.validate("https://collector.example:4318").unwrap_err();
+    assert!(matches!(
+        missing,
+        OpenTelemetryError::TlsFileRead {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }
+    ));
+    assert_eq!(
+        missing.to_string(),
+        "failed to build the OTLP exporter: tls.certificate: cannot read PEM file"
+    );
+    assert!(!missing.to_string().contains("private-certificate"));
+
+    std::fs::write(&path, "private-invalid-PEM").unwrap();
+    let invalid = tls.validate("https://collector.example:4318").unwrap_err();
+    assert!(matches!(
+        invalid,
+        OpenTelemetryError::InvalidTlsConfiguration(_)
+    ));
+    assert!(!invalid.to_string().contains("private-invalid-PEM"));
+    assert!(!invalid.to_string().contains("private-certificate"));
+    assert!(matches!(
+        tls.validate("http://collector.example:4318").unwrap_err(),
+        OpenTelemetryError::InvalidTlsConfiguration(_),
+    ));
 }

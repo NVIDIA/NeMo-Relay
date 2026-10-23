@@ -315,7 +315,7 @@ These existing interfaces retain their own contracts:
 - Worker `GetRuntimeDiagnostics`.
  Snapshot
 readers do not fall back to those reports. Skipped automatic OTel exporters are
-recorded directly as activation-phase `plugin.registration_failed` observations;
+recorded directly as activation-phase `plugin.exporter_initialization_failed` observations;
 their activation warnings remain in plugin reports independently. Broader OTel
 pipeline diagnostics integration, CPU attribution, and durable restart history
 are not supported.
