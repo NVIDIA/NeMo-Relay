@@ -37,7 +37,7 @@ Creates a new decoder with an empty buffer.
 
 Appends `bytes` to the internal buffer and returns every now-complete SSE event.
 
-Bytes are interpreted as UTF-8 with replacement characters for invalid sequences; provider SSE streams are well-formed UTF-8 in practice, but lossy decoding keeps the decoder honest rather than failing on a single corrupt chunk.
+Bytes are interpreted as UTF-8 with replacement characters for invalid sequences; provider SSE streams are well-formed UTF-8 in practice. Decoding happens only after a complete frame is buffered, preserving valid characters split across incoming chunks.
 
 Returns `Ok(events)` containing zero or more events whose `data:` payloads parsed successfully. Frames whose `data:` line is non-empty but does not parse as JSON are surfaced as [`FlowError::Internal`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) so the caller can decide whether to abort the stream or skip the frame; frames with no `data:` line at all (e.g. SSE heartbeats) are silently dropped.
 
