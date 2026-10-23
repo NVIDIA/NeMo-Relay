@@ -22,7 +22,7 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tdigest = { version = "0.2", features = ["use_serde"] }
-tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 regex = "1"
 serde_json_canonicalizer = "0.3"
@@ -37,7 +37,7 @@ __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dev-dependencies]
 nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
-tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
+tokio = { workspace = true, default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
 
 [[test]]
 name = "redis_integration"
