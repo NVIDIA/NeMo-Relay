@@ -852,3 +852,27 @@ fn http_model_host_list_rejects_non_string_config_entries() {
         );
     }
 }
+
+#[test]
+fn logging_editor_sets_and_clears_file_failure_policy() {
+    for section in ["logging", "daemon.logging"] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut document = ConfigDocument::read(temp.path().join("config.toml")).unwrap();
+        document.logging_section = section;
+        document.add_sink("relay.jsonl".into()).unwrap();
+        document
+            .set_sink_enum(0, "failure_policy", "optional", LOG_FAILURE_POLICIES)
+            .unwrap();
+        assert_eq!(
+            document.sink_string(0, "failure_policy").as_deref(),
+            Some("optional")
+        );
+        assert!(
+            document
+                .set_sink_enum(0, "failure_policy", "ignore", LOG_FAILURE_POLICIES)
+                .is_err()
+        );
+        document.clear_sink_key(0, "failure_policy").unwrap();
+        assert!(!document.sink_has_key(0, "failure_policy").unwrap());
+    }
+}

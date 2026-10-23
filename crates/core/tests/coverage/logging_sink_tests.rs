@@ -538,6 +538,8 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         root_relay_id: diagnostics.source().instance_id.to_string(),
         logger,
         _thread_pools: Vec::new(),
+        sink_indices: vec![0],
+        unavailable_files: Vec::new(),
         diagnostics: logging,
         config,
         diagnostic_source: Some(diagnostics.source().instance_id),
@@ -585,7 +587,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
     let diagnostics = enabled_diagnostics();
     let config = LoggingConfig {
         stderr_enabled: false,
-        sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default()); 2],
         ..LoggingConfig::default()
     };
     let logging = LoggingDiagnostics::new(&diagnostics, &config);
@@ -599,6 +601,9 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
         root_relay_id: diagnostics.source().instance_id.to_string(),
         logger,
         _thread_pools: Vec::new(),
+        // Only the second configured file was installed.
+        sink_indices: vec![1],
+        unavailable_files: Vec::new(),
         diagnostics: logging,
         config,
         diagnostic_source: Some(diagnostics.source().instance_id),
@@ -613,7 +618,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
         .unwrap();
     for (component_key, code) in [
         ("logging", "logging.shutdown_failed"),
-        ("logging.file.0", "logging.sink.shutdown_failed"),
+        ("logging.file.1", "logging.sink.shutdown_failed"),
     ] {
         let component = snapshot
             .components
@@ -838,4 +843,27 @@ fn late_diagnostic_attachment_reaches_existing_sink_error_handlers() {
             .unwrap()
             .contains("restricted backend detail")
     );
+}
+
+#[test]
+fn optional_file_policy_only_accepts_structured_initialization_io_errors() {
+    use std::io;
+    for error in [
+        Error::CreateDirectory(io::ErrorKind::PermissionDenied.into()),
+        Error::OpenFile(io::ErrorKind::PermissionDenied.into()),
+        Error::QueryFileMetadata(io::ErrorKind::PermissionDenied.into()),
+    ] {
+        assert_eq!(
+            super::file_open_error_kind(&error),
+            Some(io::ErrorKind::PermissionDenied)
+        );
+    }
+    for error in [
+        Error::FormatRecord(std::fmt::Error),
+        Error::Downstream(Box::new(io::Error::other("permission denied"))),
+        Error::WriteRecord(io::ErrorKind::PermissionDenied.into()),
+        Error::FlushBuffer(io::ErrorKind::PermissionDenied.into()),
+    ] {
+        assert_eq!(super::file_open_error_kind(&error), None);
+    }
 }

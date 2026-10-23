@@ -359,8 +359,14 @@ or exporters. Existing event sanitization and export order stay the same.
 Recording is independent of log thresholds. Projections execute outside the
 state lock, and sink failures use a state-only recording path to avoid recursive
 delivery through a failing sink. Shutdown detaches projections before draining
-sinks. Explicitly configured file sinks remain required, with existing queue,
-rotation, and delivery behavior.
+sinks. File sinks are required by default. An individual sink can use
+`failure_policy = "optional"` to record a filesystem initialization failure and
+allow startup with the other sinks. Failed optional sinks have no delivery queue
+and remain disabled until logging is reinitialized. A diagnostics service attached
+later observes their current unavailable state without replaying earlier records.
+Diagnostic retention remains independent of these delivery policies. Refer to
+[File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
+for configuration, loss semantics, and unchanged runtime delivery behavior.
 
 OpenTelemetry subscriber diagnostics and OTel-dependent plugin reports remain
 legacy-only. They are not projections of this canonical store.
