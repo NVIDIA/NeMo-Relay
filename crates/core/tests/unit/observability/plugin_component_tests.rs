@@ -604,7 +604,11 @@ fn automatic_otel_rejection_reports_redacted_trace_source_and_keeps_valid_metric
     );
     assert!(diagnostic.message.contains("traces"));
     assert!(diagnostic.message.contains("http://collector.example:4318"));
-    assert!(diagnostic.message.contains("insecure_http_hosts"));
+    assert!(
+        diagnostic
+            .message
+            .contains("insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS")
+    );
     for secret in [
         "relay-user",
         "relay-secret",
@@ -8817,7 +8821,11 @@ fn assert_automatic_host_rejection_report(diagnostics: &[ConfigDiagnostic]) -> &
         Some("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
     );
     assert!(!legacy.message.contains("underlying cause is unavailable"));
-    assert!(legacy.message.contains("insecure_http_hosts"));
+    assert!(
+        legacy
+            .message
+            .contains("insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS")
+    );
     assert_automatic_host_redacted(&legacy.message);
     legacy
 }

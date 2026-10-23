@@ -2203,7 +2203,7 @@ fn automatic_exporter_failure(
         ),
         OpenTelemetryError::PlaintextRejected(_) => (
             FailureClass::PolicyRejected,
-            "plaintext destination rejected by transport policy; use HTTPS or explicitly permit the intended host in insecure_http_hosts",
+            "plaintext destination rejected by transport policy; use HTTPS or explicitly permit the intended host in insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS",
         ),
         OpenTelemetryError::InvalidTlsConfiguration(_) => (
             FailureClass::InvalidInput,
