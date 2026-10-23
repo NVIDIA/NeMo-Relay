@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import threading
 import time
 import typing
@@ -864,3 +865,140 @@ def test_otlp_tls_helpers_and_direct_configs_share_schema():
         config.tls = OpenTelemetryTlsConfig(client_certificate="client.pem")
         with pytest.raises(Exception, match="must be supplied together"):
             subscriber(config)
+
+
+class TestPlaintextPreflight:
+    @pytest.fixture(autouse=True)
+    def isolate_plaintext_preflight_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for variable_name in list(os.environ):
+            if variable_name.startswith("OTEL_"):
+                monkeypatch.delenv(variable_name)
+        monkeypatch.setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+
+    @staticmethod
+    def configuration(
+        signal: str,
+        endpoints: list[str],
+        *,
+        headers: dict[str, str] | None = None,
+        insecure_http_hosts: list[str] | None = None,
+    ) -> plugin.PluginConfig:
+        observability = ObservabilityConfig(version=4, insecure_http_hosts=insecure_http_hosts)
+        configured_headers = headers if headers is not None else {"authorization": "synthetic-header-secret"}
+        if signal == "atof":
+            observability.atof = AtofConfig(
+                enabled=True,
+                sinks=[AtofStreamSinkConfig(url=endpoint, headers=configured_headers) for endpoint in endpoints],
+            )
+        elif signal == "atif":
+            observability.atif = AtifConfig(
+                enabled=True,
+                storage=[HttpStorageConfig(endpoint=endpoint, headers=configured_headers) for endpoint in endpoints],
+            )
+        else:
+            section = OpenTelemetrySectionConfig(enabled=True)
+            if signal == "traces":
+                section.endpoints = [
+                    OpenTelemetryEndpointConfig("full", endpoint, headers=configured_headers) for endpoint in endpoints
+                ]
+            elif signal == "logs":
+                section.logs = OpenTelemetryLogSectionConfig(
+                    enabled=True,
+                    endpoints=[
+                        OpenTelemetrySignalEndpointConfig(endpoint, headers=configured_headers)
+                        for endpoint in endpoints
+                    ],
+                )
+            else:
+                assert signal == "metrics"
+                section.metrics = OpenTelemetryMetricSectionConfig(
+                    enabled=True,
+                    endpoints=[
+                        OpenTelemetrySignalEndpointConfig(endpoint, headers=configured_headers)
+                        for endpoint in endpoints
+                    ],
+                )
+            observability.opentelemetry = section
+        return plugin.PluginConfig(components=[ComponentSpec(observability)])
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    async def test_plaintext_preflight_and_activation_reject_reported_cases(self, signal: str) -> None:
+        configuration = self.configuration(
+            signal,
+            ["http://collector.example:4318/telemetry"],
+            headers={} if signal == "traces" else None,
+        )
+        for validate in (plugin.validate, plugin.validate_exact):
+            diagnostics = validate(configuration)["config"]["diagnostics"]
+            assert len(diagnostics) == 1
+            assert diagnostics[0]["level"] == "error"
+            assert diagnostics[0]["code"] == "observability.unsafe_plaintext_destination"
+        expected_exception = RuntimeError if signal in ("atof", "atif") else ValueError
+        with pytest.raises(expected_exception, match="insecure_http_hosts"):
+            await plugin.initialize(configuration)
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    def test_plaintext_preflight_identifies_endpoint_and_redacts_sensitive_values(self, signal: str) -> None:
+        configuration = self.configuration(
+            signal,
+            [
+                "https://collector.example:4318/safe",
+                "http://synthetic-user:synthetic-password@collector.example:4318/private-path?token=synthetic-query",
+            ],
+        )
+        component = signal if signal in ("atof", "atif") else f"opentelemetry.{signal}"
+        field = {"atof": "sinks[1].url", "atif": "storage[1].endpoint"}.get(signal, "endpoints[1].endpoint")
+        for validate in (plugin.validate, plugin.validate_exact):
+            diagnostics = validate(configuration)["config"]["diagnostics"]
+            assert len(diagnostics) == 1
+            diagnostic = diagnostics[0]
+            assert diagnostic["component"] == component
+            assert diagnostic["field"] == field
+            assert "collector.example:4318" in diagnostic["message"]
+            serialized_diagnostics = json.dumps(diagnostics)
+            for sensitive_value in (
+                "synthetic-header-secret",
+                "synthetic-user",
+                "synthetic-password",
+                "private-path",
+                "synthetic-query",
+            ):
+                assert sensitive_value not in serialized_diagnostics
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    @pytest.mark.parametrize("permitted_transport", ["https", "loopback", "allowlist"])
+    def test_plaintext_preflight_permits_existing_transport_controls(
+        self, signal: str, permitted_transport: str
+    ) -> None:
+        endpoint = {
+            "https": "https://collector.example:4318/telemetry",
+            "loopback": "http://127.0.0.1:4318/telemetry",
+            "allowlist": "http://collector.example:4318/telemetry",
+        }[permitted_transport]
+        configuration = self.configuration(
+            signal,
+            [endpoint],
+            insecure_http_hosts=["collector.example"] if permitted_transport == "allowlist" else None,
+        )
+        for validate in (plugin.validate, plugin.validate_exact):
+            assert validate(configuration)["config"]["diagnostics"] == []
+
+    @pytest.mark.parametrize("signal", ["logs", "metrics", "atof", "atif"])
+    def test_plaintext_preflight_permits_headerless_http(self, signal: str) -> None:
+        configuration = self.configuration(signal, ["http://collector.example:4318/telemetry"], headers={})
+        for validate in (plugin.validate, plugin.validate_exact):
+            assert validate(configuration)["config"]["diagnostics"] == []
+
+    async def test_plaintext_preflight_error_preserves_partial_trace_activation(self) -> None:
+        configuration = self.configuration(
+            "traces", ["http://127.0.0.1:4318/v1/traces", "http://collector.example:4318/v1/traces"], headers={}
+        )
+        diagnostics = plugin.validate(configuration)["config"]["diagnostics"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["level"] == "error"
+        assert diagnostics[0]["field"] == "endpoints[1].endpoint"
+        activation = await plugin.initialize(configuration)
+        try:
+            assert activation.is_active
+        finally:
+            await activation.close()

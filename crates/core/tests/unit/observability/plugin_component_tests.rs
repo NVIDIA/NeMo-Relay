@@ -1849,6 +1849,391 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
     unsafe { std::env::remove_var(variable) };
 }
 
+fn plaintext_preflight_environment() -> EnvironmentGuard {
+    let mut variables: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| name.starts_with("OTEL_"))
+        .collect();
+    variables.extend(
+        [
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "OTEL_TRACES_EXPORTER",
+            "OTEL_LOGS_EXPORTER",
+            "OTEL_METRICS_EXPORTER",
+            "OTEL_SDK_DISABLED",
+            "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    let environment = EnvironmentGuard::capture(&variables);
+    // SAFETY: callers hold the observability mutex until this guard restores the environment.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
+    }
+    environment
+}
+
+fn plaintext_preflight_configuration(
+    signal: &str,
+    destination: &str,
+    headers: Json,
+) -> PluginConfig {
+    let mut endpoint = json!({"endpoint": destination});
+    endpoint
+        .as_object_mut()
+        .unwrap()
+        .extend(headers.as_object().unwrap().clone());
+    let section = match signal {
+        "traces" => {
+            endpoint["type"] = json!("full");
+            json!({"opentelemetry": {"enabled": true, "endpoints": [endpoint]}})
+        }
+        "logs" | "metrics" => json!({
+            "opentelemetry": {"enabled": true, signal: {"enabled": true, "endpoints": [endpoint]}}
+        }),
+        "atof" => {
+            endpoint.as_object_mut().unwrap().remove("endpoint");
+            endpoint["url"] = json!(destination);
+            endpoint["type"] = json!("stream");
+            json!({"atof": {"enabled": true, "sinks": [endpoint]}})
+        }
+        "atif" => {
+            endpoint["type"] = json!("http");
+            json!({"atif": {"enabled": true, "storage": [endpoint]}})
+        }
+        _ => panic!("unexpected test signal {signal}"),
+    };
+    let mut configuration = section;
+    configuration["version"] = json!(4);
+    plugin_config(configuration)
+}
+
+fn plaintext_preflight_diagnostics(configuration: &PluginConfig) -> Vec<ConfigDiagnostic> {
+    crate::plugin::validate_exact(configuration.clone())
+        .config
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == "observability.unsafe_plaintext_destination")
+        .collect()
+}
+
+#[test]
+fn plaintext_preflight_rejects_all_five_destinations_and_header_sources() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for signal in ["traces", "logs", "metrics", "atof", "atif"] {
+        for headers in [
+            json!({"headers": {"authorization": "synthetic-inline-secret"}}),
+            json!({"header_env": {"authorization": "UNREAD_SYNTHETIC_TOKEN"}}),
+            json!({"header_file": {"authorization": "/synthetic/unread-token"}}),
+            json!({}),
+        ] {
+            let has_headers = headers != json!({});
+            let configuration = plaintext_preflight_configuration(
+                signal,
+                "http://collector.example:4318/private-path?token=synthetic-query-secret",
+                headers,
+            );
+            let diagnostics = plaintext_preflight_diagnostics(&configuration);
+            if signal != "traces" && !has_headers {
+                assert!(diagnostics.is_empty(), "{signal}: {diagnostics:?}");
+                continue;
+            }
+            assert_eq!(diagnostics.len(), 1, "{signal}: {diagnostics:?}");
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+            let component = match signal {
+                "atof" | "atif" => signal.to_string(),
+                _ => format!("opentelemetry.{signal}"),
+            };
+            let field = match signal {
+                "atof" => "sinks[0].url",
+                "atif" => "storage[0].endpoint",
+                _ => "endpoints[0].endpoint",
+            };
+            assert_eq!(diagnostic.component.as_deref(), Some(component.as_str()));
+            assert_eq!(diagnostic.field.as_deref(), Some(field));
+            assert!(diagnostic.message.contains("http://collector.example:4318"));
+            assert!(!diagnostic.message.contains("synthetic-query-secret"));
+            assert!(!diagnostic.message.contains("private-path"));
+            assert!(!diagnostic.message.contains("synthetic-inline-secret"));
+            #[cfg(feature = "__skip-implicit-config")]
+            {
+                let merged = crate::plugin::validate(configuration, None).unwrap();
+                assert!(
+                    merged.config.diagnostics.iter().any(|diagnostic| {
+                        diagnostic.code == "observability.unsafe_plaintext_destination"
+                            && diagnostic.component.as_deref() == Some(component.as_str())
+                            && diagnostic.field.as_deref() == Some(field)
+                            && diagnostic.level == DiagnosticLevel::Error
+                    }),
+                    "{signal}: {:?}",
+                    merged.config.diagnostics
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn plaintext_preflight_preserves_https_loopback_and_explicit_host_permissions() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for signal in ["traces", "logs", "metrics", "atof", "atif"] {
+        for destination in [
+            "https://collector.example:4318/ingest",
+            "http://localhost:4318/ingest",
+            "http://127.0.0.1:4318/ingest",
+            "http://[::1]:4318/ingest",
+            "http://collector.example:4318/ingest",
+        ] {
+            let mut configuration = plaintext_preflight_configuration(
+                signal,
+                destination,
+                json!({"headers": {"authorization": "synthetic-token"}}),
+            );
+            if destination == "http://collector.example:4318/ingest" {
+                configuration.components[0]
+                    .config
+                    .insert("insecure_http_hosts".into(), json!(["COLLECTOR.EXAMPLE"]));
+            }
+            let report = crate::plugin::validate_exact(configuration);
+            assert!(
+                !report.config.has_errors(),
+                "{signal} {destination}: {:?}",
+                report.config.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn plaintext_preflight_identifies_later_endpoints_and_redacts_credentials() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for signal in ["traces", "logs", "metrics", "atof", "atif"] {
+        let mut configuration = plaintext_preflight_configuration(
+            signal,
+            "http://synthetic-user:synthetic-password@collector.example:4318/private-token?key=query-secret",
+            json!({"headers": {"authorization": "synthetic-header-secret"}}),
+        );
+        let section = &mut configuration.components[0].config;
+        let endpoints = match signal {
+            "traces" => section["opentelemetry"]["endpoints"]
+                .as_array_mut()
+                .unwrap(),
+            "logs" | "metrics" => section["opentelemetry"][signal]["endpoints"]
+                .as_array_mut()
+                .unwrap(),
+            "atof" => section["atof"]["sinks"].as_array_mut().unwrap(),
+            "atif" => section["atif"]["storage"].as_array_mut().unwrap(),
+            _ => unreachable!(),
+        };
+        let mut valid = endpoints[0].clone();
+        valid[if signal == "atof" { "url" } else { "endpoint" }] =
+            json!("https://safe.example:4318/ingest");
+        endpoints.insert(0, valid);
+        let diagnostics = plaintext_preflight_diagnostics(&configuration);
+        assert_eq!(diagnostics.len(), 1, "{signal}: {diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(diagnostic.field.as_deref().unwrap().contains("[1]"));
+        let rendered = serde_json::to_string(diagnostic).unwrap();
+        for secret in [
+            "synthetic-user",
+            "synthetic-password",
+            "private-token",
+            "query-secret",
+            "synthetic-header-secret",
+        ] {
+            assert!(!rendered.contains(secret), "{signal}: {rendered}");
+        }
+    }
+}
+
+#[test]
+fn plaintext_preflight_checks_inherited_log_and_metric_destinations() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    let configuration = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": "http://collector.example:4318/v1/traces", "headers": {"authorization": "synthetic-token"}}],
+            "logs": {"enabled": true},
+            "metrics": {"enabled": true}
+        }
+    }));
+    let diagnostics = plaintext_preflight_diagnostics(&configuration);
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+    for signal in ["traces", "logs", "metrics"] {
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.component.as_deref() == Some(format!("opentelemetry.{signal}").as_str())
+                && diagnostic.field.as_deref() == Some("endpoints[0].endpoint")
+        }));
+    }
+}
+
+#[test]
+fn plaintext_preflight_checks_automatic_destinations_and_honors_exporter_disabling() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    let configuration = plugin_config(json!({"version": 4}));
+    for signal in ["TRACES", "LOGS", "METRICS"] {
+        let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT");
+        let exporter_variable = format!("OTEL_{signal}_EXPORTER");
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::set_var(
+                &endpoint_variable,
+                "http://collector.example:4318/private?token=synthetic-secret",
+            );
+            std::env::set_var(
+                "OTEL_EXPORTER_OTLP_HEADERS",
+                "authorization=synthetic-header-secret",
+            );
+        }
+        let diagnostics = plaintext_preflight_diagnostics(&configuration);
+        assert_eq!(diagnostics.len(), 1, "{signal}: {diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].component.as_deref(),
+            Some(format!("opentelemetry.automatic.{}", signal.to_lowercase()).as_str())
+        );
+        assert_eq!(
+            diagnostics[0].field.as_deref(),
+            Some("endpoints[0].endpoint")
+        );
+        assert!(!diagnostics[0].message.contains("synthetic-secret"));
+        for setting in ["none", "console"] {
+            // SAFETY: the observability mutex serializes test-only environment changes.
+            unsafe {
+                std::env::set_var(&exporter_variable, setting);
+            }
+            assert!(plaintext_preflight_diagnostics(&configuration).is_empty());
+        }
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::remove_var(&exporter_variable);
+            std::env::set_var("OTEL_SDK_DISABLED", "true");
+        }
+        assert!(plaintext_preflight_diagnostics(&configuration).is_empty());
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::remove_var("OTEL_SDK_DISABLED");
+            std::env::remove_var(&endpoint_variable);
+        }
+    }
+    // A generic endpoint selects all three signals; headerless logs and metrics remain permitted.
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://collector.example:4318",
+        );
+        std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
+    }
+    let diagnostics = plaintext_preflight_diagnostics(&configuration);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(
+        diagnostics[0].component.as_deref(),
+        Some("opentelemetry.automatic.traces")
+    );
+}
+
+#[test]
+fn plaintext_preflight_ignores_disabled_components_and_sections() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for signal in ["traces", "logs", "metrics", "atof", "atif"] {
+        let mut configuration = plaintext_preflight_configuration(
+            signal,
+            "http://collector.example:4318",
+            json!({"headers": {"authorization": "synthetic-token"}}),
+        );
+        configuration.components[0].enabled = false;
+        assert!(plaintext_preflight_diagnostics(&configuration).is_empty());
+        configuration.components[0].enabled = true;
+        let section = &mut configuration.components[0].config;
+        let section_name = if ["traces", "logs", "metrics"].contains(&signal) {
+            "opentelemetry"
+        } else {
+            signal
+        };
+        section[section_name]["enabled"] = json!(false);
+        assert!(plaintext_preflight_diagnostics(&configuration).is_empty());
+        if ["logs", "metrics"].contains(&signal) {
+            configuration.components[0].config["opentelemetry"]["enabled"] = json!(true);
+            configuration.components[0].config["opentelemetry"][signal]["enabled"] = json!(false);
+            assert!(plaintext_preflight_diagnostics(&configuration).is_empty());
+        }
+    }
+}
+
+#[test]
+fn plaintext_preflight_errors_do_not_block_partial_opentelemetry_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for signal in ["traces", "logs", "metrics"] {
+        reset_runtime();
+        let mut configuration = plaintext_preflight_configuration(
+            signal,
+            "http://collector.example:4318/ingest",
+            json!({"headers": {"authorization": "synthetic-token"}}),
+        );
+        let section = &mut configuration.components[0].config;
+        let endpoints = if signal == "traces" {
+            section["opentelemetry"]["endpoints"]
+                .as_array_mut()
+                .unwrap()
+        } else {
+            section["opentelemetry"][signal]["endpoints"]
+                .as_array_mut()
+                .unwrap()
+        };
+        let mut valid = endpoints[0].clone();
+        valid["endpoint"] = json!("https://safe.example:4318/ingest");
+        endpoints.push(valid);
+        assert!(
+            crate::plugin::validate_exact(configuration.clone())
+                .config
+                .has_errors()
+        );
+        futures::executor::block_on(test_initialize_plugin_host_exact(configuration)).unwrap();
+        assert_eq!(global_context().read().unwrap().event_subscribers.len(), 1);
+        test_close_plugin_host().unwrap();
+    }
+}
+
+#[test]
+fn plaintext_preflight_uses_websocket_policy_for_atof_streams() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _environment = plaintext_preflight_environment();
+    for (destination, rejected) in [
+        ("ws://collector.example:8080/events", true),
+        ("wss://collector.example:8080/events", false),
+        ("ws://localhost:8080/events", false),
+    ] {
+        let mut configuration = plaintext_preflight_configuration(
+            "atof",
+            destination,
+            json!({"headers": {"authorization": "synthetic-token"}}),
+        );
+        configuration.components[0].config["atof"]["sinks"][0]["transport"] = json!("websocket");
+        assert_eq!(
+            !plaintext_preflight_diagnostics(&configuration).is_empty(),
+            rejected,
+            "{destination}"
+        );
+    }
+}
+
 fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
     OpenTelemetryEndpointConfig {
         tls: None,

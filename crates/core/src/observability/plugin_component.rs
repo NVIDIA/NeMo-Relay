@@ -4250,6 +4250,230 @@ fn parse_observability_config(
     })
 }
 
+pub(crate) fn validate_observability_plaintext_destinations(
+    plugin_configuration: &Map<String, Json>,
+) -> Vec<ConfigDiagnostic> {
+    // Structural validation already reports malformed configuration and host lists.
+    let Ok(configuration) = parse_observability_config(plugin_configuration) else {
+        return Vec::new();
+    };
+    let Ok(plaintext) = PlaintextPolicy::from_hosts(
+        configuration
+            .insecure_http_hosts
+            .as_deref()
+            .unwrap_or_default(),
+    ) else {
+        return Vec::new();
+    };
+    if configuration.version != 4 {
+        return Vec::new();
+    }
+    let mut diagnostics = Vec::new();
+    if let Some(section) = configuration
+        .atof
+        .as_ref()
+        .filter(|section| section.enabled)
+    {
+        for (index, sink) in section.sinks.iter().enumerate() {
+            let AtofSinkSectionConfig::Stream(endpoint) = sink else {
+                continue;
+            };
+            if !super::header_file::has_configured_headers(
+                &endpoint.headers,
+                &endpoint.header_env,
+                &endpoint.header_file,
+            ) {
+                continue;
+            }
+            let validation = match AtofEndpointTransport::parse(&endpoint.transport) {
+                Some(AtofEndpointTransport::Websocket) => {
+                    super::header_file::validate_header_websocket_endpoint(
+                        &endpoint.url,
+                        &plaintext,
+                    )
+                }
+                Some(AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson) => {
+                    super::header_file::validate_header_http_endpoint(&endpoint.url, &plaintext)
+                }
+                None => continue,
+            };
+            push_plaintext_preflight_diagnostic(
+                &mut diagnostics,
+                "atof",
+                format!("sinks[{index}].url"),
+                validation,
+            );
+        }
+    }
+    if let Some(section) = configuration
+        .atif
+        .as_ref()
+        .filter(|section| section.enabled)
+    {
+        for (index, storage) in section.storage.iter().enumerate() {
+            let AtifStorageConfig::Http(endpoint) = storage else {
+                continue;
+            };
+            if super::header_file::has_configured_headers(
+                &endpoint.headers,
+                &endpoint.header_env,
+                &endpoint.header_file,
+            ) {
+                push_plaintext_preflight_diagnostic(
+                    &mut diagnostics,
+                    "atif",
+                    format!("storage[{index}].endpoint"),
+                    super::header_file::validate_header_http_endpoint(
+                        &endpoint.endpoint,
+                        &plaintext,
+                    ),
+                );
+            }
+        }
+    }
+    validate_opentelemetry_plaintext_destinations(&mut diagnostics, &configuration, &plaintext);
+    diagnostics
+}
+
+fn validate_opentelemetry_plaintext_destinations(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    configuration: &ObservabilityConfig,
+    plaintext: &PlaintextPolicy,
+) {
+    if otel_sdk_disabled()
+        || configuration
+            .opentelemetry
+            .as_ref()
+            .is_some_and(|section| !section.enabled)
+    {
+        return;
+    }
+    if let Some(signals) = automatic_otlp_signals() {
+        validate_automatic_plaintext_destinations(diagnostics, signals, plaintext);
+    }
+    let Some(section) = &configuration.opentelemetry else {
+        return;
+    };
+    for (index, endpoint) in section.endpoints.iter().enumerate() {
+        push_plaintext_preflight_diagnostic(
+            diagnostics,
+            "opentelemetry.traces",
+            format!("endpoints[{index}].endpoint"),
+            super::header_file::validate_trace_transport(&endpoint.endpoint, plaintext),
+        );
+    }
+    for (signal, enabled, explicit) in [
+        (
+            "logs",
+            section.logs.as_ref().is_some_and(|section| section.enabled),
+            section
+                .logs
+                .as_ref()
+                .and_then(|section| section.endpoints.as_ref()),
+        ),
+        (
+            "metrics",
+            section
+                .metrics
+                .as_ref()
+                .is_some_and(|section| section.enabled),
+            section
+                .metrics
+                .as_ref()
+                .and_then(|section| section.endpoints.as_ref()),
+        ),
+    ] {
+        if !enabled {
+            continue;
+        }
+        // Existing structural validation reports endpoint-resolution failures.
+        let Ok(resolution) = resolve_signal_endpoints(signal, explicit, &section.endpoints) else {
+            continue;
+        };
+        for endpoint in resolution.endpoints {
+            let OpenTelemetryResource::Active(configuration) = endpoint.value else {
+                continue;
+            };
+            if super::header_file::has_configured_headers(
+                &configuration.headers,
+                &configuration.header_env,
+                &configuration.header_file,
+            ) {
+                push_plaintext_preflight_diagnostic(
+                    diagnostics,
+                    &format!("opentelemetry.{signal}"),
+                    format!("endpoints[{}].endpoint", endpoint.index),
+                    super::header_file::validate_header_http_endpoint(
+                        &configuration.endpoint,
+                        plaintext,
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn validate_automatic_plaintext_destinations(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    signals: AutomaticOtlpSignals,
+    plaintext: &PlaintextPolicy,
+) {
+    for (signal, enabled, variable_prefix, exporter_variable) in [
+        ("traces", signals.traces, "TRACES", "OTEL_TRACES_EXPORTER"),
+        ("logs", signals.logs, "LOGS", "OTEL_LOGS_EXPORTER"),
+        (
+            "metrics",
+            signals.metrics,
+            "METRICS",
+            "OTEL_METRICS_EXPORTER",
+        ),
+    ] {
+        if !enabled || !environment_signal_enabled(exporter_variable) {
+            continue;
+        }
+        let header_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_HEADERS");
+        if signal != "traces"
+            && !super::otel_signal::automatic_signal_headers_configured(&header_variable)
+        {
+            continue;
+        }
+        let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_ENDPOINT");
+        let validation = super::otel_signal::automatic_signal_endpoint(&endpoint_variable)
+            .and_then(|endpoint| match endpoint {
+                Some(endpoint) if signal == "traces" => {
+                    super::header_file::validate_trace_transport(&endpoint, plaintext)
+                }
+                Some(endpoint) => {
+                    super::header_file::validate_header_http_endpoint(&endpoint, plaintext)
+                }
+                None => Ok(()),
+            });
+        push_plaintext_preflight_diagnostic(
+            diagnostics,
+            &format!("opentelemetry.automatic.{signal}"),
+            "endpoints[0].endpoint".to_string(),
+            validation,
+        );
+    }
+}
+
+fn push_plaintext_preflight_diagnostic(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    component: &str,
+    field: String,
+    validation: std::result::Result<(), String>,
+) {
+    if let Err(message) = validation {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "observability.unsafe_plaintext_destination".to_string(),
+            component: Some(component.to_string()),
+            message: format!("{component}.{field}: {message}"),
+            field: Some(field),
+        });
+    }
+}
+
 fn validate_observability_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {

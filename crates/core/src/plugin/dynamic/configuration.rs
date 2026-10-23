@@ -262,11 +262,29 @@ pub fn validate(
 /// supplied the complete configuration to validate.
 pub fn validate_exact(config: PluginConfig) -> PluginHostReport {
     PluginHostReport {
-        config: crate::plugin::validate_static_plugin_config(&config),
+        config: validate_static_preflight_configuration(&config),
         dynamic_plugins: Vec::new(),
         config_paths: Vec::new(),
         resolved_config: sanitized_plugin_config(&config),
     }
+}
+
+fn validate_static_preflight_configuration(
+    configuration: &PluginConfig,
+) -> crate::plugin::ConfigReport {
+    let mut report = crate::plugin::validate_static_plugin_config(configuration);
+    for component in &configuration.components {
+        if component.enabled
+            && component.kind == crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND
+        {
+            report.diagnostics.extend(
+                crate::observability::plugin_component::validate_observability_plaintext_destinations(
+                    &component.config,
+                ),
+            );
+        }
+    }
+    report
 }
 
 /// Validates a targeted dynamic-plugin request for internal diagnostics.
@@ -285,7 +303,7 @@ fn validation_report(
     resolved: ResolvedPluginHostConfig,
     target: PluginHostValidationTarget,
 ) -> Result<PluginHostReport> {
-    let mut config_report = crate::plugin::validate_static_plugin_config(&resolved.config);
+    let mut config_report = validate_static_preflight_configuration(&resolved.config);
     config_report
         .diagnostics
         .splice(0..0, resolved.diagnostics.iter().cloned());
