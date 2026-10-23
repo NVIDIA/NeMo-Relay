@@ -52,14 +52,18 @@ async def backend_of(model: BaseLlm) -> Backend:
     if not any(_defined_in(cls, package) for package in _PROVIDER_PACKAGES):
         return Backend(cls.__name__, GEMINI_CODEC, client_headers=False)
     if _defined_in(cls, adk_openai.__name__):
-        from google.adk.integrations.openai import OpenAILlm, OpenAIResponsesLlm
+        if find_spec("openai") is not None:
+            from google.adk.integrations.openai import OpenAILlm, OpenAIResponsesLlm
 
-        from nemo_relay.integrations.google_adk._backends._openai import openai_chat_backend, openai_responses_backend
+            from nemo_relay.integrations.google_adk._backends._openai import (
+                openai_chat_backend,
+                openai_responses_backend,
+            )
 
-        if isinstance(model, OpenAILlm):
-            return openai_chat_backend(model)
-        if isinstance(model, OpenAIResponsesLlm):
-            return openai_responses_backend(model)
+            if isinstance(model, OpenAILlm):
+                return openai_chat_backend(model)
+            if isinstance(model, OpenAIResponsesLlm):
+                return openai_responses_backend(model)
     elif find_spec("anthropic") is not None:
         from google.adk.models.anthropic_llm import AnthropicLlm
 

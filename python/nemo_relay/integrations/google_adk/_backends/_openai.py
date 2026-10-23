@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, cast
 
 import openai
 from google.adk.integrations.openai import AzureOpenAIResponsesLlm
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response, ResponseCompletedEvent, ResponseIncompleteEvent
 
-from nemo_relay.codecs import OpenAIResponsesCodec
 from nemo_relay.integrations.google_adk._backends._attempt import (
     CURRENT_ATTEMPT,
     Attempt,
@@ -21,17 +20,9 @@ from nemo_relay.integrations.google_adk._backends._attempt import (
     with_extra_headers,
 )
 from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
+from nemo_relay.integrations.google_adk._backends._responses import RESPONSES_CODEC
 from nemo_relay.integrations.google_adk._serialization import (
-    BASE_USAGE,
-    BASE_USAGE_KEYS,
-    GENAI_USAGE,
     RECORDED_ID_KEY,
-    RECORDED_USAGE_KEY,
-    AdkCodec,
-    Normalized,
-    reported_cost,
-    token_counts,
-    with_uncached,
 )
 from nemo_relay.integrations.google_adk._swap import swap_class
 
@@ -45,37 +36,10 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionChunk
     from openai.types.responses import ResponseStreamEvent
 
-    from nemo_relay import JsonObject
 
 _Provider: TypeAlias = Literal["azure", "bedrock", "openai"]
 _ChatStream: TypeAlias = "AsyncStream[ChatCompletionChunk]"
 _ResponsesStream: TypeAlias = "AsyncStream[ResponseStreamEvent]"
-_RESPONSES_API: Final = "openai_responses"
-_RESPONSES_USAGE_KEYS: Final = BASE_USAGE_KEYS | {"thoughts_token_count"}
-_RESPONSES_RECORDED_KEYS: Final = frozenset({RECORDED_USAGE_KEY})
-_RESPONSES_NATIVE_CODEC: Final = OpenAIResponsesCodec()
-
-
-def _read_responses(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject) -> Normalized:
-    """Read Responses usage. Cached and reasoning counts go under `input_tokens_details` and `output_tokens_details`."""
-    counts = token_counts(usage_metadata, BASE_USAGE)
-    separate = token_counts(usage_metadata, GENAI_USAGE)
-    api_specific: JsonObject = {"api": _RESPONSES_API}
-    if (cached := counts.get("cache_read_tokens")) is not None:
-        api_specific["input_tokens_details"] = {"cached_tokens": cached}
-    if (reasoning := separate.get("thoughts_tokens")) is not None:
-        api_specific["output_tokens_details"] = {"reasoning_tokens": reasoning}
-    return Normalized(
-        usage=with_uncached(counts),
-        cost=reported_cost(recorded, codec=_RESPONSES_NATIVE_CODEC),
-        api_specific=api_specific,
-        usage_keys=_RESPONSES_USAGE_KEYS,
-        response_keys=frozenset(),
-        recorded_keys=_RESPONSES_RECORDED_KEYS,
-    )
-
-
-RESPONSES_CODEC: Final = AdkCodec(_read_responses)
 
 
 def openai_chat_backend(model: OpenAILlm) -> Backend:
