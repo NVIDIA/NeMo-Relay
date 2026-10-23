@@ -1464,24 +1464,18 @@ fn register_observability(
     let automatic_signals = automatic_otlp_signals();
     match config.opentelemetry {
         Some(otel) if otel.enabled => {
-            let has_configured_destination = !opentelemetry_section_is_empty(&otel);
             let automatic_active = match automatic_signals {
-                Some(signals) => register_automatic_opentelemetry(
-                    signals,
-                    &plaintext,
-                    ctx,
-                    !has_configured_destination,
-                )?,
+                Some(signals) => register_automatic_opentelemetry(signals, &plaintext, ctx)?,
                 None => false,
             };
-            if has_configured_destination || automatic_signals.is_none() {
+            if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
                 register_opentelemetry(otel, &plaintext, ctx, automatic_active)?;
             }
         }
         Some(_) => {}
         None => {
             if let Some(signals) = automatic_signals {
-                register_automatic_opentelemetry(signals, &plaintext, ctx, true)?;
+                register_automatic_opentelemetry(signals, &plaintext, ctx)?;
             }
         }
     }
@@ -2086,7 +2080,6 @@ fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
     plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
-    require_active_destination: bool,
 ) -> PluginResult<bool> {
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
@@ -2118,22 +2111,6 @@ fn register_automatic_opentelemetry(
         },
     );
     if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
-        if require_active_destination {
-            let skipped = ctx
-                .activation_diagnostics()
-                .iter()
-                .filter(|diagnostic| {
-                    diagnostic.code == "observability.automatic_otel_signal_skipped"
-                })
-                .map(|diagnostic| diagnostic.message.as_str())
-                .collect::<Vec<_>>();
-            if !skipped.is_empty() {
-                return Err(PluginError::InvalidConfig(format!(
-                    "automatic OpenTelemetry has no active exporter: {}",
-                    skipped.join("; ")
-                )));
-            }
-        }
         return Ok(false);
     }
     register_opentelemetry_resources(

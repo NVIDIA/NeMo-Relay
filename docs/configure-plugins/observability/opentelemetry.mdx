@@ -859,10 +859,8 @@ header lists take precedence over the generic list, including empty lists.
 
 When Relay skips an automatic exporter during activation, the plugin activation
 report includes a warning with code `observability.automatic_otel_signal_skipped`.
-If every requested automatic exporter is skipped and no configured OpenTelemetry
-destination remains, activation fails with an actionable error. The warning and
-error identify the signal, the endpoint environment variable used, and the
-endpoint's scheme, host, and port when they can be parsed. They omit URL
+It identifies the signal, the endpoint environment variable used, and the
+endpoint's scheme, host, and port when they can be parsed. The report omits URL
 credentials, paths, and queries. Check the endpoint and exporter settings; for
 plain HTTP, add the intended host to `insecure_http_hosts`.
 

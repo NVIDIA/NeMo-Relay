@@ -655,15 +655,24 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
         std::env::set_var("OTEL_METRICS_EXPORTER", "none");
     }
     let config = plugin_config(json!({"version": 4, "opentelemetry": {"enabled": true}}));
-    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config.clone()))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("automatic OpenTelemetry has no active exporter"));
-    assert!(error.contains("OTEL_EXPORTER_OTLP_ENDPOINT"));
-    assert!(error.contains("http://collector.example:4318"));
-    assert!(error.contains("insecure_http_hosts"));
-    assert!(!error.contains("/private"));
-    assert!(!error.contains("relay-query-secret"));
+    let report =
+        futures::executor::block_on(test_initialize_plugin_host_exact(config.clone())).unwrap();
+    let skipped = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 1, "diagnostics: {:?}", report.diagnostics);
+    for diagnostic in skipped {
+        assert!(diagnostic.message.contains("traces"));
+        assert_eq!(
+            diagnostic.field.as_deref(),
+            Some("OTEL_EXPORTER_OTLP_ENDPOINT")
+        );
+        assert!(diagnostic.message.contains("http://collector.example:4318"));
+        assert!(!diagnostic.message.contains("/private"));
+        assert!(!diagnostic.message.contains("relay-query-secret"));
+    }
     assert!(
         !global_context()
             .read()
@@ -905,13 +914,21 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             format!("http://{}", collector.local_addr().unwrap()),
         );
     }
-    let error = futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(
         json!({"version": 4}),
     )))
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("automatic OpenTelemetry has no active exporter"));
-    assert!(!error.contains("secret-token"));
+    .unwrap();
+    let skipped = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 3, "diagnostics: {:?}", report.diagnostics);
+    for diagnostic in skipped {
+        assert_eq!(diagnostic.field.as_deref(), Some(endpoint));
+        assert!(!diagnostic.message.contains("secret-token"));
+        assert!(!diagnostic.message.contains("%2Z"));
+    }
     assert!(
         global_context()
             .read()
@@ -919,6 +936,9 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             .event_subscribers
             .is_empty()
     );
+    let agent = push_agent("malformed-header-regression");
+    pop(&agent);
+    flush_subscribers().unwrap();
     crate::plugin::test_close_plugin_host().unwrap();
     assert!(
         matches!(collector.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
