@@ -775,9 +775,11 @@ failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
 </Warning>
 
-For HTTP trace exports, a TLS error stops the exporter. NeMo Relay logs the
-error once. The message identifies the endpoint and the TLS problem. If the
-message reports an unknown certificate issuer, check the CA bundle.
+For HTTP trace exports, a fatal TLS error stops the exporter. This includes
+certificate errors. NeMo Relay logs the error once. The message identifies the
+endpoint and the TLS problem. If the message reports an unknown certificate
+issuer, check the CA bundle. Temporary connection errors do not stop the
+exporter.
 
 Fix the TLS problem, then recreate the exporter to send traces again. Traces
 created while the exporter is stopped are lost. Calling `force_flush()`

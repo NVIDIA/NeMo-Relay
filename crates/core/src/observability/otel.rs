@@ -1666,16 +1666,22 @@ impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
     }
 }
 
+/// Return a safe reason for TLS failures that must stop the exporter.
 fn safe_tls_failure_reason(mut error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
     loop {
         if let Some(error) = error.downcast_ref::<rustls::Error>() {
-            return Some(match error {
-                rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer) => {
-                    "TLS certificate verification failed: unknown issuer; check the configured CA bundle"
+            return match error {
+                // Broken connections can produce malformed or unexpected
+                // records. Let a later request recover from these errors.
+                rustls::Error::InvalidMessage(_) | rustls::Error::InappropriateMessage { .. } => {
+                    None
                 }
-                rustls::Error::InvalidCertificate(_) => "TLS certificate verification failed",
-                _ => "TLS handshake failed",
-            });
+                rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer) => Some(
+                    "TLS certificate verification failed: unknown issuer; check the configured CA bundle",
+                ),
+                rustls::Error::InvalidCertificate(_) => Some("TLS certificate verification failed"),
+                _ => Some("TLS handshake failed"),
+            };
         }
         // io::Error's source can skip the wrapped error itself.
         if let Some(io) = error.downcast_ref::<std::io::Error>()
