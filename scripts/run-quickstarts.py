@@ -308,7 +308,9 @@ def run_case(
         try:
             temporary.cleanup()
         except OSError as error:
-            result.update(status="failed", error=f"Temporary workspace cleanup failed: {error}")
+            # Preserve the original command failure when teardown fails as well.
+            result["status"] = "failed"
+            result["cleanup_error" if "error" in result else "error"] = f"Temporary workspace cleanup failed: {error}"
         result["seconds"] = round(time.monotonic() - started, 3)
         write_json(folder / "result.json", result)
     return result
