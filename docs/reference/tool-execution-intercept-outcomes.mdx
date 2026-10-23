@@ -131,14 +131,18 @@ change or remove fields before export.
 Execution intercepts can pass the wrapper through or edit its content and
 failure flag. For LangChain and LangGraph, the codec applies these edits to the
 matching `ToolMessage`. It keeps the message's other fields and the graph state.
-For Google ADK, edits must match the tool's result type:
+For Google ADK, edit the wrapper's `content` and `is_error` fields. Set
+`is_error` to `true` for a failure or `false` for success. Relay updates the
+ADK result to match these fields.
 
-| Result Type | How to Edit It |
-| --- | --- |
-| Text or an object with text | Set the content. Use an `error` entry for a failure and remove it for a successful result. |
-| MCP tool result | Set the content blocks and `isError` flag. |
-| Code execution | Set stdout for success or stderr for failure, and set the outcome to match. |
-| Other structured data, such as a list or dictionary | Set the content to valid JSON. Include a nonempty `error` value for a failure. |
+Choose `content` based on the tool's result type:
+
+| Result Type | Set Wrapper `content` To | How ADK Receives the Edit |
+| --- | --- | --- |
+| Text or an object with text | The output text | A failure has an `error` entry. A successful result has no `error` entry. |
+| MCP tool result | The content blocks | The content blocks and an `isError` flag that matches wrapper `is_error`. |
+| Code execution | The output text | `stdout` for success or `stderr` for failure, or `output` and a matching `outcome`, depending on the result type. |
+| Other structured data, such as a list or dictionary | Valid JSON text | The parsed JSON. For a failure, include a nonempty `error` value in the JSON. |
 
 A failed result needs error text. For structured data, the JSON content must
 agree with the failure flag. For example, `{"error": "blocked"}` is valid

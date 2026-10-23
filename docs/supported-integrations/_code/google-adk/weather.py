@@ -42,6 +42,8 @@ async def main(application: App = app) -> None:
                             for part in event.content.parts:
                                 if part.text and not part.thought:
                                     print(part.text)
+                        if event.output is not None:
+                            print(event.output)
         finally:
             await nemo_relay.subscribers.flush_async()
 
