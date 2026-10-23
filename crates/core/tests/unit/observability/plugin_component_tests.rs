@@ -707,6 +707,129 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
 }
 
 #[test]
+fn automatic_insecure_host_override_does_not_allow_configured_exporters() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let variables = [
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var(
+            AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+            "collector.example, other.example",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://collector.example:4318",
+        );
+    }
+    let automatic = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {"enabled": true}
+    }));
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(automatic)).unwrap();
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.automatic_otel_signal_skipped" })
+    );
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry.automatic")
+    );
+    test_close_plugin_host().unwrap();
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe { std::env::remove_var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") };
+    let configured = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": "http://collector.example:4318"}]
+        }
+    }));
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(configured))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("OTLP trace endpoints require HTTPS"),
+        "{error}"
+    );
+    test_close_plugin_host().unwrap();
+}
+
+#[test]
+fn invalid_automatic_insecure_host_override_is_ignored_without_failing_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let variables = [
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var(
+            AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+            "collector.example,https://private.example/token?secret=hidden",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://collector.example:4318",
+        );
+    }
+    let config = plugin_config(json!({"version": 4, "opentelemetry": {"enabled": true}}));
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.invalid_automatic_insecure_http_hosts"
+            && diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.field.as_deref() == Some(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE)
+            && !diagnostic.message.contains("hidden")
+    }));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.automatic_otel_signal_skipped" })
+    );
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry.automatic")
+    );
+    test_close_plugin_host().unwrap();
+}
+
+#[test]
 fn automatic_otel_skip_keeps_a_valid_configured_destination_active() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();

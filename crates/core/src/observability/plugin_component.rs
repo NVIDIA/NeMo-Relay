@@ -91,6 +91,7 @@ use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
+const AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE: &str = "NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS";
 /// Top-level observability component wrapper.
 ///
 /// Use this wrapper when constructing a [`PluginComponentSpec`] from Rust
@@ -1448,9 +1449,9 @@ fn register_observability(
             config.version
         )));
     }
+    let configured_hosts = config.insecure_http_hosts.as_deref().unwrap_or_default();
     let plaintext =
-        PlaintextPolicy::from_hosts(config.insecure_http_hosts.as_deref().unwrap_or_default())
-            .map_err(PluginError::InvalidConfig)?;
+        PlaintextPolicy::from_hosts(configured_hosts).map_err(PluginError::InvalidConfig)?;
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, &plaintext, ctx)?;
@@ -1465,7 +1466,9 @@ fn register_observability(
     match config.opentelemetry {
         Some(otel) if otel.enabled => {
             let automatic_active = match automatic_signals {
-                Some(signals) => register_automatic_opentelemetry(signals, &plaintext, ctx)?,
+                Some(signals) => {
+                    register_automatic_opentelemetry(signals, configured_hosts, &plaintext, ctx)?
+                }
                 None => false,
             };
             if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
@@ -1475,7 +1478,7 @@ fn register_observability(
         Some(_) => {}
         None => {
             if let Some(signals) = automatic_signals {
-                register_automatic_opentelemetry(signals, &plaintext, ctx)?;
+                register_automatic_opentelemetry(signals, configured_hosts, &plaintext, ctx)?;
             }
         }
     }
@@ -2078,9 +2081,11 @@ fn environment_signal_enabled(variable: &'static str) -> bool {
 
 fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
-    plaintext: &PlaintextPolicy,
+    configured_hosts: &[String],
+    configured_plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<bool> {
+    let plaintext = automatic_plaintext_policy(configured_hosts, configured_plaintext, ctx);
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
         "traces",
@@ -2121,6 +2126,46 @@ fn register_automatic_opentelemetry(
         ctx,
     )?;
     Ok(true)
+}
+
+fn automatic_plaintext_policy(
+    configured_hosts: &[String],
+    configured_plaintext: &PlaintextPolicy,
+    ctx: &mut PluginRegistrationContext,
+) -> PlaintextPolicy {
+    let additional_hosts = match std::env::var(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE) {
+        Ok(value) if !value.trim().is_empty() => value,
+        Ok(_) | Err(std::env::VarError::NotPresent) => return configured_plaintext.clone(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            record_invalid_automatic_insecure_hosts(ctx);
+            return configured_plaintext.clone();
+        }
+    };
+    let mut hosts = configured_hosts.to_vec();
+    hosts.extend(
+        additional_hosts
+            .split(',')
+            .map(|host| host.trim().to_string()),
+    );
+    match PlaintextPolicy::from_hosts(&hosts) {
+        Ok(policy) => policy,
+        Err(_) => {
+            record_invalid_automatic_insecure_hosts(ctx);
+            configured_plaintext.clone()
+        }
+    }
+}
+
+fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) {
+    ctx.record_activation_diagnostic(ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "observability.invalid_automatic_insecure_http_hosts".to_string(),
+        component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+        field: Some(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE.to_string()),
+        message: format!(
+            "{AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE} must contain comma-separated bare hostnames or IP addresses; the override was ignored"
+        ),
+    });
 }
 
 /// Build one automatic subscriber without preventing healthy signals from activating.
