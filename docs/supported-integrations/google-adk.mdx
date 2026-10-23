@@ -48,8 +48,38 @@ $env:GOOGLE_API_KEY = "your-api-key"
 </Tab>
 </Tabs>
 
-For OpenAI models, also install `google-adk[openai]`. For Anthropic models,
-also install `anthropic`. Set the credentials for your chosen provider.
+Set the credentials for your chosen provider. Install any additional packages
+listed below.
+
+## Supported Models and Providers
+
+Use these ADK model classes to connect to a supported provider. The packages
+in the last column are in addition to `nemo-relay[google-adk]`.
+
+| Provider or Service | ADK Model Class | Additional Package |
+| --- | --- | --- |
+| Google Gemini API | `Gemini`, including a `gemini-*` model name | None |
+| Vertex AI with Gemini | `Gemini` | None |
+| Anthropic Claude | `AnthropicLlm` or `Claude` | `anthropic` |
+| Vertex AI with Claude | `AnthropicLlm` or `Claude` | `anthropic[vertex]` |
+| Microsoft Foundry with Claude | `AnthropicLlm` or `Claude` | `anthropic` |
+| OpenAI | `OpenAILlm` for Chat Completions or `OpenAIResponsesLlm` for Responses | `google-adk[openai]` |
+| Azure OpenAI | `OpenAILlm`, `OpenAIResponsesLlm`, or `AzureOpenAIResponsesLlm` | `google-adk[openai]` |
+| Amazon Bedrock through the OpenAI SDK | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` and `openai[bedrock]` |
+| OpenAI-compatible endpoints | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` |
+| Apigee | `ApigeeLlm` in GenAI or Chat Completions mode | None |
+
+For Vertex AI, Microsoft Foundry, Azure OpenAI, and Amazon Bedrock, configure
+ADK with the client for that service. For an OpenAI-compatible endpoint, set
+the client's `base_url`. The endpoint must support the API used by your ADK
+model class.
+
+Other built-in ADK model classes are not supported and fail when called.
+
+<Note>
+Custom `BaseLlm` classes can also use Relay. Provider-specific usage and cost
+details depend on the response data the custom model supplies.
+</Note>
 
 ## Usage Example
 
@@ -221,7 +251,3 @@ Keep these limits in mind when choosing features for your app:
   enable `include_server_side_tool_invocations` in your Gemini request.
 - **Custom extensions:** Code that relies on exact model, tool, or agent
   classes, or changes class attributes during a run, can behave differently.
-
-Only model classes supported by the integration can use all of these features.
-An unsupported built-in ADK model class fails the call. A custom `BaseLlm`
-can use Relay, but provider details depend on the response data it supplies.
