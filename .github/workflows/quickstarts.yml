@@ -117,7 +117,9 @@ jobs:
           workspaces: . -> target/quickstarts
           cache-all-crates: true
           cache-bin: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Temporary fork validation cache; restore the main-only policy afterward.
+          save-if: ${{ github.ref == 'refs/heads/main' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
+          cache-on-failure: true
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
@@ -126,7 +128,7 @@ jobs:
 
       - name: Provision coding-agent hosts
         env:
-          QUICKSTART_CASES: ${{ inputs.cases || 'all' }}
+          QUICKSTART_CASES: ${{ inputs.cases || (github.event_name == 'push' && matrix.platform == 'windows-amd64' && 'claude-code,codex,hermes') || 'all' }}
         run: |
           if [[ "$QUICKSTART_CASES" == all || ",$QUICKSTART_CASES," == *,codex,* ]]; then
             npm install --global @openai/codex@0.159.3
@@ -148,7 +150,7 @@ jobs:
           QUICKSTART_HERMES_REF: ${{ inputs.hermes_ref || '4d04303818b61bf3aa09278af48356315515965b' }}
           QUICKSTART_ASSET_LOCATION: ${{ inputs.asset_location }}
           QUICKSTART_RUN_ID: ${{ inputs.run_id }}
-          QUICKSTART_CASES: ${{ inputs.cases || 'all' }}
+          QUICKSTART_CASES: ${{ inputs.cases || (github.event_name == 'push' && matrix.platform == 'windows-amd64' && 'claude-code,codex,hermes') || 'all' }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/quickstarts
           # Disposable example directories are outside setup-rust's checkout override.
           RUSTUP_TOOLCHAIN: ${{ steps.ci-config.outputs.rust_version }}

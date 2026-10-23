@@ -111,13 +111,20 @@ class QuickstartExecutionTests(unittest.TestCase):
 
     def test_cleanup_failure_preserves_the_case_report(self):
         original_cleanup = tempfile.TemporaryDirectory.cleanup
+
+        def fail_example_cleanup(directory):
+            if Path(directory.name).name.startswith("relay-quickstart-"):
+                raise OSError("busy workspace")
+            return original_cleanup(directory)
+
         with patch.object(
-            tempfile.TemporaryDirectory, "cleanup", autospec=True, side_effect=OSError("busy workspace")
+            tempfile.TemporaryDirectory, "cleanup", autospec=True, side_effect=fail_example_cleanup
         ) as cleanup:
             result = RUNNER.run_case("nodejs", self.scenario(), self.assets(), {}, self.root / "cleanup-failed")
         original_cleanup(cleanup.call_args.args[0])
         self.assertEqual(result["status"], "failed")
         self.assertIn("cleanup failed", result["error"])
+        self.assertEqual(result["block"], "complete")
         self.assertTrue((self.root / "cleanup-failed/result.json").is_file())
 
     def test_remote_inventory_requires_integrity_and_plain_filenames(self):
@@ -226,6 +233,14 @@ class QuickstartExecutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed", result)
         self.assertTrue((self.root / "pass/workspace/project/logs/events.jsonl").is_file())
         self.assertFalse(list((self.root / "pass").rglob(".session-*")))
+
+    def test_unicode_agent_output_preserves_the_marker_checks(self):
+        scenario = self.scenario()
+        scenario["blocks"][1]["content"] = shell.command(sys.executable, "-c", "print('✍️'); print('OK')")
+        scenario["blocks"][2]["content"] = "✍️\nOK\n"
+        result = RUNNER.run_case("nodejs", scenario, self.assets(), {}, self.root / "unicode")
+        self.assertEqual(result["status"], "passed", result)
+        self.assertIn("✍️", (self.root / "unicode/run.stdout.log").read_text(encoding="utf-8-sig"))
 
     def test_nonzero_exit_and_missing_scopes_cannot_pass_from_marker_text(self):
         for label, command in [
@@ -337,6 +352,15 @@ class QuickstartExecutionTests(unittest.TestCase):
         self.assertNotIn(provider.RESPONSE_MARKER, json.dumps(first))
         with self.assertRaisesRegex(ValueError, "Incomplete"):
             fixture.verify()
+        for failed in (
+            'exec_command failed: CreateProcess Rejected("blocked by policy")',
+            json.dumps({"output": "tool failure", "metadata": {"exit_code": 1}}),
+        ):
+            prompt["messages"].append({"role": "tool", "content": failed, "tool_call_id": "call_quickstart"})
+            self.assertNotIn(provider.RESPONSE_MARKER, post("/v1/chat/completions", prompt))
+            with self.assertRaisesRegex(ValueError, "Incomplete"):
+                fixture.verify()
+            prompt["messages"].pop()
         prompt["messages"].append({"role": "tool", "content": provider.TOOL_MARKER, "tool_call_id": "call_quickstart"})
         self.assertIn(provider.RESPONSE_MARKER, post("/v1/chat/completions", prompt))
         fixture.verify()

@@ -114,7 +114,8 @@ def run_case(
     # uv discovers enclosing workspaces, so examples must execute outside this checkout.
     # Copy only evidence back; dependency environments and exported shell state are disposable.
     temporary = tempfile.TemporaryDirectory(prefix="relay-quickstart-")
-    work = Path(temporary.name)
+    # Resolve Windows 8.3 aliases before agents compare tool paths with their cwd.
+    work = Path(temporary.name).resolve()
     result: dict[str, Any] = {
         "case": name,
         "status": "failed",
@@ -149,6 +150,8 @@ def run_case(
     }
     environment.update(
         UV_PYTHON=sys.executable,
+        PYTHONUTF8="1",
+        PYTHONIOENCODING="utf-8",
         UV_PYTHON_DOWNLOADS="never",
         XDG_CONFIG_HOME=str(work / ".config"),
         XDG_DATA_HOME=str(work / ".data"),
@@ -232,10 +235,10 @@ def run_case(
                 raise ValueError(f"Unattended setup is missing for {block['id']} ({block['role']})")
         result["block"] = "verify"
         expected = next(block for block in scenario["blocks"] if block["role"] == "expected")
-        CONTRACTS.verify(scenario, work, outputs[expected["from"]].read_text(), {})
+        CONTRACTS.verify(scenario, work, outputs[expected["from"]].read_text(encoding="utf-8-sig"), {})
         if fixture:
             fixture.verify()
-            if "RELAY_QUICKSTART_RESPONSE_OK" not in outputs["run"].read_text():
+            if "RELAY_QUICKSTART_RESPONSE_OK" not in outputs["run"].read_text(encoding="utf-8-sig"):
                 raise ValueError("The agent did not print the final provider response marker")
         project = work / scenario["cwd"]
         if name in agents.PYTHON_CASES | {"hermes"}:
