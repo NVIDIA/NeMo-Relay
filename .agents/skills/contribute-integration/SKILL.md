@@ -8,7 +8,8 @@ license: Apache-2.0
 # Contribute A Framework Integration
 
 Use this skill when contributing an integration with a framework or plugin such
-as LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
+as LangChain, LangGraph, Deep Agents, Google ADK, or OpenClaw through its public
+APIs.
 
 ## Default Guidance
 

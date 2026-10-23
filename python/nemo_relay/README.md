@@ -116,6 +116,18 @@ uv add "nemo-relay[deepagents]"
 pip install "nemo-relay[deepagents]"
 ```
 
+#### Google ADK Integration
+
+[Google Agent Development Kit](https://google.github.io/adk-docs/) integration is available with the `google-adk` extra:
+
+```bash
+# With uv
+uv add "nemo-relay[google-adk]"
+
+# With pip
+pip install "nemo-relay[google-adk]"
+```
+
 #### LangChain NVIDIA Integration
 
 The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.

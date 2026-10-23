@@ -24,6 +24,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_integration_google_adk:
+        description: 'Whether to run Google ADK Python integration tests'
+        required: false
+        default: false
+        type: boolean
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -128,12 +133,20 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
 
+      - name: Run Python Google ADK integration tests
+        if: ${{ inputs.run_integration_google_adk && matrix.platform != 'windows-arm64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-google-adk
+
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
-          files: ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml' || 'python-coverage.xml,python-rust.xml' }}
+          files: >-
+            ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml'
+                || inputs.run_integration_google_adk && 'python-coverage.xml,python-rust.xml,python-google-adk-coverage.xml'
+                || 'python-coverage.xml,python-rust.xml' }}
           flags: python-${{ matrix.platform }}
           name: python-${{ matrix.platform }}
           verbose: true

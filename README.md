@@ -30,7 +30,7 @@ evaluation products, see [the Ecosystem guide](https://docs.nvidia.com/nemo/rela
 |---|---|
 | Observe Codex or Claude Code locally with the CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
-| Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
+| Use LangChain, LangGraph, Deep Agents, Google ADK, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
 | Export ATOF events, ATIF trajectories, or OpenTelemetry traces, logs, and metrics | [Observability Plugin](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) |
 | Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
@@ -329,13 +329,14 @@ or plugin hooks that preserve enough lifecycle fidelity.
 | LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| Google ADK | Yes | Yes | Yes | Wrapped tool and LLM calling through the ADK plugin. |
 | OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
 
-The Python `nemo-relay` package ships extras for LangChain, LangGraph, and Deep
-Agents:
+The Python `nemo-relay` package ships extras for LangChain, LangGraph, Deep
+Agents, and Google ADK:
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]"
+uv add "nemo-relay[langchain,langgraph,deepagents,google-adk]"
 ```
 
 Refer to [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup

@@ -122,6 +122,7 @@ jobs:
       base: ${{ needs.ci_changes.outputs.base }}
       run_installer: ${{ needs.ci_changes.outputs.run_installer == 'true' }}
       run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
+      run_python_integration_google_adk: ${{ needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
 
   ci_license_diff:
     name: License Diff
@@ -181,7 +182,10 @@ jobs:
     name: Python
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_python.yml
-    if: ${{ needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
+    if: >-
+      ${{ needs.ci_changes.outputs.run_python == 'true'
+          || needs.ci_changes.outputs.run_python_integration_langchain == 'true'
+          || needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
     permissions:
       contents: read
     secrets:
@@ -191,6 +195,7 @@ jobs:
       ref_name: ${{ github.ref_name }}
       run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
       run_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
+      run_integration_google_adk: ${{ needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
 
   ci_required:
     name: CI Pipeline

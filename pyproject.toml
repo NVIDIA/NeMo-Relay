@@ -76,6 +76,12 @@ test = [
     "pytest-cov~=7.0",
 ]
 
+# Provider SDKs behind the ADK model classes the integration tests drive, at ADK's floors.
+google-adk-test = [
+    "anthropic>=0.78",
+    "openai>=2.20,<3",
+]
+
 [project.optional-dependencies]
 cli = [
     "nemo-relay-cli-bin==0.11.0",
@@ -112,6 +118,11 @@ langchain-nvidia = [
     "multidict>=6.9.1",
 ]
 
+google-adk = [
+    "google-adk>=2.12.0,<3.0.0",
+    "typing-extensions>=4.10.0",
+]
+
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"
 python-source = "python"
@@ -126,6 +137,7 @@ auditwheel = true
 [tool.uv]
 default-groups = ["dev", "test"]
 package = true
+override-dependencies = ["opentelemetry-api>=1.45.1", "opentelemetry-sdk>=1.45.1"]
 
 [tool.uv.sources]
 nemo-relay-cli-bin = { path = "python/cli-bin" }
@@ -153,9 +165,9 @@ omit = [
 [tool.ty.analysis]
 # nemo_relay._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-# LangChain, LangGraph, and Deep Agents are optional integration dependencies
-# which aren't installed by default.
-allowed-unresolved-imports = ["deepagents.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
+# LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
+# dependencies which aren't installed by default.
+allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "openai.**", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]
@@ -206,4 +218,5 @@ safe_licenses = [
 unsafe_packages = [
     "certifi", # Mozilla Public License 2.0 (MPL 2.0)
     "matplotlib-inline", # unknown derived
+    "tqdm", # MPL-2.0 AND MIT
 ]
