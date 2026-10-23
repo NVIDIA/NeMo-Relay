@@ -4,9 +4,6 @@
 name: Execute Quick Starts
 
 on:
-  # Temporary fork validation; remove after the new platforms pass.
-  push:
-    branches: [codex/quickstart-e2e-ci]
   workflow_dispatch:
     inputs:
       version:
@@ -38,7 +35,6 @@ on:
 
 jobs:
   execute:
-    if: ${{ github.event_name != 'push' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
     name: Execute (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -52,8 +48,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux/macOS are validating the same implementation in run 40014004372.
-          # Restore both entries after the focused Windows retry.
+          - platform: linux-amd64
+            runner: ubuntu-latest
+          - platform: macos-arm64
+            runner: macos-15
           - platform: windows-amd64
             runner: windows-2022
     steps:
@@ -65,17 +63,11 @@ jobs:
 
       - name: Pin execution source
         id: source
-        if: ${{ github.event_name == 'push' || inputs.source_ref != '' }}
+        if: ${{ inputs.source_ref != '' }}
         env:
           REQUESTED_SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            git fetch --no-tags https://github.com/NVIDIA/NeMo-Relay.git main
-            # Hold the platform experiment on the last buildable development commit.
-            source_ref="$(git rev-parse --verify '33754e38c2edc2c71ca9e40542b43433513c3260^{commit}')"
-          else
-            source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
-          fi
+          source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
           printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
           printf 'Relay source commit: `%s`\n' "$source_ref" >> "$GITHUB_STEP_SUMMARY"
 
@@ -115,9 +107,7 @@ jobs:
           workspaces: . -> target/quickstarts
           cache-all-crates: true
           cache-bin: false
-          # Temporary fork validation cache; restore the main-only policy afterward.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
-          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
