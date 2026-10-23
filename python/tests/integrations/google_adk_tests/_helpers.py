@@ -241,6 +241,17 @@ def _scripted_llm_class() -> _ScriptedLlmClass:
         call: types.FunctionCall | None = None
         record: ScriptedLlmFactory
 
+        # Keep the generated constructor visible when ADK isn't installed.
+        if TYPE_CHECKING:
+
+            def __init__(
+                self,
+                *,
+                model: str = "scripted-model",
+                call: types.FunctionCall | None = None,
+                record: ScriptedLlmFactory,
+            ) -> None: ...
+
         @override
         async def generate_content_async(
             self, llm_request: LlmRequest, stream: bool = False
