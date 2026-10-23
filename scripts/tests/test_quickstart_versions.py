@@ -4,6 +4,10 @@
 """Version sync tests use disposable docs, not the repository checkout."""
 
 import importlib.util
+import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +20,31 @@ SPEC.loader.exec_module(VERSIONS)
 
 
 class QuickstartVersionTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("just") and shutil.which("uv"), "requires just and uv")
+    def test_set_version_rejects_docs_drift_before_changing_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copyfile(ROOT / "justfile", root / "justfile")
+            scripts = root / "scripts/docs"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(ROOT / "scripts/docs/docs_version_pins.py", scripts / "docs_version_pins.py")
+            docs = root / "docs/getting-started"
+            docs.mkdir(parents=True)
+            (docs / "installation.mdx").write_text("uv add nemo-relay==0.10.0\n", encoding="utf-8")
+            manifest = '[workspace.package]\nversion = "0.11.0"\n'
+            (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
+            result = subprocess.run(
+                ["just", "--justfile", str(root / "justfile"), "set-version", "0.12.0"],
+                cwd=root,
+                env={**os.environ, "UV_PYTHON": sys.executable},
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("expected Relay 0.11.0, found 0.10.0", result.stderr)
+            self.assertEqual((root / "Cargo.toml").read_text(encoding="utf-8"), manifest)
+
     def test_main_installer_source_stays_independent_of_release_selection(self):
         for script in ("install.sh", "install.ps1"):
             source = f"https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/{script}"

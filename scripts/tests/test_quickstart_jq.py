@@ -41,7 +41,7 @@ def events_for(guide: str) -> list[dict]:
     return events
 
 
-class QuickstartJqTests(unittest.TestCase):
+class QuickstartRerunTests(unittest.TestCase):
     def test_failed_agent_rerun_cannot_reuse_previous_artifacts(self):
         for guide in GUIDES:
             source = (ROOT / "docs/getting-started/quick-start" / f"{guide}.mdx").read_text(encoding="utf-8")
@@ -67,6 +67,8 @@ class QuickstartJqTests(unittest.TestCase):
                 self.assertFalse((folder / "relay-check.txt").exists())
                 self.assertFalse((folder / "logs/events.jsonl").exists())
 
+
+class QuickstartJqTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         configured = os.environ.get("QUICKSTART_JQ_BINARIES")

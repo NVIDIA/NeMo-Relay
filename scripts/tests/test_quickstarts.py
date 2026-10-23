@@ -86,6 +86,59 @@ class QuickstartContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stdout"):
             QS.verify(scenario, self.root, "not OK\n", {})
 
+    def test_cli_requires_shell_and_verifies_its_expected_output(self):
+        source = (
+            example_page()
+            .replace('"shells": ["bash"]', '"shells": ["bash", "powershell"]')
+            .replace('"id":"run","role":"run"', '"id":"run","role":"run","shells":["bash"]')
+            .replace('"id":"expected","role":"expected"', '"id":"expected","role":"expected","shells":["bash"]')
+        )
+        source += (
+            '\n{/* quickstart-block {"id":"run","role":"run","shells":["powershell"],'
+            '"cwd":"project","session":"main","timeout_seconds":30} */}\n'
+            "```powershell\npython demo.py\n```\n\n"
+            '{/* quickstart-block {"id":"expected","role":"expected","shells":["powershell"],'
+            '"cwd":"project","from":"run","match":"exact-lines"} */}\n'
+            "```text\nPS_OK\n```\n"
+        )
+        self.page.write_text(source, encoding="utf-8")
+        for action in ("extract", "preflight", "verify"):
+            with (
+                self.subTest(action=action),
+                mock.patch.object(sys, "argv", ["check-quickstarts", action, str(self.page)]),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(QS.main(), 1)
+                self.assertIn("select --shell", errors.getvalue())
+
+        project = self.root / "project"
+        (project / "logs").mkdir(parents=True)
+        (project / "marker.txt").write_text("TOOL_OK\n", encoding="utf-8")
+        (project / "logs/events.jsonl").write_text(agent_events(), encoding="utf-8")
+        stdout = self.root / "stdout.txt"
+        for shell, expected in (("bash", "OK"), ("powershell", "PS_OK")):
+            arguments = [
+                "check-quickstarts",
+                "verify",
+                str(self.page),
+                "--shell",
+                shell,
+                "--workspace",
+                str(self.root),
+                "--stdout",
+                str(stdout),
+            ]
+            with (
+                self.subTest(shell=shell),
+                mock.patch.object(sys, "argv", arguments),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                stdout.write_text(expected + "\n", encoding="utf-8")
+                self.assertEqual(QS.main(), 0)
+                stdout.write_text("wrong shell output\n", encoding="utf-8")
+                self.assertEqual(QS.main(), 1)
+
     def test_rejects_hidden_commands_and_unsafe_paths(self):
         source = example_page()
         for label, changed in {

@@ -253,8 +253,11 @@ def main() -> int:
             print(f"Validated {len(scenarios)} quickstart contracts (no commands executed)")
             return 0
         scenario = scenarios[0]
+        require(
+            args.shell or len(scenario["shells"]) == 1,
+            "select --shell for a page with multiple shell variants",
+        )
         if args.action == "extract":
-            require(args.shell, "select --shell to extract one executable branch")
             print(json.dumps(scenario, indent=2))
             return 0
         require(args.workspace, "supply --workspace")

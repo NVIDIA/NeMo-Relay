@@ -660,6 +660,8 @@ set_project_version() {
     local python_executable=""
     previous_version="$(read_workspace_version)"
     python_executable="$(uv_python_executable)"
+    # Reject drift before any manifest is rewritten by the version bump.
+    "$python_executable" scripts/docs/docs_version_pins.py check
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
     set_example_package_versions "$version"
