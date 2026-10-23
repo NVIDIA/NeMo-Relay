@@ -357,6 +357,30 @@ impl SpanExporter for SensitiveFailingSpanExporter {
     }
 }
 
+/// Fail the first request, then allow later requests to succeed.
+#[derive(Debug)]
+struct RecoveringTraceHttpClient {
+    first_error: rustls::Error,
+    attempts: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl opentelemetry_http::HttpClient for RecoveringTraceHttpClient {
+    async fn send_bytes(
+        &self,
+        _request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            Err(std::io::Error::other(self.first_error.clone()).into())
+        } else {
+            Ok(opentelemetry_http::Response::new(Default::default()))
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AlwaysFailingSpanExporter;
 
@@ -7341,6 +7365,87 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
         diagnostic.field.as_deref(),
         Some("opentelemetry.traces[2].endpoint")
     );
+}
+
+#[test]
+fn http_trace_client_recovers_from_connection_errors_but_stops_after_fatal_tls_errors() {
+    use opentelemetry_http::{HttpClient, Request};
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for (error, terminal) in [
+        (
+            rustls::Error::InvalidMessage(rustls::InvalidMessage::MessageTooShort),
+            false,
+        ),
+        (
+            rustls::Error::InappropriateMessage {
+                expect_types: vec![rustls::ContentType::Handshake],
+                got_type: rustls::ContentType::ApplicationData,
+            },
+            false,
+        ),
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+            true,
+        ),
+        (rustls::Error::DecryptError, true),
+        (
+            rustls::Error::AlertReceived(rustls::AlertDescription::HandshakeFailure),
+            true,
+        ),
+    ] {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let diagnostics = SignalRuntimeDiagnostics::new(None);
+        let client = DiagnosticTraceHttpClient {
+            inner: RecoveringTraceHttpClient {
+                first_error: error.clone(),
+                attempts: attempts.clone(),
+            },
+            diagnostics: diagnostics.clone(),
+        };
+        futures::executor::block_on(async {
+            let request = || {
+                Request::builder()
+                    .uri("https://collector.example/v1/traces")
+                    .body(Default::default())
+                    .unwrap()
+            };
+            assert!(client.send_bytes(request()).await.is_err());
+            assert_eq!(attempts.load(Ordering::Relaxed), 1);
+            for _ in 0..2 {
+                let next = client.send_bytes(request()).await;
+                assert_eq!(next.is_err(), terminal, "{error:?}");
+            }
+        });
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            if terminal { 1 } else { 3 },
+            "{error:?}"
+        );
+        assert_eq!(
+            diagnostics.trace_tls_failure().is_some(),
+            terminal,
+            "{error:?}"
+        );
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(
+            snapshot.get("otel.tls_failed").map(|entry| entry.count),
+            terminal.then_some(1)
+        );
+    }
+}
+
+#[test]
+fn tls_failure_classification_uses_typed_causes_without_exposing_error_strings() {
+    let error = std::io::Error::other(rustls::Error::InvalidCertificate(
+        rustls::CertificateError::UnknownIssuer,
+    ));
+    assert_eq!(
+        safe_tls_failure_reason(&error),
+        Some("TLS certificate verification failed: unknown issuer; check the configured CA bundle")
+    );
+    let sensitive = std::io::Error::other("TLS certificate Authorization: Bearer secret");
+    assert_eq!(safe_tls_failure_reason(&sensitive), None);
 }
 
 #[test]

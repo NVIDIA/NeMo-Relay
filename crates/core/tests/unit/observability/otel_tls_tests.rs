@@ -290,6 +290,7 @@ fn tls_schema_aliases_editor_and_signal_inheritance() {
 
 #[derive(Default)]
 struct CollectorCounts {
+    connections: AtomicUsize,
     requests: AtomicUsize,
     signals: AtomicU8,
 }
@@ -438,6 +439,7 @@ async fn collector(
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
+                count.connections.fetch_add(1, Ordering::SeqCst);
                 let acceptor = acceptor.clone();
                 let count = count.clone();
                 tokio::spawn(async move {
@@ -698,6 +700,162 @@ fn tls_endpoint_identities_stay_isolated_from_each_other_and_environment() {
             server_a.abort();
             server_b.abort();
         }
+    });
+}
+
+#[test]
+fn tls_failure_stops_later_http_trace_connections_until_exporter_is_recreated() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        let certificates = Certificates::new();
+        let other = Certificates::new();
+        let (endpoint, count, server) = collector(&certificates, false, false).await;
+        let correct_tls = certificates.tls.clone();
+        tokio::task::spawn_blocking(move || {
+            let config = CoreOpenTelemetryConfig::new(OpenTelemetryType::Full, &endpoint)
+                .with_scheduled_delay(Duration::from_secs(600));
+            let failed =
+                OpenTelemetrySubscriber::new(config.clone().with_tls(other.tls.clone())).unwrap();
+            for batch in 0..3 {
+                let uuid = uuid::Uuid::now_v7();
+                for category in [ScopeCategory::Start, ScopeCategory::End] {
+                    failed.subscriber()(&Event::Scope(ScopeEvent::new(
+                        BaseEvent::builder()
+                            .uuid(uuid)
+                            .name(format!("tls.batch.{batch}"))
+                            .build(),
+                        category,
+                        Vec::new(),
+                        EventCategory::agent(),
+                        None,
+                    )));
+                }
+                let error = failed.force_flush().unwrap_err().to_string();
+                assert!(error.contains("TLS certificate verification failed"));
+                assert_eq!(
+                    count.connections.load(Ordering::SeqCst),
+                    1,
+                    "later batches must not open another connection"
+                );
+                assert_eq!(count.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    failed
+                        .runtime_diagnostics()
+                        .get("otel.tls_failed")
+                        .unwrap()
+                        .count,
+                    1
+                );
+            }
+            failed.shutdown().unwrap();
+
+            let recovered = OpenTelemetrySubscriber::new(config.with_tls(correct_tls)).unwrap();
+            let uuid = uuid::Uuid::now_v7();
+            for category in [ScopeCategory::Start, ScopeCategory::End] {
+                recovered.subscriber()(&Event::Scope(ScopeEvent::new(
+                    BaseEvent::builder()
+                        .uuid(uuid)
+                        .name("tls.recreated")
+                        .build(),
+                    category,
+                    Vec::new(),
+                    EventCategory::agent(),
+                    None,
+                )));
+            }
+            recovered.force_flush().unwrap();
+            recovered.shutdown().unwrap();
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert_eq!(count.connections.load(Ordering::SeqCst), 2);
+        })
+        .await
+        .unwrap();
+        server.abort();
+    });
+}
+
+#[test]
+fn wrong_ca_trace_export_during_shutdown_reports_tls_and_releases_host() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        let certificates = Certificates::new();
+        let other = Certificates::new();
+        let (endpoint, count, server) = collector(&certificates, false, false).await;
+        for trusted in [false, true] {
+            for file_headers in [false, true] {
+                let before = count.load(Ordering::SeqCst);
+                let endpoint = endpoint.clone();
+                let ca = if trusted { &certificates } else { &other }
+                    .tls.certificate.clone().unwrap();
+                let token = certificates._directory.path().join("token");
+                std::fs::write(&token, "secret-token").unwrap();
+                tokio::task::spawn_blocking(move || {
+                    use crate::plugin::dynamic::PluginHostActivation;
+                    let config = serde_json::from_value(json!({
+                        "components": [{"kind": "observability", "config": {
+                            "version": 4,
+                            "opentelemetry": {"enabled": true, "traces": [{
+                                "type": "full", "endpoint": if trusted { endpoint.clone() } else { format!("{endpoint}/private-path?secret-query") },
+                                "transport": "http_binary", "tls": {"certificate": ca},
+                                "scheduled_delay_millis": 600_000,
+                                "header_file": if file_headers { json!({"x-token": token}) } else { json!({}) }
+                            }]}
+                        }}]
+                    })).unwrap();
+                    let mut activation = futures::executor::block_on(
+                        PluginHostActivation::initialize_exact(config),
+                    ).unwrap();
+                    let callbacks: Vec<_> = crate::api::runtime::global_context()
+                        .read().unwrap().event_subscribers.values().cloned().collect();
+                    let uuid = uuid::Uuid::now_v7();
+                    for category in [ScopeCategory::Start, ScopeCategory::End] {
+                        let event = Event::Scope(ScopeEvent::new(
+                            BaseEvent::builder().uuid(uuid).name("tls.trace").build(),
+                            category, Vec::new(), EventCategory::agent(), None,
+                        ));
+                        for callback in &callbacks { callback(&event); }
+                    }
+                    // Do not force-flush: the first export must fail inside
+                    // shutdown, rather than taking the preexisting-failure path.
+                    let result = activation.close();
+                    assert!(!activation.is_active(), "one close must release ownership: {result:?}");
+                    let report = activation.report();
+                    if trusted {
+                        result.unwrap();
+                        assert!(report.config.runtime_diagnostics.is_empty());
+                    } else {
+                        assert!(result.unwrap_err().to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER));
+                        let diagnostic = report.config.runtime_diagnostics.iter()
+                            .find(|diagnostic| diagnostic.code == "otel.tls_failed")
+                            .expect("actionable TLS diagnostic");
+                        assert!(diagnostic.message.contains(&endpoint));
+                        assert!(diagnostic.message.contains("TLS certificate verification failed"));
+                        for secret in ["private-path", "secret-query", "secret-token"] {
+                            assert!(!diagnostic.message.contains(secret));
+                        }
+                        assert_eq!(diagnostic.count, 1);
+                    }
+                    let mut next = futures::executor::block_on(
+                        PluginHostActivation::initialize_exact(Default::default()),
+                    ).expect("host must be available without a second close");
+                    next.close().unwrap();
+                }).await.unwrap();
+                assert_eq!(count.load(Ordering::SeqCst), before + usize::from(trusted));
+            }
+        }
+        server.abort();
     });
 }
 

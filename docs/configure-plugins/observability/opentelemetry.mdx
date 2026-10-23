@@ -777,6 +777,23 @@ failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
 </Warning>
 
+For HTTP trace exports, a fatal TLS error stops the exporter. This includes
+certificate errors. NeMo Relay logs the error once. The message identifies the
+endpoint and the TLS problem. If the message reports an unknown certificate
+issuer, check the CA bundle. Temporary connection errors do not stop the
+exporter.
+
+Fix the TLS problem, then recreate the exporter to send traces again. Traces
+created while the exporter is stopped are lost. Calling `force_flush()`
+continues to report the error.
+
+If cleanup finishes but trace delivery fails, closing the plugin reports the
+error. You can start a new plugin without closing the old one again.
+
+`subscribers.flush_async()` waits for callbacks. It does not confirm trace
+delivery. For direct subscribers, use `force_flush()` to check for export
+errors.
+
 Increasing an endpoint's `max_queue_size`, or the process-wide
 `OTEL_BSP_MAX_QUEUE_SIZE` fallback, can reduce the risk for a known burst size,
 but a finite queue does not guarantee lossless telemetry. Always clear the
