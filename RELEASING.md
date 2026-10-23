@@ -319,6 +319,13 @@ NVIDIA Artifactory publication for the same tag:
   Node.js package artifacts produced by GitHub Actions.
 - The Artifactory jobs publish those collected artifacts to the configured
   Python, Cargo, and npm Artifactory registries.
+- For non-alpha tags only, the collector also downloads all seven CLI binary
+  artifacts. The CLI publishing job uploads them to
+  `https://artifactory.nvidia.com/artifactory/sw-nemo-relay-generic-local/<tag>/<filename>`,
+  preserving the GitHub release filenames, including `.exe` on Windows. It uses
+  the existing `NEMO_RELAY_CI_ARTIFACTORY_USER` and
+  `NEMO_RELAY_CI_ARTIFACTORY_KEY` credentials, which must have deploy access to
+  that repository. Alpha tags skip CLI binary collection and publication.
 
 npm trusted publishing has its own registry-side constraints:
 
