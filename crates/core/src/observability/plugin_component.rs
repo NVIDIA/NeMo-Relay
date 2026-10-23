@@ -57,7 +57,7 @@ use crate::observability::atof::{
     AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode, AtofFileSinkConfig,
     AtofSinkConfig as CoreAtofSinkConfig, AtofStreamSinkConfig,
 };
-use crate::observability::header_file::PlaintextPolicy;
+use crate::observability::header_file::{PlaintextPolicy, redacted_origin};
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig,
     OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
@@ -91,6 +91,7 @@ use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
+const AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE: &str = "NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS";
 /// Top-level observability component wrapper.
 ///
 /// Use this wrapper when constructing a [`PluginComponentSpec`] from Rust
@@ -1448,9 +1449,9 @@ fn register_observability(
             config.version
         )));
     }
+    let configured_hosts = config.insecure_http_hosts.as_deref().unwrap_or_default();
     let plaintext =
-        PlaintextPolicy::from_hosts(config.insecure_http_hosts.as_deref().unwrap_or_default())
-            .map_err(PluginError::InvalidConfig)?;
+        PlaintextPolicy::from_hosts(configured_hosts).map_err(PluginError::InvalidConfig)?;
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, &plaintext, ctx)?;
@@ -1465,7 +1466,9 @@ fn register_observability(
     match config.opentelemetry {
         Some(otel) if otel.enabled => {
             let automatic_active = match automatic_signals {
-                Some(signals) => register_automatic_opentelemetry(signals, &plaintext, ctx)?,
+                Some(signals) => {
+                    register_automatic_opentelemetry(signals, configured_hosts, &plaintext, ctx)?
+                }
                 None => false,
             };
             if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
@@ -1475,7 +1478,7 @@ fn register_observability(
         Some(_) => {}
         None => {
             if let Some(signals) = automatic_signals {
-                register_automatic_opentelemetry(signals, &plaintext, ctx)?;
+                register_automatic_opentelemetry(signals, configured_hosts, &plaintext, ctx)?;
             }
         }
     }
@@ -2078,17 +2081,23 @@ fn environment_signal_enabled(variable: &'static str) -> bool {
 
 fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
-    plaintext: &PlaintextPolicy,
+    configured_hosts: &[String],
+    configured_plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<bool> {
+    let plaintext = automatic_plaintext_policy(configured_hosts, configured_plaintext, ctx);
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
         "traces",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        ctx,
         || OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(plaintext.clone()),
     );
     let log_subscribers = automatic_subscriber(
         signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER"),
         "logs",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        ctx,
         || {
             OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
                 plaintext.clone(),
@@ -2098,6 +2107,8 @@ fn register_automatic_opentelemetry(
     let metric_subscribers = automatic_subscriber(
         signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER"),
         "metrics",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        ctx,
         || {
             OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
                 plaintext.clone(),
@@ -2117,10 +2128,52 @@ fn register_automatic_opentelemetry(
     Ok(true)
 }
 
+fn automatic_plaintext_policy(
+    configured_hosts: &[String],
+    configured_plaintext: &PlaintextPolicy,
+    ctx: &mut PluginRegistrationContext,
+) -> PlaintextPolicy {
+    let additional_hosts = match std::env::var(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE) {
+        Ok(value) if !value.trim().is_empty() => value,
+        Ok(_) | Err(std::env::VarError::NotPresent) => return configured_plaintext.clone(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            record_invalid_automatic_insecure_hosts(ctx);
+            return configured_plaintext.clone();
+        }
+    };
+    let mut hosts = configured_hosts.to_vec();
+    hosts.extend(
+        additional_hosts
+            .split(',')
+            .map(|host| host.trim().to_string()),
+    );
+    match PlaintextPolicy::from_hosts(&hosts) {
+        Ok(policy) => policy,
+        Err(_) => {
+            record_invalid_automatic_insecure_hosts(ctx);
+            configured_plaintext.clone()
+        }
+    }
+}
+
+fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) {
+    ctx.record_activation_diagnostic(ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "observability.invalid_automatic_insecure_http_hosts".to_string(),
+        component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+        field: Some(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE.to_string()),
+        message: format!(
+            "{AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE} must contain comma-separated bare hostnames or IP addresses; the override was ignored"
+        ),
+    });
+}
+
 /// Build one automatic subscriber without preventing healthy signals from activating.
 fn automatic_subscriber<T>(
     enabled: bool,
     signal: &'static str,
+    signal_endpoint_variable: &'static str,
+    ctx: &mut PluginRegistrationContext,
     build: impl FnOnce() -> crate::observability::otel::Result<T>,
 ) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
     if !enabled {
@@ -2139,6 +2192,25 @@ fn automatic_subscriber<T>(
                 signal;
                 "Automatic OpenTelemetry {signal} exporter was skipped during activation; delivery continues to valid signals: {error}"
             );
+            let endpoint_source = if environment_has_nonblank_value(signal_endpoint_variable) {
+                signal_endpoint_variable
+            } else {
+                "OTEL_EXPORTER_OTLP_ENDPOINT"
+            };
+            let redacted_destination = std::env::var(endpoint_source)
+                .ok()
+                .and_then(|endpoint| redacted_origin(&endpoint))
+                .map(|origin| format!(" ({origin})"))
+                .unwrap_or_default();
+            ctx.record_activation_diagnostic(ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+                field: Some(endpoint_source.to_string()),
+                message: format!(
+                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped; check the endpoint and exporter settings. Plain HTTP requires its host in insecure_http_hosts."
+                ),
+            });
             Vec::new()
         }
     }
