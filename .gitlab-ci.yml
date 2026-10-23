@@ -205,8 +205,8 @@ publish:artifactory:cli:
     - |
       set -eu
 
-      if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ]; then
-        echo "Error: uploading CLI binaries to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER and NEMO_RELAY_CI_ARTIFACTORY_KEY." >&2
+      if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_GENERIC_URL:-}" ]; then
+        echo "Error: uploading CLI binaries to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_GENERIC_URL." >&2
         exit 1
       fi
       set -- collected/cli/nemo-relay-cli-*
@@ -221,7 +221,7 @@ publish:artifactory:cli:
         fi
       done
 
-      repository_url="https://artifactory.nvidia.com/artifactory/sw-nemo-relay-generic-local"
+      repository_url="${NEMO_RELAY_CI_ARTIFACTORY_GENERIC_URL%/}"
       for binary in "$@"; do
         curl --fail --show-error --silent \
           --user "${NEMO_RELAY_CI_ARTIFACTORY_USER}:${NEMO_RELAY_CI_ARTIFACTORY_KEY}" \
