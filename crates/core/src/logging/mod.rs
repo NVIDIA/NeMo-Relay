@@ -26,7 +26,7 @@ use crate::error::{FlowError, Result};
 
 pub use config::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES,
 };
 #[cfg(test)]
@@ -115,6 +115,10 @@ pub struct LoggingRuntime {
     pub(crate) logger: Arc<Logger>,
     /// Keeps per-sink async thread pools alive until shutdown.
     _thread_pools: Vec<Arc<ThreadPool>>,
+    /// Original configured sink positions, including stderr, for each installed sink.
+    sink_indices: Vec<usize>,
+    /// One fixed reason per unavailable file, retained for late diagnostics attachment.
+    unavailable_files: Vec<(usize, io::ErrorKind)>,
     diagnostics: LoggingDiagnostics,
     projection: Option<LoggingProjection>,
     config: LoggingConfig,
@@ -125,9 +129,10 @@ impl LoggingRuntime {
     /// Installs process-wide operational logging from resolved configuration.
     ///
     /// Stderr is enabled by default and can be disabled with [`LoggingConfig::stderr_enabled`].
-    /// Explicit file sinks fail initialization if they cannot be
-    /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
-    /// process-global `log` proxy when it is still installed.
+    /// Required file sinks fail initialization if they cannot be opened. Optional sinks are
+    /// disabled on filesystem opening failures until logging is reinitialized. Dropping the returned
+    /// runtime flushes sinks and detaches its logger from the process-global `log` proxy when it is
+    /// still installed.
     /// Reuses an already selected diagnostics context. Otherwise, logging uses an inert context
     /// without selecting the process default, leaving diagnostics enablement to runtime startup.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
@@ -140,8 +145,8 @@ impl LoggingRuntime {
     /// Installs operational logging with diagnostics owned by an independent diagnostic context.
     ///
     /// Sink initialization and delivery failures remain queryable when logging is unavailable or
-    /// filtered. Configured sinks remain required, matching [`Self::configure`]. Diagnostic events
-    /// are projected into this logger through a detachable subscription; sink failures update
+    /// filtered. File sinks use their configured failure policy, matching [`Self::configure`].
+    /// Diagnostic events are projected through a detachable subscription. Sink failures update
     /// diagnostic state directly without being sent back through the failing logging pipeline.
     /// Exhausting diagnostic component or projection budgets does not prevent operational logging
     /// from starting; the diagnostic snapshot reports the available evidence and coverage loss.
@@ -159,7 +164,12 @@ impl LoggingRuntime {
         let root_relay_id = context.source().instance_id.to_string();
         let built =
             sink::build_logger_with_diagnostics(&config, root_relay_id.clone(), Some(&diagnostics));
-        let (logger, thread_pools) = match built {
+        let sink::BuiltLogger {
+            logger,
+            thread_pools,
+            sink_indices,
+            unavailable_files,
+        } = match built {
             Ok(built) => built,
             Err(error) => {
                 diagnostics.initialization_failed();
@@ -189,13 +199,16 @@ impl LoggingRuntime {
         log::info!(
             target: "nemo_relay.logging",
             event = "logging_initialized",
-            file_sink_count = config.sinks.len();
+            file_sink_count = thread_pools.len(),
+            unavailable_file_sink_count = unavailable_files.len();
             "Operational logging initialized"
         );
         Ok(Self {
             root_relay_id,
             logger,
             _thread_pools: thread_pools,
+            sink_indices,
+            unavailable_files,
             diagnostics,
             projection,
             config,
@@ -247,7 +260,7 @@ impl Drop for LoggingRuntime {
         for (index, sink) in self.logger.sinks().iter().enumerate() {
             if let Err(error) = Sink::flush_on_exit(sink.as_ref()) {
                 shutdown_failed = true;
-                if let Some(diagnostics) = self.diagnostics.sink(index) {
+                if let Some(diagnostics) = self.diagnostics.sink(self.sink_indices[index]) {
                     diagnostics.shutdown_failed();
                 }
                 let _ = writeln!(
@@ -277,7 +290,8 @@ impl Drop for LoggingRuntime {
 /// Installs process-wide operational logging from resolved config.
 ///
 /// Stderr is enabled by default and can be disabled with [`LoggingConfig::stderr_enabled`].
-/// Explicit file sinks fail startup if they cannot be opened.
+/// Required file sinks fail startup if they cannot be opened. Optional sinks are disabled on
+/// filesystem opening failures until logging is reinitialized.
 ///
 /// Verbosity comes from [`LoggingConfig::level`]: records below that minimum severity are discarded.
 /// Dropping the returned [`LoggingRuntime`] flushes sinks and detaches this logger from the
@@ -336,15 +350,22 @@ pub fn attach_default_diagnostics(context: &Diagnostics) -> Result<()> {
     runtime.diagnostics.attach(context);
     runtime.diagnostic_source = Some(context.source().instance_id);
     runtime.root_relay_id = context.source().instance_id.to_string();
-    let formats = runtime
-        .config
-        .stderr_enabled
-        .then_some(runtime.config.stderr_format)
-        .into_iter()
-        .chain(runtime.config.sinks.iter().map(|config| {
-            let LogSinkConfig::File(file) = config;
+    // These sinks remain unavailable; observe that state when a service attaches later.
+    // No log payloads or earlier delivery history are replayed.
+    for &(index, reason) in &runtime.unavailable_files {
+        if let Some(diagnostic) = runtime.diagnostics.file(index) {
+            diagnostic.open_failed(reason);
+        }
+    }
+    let formats = runtime.sink_indices.iter().map(|&index| {
+        if runtime.config.stderr_enabled && index == 0 {
+            runtime.config.stderr_format
+        } else {
+            let LogSinkConfig::File(file) =
+                &runtime.config.sinks[index - usize::from(runtime.config.stderr_enabled)];
             file.format
-        }));
+        }
+    });
     for (sink, format) in runtime.logger.sinks().iter().zip(formats) {
         sink.set_formatter(Box::new(self::format::RelayFormatter {
             format,

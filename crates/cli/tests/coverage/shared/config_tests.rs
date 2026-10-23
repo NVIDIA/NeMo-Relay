@@ -4625,6 +4625,7 @@ path = {}
 level = "trace"
 format = "jsonl"
 queue_capacity = 32
+failure_policy = "optional"
 
 [[logging.sinks]]
 path = {}
@@ -4653,6 +4654,10 @@ format = "human"
             assert_eq!(sink.level, LogLevel::Trace);
             assert_eq!(sink.format, LogFormat::Jsonl);
             assert_eq!(sink.queue_capacity, 32);
+            assert_eq!(
+                sink.failure_policy,
+                nemo_relay::logging::FileLogSinkFailurePolicy::Optional
+            );
         }
     }
     match &resolved.logging.sinks[1] {
@@ -4661,6 +4666,10 @@ format = "human"
             assert_eq!(sink.level, LogLevel::Debug);
             assert_eq!(sink.format, LogFormat::Human);
             assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
+            assert_eq!(
+                sink.failure_policy,
+                nemo_relay::logging::FileLogSinkFailurePolicy::Required
+            );
         }
     }
 }
@@ -5789,4 +5798,39 @@ async fn http_model_hosts_managed_layers_preserve_omission_and_enforce_system_de
         }
     }
     set_test_system_config_dir(previous_system);
+}
+
+#[test]
+fn logging_failure_policy_layers_by_sink_path_for_cli_and_daemon() {
+    for section in ["logging", "daemon.logging"] {
+        for override_field in ["", "failure_policy = 'required'"] {
+            let mut lower: toml::Value = toml::from_str(&format!(
+                "[[{section}.sinks]]\npath = 'relay.jsonl'\nfailure_policy = 'optional'\n"
+            ))
+            .unwrap();
+            let higher: toml::Value = toml::from_str(&format!(
+                "[[{section}.sinks]]\npath = './relay.jsonl'\nformat = 'human'\n{override_field}\n"
+            ))
+            .unwrap();
+            merge_gateway_config_toml(&mut lower, higher);
+            let keys: Vec<_> = section.split('.').collect();
+            let logging = toml_value_at_path(&lower, &keys).unwrap().clone();
+            let document =
+                toml::Value::Table(toml::Table::from_iter([("logging".into(), logging)]));
+            let resolved =
+                LoggingConfig::from_toml_document(&toml::to_string(&document).unwrap()).unwrap();
+            let [LogSinkConfig::File(sink)] = resolved.sinks.as_slice() else {
+                panic!("one merged destination");
+            };
+            assert_eq!(sink.format, LogFormat::Human);
+            assert_eq!(
+                sink.failure_policy,
+                if override_field.is_empty() {
+                    nemo_relay::logging::FileLogSinkFailurePolicy::Optional
+                } else {
+                    nemo_relay::logging::FileLogSinkFailurePolicy::Required
+                }
+            );
+        }
+    }
 }

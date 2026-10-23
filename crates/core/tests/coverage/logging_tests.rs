@@ -7,9 +7,10 @@ use crate::diagnostics::{
     DiagnosticsSettings, FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
 };
 use crate::logging::{
-    FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
-    LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
-    format_event_for_test, init_logging, initialize_default_logging, shutdown_default_logging,
+    FileLogRotationConfig, FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel,
+    LogSinkConfig, LoggingConfig, LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES,
+    MAX_FILE_SINK_RETAINED_FILES, build_logger, format_event_for_test, init_logging,
+    initialize_default_logging, shutdown_default_logging,
 };
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_sdk::error::OTelSdkResult;
@@ -724,6 +725,7 @@ queue_capacity = 7
                 format: LogFormat::Human,
                 queue_capacity: 7,
                 rotation: None,
+                failure_policy: FileLogSinkFailurePolicy::Required,
             })]
         );
     }
@@ -2216,5 +2218,297 @@ fn typed_projection_respects_facade_filter_before_serializing_and_keeps_recordin
     assert_eq!(
         page.coverage.loss.projection_deliveries_omitted.value.get(),
         0
+    );
+}
+
+#[test]
+fn optional_file_sinks_preserve_healthy_outputs_and_record_one_safe_failure() {
+    let _guard = lock_logging_tests();
+    for rotation in [None, Some(FileLogRotationConfig::new(4096, 1).unwrap())] {
+        let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("private-path-sentinel");
+        std::fs::write(&blocked, "file").unwrap();
+        let paths = [
+            temp.path().join("before.jsonl"),
+            temp.path().join("after.jsonl"),
+        ];
+        let config = LoggingConfig {
+            level: LogLevel::Info,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: paths[0].clone(),
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: blocked.join("relay.jsonl"),
+                    rotation,
+                    failure_policy: FileLogSinkFailurePolicy::Optional,
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: paths[1].clone(),
+                    ..Default::default()
+                }),
+            ],
+            ..default_config()
+        };
+        let runtime = LoggingRuntime::configure_with_diagnostics(config, &diagnostics).unwrap();
+        log::info!("healthy destinations still receive this record");
+        runtime.shutdown();
+        for path in paths {
+            let output = std::fs::read_to_string(path).unwrap();
+            assert!(output.contains("healthy destinations still receive this record"));
+            assert!(!output.contains("private-path-sentinel"));
+            // Sink failures stay out of the projection back into operational logging.
+            assert!(!output.contains("logging.sink.initialize_failed"));
+        }
+        let page = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let failures: Vec<_> = page
+            .events
+            .iter()
+            .filter(|event| event.code() == "logging.sink.initialize_failed")
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].component.key, "logging.file.1");
+        assert_eq!(failures[0].classification.failure_class(), Some("io"));
+        assert!(
+            !serde_json::to_string(&page)
+                .unwrap()
+                .contains("private-path-sentinel")
+        );
+        for key in ["logging.file.0", "logging.file.2"] {
+            assert!(
+                page.events.iter().any(|event| event.component.key == key
+                    && event.code() == "logging.sink.initialized")
+            );
+        }
+        assert!(
+            !page
+                .events
+                .iter()
+                .any(|event| event.code() == "logging.initialize_failed")
+        );
+    }
+}
+
+#[test]
+fn optional_file_sink_is_not_retried_until_logging_is_reinitialized() {
+    let _guard = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, "file").unwrap();
+    let path = blocked.join("relay.jsonl");
+    let config = LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            failure_policy: FileLogSinkFailurePolicy::Optional,
+            ..Default::default()
+        })],
+        ..default_config()
+    };
+    // No diagnostics or output sinks are required for startup to succeed.
+    let runtime =
+        LoggingRuntime::configure_with_diagnostics(config.clone(), &Diagnostics::default())
+            .unwrap();
+    assert!(runtime.logger.sinks().is_empty());
+    std::fs::remove_file(&blocked).unwrap();
+    std::fs::create_dir(&blocked).unwrap();
+    log::info!("not buffered for replay");
+    runtime.shutdown();
+    assert!(!path.exists());
+    let runtime = LoggingRuntime::configure(config).unwrap();
+    log::info!("delivered after reinitialization");
+    runtime.shutdown();
+    let output = std::fs::read_to_string(path).unwrap();
+    assert!(!output.contains("not buffered for replay"));
+    assert!(output.contains("delivered after reinitialization"));
+}
+
+#[test]
+fn optional_file_sinks_cannot_hide_invalid_configuration_or_reserved_paths() {
+    let _guard = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, "file").unwrap();
+    let optional = FileLogSinkConfig {
+        path: blocked.join("relay.jsonl"),
+        failure_policy: FileLogSinkFailurePolicy::Optional,
+        ..Default::default()
+    };
+    let healthy = temp.path().join("must-not-be-opened.jsonl");
+    for invalid in [
+        FileLogSinkConfig {
+            queue_capacity: 0,
+            ..optional.clone()
+        },
+        FileLogSinkConfig {
+            queue_capacity: MAX_FILE_SINK_QUEUE_ENTRIES + 1,
+            ..optional.clone()
+        },
+        FileLogSinkConfig {
+            path: PathBuf::new(),
+            ..optional.clone()
+        },
+    ] {
+        let config = LoggingConfig {
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: healthy.clone(),
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(invalid),
+            ],
+            ..default_config()
+        };
+        let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+        assert!(LoggingRuntime::configure_with_diagnostics(config, &diagnostics).is_err());
+        let snapshot = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert!(
+            snapshot
+                .events
+                .iter()
+                .any(|event| event.component.key == "logging.file.1"
+                    && event.code() == "logging.sink.initialize_failed")
+        );
+        assert!(!healthy.exists(), "validate all sinks before opening any");
+    }
+    for (first, second, reason) in [
+        (
+            optional.clone(),
+            optional.clone(),
+            "duplicate logging sink path",
+        ),
+        (
+            FileLogSinkConfig {
+                rotation: Some(FileLogRotationConfig::new(4096, 1).unwrap()),
+                ..optional.clone()
+            },
+            FileLogSinkConfig {
+                path: blocked.join("relay.1.jsonl"),
+                ..optional
+            },
+            "conflicts with another active or rotated file",
+        ),
+    ] {
+        let config = LoggingConfig {
+            sinks: vec![LogSinkConfig::File(first), LogSinkConfig::File(second)],
+            ..default_config()
+        };
+        let error = build_logger(&config, "root".into())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains(reason), "{error}");
+    }
+}
+
+#[test]
+fn file_sink_failure_policy_defaults_to_required_and_rejects_unknown_values() {
+    for (field, expected) in [
+        ("", FileLogSinkFailurePolicy::Required),
+        (
+            "failure_policy = 'required'",
+            FileLogSinkFailurePolicy::Required,
+        ),
+        (
+            "failure_policy = 'optional'",
+            FileLogSinkFailurePolicy::Optional,
+        ),
+    ] {
+        let config = LoggingConfig::from_toml_document(&format!(
+            "[logging]\n[[logging.sinks]]\npath = 'relay.jsonl'\n{field}\n"
+        ))
+        .unwrap();
+        let LogSinkConfig::File(sink) = &config.sinks[0];
+        assert_eq!(sink.failure_policy, expected);
+    }
+    assert!(
+        LoggingConfig::from_toml_document(
+            "[logging]\n[[logging.sinks]]\npath = 'relay.jsonl'\nfailure_policy = 'ignore'\n"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn optional_file_sinks_keep_identity_and_format_when_diagnostics_attach_later() {
+    let _guard = lock_logging_tests();
+    shutdown_default_logging().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("private-path-sentinel");
+    std::fs::write(&blocked, "file").unwrap();
+    let path = temp.path().join("healthy.jsonl");
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Info,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: blocked.join("relay.log"),
+                    format: LogFormat::Human,
+                    failure_policy: FileLogSinkFailurePolicy::Optional,
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: path.clone(),
+                    format: LogFormat::Jsonl,
+                    ..Default::default()
+                }),
+            ],
+            ..default_config()
+        },
+        &Diagnostics::default(),
+    )
+    .unwrap();
+    *super::DEFAULT_LOGGING_RUNTIME.lock().unwrap() = Some(runtime);
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    super::attach_default_diagnostics(&diagnostics).unwrap();
+    super::attach_default_diagnostics(&diagnostics).unwrap();
+    log::info!("after diagnostics attach");
+    shutdown_default_logging().unwrap();
+    let records: Vec<Value> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let row = records
+        .iter()
+        .find(|row| row["message"] == "after diagnostics attach")
+        .unwrap();
+    assert_eq!(
+        row["root_relay_id"],
+        diagnostics.source().instance_id.to_string()
+    );
+    let page = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let failures: Vec<_> = page
+        .events
+        .iter()
+        .filter(|event| event.code() == "logging.sink.initialize_failed")
+        .collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].component.key, "logging.file.0");
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private-path-sentinel")
     );
 }

@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 _LOG_ENVIRONMENT = (
     "NEMO_RELAY_LOG",
     "NEMO_RELAY_LOG_STDERR",
@@ -125,3 +127,32 @@ def test_binding_rejects_non_object_log_fields() -> None:
 
     assert completed.returncode != 0
     assert "log fields must be an object" in completed.stderr
+
+
+@pytest.mark.parametrize("policy", [None, "required", "optional"])
+def test_binding_file_sink_startup_failure_policy(tmp_path, policy) -> None:
+    blocked = tmp_path / "private-path-sentinel"
+    blocked.write_text("file")
+    healthy = tmp_path / "healthy.jsonl"
+    config = tmp_path / "logging.toml"
+    policy_field = "" if policy is None else f'failure_policy = "{policy}"'
+    config.write_text(
+        f"""[logging]
+level = "info"
+stderr_enabled = false
+[[logging.sinks]]
+path = {json.dumps(str(blocked / "relay.jsonl"))}
+{policy_field}
+[[logging.sinks]]
+path = {json.dumps(str(healthy))}
+"""
+    )
+    completed = _run_nemo_relay(NEMO_RELAY_LOG_CONFIG_PATH=str(config))
+    if policy == "optional":
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stderr.count("optional logging sink logging.file.0 disabled") == 1
+        assert "private-path-sentinel" not in completed.stderr
+        assert '"event":"logging_shutdown_started"' in healthy.read_text()
+    else:
+        assert completed.returncode != 0
+        assert "failed to open logging sink" in completed.stderr

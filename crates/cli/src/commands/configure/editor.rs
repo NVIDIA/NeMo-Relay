@@ -15,6 +15,7 @@ use crate::error::CliError;
 
 const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 const LOG_FORMATS: &[&str] = &["human", "jsonl"];
+const LOG_FAILURE_POLICIES: &[&str] = &["required", "optional"];
 
 mod prompt;
 

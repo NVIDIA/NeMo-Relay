@@ -207,6 +207,18 @@ impl SinkDiagnostics {
         );
     }
 
+    pub(super) fn open_failed(&self, reason: io::ErrorKind) {
+        record(
+            self.recorder.get(),
+            BuiltinDiagnosticCode::Failure(FailureCode::Logging(
+                LoggingFailureCode::SinkInitializeFailed,
+            )),
+            Some(FailureClass::Io),
+            DiagnosticSeverity::Error,
+            file_open_failure_reason(reason),
+        );
+    }
+
     pub(super) fn runtime_error(&self, error: &spdlog::Error) {
         let Some(recorder) = self.recorder.get() else {
             return;
@@ -245,6 +257,20 @@ impl SinkDiagnostics {
             DiagnosticSeverity::Error,
             message,
         );
+    }
+}
+
+/// Fixed reasons shared by startup diagnostics and the emergency stderr notice.
+/// Neither file paths nor backend error strings enter diagnostic evidence.
+pub(super) fn file_open_failure_reason(reason: io::ErrorKind) -> &'static str {
+    match reason {
+        io::ErrorKind::PermissionDenied => "Logging sink could not open: permission_denied",
+        io::ErrorKind::NotFound => "Logging sink could not open: not_found",
+        io::ErrorKind::NotADirectory => "Logging sink could not open: not_a_directory",
+        io::ErrorKind::IsADirectory => "Logging sink could not open: is_a_directory",
+        io::ErrorKind::ReadOnlyFilesystem => "Logging sink could not open: read_only_filesystem",
+        io::ErrorKind::StorageFull => "Logging sink could not open: storage_full",
+        _ => "Logging sink could not open: io_error",
     }
 }
 

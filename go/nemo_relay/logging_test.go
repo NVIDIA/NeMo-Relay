@@ -65,6 +65,7 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 	t.Run("disables stderr from environment", testLoggingDisabledStderr)
 	t.Run("rejects invalid environment", testLoggingInvalidEnvironment)
 	t.Run("flushes file sink during shutdown", testLoggingFileSinkShutdown)
+	t.Run("file sink startup failure policy", testLoggingFileSinkFailurePolicy)
 	t.Run("emits structured records through every level helper", testBindingLoggingLevels)
 }
 
@@ -233,5 +234,53 @@ func TestBindingLoggingRejectsInvalidRecords(t *testing.T) {
 	}
 	if err := Info("coverage.binding", "structured record", map[string]any{"nested": map[string]any{"retained": true}, "ordinal": uint64(9007199254740993)}); err != nil {
 		t.Fatalf("structured record: %v", err)
+	}
+}
+
+func testLoggingFileSinkFailurePolicy(t *testing.T) {
+	for _, policy := range []string{"", "required", "optional"} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			directory := t.TempDir()
+			blocked := filepath.Join(directory, "private-path-sentinel")
+			if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			healthy := filepath.Join(directory, "healthy.jsonl")
+			configPath := filepath.Join(directory, "logging.toml")
+			policyField := ""
+			if policy != "" {
+				policyField = "failure_policy = " + strconv.Quote(policy)
+			}
+			config := `[logging]
+level = "info"
+stderr_enabled = false
+[[logging.sinks]]
+path = ` + strconv.Quote(filepath.Join(blocked, "relay.jsonl")) + "\n" + policyField + `
+[[logging.sinks]]
+path = ` + strconv.Quote(healthy) + "\n"
+			if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
+			command.Env = loggingTestEnvironment(loggingHelperEnvironment+"=shutdown", "NEMO_RELAY_LOG_CONFIG_PATH="+configPath)
+			output, err := command.CombinedOutput()
+			if policy == "optional" {
+				if err != nil {
+					t.Fatalf("optional sink blocked startup: %v\n%s", err, output)
+				}
+				if strings.Count(string(output), "optional logging sink logging.file.0 disabled") != 1 || strings.Contains(string(output), "private-path-sentinel") {
+					t.Fatalf("expected one safe warning: %s", output)
+				}
+				contents, err := os.ReadFile(healthy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(contents), `"event":"logging_shutdown_started"`) {
+					t.Fatalf("healthy sink lost output: %s", contents)
+				}
+			} else if err == nil || !strings.Contains(string(output), "failed to open logging sink") {
+				t.Fatalf("required sink did not fail startup: %v\n%s", err, output)
+			}
+		})
 	}
 }

@@ -10,8 +10,8 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Password, Select};
 
 use super::{
-    ConfigDocument, ConfigEditCommand, LOG_FORMATS, LOG_LEVELS, ensure_tty_with,
-    resolve_edit_target,
+    ConfigDocument, ConfigEditCommand, LOG_FAILURE_POLICIES, LOG_FORMATS, LOG_LEVELS,
+    ensure_tty_with, resolve_edit_target,
 };
 use crate::error::CliError;
 
@@ -555,6 +555,10 @@ fn edit_sink(
                 document.sink_integer_summary(index, "queue_capacity")
             ),
             format!("Rotation: {}", document.sink_rotation_summary(index)),
+            format!(
+                "Startup failure policy: {}",
+                document.sink_string_summary(index, "failure_policy")
+            ),
             "Remove sink".into(),
             "Back".into(),
         ];
@@ -564,7 +568,14 @@ fn edit_sink(
             2 => edit_sink_enum(theme, document, index, "format", LOG_FORMATS)?,
             3 => edit_sink_queue_capacity(theme, document, index)?,
             4 => edit_sink_rotation(theme, document, index)?,
-            5 => {
+            5 => edit_sink_enum(
+                theme,
+                document,
+                index,
+                "failure_policy",
+                LOG_FAILURE_POLICIES,
+            )?,
+            6 => {
                 document.remove_sink(index)?;
                 return Ok(());
             }
