@@ -4,10 +4,6 @@
 name: Execute Quick Starts
 
 on:
-  # Temporary fork-only validation path; remove before this PR is ready to merge.
-  push:
-    branches:
-      - codex/quickstart-e2e-ci
   workflow_dispatch:
     inputs:
       version:
@@ -39,7 +35,6 @@ on:
 
 jobs:
   execute:
-    if: ${{ github.event_name != 'push' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
     name: Execute (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -61,16 +56,11 @@ jobs:
 
       - name: Pin execution source
         id: source
-        if: ${{ github.event_name == 'push' || inputs.source_ref != '' }}
+        if: ${{ inputs.source_ref != '' }}
         env:
           REQUESTED_SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            git fetch --no-tags https://github.com/NVIDIA/NeMo-Relay.git main
-            source_ref="$(git rev-parse FETCH_HEAD)"
-          else
-            source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
-          fi
+          source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
           printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
           printf 'Relay source commit: `%s`\n' "$source_ref" >> "$GITHUB_STEP_SUMMARY"
 
