@@ -320,9 +320,8 @@ NVIDIA Artifactory publication for the same tag:
 - The Artifactory jobs publish those collected artifacts to the configured
   Python, Cargo, and npm Artifactory registries.
 - For non-alpha tags only, the collector also downloads all seven CLI binary
-  artifacts. Set `NEMO_RELAY_CI_ARTIFACTORY_GENERIC_URL` in GitLab to
-  `https://artifactory.nvidia.com/artifactory/sw-nemo-relay-generic-local`.
-  The CLI publishing job uploads them to `<generic-url>/<tag>/<filename>`,
+  artifacts. The CLI publishing job uploads them to
+  `<generic-url>/<tag>/<filename>`,
   preserving the GitHub release filenames, including `.exe` on Windows. It uses
   the existing `NEMO_RELAY_CI_ARTIFACTORY_USER` and
   `NEMO_RELAY_CI_ARTIFACTORY_KEY` credentials, which must have deploy access to
