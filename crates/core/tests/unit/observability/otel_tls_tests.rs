@@ -133,6 +133,114 @@ fn tls_rejects_invalid_configuration_and_identity_without_disclosing_pem() {
     );
 }
 
+// Preflight is synchronous and must work without a Tokio runtime or collector.
+#[test]
+fn tls_preflight_checks_files_and_identity_for_every_signal_and_transport() {
+    let certificates = Certificates::new();
+    assert_tls_preflight(&certificates.tls, true);
+    assert_tls_preflight(&OpenTelemetryTlsConfig::default(), true);
+    assert_tls_preflight(
+        &OpenTelemetryTlsConfig {
+            certificate: certificates.tls.certificate.clone(),
+            ..Default::default()
+        },
+        true,
+    );
+    assert_tls_preflight(
+        &OpenTelemetryTlsConfig {
+            certificate: None,
+            ..certificates.tls.clone()
+        },
+        true,
+    );
+    for field in ["certificate", "client_certificate", "private_key"] {
+        for contents in [
+            None,
+            Some(""),
+            Some("SECRET not PEM"),
+            Some("-----BEGIN CERTIFICATE-----\nSECRET invalid base64\n-----END CERTIFICATE-----"),
+        ] {
+            let path = certificates._directory.path().join("invalid.pem");
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).unwrap();
+            }
+            let mut tls = certificates.tls.clone();
+            let path = Some(path.to_str().unwrap().to_string());
+            match field {
+                "certificate" => tls.certificate = path,
+                "client_certificate" => tls.client_certificate = path,
+                _ => tls.private_key = path,
+            }
+            assert_tls_preflight(&tls, false);
+            if contents.is_some() {
+                std::fs::remove_file(certificates._directory.path().join("invalid.pem")).unwrap();
+            }
+        }
+    }
+    let other = Certificates::new();
+    let mut tls = certificates.tls.clone();
+    tls.private_key = other.tls.private_key.clone();
+    assert_tls_preflight(&tls, false);
+
+    // Startup must recheck files even after a successful preflight.
+    std::fs::write(
+        certificates.tls.private_key.as_ref().unwrap(),
+        "SECRET invalid key",
+    )
+    .unwrap();
+    assert_tls_preflight(&certificates.tls, false);
+    assert!(
+        certificates
+            .tls
+            .http_client("https://127.0.0.1:4318", None)
+            .is_err()
+    );
+    assert!(
+        certificates
+            .tls
+            .grpc_config("https://127.0.0.1:4317")
+            .is_err()
+    );
+}
+
+fn assert_tls_preflight(tls: &OpenTelemetryTlsConfig, valid: bool) {
+    for transport in ["http_binary", "grpc"] {
+        for signal in ["traces", "logs", "metrics"] {
+            let mut otel = json!({"enabled":true});
+            let mut endpoint =
+                json!({"endpoint":"https://127.0.0.1:4318", "transport":transport, "tls":tls});
+            if signal == "traces" {
+                endpoint["type"] = json!("full");
+                otel["endpoints"] = json!([endpoint]);
+            } else {
+                otel[signal] = json!({"enabled":true,"endpoints":[endpoint]});
+            };
+            let config = serde_json::from_value(json!({
+                "version":1,
+                "components":[{"kind":OBSERVABILITY_PLUGIN_KIND,"config":{"version":4,"opentelemetry":otel}}]
+            })).unwrap();
+            let report = crate::plugin::dynamic::validate_exact(config).config;
+            if valid {
+                assert!(
+                    report.diagnostics.is_empty(),
+                    "{signal}/{transport}: {report:?}"
+                );
+            } else {
+                assert_eq!(
+                    report.diagnostics.len(),
+                    1,
+                    "{signal}/{transport}: {report:?}"
+                );
+                let diagnostic = &report.diagnostics[0];
+                assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+                assert_eq!(diagnostic.field.as_deref(), Some("endpoints[0].tls"));
+                assert!(diagnostic.message.contains("tls."));
+                assert!(!diagnostic.message.contains("SECRET"));
+            }
+        }
+    }
+}
+
 #[test]
 fn tls_schema_aliases_editor_and_signal_inheritance() {
     let config: OpenTelemetrySectionConfig = serde_json::from_value(json!({
