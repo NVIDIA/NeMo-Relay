@@ -383,6 +383,10 @@ inline image bytes, remains in `extra.llm_request`. This display projection
 does not change the request sent to the LLM. Consumers that reconstruct a
 multimodal request must use `extra.llm_request` rather than the display message.
 
+For OpenAI Responses input with no text, the exporter uses an empty display
+message when no image parts can be represented by ATIF. It preserves the full
+request in `extra.llm_request` and does not substitute an earlier user message.
+
 When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.

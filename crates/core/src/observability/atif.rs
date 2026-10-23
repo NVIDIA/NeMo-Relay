@@ -1196,7 +1196,9 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
             collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
         }
         return match text_parts.as_slice() {
-            [] => canonicalize_atif_content_parts(content),
+            // An image-only user turn is still a message. Do not fall back to
+            // an earlier turn or stringify the full request for display.
+            [] => Some(atif_user_content_value(content)),
             [text] => Some(Json::String(text.clone())),
             _ => Some(Json::String(text_parts.join("\n"))),
         };

@@ -935,6 +935,45 @@ fn test_exporter_user_message_keeps_supported_parts_and_preserves_raw_images() {
 }
 
 #[test]
+fn test_exporter_responses_image_only_keeps_empty_display_and_raw_request() {
+    for part in [
+        json!({"type": "input_image", "image_url": "data:image/png;base64,YQ=="}),
+        json!({"type": "input_image", "image_url": "https://example.com/image.png"}),
+        json!({"type": "input_image", "file_id": "file-image"}),
+        json!({"type": "input_file", "file_id": "file-document"}),
+    ] {
+        for use_annotation in [false, true] {
+            let request = json!({"input": [
+                {"role": "user", "content": "Earlier message"},
+                {"role": "user", "content": [part]}
+            ]});
+            let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+            let builder = event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(request.clone());
+            let start = if use_annotation {
+                let annotation = OpenAIResponsesCodec
+                    .decode(&LlmRequest {
+                        headers: Default::default(),
+                        content: request.clone(),
+                    })
+                    .unwrap();
+                builder.annotated_request(annotation).build()
+            } else {
+                builder.build()
+            };
+            exporter.state.lock().unwrap().events.push(start);
+
+            let trajectory = exporter.export().unwrap();
+            assert_atif_v17_shape(&trajectory);
+            let user = &trajectory.steps[0];
+            assert_eq!(user.message, json!(""));
+            assert_eq!(user.extra.as_ref().unwrap()["llm_request"], request);
+        }
+    }
+}
+
+#[test]
 fn test_exporter_llm_lifecycle() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
