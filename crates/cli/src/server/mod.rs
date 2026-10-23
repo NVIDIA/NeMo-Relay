@@ -367,6 +367,19 @@ async fn serve_listener_with_dynamic_inner(
     let shutdown = shutdown.map(|shutdown| {
         log_shutdown_started(shutdown, instance_id.clone(), diagnostics_shutdown.clone())
     });
+    // Streaming responses must not wait for a delayed ACK before sending small frames.
+    // Apply this to accepted sockets, including connections later upgraded to TLS.
+    use axum::serve::ListenerExt as _;
+    let listener = listener.tap_io(|stream| {
+        if let Err(error) = stream.set_nodelay(true) {
+            log::warn!(
+                target: "nemo_relay.server",
+                event = "socket_nodelay_failed",
+                error_kind = format!("{:?}", error.kind()).as_str();
+                "Failed to enable TCP_NODELAY"
+            );
+        }
+    });
     let serve_result = match shutdown {
         Some(shutdown) => {
             axum::serve(listener, app)

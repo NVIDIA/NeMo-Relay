@@ -2071,6 +2071,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "ring",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

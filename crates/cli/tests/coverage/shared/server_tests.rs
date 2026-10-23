@@ -4119,6 +4119,141 @@ async fn gateway_preserves_streaming_body() {
     );
 }
 
+/// Transport chunks may split both text and incremental tool arguments inside UTF-8.
+#[tokio::test]
+async fn gateway_preserves_fragmented_unicode_text_and_tool_arguments() {
+    let text = "café € 🙂";
+    let arguments = [r#"{"city":"Montr"#, r#"éal🙂"}"#];
+    for anthropic in [false, true] {
+        let path = if anthropic {
+            "/v1/messages"
+        } else {
+            "/v1/responses"
+        };
+        let events = if anthropic {
+            vec![
+                json!({"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"weather","input":{}}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":arguments[0]}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":arguments[1]}}),
+                json!({"type":"content_block_stop","index":1}),
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":3}}),
+                json!({"type":"message_stop"}),
+            ]
+        } else {
+            vec![
+                json!({"type":"response.created","response":{"id":"r1"}}),
+                json!({"type":"response.output_text.delta","item_id":"m1","output_index":0,"content_index":0,"delta":text}),
+                json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"t1","call_id":"c1","name":"weather","arguments":""}}),
+                json!({"type":"response.function_call_arguments.delta","item_id":"t1","output_index":1,"delta":arguments[0]}),
+                json!({"type":"response.function_call_arguments.delta","item_id":"t1","output_index":1,"delta":arguments[1]}),
+                json!({"type":"response.completed","response":{"id":"r1"}}),
+            ]
+        };
+        for chunk_size in [1, 7] {
+            let wire = events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "data: {event}
+
+"
+                    )
+                })
+                .collect::<String>();
+            let chunks = wire
+                .as_bytes()
+                .chunks(chunk_size)
+                .map(Bytes::copy_from_slice)
+                .collect::<Vec<_>>();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let app = Router::new().route(
+                path,
+                post(move || {
+                    let chunks = chunks.clone();
+                    async move {
+                        (
+                            [(header::CONTENT_TYPE, "text/event-stream")],
+                            Body::from_stream(stream::iter(
+                                chunks.into_iter().map(Ok::<_, std::convert::Infallible>),
+                            )),
+                        )
+                    }
+                }),
+            );
+            let upstream = TestServer {
+                url: format!("http://{address}"),
+                handle: tokio::spawn(async move {
+                    axum::serve(listener, app).await.unwrap();
+                }),
+            };
+            let mut config = test_config();
+            config.openai_base_url = upstream.url();
+            config.anthropic_base_url = upstream.url();
+            let request = if anthropic {
+                json!({"model":"test","messages":[{"role":"user","content":"hello"}],"max_tokens":32,"stream":true})
+            } else {
+                json!({"model":"test","input":"hello","stream":true})
+            };
+            let response = router(config)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body =
+                tokio::time::timeout(Duration::from_secs(10), response.into_body().collect())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .to_bytes();
+            let decoded = std::str::from_utf8(&body)
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .map(|data| serde_json::from_str::<Value>(data).unwrap())
+                .collect::<Vec<_>>();
+            let deltas = decoded
+                .iter()
+                .filter_map(|event| {
+                    if anthropic {
+                        event["delta"]["text"]
+                            .as_str()
+                            .or_else(|| event["delta"]["partial_json"].as_str())
+                    } else {
+                        event["delta"].as_str()
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                deltas,
+                [text, arguments[0], arguments[1]],
+                "{path}, chunk size {chunk_size}"
+            );
+            let reconstructed: Value = serde_json::from_str(&deltas[1..].concat()).unwrap();
+            assert_eq!(reconstructed, json!({"city":"Montréal🙂"}));
+            assert_eq!(
+                decoded.last().unwrap()["type"],
+                if anthropic {
+                    "message_stop"
+                } else {
+                    "response.completed"
+                }
+            );
+        }
+    }
+}
+
 /// A clean upstream EOF still fails if the Responses stream has no final event.
 #[tokio::test]
 async fn gateway_rejects_responses_streams_without_final_events() {

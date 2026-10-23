@@ -68,15 +68,16 @@ impl BenchmarkClient {
         let mut http = HttpConnector::new();
         http.enforce_http(false);
         http.set_nodelay(true);
+        // Workspace builds can enable multiple Rustls providers; select ours per connector.
         let connector = match protocol {
             Protocol::Http1 => HttpsConnectorBuilder::new()
-                .with_native_roots()
+                .with_provider_and_native_roots(rustls::crypto::ring::default_provider())
                 .context("failed to load native TLS roots")?
                 .https_or_http()
                 .enable_http1()
                 .wrap_connector(http),
             Protocol::Http2 => HttpsConnectorBuilder::new()
-                .with_native_roots()
+                .with_provider_and_native_roots(rustls::crypto::ring::default_provider())
                 .context("failed to load native TLS roots")?
                 .https_or_http()
                 .enable_http2()
@@ -169,6 +170,8 @@ struct ScenarioRecord {
     total: HistogramRecord,
     integrity: IntegrityRecord,
     transport_errors: u64,
+    transport_error_stages: BTreeMap<&'static str, u64>,
+    transport_error_samples: Vec<String>,
     connections_opened_during_measurement: u64,
     estimated_pool_reuses: u64,
     reconnect_count: Option<u64>,
@@ -235,6 +238,8 @@ struct Accumulator {
     bytes: u64,
     integrity: IntegrityRecord,
     transport_errors: u64,
+    transport_error_stages: BTreeMap<&'static str, u64>,
+    transport_error_samples: Vec<String>,
 }
 
 impl Accumulator {
@@ -250,6 +255,8 @@ impl Accumulator {
             bytes: 0,
             integrity: IntegrityRecord::default(),
             transport_errors: 0,
+            transport_error_stages: BTreeMap::new(),
+            transport_error_samples: Vec::new(),
         }
     }
 
@@ -271,7 +278,17 @@ impl Accumulator {
                 self.bytes += observation.bytes as u64;
                 self.integrity.add(observation.integrity);
             }
-            Err(_) => self.transport_errors += 1,
+            Err(error) => {
+                self.transport_errors += 1;
+                let stage = error
+                    .downcast_ref::<TransportStage>()
+                    .map_or("other", |stage| stage.name());
+                *self.transport_error_stages.entry(stage).or_default() += 1;
+                if self.transport_error_samples.len() < 8 {
+                    self.transport_error_samples
+                        .push(format!("{error:#}").chars().take(1024).collect());
+                }
+            }
         }
     }
 
@@ -286,6 +303,12 @@ impl Accumulator {
         self.bytes += other.bytes;
         self.integrity.add(other.integrity);
         self.transport_errors += other.transport_errors;
+        for (stage, count) in other.transport_error_stages {
+            *self.transport_error_stages.entry(stage).or_default() += count;
+        }
+        let remaining = 8usize.saturating_sub(self.transport_error_samples.len());
+        self.transport_error_samples
+            .extend(other.transport_error_samples.into_iter().take(remaining));
         Ok(())
     }
 }
@@ -313,6 +336,33 @@ impl IntegrityRecord {
             + self.status_errors
     }
 }
+
+#[derive(Debug)]
+enum TransportStage {
+    Request,
+    Body,
+    MissingContent,
+    Timeout,
+}
+
+impl TransportStage {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Body => "response_body",
+            Self::MissingContent => "missing_content",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
+impl std::fmt::Display for TransportStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+impl std::error::Error for TransportStage {}
 
 struct Observation {
     head: Duration,
@@ -528,6 +578,7 @@ async fn run_slow_scenario(
                     ordinal,
                     active,
                     max_active,
+                    None,
                 )
                 .await,
             );
@@ -589,21 +640,42 @@ async fn run_timed_phase(
             while Instant::now() < deadline {
                 let ordinal = request_sequence.fetch_add(1, Ordering::Relaxed);
                 let cancel = cancel_every > 0 && ordinal.is_multiple_of(cancel_every as u64);
-                accumulator.record(
-                    perform_request(
-                        &client,
-                        &target,
-                        provider,
-                        response_bytes,
-                        events,
-                        event_delay_micros,
-                        cancel,
-                        ordinal,
-                        Arc::clone(&active),
-                        Arc::clone(&max_active),
+                let request_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                let result = perform_request(
+                    &client,
+                    &target,
+                    provider,
+                    response_bytes,
+                    events,
+                    event_delay_micros,
+                    cancel,
+                    ordinal,
+                    Arc::clone(&active),
+                    Arc::clone(&max_active),
+                    Some(request_deadline),
+                )
+                .await;
+                let failed = result
+                    .as_ref()
+                    .map_or(true, |observation| observation.integrity.error_count() > 0);
+                accumulator.record(result.map_err(|error| {
+                    error.context(format!(
+                        "request={ordinal} remaining_ms={}",
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_millis()
+                    ))
+                }));
+                if failed {
+                    // Keep failed runs observable without amplifying a broken connection
+                    // into an unpaced request storm. Never retry an individual request.
+                    tokio::time::sleep_until(
+                        (Instant::now() + Duration::from_millis(100))
+                            .min(deadline)
+                            .into(),
                     )
-                    .await,
-                );
+                    .await;
+                }
             }
             accumulator
         }));
@@ -627,6 +699,7 @@ async fn perform_request(
     request_ordinal: u64,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
+    deadline: Option<tokio::time::Instant>,
 ) -> Result<Observation> {
     let stream_id = format!("{request_ordinal:016x}");
     let uri: Uri = format!("{}{}", target.url, provider.path())
@@ -657,12 +730,20 @@ async fn perform_request(
     let active_now = active.fetch_add(1, Ordering::Relaxed) + 1;
     max_active.fetch_max(active_now, Ordering::Relaxed);
     let _active_guard = ActiveGuard(active);
-    let response = client
-        .client
-        .request(request)
+    let response = before_deadline(deadline, client.client.request(request))
         .await
-        .context("request failed")?;
+        .with_context(|| {
+            format!(
+                "status=unavailable protocol=unavailable elapsed_ms={} body_prefix=\"\"",
+                started.elapsed().as_millis(),
+            )
+        })
+        .context(TransportStage::Timeout)?
+        .context(TransportStage::Request)?;
     let head = started.elapsed();
+    let status = response.status();
+    let version = response.version();
+    let mut response_prefix = Vec::with_capacity(512);
     let mut integrity = IntegrityRecord::default();
     if !response.status().is_success() {
         integrity.status_errors += 1;
@@ -686,10 +767,32 @@ async fn perform_request(
     let mut first = None;
     let mut trailer_hash = None;
     let mut trailer_events = None;
-    while let Some(frame) = body.frame().await {
-        let frame = frame.context("response body failed")?;
+    loop {
+        let frame = before_deadline(deadline, body.frame())
+            .await
+            .with_context(|| {
+                format!(
+                    "status={status} protocol={version:?} elapsed_ms={} body_prefix={:?}",
+                    started.elapsed().as_millis(),
+                    String::from_utf8_lossy(&response_prefix),
+                )
+            })
+            .context(TransportStage::Timeout)?;
+        let Some(frame) = frame else { break };
+
+        let frame = frame
+            .with_context(|| {
+                format!(
+                    "status={status} protocol={version:?} elapsed_ms={} body_prefix={:?}",
+                    started.elapsed().as_millis(),
+                    String::from_utf8_lossy(&response_prefix),
+                )
+            })
+            .context(TransportStage::Body)?;
         match frame.into_data() {
             Ok(data) => {
+                response_prefix
+                    .extend_from_slice(&data[..data.len().min(512 - response_prefix.len())]);
                 bytes += data.len();
                 hasher.update(&data);
                 let before = tracker.unique_events();
@@ -734,13 +837,31 @@ async fn perform_request(
     }
     Ok(Observation {
         head,
-        first: first.ok_or_else(|| anyhow!("response contained no content event"))?,
+        first: first.ok_or_else(|| {
+            anyhow!(
+                "status={status} protocol={version:?} elapsed_ms={} body_prefix={:?}",
+                started.elapsed().as_millis(),
+                String::from_utf8_lossy(&response_prefix),
+            )
+            .context(TransportStage::MissingContent)
+        })?,
         total: started.elapsed(),
         event_delays: tracker.event_delays,
         bytes,
         integrity,
         cancelled: false,
     })
+}
+
+// Reuse the same absolute deadline for every await; incoming frames do not extend it.
+async fn before_deadline<F: std::future::Future>(
+    deadline: Option<tokio::time::Instant>,
+    future: F,
+) -> std::result::Result<F::Output, tokio::time::error::Elapsed> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, future).await,
+        None => Ok(future.await),
+    }
 }
 
 struct ActiveGuard(Arc<AtomicUsize>);
@@ -880,6 +1001,8 @@ fn make_scenario(
         total: HistogramRecord::from_histogram(&accumulator.total),
         integrity: accumulator.integrity,
         transport_errors: accumulator.transport_errors,
+        transport_error_stages: accumulator.transport_error_stages,
+        transport_error_samples: accumulator.transport_error_samples,
         connections_opened_during_measurement: connections,
         estimated_pool_reuses: pool_reuses,
         reconnect_count: None,
@@ -929,4 +1052,205 @@ fn unix_time_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn request_deadline_retains_context_and_releases_active_count() {
+        for send_headers in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let target = Target {
+                topology: Topology::Direct,
+                url: format!("http://{}", listener.local_addr().unwrap()),
+                headers: Vec::new(),
+            };
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let _ = hyper::server::conn::http1::Builder::new().serve_connection(
+                    hyper_util::rt::TokioIo::new(stream),
+                    hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| async move {
+                        request.into_body().collect().await.unwrap();
+                        if !send_headers {
+                            std::future::pending::<()>().await;
+                        }
+                        let body = http_body_util::StreamBody::new(async_stream::stream! {
+                            // Keep delivering frames: a per-frame reset of the deadline
+                            // would never terminate this response.
+                            loop {
+                                yield Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(
+                                    Bytes::from_static(b": retained evidence\n\n"),
+                                ));
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(http::Response::new(body))
+                    }),
+                ).await;
+            });
+            let client = BenchmarkClient::new(Protocol::Http1).unwrap();
+            let active = Arc::new(AtomicUsize::new(0));
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                perform_request(
+                    &client,
+                    &target,
+                    Provider::Openai,
+                    1024,
+                    4,
+                    0,
+                    false,
+                    0,
+                    Arc::clone(&active),
+                    Arc::new(AtomicUsize::new(0)),
+                    Some(tokio::time::Instant::now() + Duration::from_millis(200)),
+                ),
+            )
+            .await
+            .expect("one absolute deadline must bound the complete request");
+            let error = result.err().expect("unfinished response must time out");
+            assert!(matches!(
+                error.downcast_ref::<TransportStage>(),
+                Some(TransportStage::Timeout)
+            ));
+            let evidence = format!("{error:#}");
+            assert!(evidence.contains("elapsed_ms="), "{evidence}");
+            if send_headers {
+                assert!(evidence.contains("status=200 OK"), "{evidence}");
+                assert!(evidence.contains("protocol=HTTP/1.1"), "{evidence}");
+                assert!(evidence.contains("retained evidence"), "{evidence}");
+            } else {
+                assert!(
+                    evidence.contains("status=unavailable protocol=unavailable"),
+                    "{evidence}"
+                );
+                assert!(evidence.contains("body_prefix=\"\""), "{evidence}");
+            }
+            assert_eq!(active.load(Ordering::Relaxed), 0);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_responses_preserve_evidence_and_limit_request_rate() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = Target {
+            topology: Topology::Direct,
+            url: format!("http://{}", listener.local_addr().unwrap()),
+            headers: Vec::new(),
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(
+                    hyper_util::rt::TokioIo::new(stream),
+                    hyper::service::service_fn(
+                        |request: Request<hyper::body::Incoming>| async move {
+                            request.into_body().collect().await.unwrap();
+                            Ok::<_, std::convert::Infallible>(
+                                http::Response::builder()
+                                    .status(503)
+                                    .body(Full::new(Bytes::from(format!(
+                                        "unavailable{}",
+                                        "x".repeat(4096)
+                                    ))))
+                                    .unwrap(),
+                            )
+                        },
+                    ),
+                )
+                .await
+                .unwrap();
+        });
+        let client = BenchmarkClient::new(Protocol::Http1).unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let result = run_timed_phase(
+            &client,
+            &target,
+            Provider::Openai,
+            1024,
+            4,
+            1,
+            Duration::from_millis(250),
+            0,
+            0,
+            Arc::new(AtomicU64::new(0)),
+            Arc::clone(&active),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await
+        .unwrap();
+        assert!(result.started > 0 && result.started <= 3);
+        assert_eq!(result.transport_errors, result.started);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+        let sample = &result.transport_error_samples[0];
+        assert!(sample.contains("status=503"), "{sample}");
+        assert!(sample.contains("unavailable"), "{sample}");
+        assert!(sample.contains("protocol=HTTP/1.1"), "{sample}");
+        assert!(sample.chars().count() <= 1024);
+        server.abort();
+    }
+
+    #[test]
+    fn transport_failures_keep_stage_totals_and_bounded_samples() {
+        let mut total = Accumulator::new();
+        for _ in 0..4 {
+            let mut worker = Accumulator::new();
+            for _ in 0..12 {
+                worker.record(Err(anyhow!("x".repeat(2048)).context(TransportStage::Body)));
+            }
+            total.add(worker).unwrap();
+        }
+        total.record(Err(anyhow!(TransportStage::MissingContent)));
+        assert_eq!(total.transport_errors, 49);
+        assert_eq!(total.transport_error_stages["response_body"], 48);
+        assert_eq!(total.transport_error_stages["missing_content"], 1);
+        assert_eq!(total.transport_error_samples.len(), 8);
+        assert!(
+            total
+                .transport_error_samples
+                .iter()
+                .all(|sample| sample.chars().count() <= 1024)
+        );
+    }
+
+    #[tokio::test]
+    async fn http2_provider_drains_request_body_before_responding() {
+        let (url, stop, task) = provider::spawn_ephemeral().await.unwrap();
+        let (release, pending) = tokio::sync::oneshot::channel();
+        let (started, body_started) = tokio::sync::oneshot::channel();
+        let body = http_body_util::StreamBody::new(async_stream::stream! {
+            let _ = started.send(());
+            yield Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(Bytes::from_static(b"{")));
+            let _ = pending.await;
+            yield Ok(hyper::body::Frame::data(Bytes::from_static(b"}")));
+        }).boxed_unsync();
+        let mut builder = Client::builder(TokioExecutor::new());
+        builder.http2_only(true);
+        let client = builder.build_http();
+        let request = Request::post(format!("{url}/v1/responses"))
+            .body(body)
+            .unwrap();
+        let mut response = tokio::spawn(async move { client.request(request).await });
+        body_started.await.unwrap();
+        // The response must wait for the unfinished request body, rather than
+        // dropping it and resetting the still-active HTTP/2 stream.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut response)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), response)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(response.status().is_success());
+        response.into_body().collect().await.unwrap();
+        let _ = stop.send(());
+        task.await.unwrap().unwrap();
+    }
 }
