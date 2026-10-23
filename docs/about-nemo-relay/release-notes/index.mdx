@@ -220,7 +220,7 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
   Proxies must support WebSockets. Loopback control connections do not send
   periodic pings. An idle hung process can go undetected until an operation
   times out.
-- The Node.js binding and package workflows require Node.js 24 or later.
+- The Node.js binding and package workflows require Node.js 24.13.1 or later.
 - OpenClaw provides telemetry through public hooks. Its security and
   optimization coverage is partial because Relay does not manage its execution.
 - The built-in `nemo_guardrails` plugin remains deprecated but is still
