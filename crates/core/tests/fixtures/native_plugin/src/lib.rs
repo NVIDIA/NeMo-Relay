@@ -45,6 +45,19 @@ impl Drop for DropScope {
     }
 }
 
+// Make the distinction between terminal delivery and producer cleanup observable.
+struct StreamCleanup {
+    marker_path: String,
+    _scope: DropScope,
+}
+
+impl Drop for StreamCleanup {
+    fn drop(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&self.marker_path, "dropped").expect("write stream cleanup marker");
+    }
+}
+
 static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
@@ -361,6 +374,41 @@ impl NativePlugin for FixtureNativePlugin {
                 move |name, request, _context, next| {
                     let runtime = runtime.clone();
                     async move {
+                        if name == "native-fixture-cleanup-stream" {
+                            let cleanup = StreamCleanup {
+                                marker_path: request.content["marker_path"]
+                                    .as_str()
+                                    .ok_or("missing marker path")?
+                                    .to_owned(),
+                                _scope: DropScope {
+                                    runtime,
+                                    name: "fixture.native.stream.cleanup",
+                                },
+                            };
+                            let mode = request.content["mode"]
+                                .as_str()
+                                .unwrap_or("pending")
+                                .to_owned();
+                            let mut first = true;
+                            let stream: LlmJsonAsyncStream =
+                                Box::pin(futures::stream::poll_fn(move |_| {
+                                    let _ = &cleanup;
+                                    if first {
+                                        first = false;
+                                        return std::task::Poll::Ready(Some(Ok(
+                                            json!({"token": "first"}),
+                                        )));
+                                    }
+                                    match mode.as_str() {
+                                        "end" => std::task::Poll::Ready(None),
+                                        "error" => std::task::Poll::Ready(Some(Err(
+                                            "native cleanup stream failed".into(),
+                                        ))),
+                                        _ => std::task::Poll::Pending,
+                                    }
+                                }));
+                            return Ok(stream);
+                        }
                         if name != "native-fixture-cancelled-stream" {
                             return next.call(request).await;
                         }

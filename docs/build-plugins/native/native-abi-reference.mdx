@@ -207,6 +207,11 @@ The generic v3 completion API rejects the LLM stream intercept kind. Register it
 `async_next_invoke_stream`. Each repeated or concurrent invocation needs independent
 callback state.
 
+Finish and rejection settle chunk delivery. Release the output stream capability with
+`async_stream_release` only after producer-owned cleanup is complete. Balance each
+`async_stream_retain` with a release. Managed stream close waits for all plugin-owned
+output capabilities to be released; the typed SDK handles this ordering automatically.
+
 The output queue is bounded. `async_stream_push_json` and `async_stream_reject` never
 block a callback thread. `Backpressured` means the same logical chunk or rejection must
 be retried after the consumer advances. `InvalidArg` means the stream is closed or

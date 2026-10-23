@@ -185,7 +185,7 @@ service RelayHostRuntime {
 | `Register` | Receives valid component config and returns owned registrations with local name, surface, priority, and `break_chain`. |
 | `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or unary execution callback and returns the surface-appropriate result. |
 | `InvokeStream` | Dispatches an LLM stream execution intercept and emits incremental value or error chunks. |
-| `CancelInvocation` | Cooperatively cancels one active invocation ID and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
+| `CancelInvocation` | Cooperatively cancels one active invocation ID, waits for callback-owned cleanup, and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
 | `Shutdown` | Stops new work for an activation and begins orderly worker termination with a reason. |
 
 Each lifecycle message carries the following fields. Fields described as envelopes use
@@ -532,9 +532,12 @@ process:
 
 1. Relay stops routing new calls to the component and sends `CancelInvocation` for
    in-flight work that cannot drain normally.
-2. The worker acknowledges known active invocations and cooperatively cancels their async
-   tasks. Continuation and codec capabilities become unusable when their owner invocation
-   ends.
+2. The worker cooperatively cancels known active invocations and acknowledges only after
+   their callback tasks and stream-owned cleanup have completed. Managed stream close
+   waits for this acknowledgment, including after a terminal stream error. Flush exporters
+   after close to collect final cleanup events. Continuation and codec capabilities become
+   unusable when their owner invocation ends. Unmanaged background work started by a
+   callback remains the plugin's responsibility.
 3. Relay sends `Shutdown` with the activation ID, token, and reason. The worker stops its
    service and closes the local endpoint.
 4. Relay waits for the managed process within its shutdown policy, terminates it if

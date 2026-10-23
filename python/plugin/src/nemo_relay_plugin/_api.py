@@ -75,7 +75,7 @@ import platform
 import stat
 import tempfile
 import tomllib
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -2658,9 +2658,10 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             if active.task.cancelled() and active.cancel_reason is None:
                 yield pb.StreamChunk(error=_cancelled_worker_error("stream callback cancelled without a host request"))
         finally:
-            if not active.task.done():
+            if not active.task.done() and not active.cancel_requested:
+                active.cancel_requested = True
                 active.task.cancel()
-            await asyncio.gather(active.task, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
             self._forget_invocation(request.invocation_id, active)
 
     async def _produce_stream(self, request: Any, queue: asyncio.Queue[Any]) -> None:
@@ -2679,8 +2680,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             next_call = LlmStreamNext(self._runtime, request.continuation_id)
             with _bind_invocation_scope(request):
                 stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
-                async for value in _as_async_iter(stream):
-                    await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+                iterator = _as_async_iter(stream)
+                try:
+                    async for value in iterator:
+                        await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+                finally:
+                    await iterator.aclose()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
@@ -2689,7 +2694,10 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
     async def CancelInvocation(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
         active = self._active_invocations.get(request.invocation_id)
-        if active is None or active.cancel_requested:
+        if active is None:
+            return pb.WorkerAck(accepted=False, message="invocation is not active")
+        if active.cancel_requested:
+            await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
             return pb.WorkerAck(accepted=False, message="invocation is not active")
         if active.task.done() and active.cancel_callback is None:
             return pb.WorkerAck(accepted=False, message="invocation is not active")
@@ -2699,6 +2707,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             active.cancel_callback(active.cancel_reason)
         if not active.task.done():
             active.task.cancel()
+        await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
         return pb.WorkerAck(accepted=True, message=f"cancellation accepted: {active.cancel_reason}")
 
     async def Shutdown(self, request: Any, context: Any) -> Any:
@@ -3202,17 +3211,28 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncIterator[Json]:
+async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncGenerator[Json, None]:
     if isinstance(value, AsyncIterator):
-        async for item in value:
-            yield item
+        try:
+            async for item in value:
+                yield item
+        finally:
+            close = getattr(value, "aclose", None)
+            if close is not None:
+                await close()
         return
     if isinstance(value, (str, bytes, bytearray, Mapping)):
         raise WorkerSdkError("stream callback must return an iterable of JSON chunks, not a scalar or mapping")
     if not isinstance(value, Iterable):
         raise WorkerSdkError("stream callback must return an iterable or async iterator of JSON chunks")
-    for item in value:
-        yield item
+    iterator = iter(value)
+    try:
+        for item in iterator:
+            yield item
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
 
 
 def _runtime_registration_surface(kind: RuntimeRegistrationKind | str) -> int:

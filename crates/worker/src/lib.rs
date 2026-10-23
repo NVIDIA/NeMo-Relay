@@ -10,8 +10,8 @@
 //! The `grpc-v1` service tracks active unary and streaming callbacks by the
 //! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
 //! caller is cancelled, an invocation times out, or a host stream is abandoned.
-//! The SDK aborts the matching async callback task and reports
-//! `worker.cancelled`; cancellation of an unknown, completed, or already
+//! The SDK aborts the matching async callback task, waits for callback-owned
+//! cleanup, and reports `worker.cancelled`; cancellation of an unknown, completed, or already
 //! cancelled ID returns a negative acknowledgment.
 //!
 //! Cancellation is cooperative. Dropping an async callback future releases its
@@ -1984,25 +1984,71 @@ struct ActiveInvocation {
     generation: u64,
     abort_handle: tokio::task::AbortHandle,
     stream_cancel: Option<watch::Sender<bool>>,
+    completion: watch::Receiver<bool>,
+    cancel_requested: bool,
+}
+
+// Shared across stream setup and production so cancellation also waits for
+// cleanup during the handoff between those tasks.
+struct InvocationCompletion {
+    completed: watch::Sender<bool>,
+    registration: Mutex<Option<ActiveInvocationGuard>>,
+}
+
+impl InvocationCompletion {
+    fn new(completed: watch::Sender<bool>) -> Arc<Self> {
+        Arc::new(Self {
+            completed,
+            registration: Mutex::new(None),
+        })
+    }
+
+    fn track(&self, service: &WorkerService, invocation_id: &str, generation: u64) {
+        *self
+            .registration
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(ActiveInvocationGuard {
+            active_invocations: service.active_invocations.clone(),
+            invocation_id: invocation_id.to_owned(),
+            generation,
+        });
+    }
+}
+
+impl Drop for InvocationCompletion {
+    fn drop(&mut self) {
+        self.registration
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        self.completed.send_replace(true);
+    }
+}
+
+struct InvocationFuture<F> {
+    // Field order keeps completion pending until the task's captured state drops,
+    // including when cancellation happens before the task is first polled.
+    future: Pin<Box<F>>,
+    _completion: Arc<InvocationCompletion>,
+}
+
+impl<F: Future> Future for InvocationFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
+    }
 }
 
 struct ActiveInvocationGuard {
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     invocation_id: String,
     generation: u64,
-    armed: bool,
-}
-
-impl ActiveInvocationGuard {
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
 }
 
 impl Drop for ActiveInvocationGuard {
     fn drop(&mut self) {
-        if self.armed
-            && let Ok(mut active) = self.active_invocations.lock()
+        if let Ok(mut active) = self.active_invocations.lock()
             && active
                 .get(&self.invocation_id)
                 .is_some_and(|entry| entry.generation == self.generation)
@@ -2195,21 +2241,26 @@ impl PluginWorker for WorkerService {
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
         let service = self.clone();
-        let task = tokio::spawn(async move { service.invoke_inner(request).await });
+        let (completion_tx, completion_rx) = watch::channel(false);
+        let completion = InvocationCompletion::new(completion_tx);
+        let task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move { service.invoke_inner(request).await }),
+            _completion: Arc::clone(&completion),
+        });
         let abort_handle = task.abort_handle();
-        let generation = match self.track_invocation(&invocation_id, abort_handle.clone(), None) {
+        let generation = match self.track_invocation(
+            &invocation_id,
+            abort_handle.clone(),
+            None,
+            completion_rx,
+        ) {
             Ok(generation) => generation,
             Err(err) => {
                 task.abort();
                 return Err(err);
             }
         };
-        let _active_guard = ActiveInvocationGuard {
-            active_invocations: self.active_invocations.clone(),
-            invocation_id,
-            generation,
-            armed: true,
-        };
+        completion.track(self, &invocation_id, generation);
         let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
         let response = match task.await {
             Ok(response) => response,
@@ -2268,22 +2319,29 @@ impl PluginWorker for WorkerService {
         let model_name = payload.model_name;
         let (tx, rx) = mpsc::channel(16);
         let (stream_cancel_tx, stream_cancel_rx) = watch::channel(false);
+        let (completion_tx, completion_rx) = watch::channel(false);
+        let completion = InvocationCompletion::new(completion_tx);
+        let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
-        let open_task = tokio::spawn(async move {
-            TASK_SCOPE_CONTEXT
-                .scope(open_scope.clone(), async {
-                    let future = with_thread_scope(&open_scope, || {
-                        handler(&model_name, request_value, execution_context, next)
-                    });
-                    future.await
-                })
-                .await
+        let open_task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move {
+                TASK_SCOPE_CONTEXT
+                    .scope(open_scope.clone(), async {
+                        let future = with_thread_scope(&open_scope, || {
+                            handler(&model_name, request_value, execution_context, next)
+                        });
+                        future.await
+                    })
+                    .await
+            }),
+            _completion: open_completion,
         });
         let open_abort_handle = open_task.abort_handle();
         let generation = match self.track_invocation(
             &invocation_id,
             open_abort_handle.clone(),
             Some(stream_cancel_tx.clone()),
+            completion_rx.clone(),
         ) {
             Ok(generation) => generation,
             Err(err) => {
@@ -2291,12 +2349,7 @@ impl PluginWorker for WorkerService {
                 return Err(err);
             }
         };
-        let mut active_guard = ActiveInvocationGuard {
-            active_invocations: self.active_invocations.clone(),
-            invocation_id: invocation_id.clone(),
-            generation,
-            armed: true,
-        };
+        completion.track(self, &invocation_id, generation);
         let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
         let stream = match open_task.await {
             Ok(Ok(stream)) => stream,
@@ -2323,58 +2376,58 @@ impl PluginWorker for WorkerService {
             }
         };
         abort_on_drop.disarm();
-        let active_invocations = self.active_invocations.clone();
-        let task_invocation_id = invocation_id.clone();
         let task_tx = tx;
-        let task = tokio::spawn(async move {
-            let _active_guard = ActiveInvocationGuard {
-                active_invocations,
-                invocation_id: task_invocation_id,
-                generation,
-                armed: true,
-            };
-            let mut stream = ScopedJsonStream::new(stream, scope);
-            loop {
-                let item = tokio::select! {
-                    item = stream.next() => item,
-                    _ = task_tx.closed() => return,
-                };
-                let Some(item) = item else {
-                    return;
-                };
-                let (chunk, terminal) = match item {
-                    Ok(value) => (
-                        StreamChunk {
-                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                                match json_envelope(JSON_SCHEMA, &value) {
-                                    Ok(value) => value,
-                                    Err(err) => {
-                                        let _ = task_tx
-                                            .send(Err(Status::internal(err.to_string())))
-                                            .await;
-                                        return;
-                                    }
-                                },
-                            )),
-                        },
-                        false,
-                    ),
-                    Err(err) => (
-                        StreamChunk {
-                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                                sdk_error_to_worker(err),
-                            )),
-                        },
-                        true,
-                    ),
-                };
-                if task_tx.send(Ok(chunk)).await.is_err() {
+        let stream = ScopedJsonStream::new(stream, scope);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move {
+                let mut stream = stream;
+                if start_rx.await.is_err() {
                     return;
                 }
-                if terminal {
-                    return;
+                loop {
+                    let item = tokio::select! {
+                        item = stream.next() => item,
+                        _ = task_tx.closed() => return,
+                    };
+                    let Some(item) = item else {
+                        return;
+                    };
+                    let (chunk, terminal) = match item {
+                        Ok(value) => (
+                            StreamChunk {
+                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
+                                    match json_envelope(JSON_SCHEMA, &value) {
+                                        Ok(value) => value,
+                                        Err(err) => {
+                                            let _ = task_tx
+                                                .send(Err(Status::internal(err.to_string())))
+                                                .await;
+                                            return;
+                                        }
+                                    },
+                                )),
+                            },
+                            false,
+                        ),
+                        Err(err) => (
+                            StreamChunk {
+                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                                    sdk_error_to_worker(err),
+                                )),
+                            },
+                            true,
+                        ),
+                    };
+                    if task_tx.send(Ok(chunk)).await.is_err() {
+                        return;
+                    }
+                    if terminal {
+                        return;
+                    }
                 }
-            }
+            }),
+            _completion: completion,
         });
         let replaced = self.replace_invocation(
             &invocation_id,
@@ -2383,10 +2436,14 @@ impl PluginWorker for WorkerService {
                 generation,
                 abort_handle: task.abort_handle(),
                 stream_cancel: Some(stream_cancel_tx),
+                completion: completion_rx,
+                cancel_requested: false,
             },
         );
         match replaced {
-            Ok(true) => active_guard.disarm(),
+            Ok(true) => {
+                let _ = start_tx.send(());
+            }
             Ok(false) => {
                 task.abort();
                 return Ok(Response::new(cancellation_aware_worker_stream(
@@ -2416,21 +2473,37 @@ impl PluginWorker for WorkerService {
                 .active_invocations
                 .lock()
                 .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
-            invocations.remove(&request.invocation_id)
+            invocations.get_mut(&request.invocation_id).map(|active| {
+                let accepted = !active.cancel_requested;
+                active.cancel_requested = true;
+                (
+                    active.abort_handle.clone(),
+                    active.stream_cancel.clone(),
+                    active.completion.clone(),
+                    accepted,
+                )
+            })
         };
-        let Some(active) = active else {
+        let Some((abort_handle, stream_cancel, mut completion, accepted)) = active else {
             return Ok(Response::new(WorkerAck {
                 accepted: false,
                 message: "invocation is not active".into(),
             }));
         };
-        if let Some(cancel) = active.stream_cancel {
+        if let Some(cancel) = stream_cancel {
             let _ = cancel.send(true);
         }
-        active.abort_handle.abort();
+        abort_handle.abort();
+        while !*completion.borrow_and_update() {
+            if completion.changed().await.is_err() {
+                break;
+            }
+        }
         Ok(Response::new(WorkerAck {
-            accepted: true,
-            message: if request.reason.is_empty() {
+            accepted,
+            message: if !accepted {
+                "invocation is not active".into()
+            } else if request.reason.is_empty() {
                 "cancellation accepted".into()
             } else {
                 format!("cancellation accepted: {}", request.reason)
@@ -2509,6 +2582,7 @@ impl WorkerService {
         invocation_id: &str,
         abort_handle: tokio::task::AbortHandle,
         stream_cancel: Option<watch::Sender<bool>>,
+        completion: watch::Receiver<bool>,
     ) -> std::result::Result<u64, Status> {
         let generation = self
             .next_invocation_generation
@@ -2519,6 +2593,8 @@ impl WorkerService {
                 generation,
                 abort_handle,
                 stream_cancel,
+                completion,
+                cancel_requested: false,
             },
         )?;
         Ok(generation)
@@ -2557,7 +2633,7 @@ impl WorkerService {
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
         if active
             .get(invocation_id)
-            .is_none_or(|entry| entry.generation != generation)
+            .is_none_or(|entry| entry.generation != generation || entry.cancel_requested)
         {
             return Ok(false);
         }

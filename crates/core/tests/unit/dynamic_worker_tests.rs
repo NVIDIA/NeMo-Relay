@@ -2785,6 +2785,12 @@ async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_re
     .expect("worker stream should yield its terminal error")
     .expect_err("worker error should remain an error");
     assert!(error.to_string().contains("worker.failed"));
+    fixture.stream.as_mut().unwrap().close().await.unwrap();
+    let cancellation = fixture
+        .cancel_rx
+        .try_recv()
+        .expect("terminal error close must wait for worker cleanup acknowledgment");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
 
     assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
     assert!(
@@ -2808,10 +2814,11 @@ async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_re
 #[test]
 fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
     let (tx, rx) = mpsc::channel(1);
-    let (_completion_tx, completion_rx) = watch::channel(false);
+    let (_completion_tx, completion_rx) = watch::channel(None);
     let mut stream = WorkerForwardedLlmStream {
         receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
         completion: completion_rx,
+        close_result: None,
     };
 
     Pin::new(&mut stream).terminalize();
@@ -2822,10 +2829,11 @@ fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
 #[tokio::test]
 async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_cancelled() {
     let (_stream_tx, stream_rx) = mpsc::channel(1);
-    let (completion_tx, completion_rx) = watch::channel(false);
+    let (completion_tx, completion_rx) = watch::channel(None);
     let mut stream = WorkerForwardedLlmStream {
         receiver: Some(tokio_stream::wrappers::ReceiverStream::new(stream_rx)),
         completion: completion_rx,
+        close_result: None,
     };
 
     // Creating close initiates shutdown by dropping the receiver. Cancelling
@@ -2841,7 +2849,7 @@ async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_canc
         _ = tokio::task::yield_now() => {}
     }
 
-    completion_tx.send_replace(true);
+    completion_tx.send_replace(Some(Ok(())));
     retry.await.expect("retry must observe producer cleanup");
     Pin::new(&mut stream)
         .close()
@@ -6022,7 +6030,7 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
         };
         let mut guard = WorkerInvocationGuard::new(&callback, &request);
         if wait {
-            guard.cancel_and_wait("test cancellation").await;
+            assert!(guard.cancel_and_wait("test cancellation").await.is_err());
         } else {
             guard.cancel("test cancellation");
         }
@@ -6056,5 +6064,43 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
         );
         assert!(cancel_rx.try_recv().is_err(), "cancellation is sent once");
         assert!(guard.cancellation("already finished").is_none());
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors() {
+    for unread_error in [false, true] {
+        let (tx, rx) = mpsc::channel(16);
+        let chunk_count = if unread_error { 15 } else { 16 };
+        for index in 0..chunk_count {
+            tx.try_send(Ok(json!({"chunk": index}))).unwrap();
+        }
+        if unread_error {
+            tx.send(Err(FlowError::Internal("producer failed".into())))
+                .await
+                .unwrap();
+        }
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let mut stream = WorkerForwardedLlmStream {
+            receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            completion: completion_rx,
+            close_result: None,
+        };
+        completion_tx.send_replace(Some(Err("cleanup failed".into())));
+        for _ in 0..2 {
+            let close = Pin::new(&mut stream).close();
+            assert!(
+                tx.is_closed(),
+                "close must stop new chunks before awaiting cleanup"
+            );
+            let error = close.await.unwrap_err();
+            assert!(error.to_string().contains(if unread_error {
+                "producer failed"
+            } else {
+                "cleanup failed"
+            }));
+        }
+        assert!(tx.is_closed());
+        assert!(stream.next().await.is_none());
     }
 }
