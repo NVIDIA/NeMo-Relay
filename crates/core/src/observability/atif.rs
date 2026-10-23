@@ -546,6 +546,20 @@ fn atif_content_value(value: &Json) -> Json {
     }
 }
 
+/// Project only displayable user content; the full request stays in `extra.llm_request`.
+fn atif_user_content_value(value: &Json) -> Json {
+    let Some(parts) = value.as_array() else {
+        return atif_content_value(value);
+    };
+    let supported = Json::Array(
+        parts
+            .iter()
+            .filter_map(canonicalize_atif_content_part)
+            .collect(),
+    );
+    atif_content_value(&supported)
+}
+
 fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<Json> {
     let object = output.as_object()?;
     if object.get("type").and_then(Json::as_str) != Some("message") {
@@ -615,19 +629,23 @@ fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
     value
         .as_array()?
         .iter()
-        .map(|part| match part.get("type")?.as_str()? {
-            "text" => Some(serde_json::json!({
-                "type": "text",
-                "text": part.get("text")?.as_str()?,
-            })),
-            "image" => Some(serde_json::json!({
-                "type": "image",
-                "source": atif_image_source(part.get("source")?)?,
-            })),
-            _ => None,
-        })
+        .map(canonicalize_atif_content_part)
         .collect::<Option<Vec<_>>>()
         .map(Json::Array)
+}
+
+fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
+    match part.get("type")?.as_str()? {
+        "text" => Some(serde_json::json!({
+            "type": "text",
+            "text": part.get("text")?.as_str()?,
+        })),
+        "image" => Some(serde_json::json!({
+            "type": "image",
+            "source": atif_image_source(part.get("source")?)?,
+        })),
+        _ => None,
+    }
 }
 
 fn atif_image_source(source: &Json) -> Option<Json> {
@@ -985,6 +1003,10 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
 /// Returns the latest user message content if present, a prompt if present, or
 /// a stringified representation of the input as a last resort.
 fn extract_user_messages(input: &Json) -> Json {
+    atif_user_content_value(&extract_user_message_content(input))
+}
+
+fn extract_user_message_content(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(messages) = obj.get("messages").and_then(Json::as_array)
         && let Some(message) = messages
@@ -997,7 +1019,7 @@ fn extract_user_messages(input: &Json) -> Json {
             })
             .and_then(|message| message.get("content"))
     {
-        return atif_content_value(message);
+        return message.clone();
     }
     if let Some(obj) = input.as_object()
         && let Some(message) = obj.get("input").and_then(openai_responses_input_message)
@@ -1007,9 +1029,9 @@ fn extract_user_messages(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(prompt) = obj.get("prompt")
     {
-        return atif_content_value(prompt);
+        return prompt.clone();
     }
-    atif_content_value(input)
+    input.clone()
 }
 
 fn llm_start_user_step_message(event: &Event, input: &Json, has_paired_end: bool) -> Option<Json> {
@@ -1174,7 +1196,9 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
             collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
         }
         return match text_parts.as_slice() {
-            [] => canonicalize_atif_content_parts(content),
+            // An image-only user turn is still a message. Do not fall back to
+            // an earlier turn or stringify the full request for display.
+            [] => Some(atif_user_content_value(content)),
             [text] => Some(Json::String(text.clone())),
             _ => Some(Json::String(text_parts.join("\n"))),
         };
@@ -1282,8 +1306,8 @@ fn tool_call_id_for_origin(
     }
 }
 
-// Annotation adapters: read the normalized message from an annotation, returning
-// None for multimodal content so the caller falls back to the raw extractor.
+// Annotation adapters: project user content from normalized parts. Assistant
+// responses still use the raw extractor for multimodal content.
 
 fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
     let content = request
@@ -1296,7 +1320,27 @@ fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<
         })?;
     match content {
         MessageContent::Text(text) => Some(Json::String(text.clone())),
-        MessageContent::Parts(_) => None,
+        MessageContent::Parts(parts) => {
+            let supported = Json::Array(
+                parts
+                    .iter()
+                    .filter_map(atif_annotated_user_content_part)
+                    .collect(),
+            );
+            Some(atif_content_value(&supported))
+        }
+    }
+}
+
+fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
+    match part {
+        ContentPart::Text { text, .. } => Some(serde_json::json!({"type": "text", "text": text})),
+        ContentPart::Image { image, .. } => Some(serde_json::json!({
+            "type": "image",
+            "source": atif_image_source(image.get("source")?)?,
+        })),
+        ContentPart::ProviderNative { value, .. } => canonicalize_atif_content_part(value),
+        _ => None,
     }
 }
 
@@ -1823,7 +1867,36 @@ impl LlmSpanCandidate {
 
 fn llm_request_signature(input: &Json) -> String {
     let content = unwrap_llm_request(input);
-    json_to_string(&extract_user_messages(&content))
+    // Responses display extraction joins text and omits accompanying image/file
+    // parts. Match multimodal requests using their raw latest user content.
+    if content.get("messages").is_none()
+        && let Some(message) = content
+            .get("input")
+            .and_then(raw_openai_responses_input_message)
+        && message.as_array().is_some_and(|parts| {
+            parts.iter().any(|part| {
+                !matches!(
+                    part.get("type").and_then(Json::as_str),
+                    Some("text" | "input_text")
+                )
+            })
+        })
+    {
+        return json_to_string(&atif_content_value(message));
+    }
+    // Matching spans must retain unsupported parts, including image bytes, even
+    // when the user-facing message omits them.
+    json_to_string(&atif_content_value(&extract_user_message_content(&content)))
+}
+
+fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
+    input.as_array()?.iter().rev().find_map(|item| {
+        if item.get("role").and_then(Json::as_str) == Some("user") {
+            item.get("content")
+        } else {
+            None
+        }
+    })
 }
 
 fn llm_response_signature(output: &Json) -> String {
