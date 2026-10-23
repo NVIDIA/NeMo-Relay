@@ -4,6 +4,10 @@
 name: Execute Quick Starts
 
 on:
+  # Temporary fork-only validation path; remove before this PR is ready to merge.
+  push:
+    branches:
+      - codex/quickstart-e2e-ci
   workflow_dispatch:
     inputs:
       version:
@@ -35,6 +39,7 @@ on:
 
 jobs:
   execute:
+    if: ${{ github.event_name != 'push' || github.repository == 'exactlyallan/NeMo-Relay-ae' }}
     name: Execute (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -53,6 +58,21 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Pin execution source
+        id: source
+        if: ${{ github.event_name == 'push' || inputs.source_ref != '' }}
+        env:
+          REQUESTED_SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            git fetch --no-tags https://github.com/NVIDIA/NeMo-Relay.git main
+            source_ref="$(git rev-parse FETCH_HEAD)"
+          else
+            source_ref="$(git rev-parse --verify --end-of-options "${REQUESTED_SOURCE_REF}^{commit}")"
+          fi
+          printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
+          printf 'Relay source commit: `%s`\n' "$source_ref" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Load CI tool versions
         id: ci-config
@@ -97,7 +117,7 @@ jobs:
 
       - name: Provision coding-agent hosts
         env:
-          QUICKSTART_CASES: ${{ inputs.cases }}
+          QUICKSTART_CASES: ${{ inputs.cases || 'all' }}
         run: |
           if [[ "$QUICKSTART_CASES" == all || ",$QUICKSTART_CASES," == *,codex,* ]]; then
             npm install --global @openai/codex@0.159.3
@@ -110,11 +130,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           QUICKSTART_VERSION: ${{ inputs.version }}
-          QUICKSTART_SOURCE_REF: ${{ inputs.source_ref }}
-          QUICKSTART_HERMES_REF: ${{ inputs.hermes_ref }}
+          QUICKSTART_SOURCE_REF: ${{ steps.source.outputs.ref }}
+          QUICKSTART_HERMES_REF: ${{ inputs.hermes_ref || '4d04303818b61bf3aa09278af48356315515965b' }}
           QUICKSTART_ASSET_LOCATION: ${{ inputs.asset_location }}
           QUICKSTART_RUN_ID: ${{ inputs.run_id }}
-          QUICKSTART_CASES: ${{ inputs.cases }}
+          QUICKSTART_CASES: ${{ inputs.cases || 'all' }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/quickstarts
         run: |
           just test-quickstarts \
