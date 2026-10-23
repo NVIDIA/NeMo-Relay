@@ -395,12 +395,14 @@ yourself, set TLS on each one. They use their own settings even if they share
 a collector with traces.
 
 Use absolute file paths or paths relative to the process working directory.
-Relay reads the PEM files when it creates the exporter. Recreate the exporter
-after you replace certificates or keys.
+Make the TLS files available wherever you run plugin validation.
 
-Relay rejects blank paths and files that it cannot read or parse.
-It also rejects a client certificate without a matching private key, or a key
-without a certificate.
+Plugin validation reports blank paths, missing or unreadable files, and invalid
+PEM files. If you set a client certificate or private key, you must supply both.
+The certificate and key must match. Validation does not connect to the collector.
+
+Relay checks the files again when the exporter starts. Recreate the exporter
+after you replace certificates or keys.
 The plugin reports the failed endpoint and keeps valid endpoints active.
 TLS settings apply only to network endpoints.
 

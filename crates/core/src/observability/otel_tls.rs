@@ -11,8 +11,8 @@ use super::otel::{OpenTelemetryError, Result};
 /// Optional certificate and private key file paths for one OTLP endpoint.
 ///
 /// Use absolute paths or paths relative to the process working directory.
-/// Relay reads the PEM files when it creates the exporter. Recreate the
-/// exporter to load new certificates or keys.
+/// Relay reads the PEM files during preflight and again when it creates the
+/// exporter. Recreate the exporter to load new certificates or keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -56,8 +56,18 @@ impl OpenTelemetryTlsConfig {
         })
     }
 
-    /// Checks file paths, the client certificate and key pair, and the URL scheme.
+    /// Checks the URL scheme and loads the same TLS material as exporter startup.
     pub(crate) fn validate(&self, endpoint: &str) -> Result<()> {
+        let pem = self.load(endpoint)?;
+        if pem.certificate.is_some() || pem.client_certificate.is_some() {
+            // Build without connecting so PEM parsing and key compatibility
+            // checks stay aligned with both HTTP and gRPC startup.
+            let _ = pem.http_client(None)?;
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self, endpoint: &str) -> Result<()> {
         for (field, path) in [
             ("certificate", &self.certificate),
             ("client_certificate", &self.client_certificate),
@@ -94,7 +104,7 @@ impl OpenTelemetryTlsConfig {
     }
 
     fn load(&self, endpoint: &str) -> Result<TlsPem> {
-        self.validate(endpoint)?;
+        self.validate_shape(endpoint)?;
         Ok(TlsPem {
             certificate: Self::read(&self.certificate, "certificate")?,
             client_certificate: Self::read(&self.client_certificate, "client_certificate")?,
