@@ -57,7 +57,7 @@ use crate::observability::atof::{
     AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode, AtofFileSinkConfig,
     AtofSinkConfig as CoreAtofSinkConfig, AtofStreamSinkConfig,
 };
-use crate::observability::header_file::PlaintextPolicy;
+use crate::observability::header_file::{PlaintextPolicy, redacted_origin};
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig,
     OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
@@ -2084,11 +2084,15 @@ fn register_automatic_opentelemetry(
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
         "traces",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        ctx,
         || OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(plaintext.clone()),
     );
     let log_subscribers = automatic_subscriber(
         signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER"),
         "logs",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        ctx,
         || {
             OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
                 plaintext.clone(),
@@ -2098,6 +2102,8 @@ fn register_automatic_opentelemetry(
     let metric_subscribers = automatic_subscriber(
         signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER"),
         "metrics",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        ctx,
         || {
             OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
                 plaintext.clone(),
@@ -2121,6 +2127,8 @@ fn register_automatic_opentelemetry(
 fn automatic_subscriber<T>(
     enabled: bool,
     signal: &'static str,
+    signal_endpoint_variable: &'static str,
+    ctx: &mut PluginRegistrationContext,
     build: impl FnOnce() -> crate::observability::otel::Result<T>,
 ) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
     if !enabled {
@@ -2139,6 +2147,25 @@ fn automatic_subscriber<T>(
                 signal;
                 "Automatic OpenTelemetry {signal} exporter was skipped during activation; delivery continues to valid signals: {error}"
             );
+            let endpoint_source = if environment_has_nonblank_value(signal_endpoint_variable) {
+                signal_endpoint_variable
+            } else {
+                "OTEL_EXPORTER_OTLP_ENDPOINT"
+            };
+            let redacted_destination = std::env::var(endpoint_source)
+                .ok()
+                .and_then(|endpoint| redacted_origin(&endpoint))
+                .map(|origin| format!(" ({origin})"))
+                .unwrap_or_default();
+            ctx.record_activation_diagnostic(ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+                field: Some(endpoint_source.to_string()),
+                message: format!(
+                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped; check the endpoint and exporter settings. Plain HTTP requires its host in insecure_http_hosts."
+                ),
+            });
             Vec::new()
         }
     }
