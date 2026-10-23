@@ -163,23 +163,6 @@ pub enum OpenTelemetryError {
         /// Environment variable that was set.
         variable: &'static str,
     },
-    /// A configured endpoint is malformed or uses an unsupported transport scheme.
-    #[error("failed to build the OTLP exporter: {0}")]
-    InvalidEndpoint(String),
-    /// The plaintext transport policy rejected the endpoint's destination.
-    #[error("failed to build the OTLP exporter: {0}")]
-    PlaintextRejected(String),
-    /// TLS settings or certificate/key material failed validation.
-    #[error("failed to build the OTLP exporter: {0}")]
-    InvalidTlsConfiguration(String),
-    /// A TLS material file could not be read. The path is deliberately omitted.
-    #[error("failed to build the OTLP exporter: tls.{field}: cannot read PEM file")]
-    TlsFileRead {
-        /// TLS field whose configured file could not be read.
-        field: String,
-        /// Filesystem cause, retained without the sensitive configured path.
-        kind: std::io::ErrorKind,
-    },
     /// Failed to build the OTLP exporter.
     #[error("failed to build the OTLP exporter: {0}")]
     ExporterBuild(String),
@@ -203,7 +186,51 @@ pub enum OpenTelemetryError {
     Core(#[from] FlowError),
 }
 
-impl From<super::header_file::EndpointTransportError> for OpenTelemetryError {
+// Preserve typed initialization evidence until the automatic plugin reports it.
+// Public constructors retain the historical exhaustive error enum and payloads.
+pub(crate) type ExporterInitializationResult<T> =
+    std::result::Result<T, ExporterInitializationError>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExporterInitializationError {
+    /// A configured endpoint is malformed or uses an unsupported transport scheme.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidEndpoint(String),
+    /// The plaintext transport policy rejected the endpoint's destination.
+    #[error("failed to build the OTLP exporter: {0}")]
+    PlaintextRejected(String),
+    /// TLS settings or certificate/key material failed validation.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidTlsConfiguration(String),
+    /// A TLS material file could not be read. The path is deliberately omitted.
+    #[error("failed to build the OTLP exporter: tls.{field}: cannot read PEM file")]
+    TlsFileRead {
+        /// TLS field whose configured file could not be read.
+        field: String,
+        /// Filesystem cause, retained without the sensitive configured path.
+        kind: std::io::ErrorKind,
+    },
+    #[error(transparent)]
+    Public(#[from] OpenTelemetryError),
+}
+
+impl From<ExporterInitializationError> for OpenTelemetryError {
+    fn from(error: ExporterInitializationError) -> Self {
+        match error {
+            ExporterInitializationError::Public(error) => error,
+            ExporterInitializationError::InvalidEndpoint(message)
+            | ExporterInitializationError::PlaintextRejected(message)
+            | ExporterInitializationError::InvalidTlsConfiguration(message) => {
+                Self::ExporterBuild(message)
+            }
+            ExporterInitializationError::TlsFileRead { field, .. } => {
+                Self::ExporterBuild(format!("tls.{field}: cannot read PEM file"))
+            }
+        }
+    }
+}
+
+impl From<super::header_file::EndpointTransportError> for ExporterInitializationError {
     fn from(error: super::header_file::EndpointTransportError) -> Self {
         match error {
             super::header_file::EndpointTransportError::InvalidEndpoint(message) => {
@@ -280,8 +307,11 @@ pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-pub(super) fn validate_trace_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> Result<()> {
-    validate_trace_transport_typed(endpoint, plaintext).map_err(OpenTelemetryError::from)
+pub(super) fn validate_trace_endpoint(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+) -> ExporterInitializationResult<()> {
+    validate_trace_transport_typed(endpoint, plaintext).map_err(ExporterInitializationError::from)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -914,11 +944,13 @@ impl OpenTelemetrySubscriber {
     /// Builds a subscriber backed by a new OTLP tracer provider.
     pub fn new(config: OpenTelemetryConfig) -> Result<Self> {
         Self::new_with_runtime_diagnostics(TraceConfig::Endpoint(config), None)
+            .map_err(OpenTelemetryError::from)
     }
 
     /// Creates a subscriber writing OTLP to a local file.
     pub fn new_file_sink(config: OpenTelemetryFileSinkConfig) -> Result<Self> {
         Self::new_with_runtime_diagnostics(TraceConfig::File(config), None)
+            .map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_for_plugin(
@@ -929,6 +961,7 @@ impl OpenTelemetrySubscriber {
             TraceConfig::Endpoint(config),
             Some(format!("opentelemetry.traces[{endpoint_index}].endpoint")),
         )
+        .map_err(OpenTelemetryError::from)
     }
 
     /// Creates a plugin-managed subscriber for a configured file sink.
@@ -942,11 +975,12 @@ impl OpenTelemetrySubscriber {
                 "opentelemetry.file_sinks[{file_sink_index}].output_directory"
             )),
         )
+        .map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_from_automatic_configuration_for_plugin(
         plaintext: PlaintextPolicy,
-    ) -> Result<Self> {
+    ) -> ExporterInitializationResult<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         )?;
@@ -962,12 +996,13 @@ impl OpenTelemetrySubscriber {
     fn new_with_runtime_diagnostics(
         mut config: TraceConfig,
         diagnostic_field: Option<String>,
-    ) -> Result<Self> {
+    ) -> ExporterInitializationResult<Self> {
         let shared = config.shared();
         if shared.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         validate_attribute_mappings(&shared.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
@@ -987,7 +1022,7 @@ impl OpenTelemetrySubscriber {
             if endpoint.automatic {
                 let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?
                     .ok_or_else(|| {
-                        OpenTelemetryError::InvalidEndpoint(
+                        ExporterInitializationError::InvalidEndpoint(
                             "automatic trace exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )
@@ -997,7 +1032,8 @@ impl OpenTelemetrySubscriber {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
-                    ));
+                    )
+                    .into());
                 }
                 validate_trace_endpoint(&endpoint.endpoint, &endpoint.plaintext)?;
                 reject_global_header_environment()?;
@@ -1334,7 +1370,7 @@ fn shutdown_trace_providers(
 fn build_owned_tracer_provider(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
-) -> Result<(SdkTracerProvider, ExporterRuntime)> {
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
     let resource_attributes = configured_resource_attributes(&config);
     build_owned_tracer_provider_with_resource(config, runtime_diagnostics, resource_attributes)
 }
@@ -1343,7 +1379,7 @@ fn build_owned_tracer_provider_with_resource(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<(SdkTracerProvider, ExporterRuntime)> {
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
     let provider_diagnostics = runtime_diagnostics.clone();
@@ -1358,7 +1394,9 @@ fn build_owned_tracer_provider_with_resource(
                 Ok(runtime) => runtime,
                 Err(error) => {
                     let _ = result_sender
-                        .send(Err(OpenTelemetryError::ExporterBuild(error.to_string())));
+                        .send(Err(
+                            OpenTelemetryError::ExporterBuild(error.to_string()).into()
+                        ));
                     return;
                 }
             };
@@ -1436,13 +1474,14 @@ fn build_tracer_provider(
     let config = TraceConfig::Endpoint(config.clone());
     let attributes = configured_resource_attributes(&config);
     build_tracer_provider_with_resource(&config, runtime_diagnostics, attributes)
+        .map_err(OpenTelemetryError::from)
 }
 
 fn build_tracer_provider_with_resource(
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<SdkTracerProvider> {
+) -> ExporterInitializationResult<SdkTracerProvider> {
     match config {
         TraceConfig::File(file) => provider_with_exporter(
             OtlpFileSpanExporter::new(
@@ -1469,7 +1508,7 @@ fn build_tracer_provider_with_resource(
 fn otlp_span_exporter(
     settings: &OpenTelemetryConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
-) -> Result<OtlpSpanExporter> {
+) -> ExporterInitializationResult<OtlpSpanExporter> {
     if settings.automatic {
         let builder = OtlpSpanExporter::builder();
         return if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
@@ -1481,7 +1520,7 @@ fn otlp_span_exporter(
                     diagnostics: runtime_diagnostics,
                 })
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
             let mut builder = builder.with_tonic();
             if let Some(tls) = super::otel_signal::automatic_otlp_grpc_tls("TRACES")? {
@@ -1489,7 +1528,7 @@ fn otlp_span_exporter(
             }
             builder
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         } else {
             builder
                 .with_http()
@@ -1498,7 +1537,7 @@ fn otlp_span_exporter(
                     diagnostics: runtime_diagnostics,
                 })
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         };
     }
     match settings.transport {
@@ -1535,7 +1574,7 @@ fn otlp_span_exporter(
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
         }
         OtlpTransport::Grpc => {
             let mut builder = OtlpSpanExporter::builder()
@@ -1570,7 +1609,7 @@ fn otlp_span_exporter(
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
         }
     }
 }
@@ -1581,7 +1620,7 @@ fn provider_with_exporter<E: SpanExporter + 'static>(
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<SdkTracerProvider> {
+) -> ExporterInitializationResult<SdkTracerProvider> {
     // Disable per-span attribute caps. Consumers may emit large attribute
     // sets on long-running spans; the OTel SDK default (128) silently drops
     // attributes added last in the span's lifecycle.

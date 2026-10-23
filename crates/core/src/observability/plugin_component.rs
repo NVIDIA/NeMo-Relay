@@ -2171,53 +2171,56 @@ fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) 
 /// Classify from typed evidence only; backend strings can contain credentials and
 /// flatten several causes, so they must neither be parsed nor copied into reports.
 fn automatic_exporter_failure(
-    error: &crate::observability::otel::OpenTelemetryError,
+    error: &crate::observability::otel::ExporterInitializationError,
 ) -> (crate::diagnostics::Classification, &'static str) {
     use crate::diagnostics::{
         Classification, CommonPluginFailureCode, FailureClass, FailureCode, PluginFailureCode,
     };
-    use crate::observability::otel::OpenTelemetryError;
+    use crate::observability::otel::{ExporterInitializationError, OpenTelemetryError};
 
     let (class, reason) = match error {
-        OpenTelemetryError::InvalidGrpcHeader { .. } | OpenTelemetryError::InvalidHeader { .. } => {
-            (
-                FailureClass::InvalidInput,
-                "invalid exporter headers; check the selected OTLP header settings",
-            )
-        }
-        OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { .. } => (
+        ExporterInitializationError::Public(OpenTelemetryError::InvalidGrpcHeader { .. })
+        | ExporterInitializationError::Public(OpenTelemetryError::InvalidHeader { .. }) => (
+            FailureClass::InvalidInput,
+            "invalid exporter headers; check the selected OTLP header settings",
+        ),
+        ExporterInitializationError::Public(
+            OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { .. },
+        ) => (
             FailureClass::InvalidInput,
             "unsupported process-global header configuration",
         ),
-        OpenTelemetryError::InvalidAttributeMappings(_) => (
+        ExporterInitializationError::Public(OpenTelemetryError::InvalidAttributeMappings(_)) => (
             FailureClass::InvalidInput,
             "invalid attribute mapping configuration",
         ),
-        OpenTelemetryError::InvalidMetadataPromotionPrefixes(_) => (
+        ExporterInitializationError::Public(
+            OpenTelemetryError::InvalidMetadataPromotionPrefixes(_),
+        ) => (
             FailureClass::InvalidInput,
             "invalid metadata promotion prefix configuration",
         ),
-        OpenTelemetryError::InvalidEndpoint(_) => (
+        ExporterInitializationError::InvalidEndpoint(_) => (
             FailureClass::InvalidInput,
             "invalid OTLP endpoint; check the URI scheme, host, and surrounding whitespace",
         ),
-        OpenTelemetryError::PlaintextRejected(_) => (
+        ExporterInitializationError::PlaintextRejected(_) => (
             FailureClass::PolicyRejected,
             "plaintext destination rejected by transport policy; use HTTPS or explicitly permit the intended host in insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS",
         ),
-        OpenTelemetryError::InvalidTlsConfiguration(_) => (
+        ExporterInitializationError::InvalidTlsConfiguration(_) => (
             FailureClass::InvalidInput,
             "invalid TLS configuration or certificate/key material",
         ),
-        OpenTelemetryError::TlsFileRead { .. } => (
+        ExporterInitializationError::TlsFileRead { .. } => (
             FailureClass::Io,
             "cannot read a configured TLS certificate or key file",
         ),
-        OpenTelemetryError::ExporterBuild(_)
-        | OpenTelemetryError::TraceProvider(_)
-        | OpenTelemetryError::LogProvider(_)
-        | OpenTelemetryError::MetricProvider(_)
-        | OpenTelemetryError::Core(_) => (
+        ExporterInitializationError::Public(OpenTelemetryError::ExporterBuild(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::TraceProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::LogProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::MetricProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::Core(_)) => (
             FailureClass::Unknown,
             "exporter initialization failed; the underlying cause is unavailable in structured form; check endpoint, TLS, and exporter settings",
         ),
@@ -2240,7 +2243,7 @@ fn automatic_subscriber<T>(
     signal: &'static str,
     signal_endpoint_variable: &'static str,
     ctx: &mut PluginRegistrationContext,
-    build: impl FnOnce() -> crate::observability::otel::Result<T>,
+    build: impl FnOnce() -> crate::observability::otel::ExporterInitializationResult<T>,
 ) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
     if !enabled {
         return Vec::new();

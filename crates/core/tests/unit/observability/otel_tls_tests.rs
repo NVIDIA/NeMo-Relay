@@ -6,6 +6,7 @@ use crate::api::event::{
     BaseEvent, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
     MarkEvent, ScopeCategory, ScopeEvent,
 };
+use crate::observability::otel::ExporterInitializationError;
 use crate::observability::otel::OpenTelemetryError;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
@@ -1163,7 +1164,7 @@ fn tls_failures_preserve_validation_and_file_read_causes_without_paths() {
     let missing = tls.validate("https://collector.example:4318").unwrap_err();
     assert!(matches!(
         missing,
-        OpenTelemetryError::TlsFileRead {
+        ExporterInitializationError::TlsFileRead {
             kind: std::io::ErrorKind::NotFound,
             ..
         }
@@ -1178,12 +1179,105 @@ fn tls_failures_preserve_validation_and_file_read_causes_without_paths() {
     let invalid = tls.validate("https://collector.example:4318").unwrap_err();
     assert!(matches!(
         invalid,
-        OpenTelemetryError::InvalidTlsConfiguration(_)
+        ExporterInitializationError::InvalidTlsConfiguration(_)
     ));
     assert!(!invalid.to_string().contains("private-invalid-PEM"));
     assert!(!invalid.to_string().contains("private-certificate"));
     assert!(matches!(
         tls.validate("http://collector.example:4318").unwrap_err(),
-        OpenTelemetryError::InvalidTlsConfiguration(_),
+        ExporterInitializationError::InvalidTlsConfiguration(_),
     ));
+}
+
+#[test]
+fn public_exporter_errors_preserve_variants_and_tls_display() {
+    // An exhaustive match also guards the pre-existing public variant set.
+    fn exporter_payload(error: OpenTelemetryError) -> String {
+        match error {
+            OpenTelemetryError::ExporterBuild(message) => message,
+            OpenTelemetryError::InvalidGrpcHeader { .. }
+            | OpenTelemetryError::InvalidHeader { .. }
+            | OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { .. }
+            | OpenTelemetryError::TraceProvider(_)
+            | OpenTelemetryError::LogProvider(_)
+            | OpenTelemetryError::MetricProvider(_)
+            | OpenTelemetryError::InvalidAttributeMappings(_)
+            | OpenTelemetryError::InvalidMetadataPromotionPrefixes(_)
+            | OpenTelemetryError::Core(_) => {
+                panic!("expected the historical ExporterBuild variant")
+            }
+        }
+    }
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("private-certificate.pem");
+    let endpoint = "https://collector.example:4318";
+    for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
+        for invalid_pem in [false, true] {
+            if invalid_pem {
+                std::fs::write(&path, "invalid PEM").unwrap();
+            }
+            let tls = OpenTelemetryTlsConfig {
+                certificate: Some(path.to_string_lossy().into_owned()),
+                ..Default::default()
+            };
+            let expected = tls.validate(endpoint).unwrap_err().to_string();
+            let errors = [
+                OpenTelemetrySubscriber::new(
+                    CoreOpenTelemetryConfig::new(OpenTelemetryType::Full, endpoint)
+                        .with_transport(transport)
+                        .with_tls(tls.clone()),
+                )
+                .err()
+                .unwrap(),
+                OpenTelemetryLogSubscriber::new(
+                    CoreOpenTelemetryLogConfig::new(endpoint)
+                        .with_transport(transport)
+                        .with_tls(tls.clone()),
+                )
+                .err()
+                .unwrap(),
+                OpenTelemetryMetricSubscriber::new(
+                    CoreOpenTelemetryMetricConfig::new(endpoint)
+                        .with_transport(transport)
+                        .with_tls(tls),
+                )
+                .err()
+                .unwrap(),
+            ];
+            for error in errors {
+                assert_eq!(error.to_string(), expected);
+                let payload = exporter_payload(error);
+                if !invalid_pem {
+                    assert_eq!(payload, "tls.certificate: cannot read PEM file");
+                }
+            }
+            if invalid_pem {
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+    for endpoint in ["not an endpoint", "http://collector.example:4318"] {
+        // Logs and metrics enforce plaintext policy when attaching credentials.
+        for error in [
+            OpenTelemetrySubscriber::new(CoreOpenTelemetryConfig::new(
+                OpenTelemetryType::Full,
+                endpoint,
+            ))
+            .err()
+            .unwrap(),
+            OpenTelemetryLogSubscriber::new(
+                CoreOpenTelemetryLogConfig::new(endpoint).with_header("authorization", "test"),
+            )
+            .err()
+            .unwrap(),
+            OpenTelemetryMetricSubscriber::new(
+                CoreOpenTelemetryMetricConfig::new(endpoint).with_header("authorization", "test"),
+            )
+            .err()
+            .unwrap(),
+        ] {
+            assert!(!exporter_payload(error).is_empty());
+        }
+    }
 }

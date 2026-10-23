@@ -8705,7 +8705,8 @@ fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchan
             Err(
                 crate::observability::otel::OpenTelemetryError::ExporterBuild(
                     "TLS private-key secret: invalid input unavailable".to_string(),
-                ),
+                )
+                .into(),
             )
         },
     );

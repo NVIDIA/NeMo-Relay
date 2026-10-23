@@ -549,8 +549,8 @@ fn transport_errors_preserve_policy_and_endpoint_causes_without_secrets() {
             assert!(!message.contains(secret));
         }
         assert!(matches!(
-            crate::observability::otel::OpenTelemetryError::from(error),
-            crate::observability::otel::OpenTelemetryError::PlaintextRejected(_),
+            crate::observability::otel::ExporterInitializationError::from(error),
+            crate::observability::otel::ExporterInitializationError::PlaintextRejected(_),
         ));
     }
     for endpoint in ["not an endpoint", "ftp://collector.example:4318"] {

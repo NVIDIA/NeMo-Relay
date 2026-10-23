@@ -8,7 +8,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
-use super::otel::{OpenTelemetryError, Result};
+use super::otel::{
+    ExporterInitializationError, ExporterInitializationResult as Result, OpenTelemetryError,
+};
 
 /// Optional certificate and private key file paths for one OTLP endpoint.
 ///
@@ -30,11 +32,11 @@ pub struct OpenTelemetryTlsConfig {
     pub private_key: Option<String>,
 }
 
-fn invalid(field: &str, reason: &str) -> OpenTelemetryError {
-    OpenTelemetryError::InvalidTlsConfiguration(format!("tls.{field}: {reason}"))
+fn invalid(field: &str, reason: &str) -> ExporterInitializationError {
+    ExporterInitializationError::InvalidTlsConfiguration(format!("tls.{field}: {reason}"))
 }
 
-fn invalid_identity() -> OpenTelemetryError {
+fn invalid_identity() -> ExporterInitializationError {
     invalid(
         "client_certificate/private_key",
         "invalid PEM client identity",
@@ -132,7 +134,7 @@ impl OpenTelemetryTlsConfig {
     fn read(path: &Option<String>, field: &str) -> Result<Option<Vec<u8>>> {
         path.as_ref()
             .map(|path| {
-                std::fs::read(path).map_err(|error| OpenTelemetryError::TlsFileRead {
+                std::fs::read(path).map_err(|error| ExporterInitializationError::TlsFileRead {
                     field: field.to_owned(),
                     kind: error.kind(),
                 })
@@ -238,6 +240,6 @@ impl TlsPem {
         // its flattened error does not establish a configuration-validation cause.
         builder.build().map_err(|_| OpenTelemetryError::ExporterBuild(
             "tls.certificate/client_certificate/private_key: invalid TLS trust or client identity".to_string(),
-        ))
+        ).into())
     }
 }

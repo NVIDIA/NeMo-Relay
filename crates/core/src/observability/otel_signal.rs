@@ -25,7 +25,9 @@ use crate::api::event::{
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
-use super::otel::{OpenTelemetryError, Result};
+use super::otel::{
+    ExporterInitializationError, ExporterInitializationResult, OpenTelemetryError, Result,
+};
 use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 
 // Each dynamic pipeline owns a runtime worker and a supervising thread. Keep the
@@ -337,10 +339,10 @@ impl Drop for SignalExporterRuntime {
 pub(super) fn build_in_owned_runtime<T, F>(
     thread_name: &str,
     build: F,
-) -> Result<(T, SignalExporterRuntime)>
+) -> ExporterInitializationResult<(T, SignalExporterRuntime)>
 where
     T: Send + 'static,
-    F: FnOnce() -> Result<T> + Send + 'static,
+    F: FnOnce() -> ExporterInitializationResult<T> + Send + 'static,
 {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
@@ -355,7 +357,9 @@ where
                 Ok(runtime) => runtime,
                 Err(error) => {
                     let _ = result_sender
-                        .send(Err(OpenTelemetryError::ExporterBuild(error.to_string())));
+                        .send(Err(
+                            OpenTelemetryError::ExporterBuild(error.to_string()).into()
+                        ));
                     return;
                 }
             };
@@ -511,7 +515,9 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
 /// value for transport safety checks; the builder still owns URL derivation.
 /// A value the builder cannot parse is rejected rather than allowed to fall back
 /// to the generic endpoint, which would bypass the check.
-pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Result<Option<String>> {
+pub(super) fn automatic_signal_endpoint(
+    signal_variable: &str,
+) -> ExporterInitializationResult<Option<String>> {
     for variable in [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"] {
         let Some(value) = std::env::var(variable)
             .ok()
@@ -520,7 +526,7 @@ pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Result<Option<
             continue;
         };
         if value.trim() != value || value.parse::<http::Uri>().is_err() {
-            return Err(OpenTelemetryError::InvalidEndpoint(format!(
+            return Err(ExporterInitializationError::InvalidEndpoint(format!(
                 "{variable} must be a valid URI without surrounding whitespace"
             )));
         }
@@ -591,7 +597,9 @@ pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
 
 /// Build an automatic HTTP client with TLS settings for one signal.
 /// The client blocks redirects.
-pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client> {
+pub(super) fn automatic_otlp_http_client(
+    signal: &str,
+) -> ExporterInitializationResult<reqwest::Client> {
     let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))?
         .unwrap_or_else(|| "http://localhost:4318".into());
     super::OpenTelemetryTlsConfig::from_environment(signal)?.http_client(&endpoint, None)
@@ -599,7 +607,7 @@ pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client
 
 pub(super) fn automatic_otlp_grpc_tls(
     signal: &str,
-) -> Result<Option<tonic::transport::ClientTlsConfig>> {
+) -> ExporterInitializationResult<Option<tonic::transport::ClientTlsConfig>> {
     let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))?
         .unwrap_or_else(|| "http://localhost:4317".into());
     let tls = super::OpenTelemetryTlsConfig::from_environment(signal)?;
