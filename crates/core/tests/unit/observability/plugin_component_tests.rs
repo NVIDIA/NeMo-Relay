@@ -8743,3 +8743,423 @@ fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchan
             .contains("private-key secret")
     );
 }
+
+// Host-level coverage uses the production initialization API with ambient config
+// disabled so an embedding application's files cannot affect the assertions.
+#[cfg(feature = "__skip-implicit-config")]
+fn automatic_host_diagnostics_environment() -> EnvironmentGuard {
+    let mut variables = vec![
+        "OTEL_SDK_DISABLED".to_string(),
+        "OTEL_TRACES_EXPORTER".to_string(),
+        "OTEL_LOGS_EXPORTER".to_string(),
+        "OTEL_METRICS_EXPORTER".to_string(),
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE.to_string(),
+        "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG".to_string(),
+    ];
+    for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
+        for suffix in [
+            "ENDPOINT",
+            "HEADERS",
+            "PROTOCOL",
+            "CERTIFICATE",
+            "CLIENT_CERTIFICATE",
+            "CLIENT_KEY",
+        ] {
+            variables.push(format!("OTEL_EXPORTER_OTLP_{signal}{suffix}"));
+        }
+    }
+    let guard = EnvironmentGuard::capture(&variables);
+    // SAFETY: callers hold the observability/runtime-owner test mutex.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
+    }
+    guard
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn automatic_host_failure_query(signal: &str) -> crate::diagnostics::DiagnosticQuery {
+    crate::diagnostics::DiagnosticQuery {
+        component_key: Some(format!("opentelemetry.automatic.{signal}")),
+        code: Some("plugin.exporter_initialization_failed".into()),
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_redacted(message: &str) {
+    for secret in [
+        "relay-user",
+        "relay-secret",
+        "/private",
+        "relay-query-secret",
+        "relay-private-missing-certificate",
+        "relay-private-invalid-certificate",
+        "relay-private-invalid-PEM",
+    ] {
+        assert!(!message.contains(secret), "diagnostic exposed {secret}");
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_rejection_report(diagnostics: &[ConfigDiagnostic]) -> &ConfigDiagnostic {
+    let skipped = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 1, "{diagnostics:?}");
+    let legacy = skipped[0];
+    assert_eq!(legacy.level, DiagnosticLevel::Warning);
+    assert_eq!(
+        legacy.field.as_deref(),
+        Some("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    );
+    assert!(!legacy.message.contains("underlying cause is unavailable"));
+    assert!(legacy.message.contains("insecure_http_hosts"));
+    assert_automatic_host_redacted(&legacy.message);
+    legacy
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_rejection_evidence(
+    service: &crate::diagnostics::Diagnostics,
+    legacy: &ConfigDiagnostic,
+) {
+    use crate::diagnostics::{DiagnosticSeverity, PluginPhase};
+    // The production registration context has already been dropped here.
+    let snapshot = service
+        .snapshot(&automatic_host_failure_query("traces"))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(snapshot.components.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.exporter_initialization_failed");
+    assert_eq!(
+        event.classification.failure_class(),
+        Some("policy_rejected")
+    );
+    assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
+    assert_eq!(event.severity, DiagnosticSeverity::Warning);
+    assert_eq!(
+        event.origin.ownership.responsibility.as_deref(),
+        Some("nemo-relay-plugin.v1.observability:1:")
+    );
+    assert_eq!(event.detail.as_ref().unwrap().message, legacy.message);
+    let row = &snapshot.components[0];
+    assert!(row.closed_at.is_some());
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(row.counters.len(), 1);
+    assert_eq!(row.counters[0].occurrences.value.get(), 1);
+    assert_automatic_host_redacted(&serde_json::to_string(&snapshot).unwrap());
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_healthy_metrics(service: &crate::diagnostics::Diagnostics) {
+    let healthy = service
+        .snapshot(&automatic_host_failure_query("metrics"))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(healthy.events.is_empty());
+    assert!(
+        healthy
+            .components
+            .iter()
+            .all(|row| row.lifetime.totals.failures_total.value.get() == 0)
+    );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_retains_rejection_after_activation_and_preserves_healthy_signal() {
+    use crate::diagnostics::{DiagnosticError, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://relay-user:relay-secret@collector.example:4318/private?token=relay-query-secret",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "http://127.0.0.1:4318/v1/metrics",
+        );
+    }
+    for enabled in [true, false] {
+        let service = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut activation =
+            futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+                plugin_config(json!({"version": 4})),
+                None,
+                &service,
+            ))
+            .expect("a rejected automatic trace exporter must not fail host activation");
+        let report = activation.report();
+        let legacy = assert_automatic_host_rejection_report(&report.config.diagnostics);
+        assert!(
+            global_context()
+                .read()
+                .unwrap()
+                .event_subscribers
+                .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry.automatic",)
+        );
+        let query = automatic_host_failure_query("traces");
+        if enabled {
+            assert_automatic_host_rejection_evidence(&service, legacy);
+            assert_automatic_host_healthy_metrics(&service);
+        } else {
+            assert!(matches!(
+                service.snapshot(&query),
+                Err(DiagnosticError::Disabled)
+            ));
+        }
+        activation.close().unwrap();
+        if enabled {
+            let retained = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+            assert_eq!(retained.events.len(), 1);
+            assert_eq!(
+                retained.components[0].counters[0].occurrences.value.get(),
+                1
+            );
+        }
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_signal_counters_survive_without_recent_evidence() {
+    use crate::diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example");
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "authorization=relay-header-secret%ZZ",
+        );
+    }
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_events: 0,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let mut activation =
+        futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+            plugin_config(json!({"version": 4})),
+            None,
+            &service,
+        ))
+        .unwrap();
+    let report = activation.report();
+    assert_eq!(
+        report
+            .config
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "observability.automatic_otel_signal_skipped"
+            })
+            .count(),
+        3
+    );
+    activation.close().unwrap();
+    for signal in ["traces", "logs", "metrics"] {
+        assert_automatic_host_counter_without_evidence(&service, signal);
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_counter_without_evidence(
+    service: &crate::diagnostics::Diagnostics,
+    signal: &str,
+) {
+    let query = automatic_host_failure_query(signal);
+    let snapshot = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+    assert!(snapshot.events.is_empty());
+    assert_eq!(snapshot.components.len(), 1, "{signal}");
+    let row = &snapshot.components[0];
+    assert!(row.closed_at.is_some());
+    assert_eq!(
+        row.identity.key,
+        format!("opentelemetry.automatic.{signal}")
+    );
+    assert_eq!(
+        row.since_refresh.ownership.responsibility.as_deref(),
+        Some("nemo-relay-plugin.v1.observability:1:")
+    );
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(row.counters.len(), 1);
+    assert_eq!(
+        row.counters[0].code,
+        "plugin.exporter_initialization_failed"
+    );
+    assert_eq!(row.counters[0].occurrences.value.get(), 1);
+    let reread = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+    assert_eq!(reread.sequence, snapshot.sequence);
+    assert_eq!(reread.lifetime.totals, snapshot.lifetime.totals);
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_classifies_endpoint_and_tls_failures_without_secrets() {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    let directory = tempfile::tempdir().unwrap();
+    let missing_certificate = directory
+        .path()
+        .join("relay-private-missing-certificate.pem");
+    let invalid_certificate = directory
+        .path()
+        .join("relay-private-invalid-certificate.pem");
+    std::fs::write(&invalid_certificate, "relay-private-invalid-PEM").unwrap();
+    // All three errors occur before an exporter can make a network request.
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            " https://relay-user:relay-secret@collector.example/private?token=relay-query-secret",
+        );
+        for signal in ["LOGS", "METRICS"] {
+            std::env::set_var(
+                format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"),
+                "https://relay-user:relay-secret@collector.example/private?token=relay-query-secret",
+            );
+            std::env::set_var(
+                format!("OTEL_EXPORTER_OTLP_{signal}_PROTOCOL"),
+                "http/protobuf",
+            );
+        }
+        std::env::set_var("OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE", &missing_certificate);
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+            &invalid_certificate,
+        );
+    }
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut activation =
+        futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+            plugin_config(json!({"version": 4})),
+            None,
+            &service,
+        ))
+        .expect("invalid automatic exporters must not prevent host activation");
+    let report = activation.report();
+    let skipped = report
+        .config
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 3, "{:?}", report.config.diagnostics);
+    activation.close().unwrap();
+    for (signal, field, expected_class, expected_reason) in [
+        (
+            "traces",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "invalid_input",
+            "invalid OTLP endpoint",
+        ),
+        (
+            "logs",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "io",
+            "cannot read a configured TLS certificate or key file",
+        ),
+        (
+            "metrics",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "invalid_input",
+            "invalid TLS configuration or certificate/key material",
+        ),
+    ] {
+        let legacy = skipped
+            .iter()
+            .find(|diagnostic| diagnostic.field.as_deref() == Some(field))
+            .unwrap();
+        assert_automatic_host_source_failure(
+            &service,
+            legacy,
+            signal,
+            expected_class,
+            expected_reason,
+            directory.path(),
+        );
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_source_failure(
+    service: &crate::diagnostics::Diagnostics,
+    legacy: &ConfigDiagnostic,
+    signal: &str,
+    expected_class: &str,
+    expected_reason: &str,
+    directory: &std::path::Path,
+) {
+    assert!(
+        legacy.message.contains(expected_reason),
+        "{}",
+        legacy.message
+    );
+    let snapshot = service
+        .snapshot(&automatic_host_failure_query(signal))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1, "{signal}");
+    assert_eq!(
+        snapshot.events[0].classification.failure_class(),
+        Some(expected_class)
+    );
+    assert_eq!(
+        snapshot.events[0].detail.as_ref().unwrap().message,
+        legacy.message
+    );
+    assert_eq!(snapshot.components.len(), 1);
+    assert_eq!(
+        snapshot.components[0]
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        1
+    );
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert_automatic_host_redacted(&serialized);
+    assert_automatic_host_redacted(&legacy.message);
+    assert!(!serialized.contains(&directory.to_string_lossy().to_string()));
+}
