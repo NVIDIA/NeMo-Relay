@@ -800,3 +800,79 @@ fn daemon_logging_edits_preserve_application_logging() {
     assert_eq!(document.string_summary("logging", "level"), "warn");
     assert_eq!(document.boolean("logging", "stderr_enabled"), Some(true));
 }
+
+#[test]
+fn http_model_host_list_edits_preserve_toml_and_allow_explicit_revocation() {
+    let mut document = document("# keep this comment\n[upstream]\nresponse_timeout_secs = 15\n");
+    assert!(document.http_model_hosts().unwrap().is_empty());
+    assert!(!document.has_key("upstream", "insecure_http_model_hosts"));
+
+    let hosts = vec!["MODEL.test.".into(), "192.168.1.10".into()];
+    document.set_http_model_hosts(hosts.clone()).unwrap();
+    assert_eq!(document.http_model_hosts().unwrap(), hosts);
+    let original = document.document.to_string();
+    assert!(
+        document
+            .set_http_model_hosts(vec!["http://bad.test".into()])
+            .is_err()
+    );
+    assert_eq!(document.document.to_string(), original);
+
+    document.set_http_model_hosts(Vec::new()).unwrap();
+    assert!(document.has_key("upstream", "insecure_http_model_hosts"));
+    assert!(document.http_model_hosts().unwrap().is_empty());
+    assert_eq!(
+        document.integer("upstream", "response_timeout_secs"),
+        Some(15)
+    );
+    assert!(
+        document
+            .document
+            .to_string()
+            .contains("# keep this comment")
+    );
+    crate::configuration::validate_config_document(
+        toml::from_str(&document.document.to_string()).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn http_model_host_list_rejects_non_string_config_entries() {
+    for contents in [
+        "[upstream]\ninsecure_http_model_hosts = 'model.test'\n",
+        "[upstream]\ninsecure_http_model_hosts = [42]\n",
+    ] {
+        assert!(
+            document(contents)
+                .http_model_hosts()
+                .unwrap_err()
+                .to_string()
+                .contains("must be a list of strings")
+        );
+    }
+}
+
+#[test]
+fn logging_editor_sets_and_clears_file_failure_policy() {
+    for section in ["logging", "daemon.logging"] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut document = ConfigDocument::read(temp.path().join("config.toml")).unwrap();
+        document.logging_section = section;
+        document.add_sink("relay.jsonl".into()).unwrap();
+        document
+            .set_sink_enum(0, "failure_policy", "optional", LOG_FAILURE_POLICIES)
+            .unwrap();
+        assert_eq!(
+            document.sink_string(0, "failure_policy").as_deref(),
+            Some("optional")
+        );
+        assert!(
+            document
+                .set_sink_enum(0, "failure_policy", "ignore", LOG_FAILURE_POLICIES)
+                .is_err()
+        );
+        document.clear_sink_key(0, "failure_policy").unwrap();
+        assert!(!document.sink_has_key(0, "failure_policy").unwrap());
+    }
+}

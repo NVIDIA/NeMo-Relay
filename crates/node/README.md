@@ -41,8 +41,8 @@ Use the Node.js binding for the following tasks:
 
 The Node.js package provides the following capabilities:
 
-- **npm package for Node.js**: A Node.js 24 or newer package backed by a
-  napi-rs native extension.
+- **npm package for Node.js**: A Node.js 24.13.1 or newer package backed by
+  a napi-rs native extension.
 - **Managed tool and LLM execution**: Helpers that emit lifecycle events and
   run middleware in a consistent order.
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
@@ -60,7 +60,7 @@ The Node.js package provides the following capabilities:
 
 ## Installation
 
-Install the npm package in a Node.js 24 or newer project:
+Install the npm package in a Node.js 24.13.1 or newer project:
 
 ```bash
 npm install nemo-relay-node@0.11.0
@@ -216,3 +216,12 @@ are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,
 ## Documentation
 
 NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+## Runtime Diagnostics
+
+Set `diagnostics: { enabled: true }` on the existing plugin initialization config,
+or configure `[diagnostics]` in the resolved `plugins.toml`. Optional readers live
+at `nemo-relay-node/diagnostics`. Native snapshots use `bigint` for diagnostic
+integers; use `snapshotJson()` for portable serialization. The service outlives
+plugin activation handles. See [Runtime Diagnostics](https://docs.nvidia.com/nemo/relay/reference/diagnostics)
+for lifetime, authorization, memory bounds, and coverage.

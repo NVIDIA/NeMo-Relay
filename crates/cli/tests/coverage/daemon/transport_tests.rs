@@ -1230,3 +1230,107 @@ async fn worker_http2_flow_control_preserves_concurrent_large_uploads() {
     assert_eq!(connections.load(Ordering::SeqCst), 1);
     server.abort();
 }
+
+#[tokio::test]
+async fn http_model_hosts_provider_hop_filters_headers_and_trailers_without_decoding_data() {
+    let config = crate::configuration::GatewayConfig {
+        openai_base_url: "http://model.test:8000/custom/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+            "other.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    for (url, client_named, allowed) in [
+        ("http://model.test:8000/custom/v1/responses", false, true),
+        ("http://model.test:8000/custom/v1/responses", true, false),
+        ("http://model.test:9000/responses", false, false),
+        ("http://other.test:8000/responses", false, false),
+        ("http://unlisted.test:8000/responses", false, false),
+    ] {
+        let trailers = HeaderMap::from_iter([
+            (
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer trailer-secret"),
+            ),
+            (
+                HeaderName::from_static("x-custom-token"),
+                HeaderValue::from_static("trailer-secret"),
+            ),
+            (
+                HeaderName::from_static("content-language"),
+                HeaderValue::from_static("en"),
+            ),
+        ]);
+        let frames = futures_util::stream::iter([
+            Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"opaque-compressed-body"))),
+            Ok(Frame::trailers(trailers)),
+        ]);
+        let request = Request::post("/responses")
+            .header("authorization", "Bearer header-secret")
+            .header("cookie", "session=secret")
+            .header("x-custom-token", "secret")
+            .header("content-encoding", "gzip")
+            .header("content-type", "application/json")
+            .body(http_body_util::StreamBody::new(frames))
+            .unwrap();
+        let request =
+            prepare_provider_request(request, url.parse().unwrap(), &[], &config, client_named);
+        assert_eq!(
+            request.is_ok(),
+            allowed,
+            "{url}, client_named={client_named}"
+        );
+        if let Ok(request) = request {
+            assert_eq!(request.headers()["content-encoding"], "gzip");
+            assert_eq!(request.headers().len(), 4); // content type/encoding and generated Host/TE
+            let body = request.into_body().collect().await.unwrap();
+            let trailers = body.trailers().unwrap();
+            assert_eq!(trailers.len(), 1);
+            assert_eq!(trailers["content-language"], "en");
+            assert_eq!(body.to_bytes(), "opaque-compressed-body");
+        }
+    }
+    for method in [Method::CONNECT, Method::GET] {
+        let request = Request::builder()
+            .method(method)
+            .header(UPGRADE, "websocket")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        assert!(
+            prepare_provider_request(
+                request,
+                "http://model.test:8000/".parse().unwrap(),
+                &[],
+                &config,
+                false
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn http_model_hosts_provider_hop_preserves_known_body_lengths_on_every_transport() {
+    let config = crate::configuration::GatewayConfig {
+        openai_base_url: "http://model.test:8000/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    for url in [
+        "http://model.test:8000/v1/responses",
+        "https://model.test/v1/responses",
+        "http://127.0.0.1:8000/v1/responses",
+    ] {
+        let request = Request::post("/responses")
+            .body(Full::new(Bytes::from_static(b"opaque-body")))
+            .unwrap();
+        let request =
+            prepare_provider_request(request, url.parse().unwrap(), &[], &config, false).unwrap();
+        assert_eq!(request.body().size_hint().exact(), Some(11), "{url}");
+    }
+}

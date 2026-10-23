@@ -123,6 +123,15 @@ python_integration_langchain:
   - 'rust-toolchain.toml'
   - 'uv.lock'
 
+python_integration_google_adk:
+  - 'justfile'
+  - 'pyproject.toml'
+  - 'python/nemo_relay/integrations/google_adk/**'
+  - 'python/tests/integrations/conftest.py'
+  - 'python/tests/integrations/google_adk_tests/**'
+  - 'rust-toolchain.toml'
+  - 'uv.lock'
+
 dependencies:
   - 'Cargo.lock'
   - 'Cargo.toml'

@@ -151,6 +151,7 @@ pub(crate) struct CollectedSnapshot {
     pub(crate) snapshot: ResourceMetricsSnapshot,
     pub(crate) process_sampled_instant: Instant,
     pub(crate) successful: bool,
+    pub(crate) root_verified: bool,
     pub(crate) process_cpu_samples: Vec<ProcessCpuSample>,
     pub(crate) process_io_samples: Vec<ProcessIoSample>,
 }
@@ -838,6 +839,8 @@ pub(crate) fn collect_with_state(
         snapshot,
         process_sampled_instant,
         successful: true,
+        root_verified: target.measurement_scope != ResourceMeasurementScope::Global
+            && root_identity_is_current(target, &samples),
         process_cpu_samples,
         process_io_samples,
     }
@@ -1012,6 +1015,7 @@ fn unavailable_snapshot(
         },
         process_sampled_instant: Instant::now(),
         successful: false,
+        root_verified: false,
         process_cpu_samples: Vec::new(),
         process_io_samples: Vec::new(),
     }

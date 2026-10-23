@@ -16,21 +16,48 @@ use spdlog::sink::{
 use spdlog::terminal_style::StyleMode;
 use spdlog::{ErrorHandler, Level, LevelFilter, Logger, Record, ThreadPool};
 
-use super::config::{LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES};
+use super::config::{
+    FileLogSinkConfig, FileLogSinkFailurePolicy, LogLevel, LogSinkConfig, LoggingConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES,
+};
+use super::diagnostics::{LoggingDiagnostics, SinkDiagnostics, file_open_failure_reason};
 use super::format::RelayFormatter;
 use super::rotation::{SizeRotatingFileWriter, rotated_log_path};
 use crate::error::{FlowError, Result};
 
+#[cfg(test)]
 pub(crate) fn build_logger(
     config: &LoggingConfig,
     root_relay_id: String,
 ) -> Result<(Arc<Logger>, Vec<Arc<ThreadPool>>)> {
+    build_logger_with_diagnostics(config, root_relay_id, None)
+        .map(|built| (built.logger, built.thread_pools))
+}
+
+pub(super) struct BuiltLogger {
+    pub logger: Arc<Logger>,
+    pub thread_pools: Vec<Arc<ThreadPool>>,
+    pub sink_indices: Vec<usize>,
+    pub unavailable_files: Vec<(usize, io::ErrorKind)>,
+}
+
+pub(super) fn build_logger_with_diagnostics(
+    config: &LoggingConfig,
+    root_relay_id: String,
+    diagnostics: Option<&LoggingDiagnostics>,
+) -> Result<BuiltLogger> {
+    // Validate every configuration and reserve every destination before opening any files.
+    // An unavailable optional file must not hide invalid limits or path collisions.
+    let resolved_paths = validate_file_sinks(config, diagnostics)?;
     let mut sinks: Vec<Arc<dyn spdlog::sink::Sink>> = Vec::new();
     let mut thread_pools = Vec::new();
-    let mut active_paths: Vec<PathBuf> = Vec::new();
-    let mut reserved_paths: Vec<PathBuf> = Vec::new();
+    let mut sink_indices = Vec::new();
+    let mut unavailable_files = Vec::new();
 
     if config.stderr_enabled {
+        let diagnostic = diagnostics.and_then(LoggingDiagnostics::stderr);
+        let initialization = SinkInitialization::new(diagnostic.clone());
+        let error_handler: ErrorHandler = stderr_error_handler("stderr", diagnostic).into();
         let stderr_sink = StdStreamSink::builder()
             .stderr()
             .style_mode(StyleMode::Never)
@@ -39,93 +66,60 @@ pub(crate) fn build_logger(
                 root_relay_id: root_relay_id.clone(),
             })
             .level_filter(spdlog_level_filter(config.level))
-            .error_handler(stderr_error_handler("stderr"))
-            .build_arc()
+            .error_handler(error_handler.clone())
+            .build()
             .map_err(|error| {
                 FlowError::InvalidArgument(format!("failed to create stderr logging sink: {error}"))
             })?;
-        sinks.push(stderr_sink);
+        sinks.push(Arc::new(SinkErrorBoundary::new(stderr_sink, error_handler)));
+        sink_indices.push(0);
+        initialization.complete();
     }
 
-    for sink in &config.sinks {
+    for (index, sink) in config.sinks.iter().enumerate() {
+        let diagnostic = diagnostics.and_then(|diagnostics| diagnostics.file(index));
+        let initialization = SinkInitialization::new(diagnostic.clone());
         let LogSinkConfig::File(file_sink) = sink;
-        let resolved_path = resolve_log_path(&file_sink.path)?;
-        if active_paths.contains(&resolved_path) {
-            return Err(FlowError::InvalidArgument(format!(
-                "duplicate logging sink path {}",
-                resolved_path.display()
-            )));
-        }
-        let candidate_paths = reserved_sink_paths(&resolved_path, file_sink.rotation);
-        if let Some(collision) = candidate_paths
-            .iter()
-            .find(|candidate| reserved_paths.contains(candidate))
-        {
-            return Err(FlowError::InvalidArgument(format!(
-                "logging sink path conflicts with another active or rotated file: {}",
-                collision.display()
-            )));
-        }
-        active_paths.push(resolved_path.clone());
-        reserved_paths.extend(candidate_paths);
+        let resolved_path = &resolved_paths[index];
         let sink_label = resolved_path.display().to_string();
-
-        let file: Arc<dyn spdlog::sink::Sink> = match file_sink.rotation {
-            None => FileSink::builder()
-                .path(&resolved_path)
-                .truncate(false)
-                .formatter(RelayFormatter {
-                    format: file_sink.format,
-                    root_relay_id: root_relay_id.clone(),
-                })
-                .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&sink_label))
-                .build_arc()
-                .map_err(|error| {
-                    FlowError::InvalidArgument(format!(
-                        "failed to open logging sink {}: {error}",
-                        resolved_path.display()
-                    ))
-                })?,
-            Some(rotation) => WriteSink::builder()
-                .target(
-                    SizeRotatingFileWriter::new(
-                        resolved_path.clone(),
-                        rotation.max_file_size_bytes(),
-                        rotation.retained_files(),
-                    )
-                    .map_err(|error| {
-                        FlowError::InvalidArgument(format!(
-                            "failed to open rotating logging sink {}: {error}",
-                            resolved_path.display()
-                        ))
-                    })?,
-                )
-                .formatter(RelayFormatter {
-                    format: file_sink.format,
-                    root_relay_id: root_relay_id.clone(),
-                })
-                .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&sink_label))
-                .build_arc()
-                .map_err(|error| {
-                    FlowError::InvalidArgument(format!(
-                        "failed to open rotating logging sink {}: {error}",
-                        resolved_path.display()
-                    ))
-                })?,
+        let file = match open_file_sink(
+            file_sink,
+            resolved_path,
+            &root_relay_id,
+            diagnostic.clone(),
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                // Match structured filesystem failures only. Thread pool, async sink,
+                // formatter, and logger failures are never covered by this policy.
+                if let Some(reason) = file_open_error_kind(&error) {
+                    initialization.open_failed(reason);
+                    if file_sink.failure_policy == FileLogSinkFailurePolicy::Optional {
+                        unavailable_files.push((index, reason));
+                        // Available even before logging/diagnostics starts, or with stderr disabled.
+                        let _ = writeln!(
+                            io::stderr(),
+                            "nemo-relay: optional logging sink logging.file.{index} disabled: {}; records for this sink are discarded until logging is reinitialized",
+                            file_open_failure_reason(reason)
+                        );
+                        continue;
+                    }
+                }
+                let kind = if file_sink.rotation.is_some() {
+                    "rotating logging"
+                } else {
+                    "logging"
+                };
+                return Err(FlowError::InvalidArgument(format!(
+                    "failed to open {kind} sink {}: {error}",
+                    resolved_path.display()
+                )));
+            }
         };
 
-        if file_sink.queue_capacity > MAX_FILE_SINK_QUEUE_ENTRIES {
-            return Err(FlowError::InvalidArgument(format!(
-                "logging sink queue_capacity {} exceeds maximum \
-                 {MAX_FILE_SINK_QUEUE_ENTRIES} entries per file sink",
-                file_sink.queue_capacity
-            )));
-        }
-        let capacity = NonZeroUsize::new(file_sink.queue_capacity).ok_or_else(|| {
-            FlowError::InvalidArgument("logging sink queue_capacity must be greater than 0".into())
-        })?;
+        // Already validated, including programmatically constructed configurations.
+        let capacity =
+            NonZeroUsize::new(file_sink.queue_capacity).expect("validated queue capacity");
         let mut pool_builder = ThreadPool::builder();
         let pool = pool_builder
             .capacity(capacity)
@@ -137,7 +131,8 @@ pub(crate) fn build_logger(
                 ))
             })?;
 
-        let async_error_handler: ErrorHandler = async_sink_error_handler(&sink_label).into();
+        let async_error_handler: ErrorHandler =
+            async_sink_error_handler(&sink_label, diagnostic).into();
         let async_sink = AsyncPoolSink::builder()
             .sink(file)
             .thread_pool(Arc::clone(&pool))
@@ -151,10 +146,12 @@ pub(crate) fn build_logger(
                     resolved_path.display()
                 ))
             })?;
-        let async_sink = Arc::new(AsyncSinkErrorBoundary::new(async_sink, async_error_handler));
+        let async_sink = Arc::new(SinkErrorBoundary::new(async_sink, async_error_handler));
 
         thread_pools.push(pool);
         sinks.push(async_sink);
+        sink_indices.push(index + usize::from(config.stderr_enabled));
+        initialization.complete();
     }
 
     // Leave the logger unnamed so LogCrateProxy maps log::target into record.logger_name().
@@ -170,17 +167,156 @@ pub(crate) fn build_logger(
         logger.set_flush_period(Some(Duration::from_millis(config.flush_interval_millis)));
     }
 
-    Ok((logger, thread_pools))
+    Ok(BuiltLogger {
+        logger,
+        thread_pools,
+        sink_indices,
+        unavailable_files,
+    })
 }
 
-/// Routes synchronous `AsyncPoolSink` errors through its per-sink handler.
-struct AsyncSinkErrorBoundary {
-    inner: AsyncPoolSink,
+fn validate_file_sinks(
+    config: &LoggingConfig,
+    diagnostics: Option<&LoggingDiagnostics>,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    let mut reserved_paths: Vec<PathBuf> = Vec::new();
+    for (index, sink) in config.sinks.iter().enumerate() {
+        (|| {
+            let LogSinkConfig::File(file) = sink;
+            if file.queue_capacity == 0 {
+                return Err(FlowError::InvalidArgument(
+                    "logging sink queue_capacity must be greater than 0".into(),
+                ));
+            }
+            if file.queue_capacity > MAX_FILE_SINK_QUEUE_ENTRIES {
+                return Err(FlowError::InvalidArgument(format!(
+                    "logging sink queue_capacity {} exceeds maximum {MAX_FILE_SINK_QUEUE_ENTRIES} entries per file sink",
+                    file.queue_capacity
+                )));
+            }
+            let path = resolve_log_path(&file.path)?;
+            if paths.contains(&path) {
+                return Err(FlowError::InvalidArgument(format!(
+                    "duplicate logging sink path {}",
+                    path.display()
+                )));
+            }
+            let candidates = reserved_sink_paths(&path, file.rotation);
+            if let Some(collision) = candidates
+                .iter()
+                .find(|candidate| reserved_paths.contains(candidate))
+            {
+                return Err(FlowError::InvalidArgument(format!(
+                    "logging sink path conflicts with another active or rotated file: {}",
+                    collision.display()
+                )));
+            }
+            paths.push(path);
+            reserved_paths.extend(candidates);
+            Ok(())
+        })()
+        .inspect_err(|_| {
+            if let Some(diagnostic) = diagnostics.and_then(|diagnostics| diagnostics.file(index)) {
+                diagnostic.initialization_failed();
+            }
+        })?;
+    }
+    Ok(paths)
+}
+
+fn open_file_sink(
+    config: &FileLogSinkConfig,
+    path: &Path,
+    root_relay_id: &str,
+    diagnostic: Option<SinkDiagnostics>,
+) -> spdlog::Result<Arc<dyn Sink>> {
+    let formatter = RelayFormatter {
+        format: config.format,
+        root_relay_id: root_relay_id.to_owned(),
+    };
+    let error_handler = stderr_error_handler(&path.display().to_string(), diagnostic);
+    match config.rotation {
+        None => Ok(FileSink::builder()
+            .path(path)
+            .truncate(false)
+            .formatter(formatter)
+            .level_filter(spdlog_level_filter(config.level))
+            .error_handler(error_handler)
+            .build_arc()?),
+        Some(rotation) => {
+            let writer = SizeRotatingFileWriter::new(
+                path.to_owned(),
+                rotation.max_file_size_bytes(),
+                rotation.retained_files(),
+            )
+            .map_err(spdlog::Error::OpenFile)?;
+            Ok(WriteSink::builder()
+                .target(writer)
+                .formatter(formatter)
+                .level_filter(spdlog_level_filter(config.level))
+                .error_handler(error_handler)
+                .build_arc()?)
+        }
+    }
+}
+
+fn file_open_error_kind(error: &spdlog::Error) -> Option<io::ErrorKind> {
+    match error {
+        spdlog::Error::CreateDirectory(error)
+        | spdlog::Error::OpenFile(error)
+        | spdlog::Error::QueryFileMetadata(error) => Some(error.kind()),
+        _ => None,
+    }
+}
+
+/// Records early returns during sink construction before a logger is installed.
+struct SinkInitialization {
+    diagnostics: Option<SinkDiagnostics>,
+    recorded: bool,
+}
+
+impl SinkInitialization {
+    fn new(diagnostics: Option<SinkDiagnostics>) -> Self {
+        Self {
+            diagnostics,
+            recorded: false,
+        }
+    }
+
+    fn open_failed(mut self, reason: io::ErrorKind) {
+        self.recorded = true;
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.open_failed(reason);
+        }
+    }
+
+    fn complete(mut self) {
+        self.recorded = true;
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.initialized();
+        }
+    }
+}
+
+impl Drop for SinkInitialization {
+    fn drop(&mut self) {
+        if !self.recorded
+            && let Some(diagnostics) = &self.diagnostics
+        {
+            diagnostics.initialization_failed();
+        }
+    }
+}
+
+/// Routes returned sink errors through the sink-specific handler instead of the logger handler.
+struct SinkErrorBoundary<S: Sink> {
+    inner: S,
     error_handler: RwLock<ErrorHandler>,
 }
 
-impl AsyncSinkErrorBoundary {
-    fn new(inner: AsyncPoolSink, error_handler: ErrorHandler) -> Self {
+impl<S: Sink> SinkErrorBoundary<S> {
+    fn new(inner: S, error_handler: ErrorHandler) -> Self {
         Self {
             inner,
             error_handler: RwLock::new(error_handler),
@@ -200,7 +336,7 @@ impl AsyncSinkErrorBoundary {
     }
 }
 
-impl SinkPropAccess for AsyncSinkErrorBoundary {
+impl<S: Sink> SinkPropAccess for SinkErrorBoundary<S> {
     fn level_filter(&self) -> LevelFilter {
         self.inner.level_filter()
     }
@@ -222,7 +358,7 @@ impl SinkPropAccess for AsyncSinkErrorBoundary {
     }
 }
 
-impl Sink for AsyncSinkErrorBoundary {
+impl<S: Sink> Sink for SinkErrorBoundary<S> {
     fn log(&self, record: &Record) -> spdlog::Result<()> {
         self.report_immediate_error(self.inner.log(record))
     }
@@ -232,7 +368,7 @@ impl Sink for AsyncSinkErrorBoundary {
     }
 
     fn flush_on_exit(&self) -> spdlog::Result<()> {
-        // Preserve final-drain errors for `LoggingRuntime`.
+        // Preserve final flush and drain errors for `LoggingRuntime`.
         self.inner.flush_on_exit()
     }
 }
@@ -312,9 +448,15 @@ fn normalize_path_components(path: &Path) -> PathBuf {
     normalized
 }
 
-fn stderr_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+fn stderr_error_handler(
+    sink_label: &str,
+    diagnostics: Option<SinkDiagnostics>,
+) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
     let sink_label = sink_label.to_owned();
     move |error| {
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.runtime_error(&error);
+        }
         let _ = writeln!(
             io::stderr(),
             "nemo-relay: logging sink error ({sink_label}): {error}"
@@ -365,11 +507,19 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-fn async_sink_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+fn async_sink_error_handler(
+    sink_label: &str,
+    diagnostics: Option<SinkDiagnostics>,
+) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
     let sink_label = sink_label.to_owned();
     let dropped_record_rate_limiter = DropNoticeRateLimiter::new();
     let dropped_flush_rate_limiter = DropNoticeRateLimiter::new();
     move |error| {
+        // Retain every loss while the independent emergency notice stays rate-limited.
+        // Sink failures never project back into logging, including errors on async workers.
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.runtime_error(&error);
+        }
         // A full queue can reject records and periodic flush requests at producer speed. Rate-limit
         // them separately so neither failure class can flood stderr or hide the other. Other errors
         // (disconnected channel and worker-side write failures) are rare and reported immediately.

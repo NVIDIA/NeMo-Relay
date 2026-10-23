@@ -22,6 +22,7 @@ use http_body_util::combinators::UnsyncBoxBody;
 use hyper::body::Body;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::Connect;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use thiserror::Error;
@@ -61,6 +62,8 @@ pub(crate) enum TransportError {
     InvalidDestination,
     #[error("plain HTTP upstreams are allowed only for loopback hosts; use https")]
     InsecureDestination,
+    #[error("remote HTTP model forwarding requires an explicitly trusted configured upstream")]
+    UntrustedHttpModelDestination,
     #[error("invalid Connection header value")]
     InvalidConnectionHeader,
     #[error("forward destination authority is not a valid Host header")]
@@ -159,9 +162,96 @@ pub(crate) fn strip_hop_by_hop_headers(headers: &mut HeaderMap) -> Result<(), Tr
 /// `destination` is the complete URI selected by the router, including its path and query. Names
 /// in `additional_strip` are routing or authentication fields consumed by the current hop.
 pub(crate) fn prepare_forward_request<B>(
+    request: Request<B>,
+    destination: Uri,
+    additional_strip: &[HeaderName],
+) -> Result<Request<B>, TransportError> {
+    prepare_forward_request_inner(request, destination, additional_strip, false)
+}
+
+/// Apply configured model trust only on the provider hop, never on worker or caller-named hops.
+/// The body remains pull-driven; credential fields in trailer frames are filtered as well.
+pub(crate) fn prepare_provider_request<B>(
     mut request: Request<B>,
     destination: Uri,
     additional_strip: &[HeaderName],
+    config: &crate::configuration::GatewayConfig,
+    client_named: bool,
+) -> Result<Request<RelayBody>, crate::error::CliError>
+where
+    B: Body<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
+{
+    if request.method() == Method::CONNECT || request.headers().contains_key(UPGRADE) {
+        return Err(crate::error::CliError::UpstreamTransport(
+            TransportError::UnsupportedTunnel,
+        ));
+    }
+    let url = reqwest::Url::parse(&destination.to_string()).map_err(|_| {
+        crate::error::CliError::UpstreamTransport(TransportError::InvalidDestination)
+    })?;
+    let remote_http = crate::configuration::remote_http(&url);
+    if remote_http && client_named {
+        return Err(crate::error::CliError::UpstreamTransport(
+            TransportError::InsecureDestination,
+        ));
+    }
+    // Consume connection-scoped fields before retaining the model header allowlist.
+    strip_hop_by_hop_headers(request.headers_mut())
+        .map_err(crate::error::CliError::UpstreamTransport)?;
+    crate::upstream_auth::prepare_http_model_request(request.headers_mut(), &url, config)?;
+    let request =
+        prepare_forward_request_inner(request, destination, additional_strip, remote_http)
+            .map_err(crate::error::CliError::UpstreamTransport)?;
+    Ok(request.map(|body| {
+        let inner = box_body(body);
+        if remote_http {
+            box_body(HttpModelBody { inner })
+        } else {
+            inner
+        }
+    }))
+}
+
+/// Filter trailer fields without changing data frames, demand, or the body's size hint.
+struct HttpModelBody {
+    inner: RelayBody,
+}
+
+impl Body for HttpModelBody {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx).map(|frame| {
+            frame.map(|result| {
+                result.map(|mut frame| {
+                    if let Some(trailers) = frame.trailers_mut() {
+                        crate::upstream_auth::retain_http_model_forward_headers(trailers);
+                    }
+                    frame
+                })
+            })
+        })
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+fn prepare_forward_request_inner<B>(
+    mut request: Request<B>,
+    destination: Uri,
+    additional_strip: &[HeaderName],
+    allow_remote_http: bool,
 ) -> Result<Request<B>, TransportError> {
     if request.method() == Method::CONNECT || request.headers().contains_key(UPGRADE) {
         return Err(TransportError::UnsupportedTunnel);
@@ -176,6 +266,7 @@ pub(crate) fn prepare_forward_request<B>(
     }
     let authority = authority.expect("authority was checked above");
     if scheme == Some("http")
+        && !allow_remote_http
         && !authority.host().eq_ignore_ascii_case("localhost")
         && !authority
             .host()
@@ -336,13 +427,23 @@ pub(crate) fn named_upstream_client() -> Result<NamedUpstreamClient, TransportEr
 
 /// Sends a provider request through `configured`, or through the client-named upstream pool
 /// when the caller chose the destination.
-pub(crate) fn request_provider(
-    configured: &PooledClient,
+pub(crate) fn request_provider<C>(
+    configured: &Client<C, RelayBody>,
     client_named: bool,
     request: Request<RelayBody>,
-) -> Result<hyper_util::client::legacy::ResponseFuture, TransportError> {
+) -> Result<hyper_util::client::legacy::ResponseFuture, TransportError>
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     Ok(if client_named {
         named_upstream_client()?.request(request)
+    } else if request.uri().scheme_str() == Some("http")
+        && reqwest::Url::parse(&request.uri().to_string())
+            .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        // Hyper neither follows redirects nor consults proxy environment variables. Reuse the
+        // non-retrying pool so plaintext model content is never replayed automatically.
+        helper_provider_client(false)?.request(request)
     } else {
         configured.request(request)
     })

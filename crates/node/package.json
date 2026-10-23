@@ -52,10 +52,14 @@
     "./model_pricing": {
       "types": "./model_pricing.d.ts",
       "default": "./model_pricing.js"
+    },
+    "./diagnostics": {
+      "types": "./diagnostics.d.ts",
+      "default": "./diagnostics.js"
     }
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.13.1"
   },
   "napi": {
     "name": "nemo-relay",

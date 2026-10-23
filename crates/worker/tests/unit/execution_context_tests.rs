@@ -83,6 +83,7 @@ fn disconnected_runtime() -> PluginRuntime {
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }
 }
@@ -255,6 +256,7 @@ fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
         code: "worker.cancelled".into(),
         message: "HTTP 403: denied".into(),
         retryable: false,
+        downstream_continuation_id: None,
     };
     let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
     assert!(
@@ -262,4 +264,62 @@ fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
             .message
             .starts_with("callback failed: worker.cancelled:")
     );
+}
+
+#[tokio::test]
+async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
+    struct TestPlugin;
+
+    impl WorkerPlugin for TestPlugin {
+        fn plugin_id(&self) -> &str {
+            "test.cancellation"
+        }
+
+        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    for repeated in [false, true] {
+        for reason in ["", "stream abandoned"] {
+            let task = tokio::spawn(std::future::pending::<()>());
+            let (completion_tx, completion_rx) = watch::channel(false);
+            let service = WorkerService {
+                plugin: Arc::new(TestPlugin),
+                runtime: disconnected_runtime(),
+                handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
+                active_invocations: Arc::new(Mutex::new(HashMap::from([(
+                    "invocation".into(),
+                    ActiveInvocation {
+                        generation: 0,
+                        abort_handle: task.abort_handle(),
+                        stream_cancel: None,
+                        completion: completion_rx,
+                        cancel_requested: repeated,
+                    },
+                )]))),
+                next_invocation_generation: Arc::new(AtomicU64::new(1)),
+            };
+            let cancellation = service.cancel_invocation(Request::new(CancelInvocationRequest {
+                activation_id: "activation".into(),
+                auth_token: "token".into(),
+                invocation_id: "invocation".into(),
+                reason: reason.into(),
+            }));
+            tokio::pin!(cancellation);
+            assert!(futures_util::poll!(&mut cancellation).is_pending());
+            completion_tx.send_replace(true);
+            let ack = cancellation.await.unwrap().into_inner();
+            assert_eq!(ack.accepted, !repeated);
+            let expected = if repeated {
+                "invocation is not active".into()
+            } else if reason.is_empty() {
+                "cancellation accepted".into()
+            } else {
+                format!("cancellation accepted: {reason}")
+            };
+            assert_eq!(ack.message, expected);
+            assert!(task.await.unwrap_err().is_cancelled());
+        }
+    }
 }

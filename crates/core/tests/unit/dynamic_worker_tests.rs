@@ -675,6 +675,7 @@ fn test_worker_error() -> WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -873,6 +874,7 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
             code: "worker.cancelled".into(),
             message: "cancelled by caller".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })
         .to_string()
         .contains("worker invocation cancelled")
@@ -916,6 +918,7 @@ fn envelope_and_error_helpers_cover_failure_paths() {
             code: "worker.empty".into(),
             message: String::new(),
             retryable: false,
+            downstream_continuation_id: None,
         },
         "fallback message",
     );
@@ -1113,6 +1116,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
+        downstream_continuation_id: None,
     };
     let (callback, _shutdown) = fake_callback_service({
         let worker_error = worker_error.clone();
@@ -1546,6 +1550,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
                             code: "worker.failed".into(),
                             message: "boom".into(),
                             retryable: false,
+                            downstream_continuation_id: None,
                         },
                     )),
                 }
@@ -2012,7 +2017,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
     let started_tx = Arc::new(Mutex::new(Some(started_tx)));
-    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+    let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
         {
             let started_tx = started_tx.clone();
             move |_| {
@@ -2028,6 +2033,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
         |_| Box::pin(tokio_stream::empty()),
     )
     .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
     let request = callback
         .base_request(
             "timeout",
@@ -2066,6 +2072,25 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     assert!(error.contains("worker RPC timed out after 10ms"), "{error}");
     assert_eq!(cancellation.invocation_id, invocation_id);
     assert!(cancellation.reason.contains("timed out"));
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+    let snapshot = diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.events.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.worker.transport_failed");
+    assert_eq!(event.classification.failure_class(), Some("timeout"));
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
 }
 
 /// Checks that execution callbacks ignore short deadlines and honor caller cancellation.
@@ -2235,7 +2260,7 @@ async fn streaming_execution_can_wait_for_slow_response_headers() {
                     Box::pin(async move {
                         started.notify_one();
                         release.notified().await;
-                        Box::pin(tokio_stream::empty()) as FakeInvokeStream
+                        Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream)
                     })
                 }
             },
@@ -2760,6 +2785,12 @@ async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_re
     .expect("worker stream should yield its terminal error")
     .expect_err("worker error should remain an error");
     assert!(error.to_string().contains("worker.failed"));
+    fixture.stream.as_mut().unwrap().close().await.unwrap();
+    let cancellation = fixture
+        .cancel_rx
+        .try_recv()
+        .expect("terminal error close must wait for worker cleanup acknowledgment");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
 
     assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
     assert!(
@@ -2783,10 +2814,11 @@ async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_re
 #[test]
 fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
     let (tx, rx) = mpsc::channel(1);
-    let (_completion_tx, completion_rx) = watch::channel(false);
+    let (_completion_tx, completion_rx) = watch::channel(None);
     let mut stream = WorkerForwardedLlmStream {
         receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
         completion: completion_rx,
+        close_result: None,
     };
 
     Pin::new(&mut stream).terminalize();
@@ -2797,10 +2829,11 @@ fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
 #[tokio::test]
 async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_cancelled() {
     let (_stream_tx, stream_rx) = mpsc::channel(1);
-    let (completion_tx, completion_rx) = watch::channel(false);
+    let (completion_tx, completion_rx) = watch::channel(None);
     let mut stream = WorkerForwardedLlmStream {
         receiver: Some(tokio_stream::wrappers::ReceiverStream::new(stream_rx)),
         completion: completion_rx,
+        close_result: None,
     };
 
     // Creating close initiates shutdown by dropping the receiver. Cancelling
@@ -2816,7 +2849,7 @@ async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_canc
         _ = tokio::task::yield_now() => {}
     }
 
-    completion_tx.send_replace(true);
+    completion_tx.send_replace(Some(Ok(())));
     retry.await.expect("retry must observe producer cleanup");
     Pin::new(&mut stream)
         .close()
@@ -2946,6 +2979,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             code: "worker.failed".into(),
             message: "callback unavailable".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     })
     .await;
@@ -4570,7 +4604,7 @@ async fn fake_worker_client_with_handlers(
     let invoke_stream = Arc::new(invoke_stream);
     fake_worker_client_with_async_handlers(invoke, move |request| {
         let invoke_stream = Arc::clone(&invoke_stream);
-        Box::pin(async move { invoke_stream(request) })
+        Box::pin(async move { Ok(invoke_stream(request)) })
     })
     .await
 }
@@ -4578,6 +4612,19 @@ async fn fake_worker_client_with_handlers(
 async fn fake_worker_client_with_async_handlers(
     invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
     invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
+    fake_worker_client_with_cancel_error(invoke, invoke_stream, None).await
+}
+
+async fn fake_worker_client_with_cancel_error(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+    cancel_error: Option<Status>,
 ) -> (
     PluginWorkerClient<Channel>,
     oneshot::Sender<()>,
@@ -4599,6 +4646,7 @@ async fn fake_worker_client_with_async_handlers(
                 invoke: Arc::new(invoke),
                 invoke_stream: Arc::new(invoke_stream),
                 cancel_tx,
+                cancel_error,
                 register_calls: register_calls.clone(),
             }))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
@@ -4635,13 +4683,15 @@ struct FakePluginWorker {
     invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
     invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync>,
     cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
+    cancel_error: Option<Status>,
     register_calls: Arc<AtomicUsize>,
 }
 
 type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
 type FakeInvokeStream =
     Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
-type FakeInvokeStreamFuture = Pin<Box<dyn Future<Output = FakeInvokeStream> + Send>>;
+type FakeInvokeStreamFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<FakeInvokeStream, Status>> + Send>>;
 
 struct WorkerStreamLifecycleFixture {
     callback: WorkerPluginCallback,
@@ -4910,9 +4960,9 @@ impl PluginWorker for FakePluginWorker {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<tonic::Response<Self::InvokeStreamStream>, tonic::Status> {
-        Ok(tonic::Response::new(
-            (self.invoke_stream)(request.into_inner()).await,
-        ))
+        (self.invoke_stream)(request.into_inner())
+            .await
+            .map(tonic::Response::new)
     }
 
     async fn cancel_invocation(
@@ -4920,6 +4970,9 @@ impl PluginWorker for FakePluginWorker {
         request: Request<CancelInvocationRequest>,
     ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
         let _ = self.cancel_tx.send(request.into_inner());
+        if let Some(error) = &self.cancel_error {
+            return Err(error.clone());
+        }
         Ok(tonic::Response::new(WorkerAck {
             accepted: true,
             message: "cancelled".into(),
@@ -4971,6 +5024,7 @@ async fn worker_shutdown_reports_closed_host_channel_and_failed_directory_cleanu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
     let (mut instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let diagnostics = enable_test_diagnostics(&mut instance.host_state);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -4998,6 +5052,41 @@ async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
         !directory.exists(),
         "a disconnected worker must still release its activation directory"
     );
+    let view = diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.shutdown_failed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.process_cleaned")
+            .count(),
+        1
+    );
+    let recorded = view.lifetime.totals.recorded_events_total.value.get();
+    assert!(instance.shutdown_checked().errors.is_empty());
+    assert_eq!(
+        diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap()
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        recorded
+    );
 }
 
 #[test]
@@ -5023,7 +5112,8 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
             worker_error_to_flow(WorkerError {
                 code: "worker.error".into(),
                 message: message.into(),
-                retryable: true
+                retryable: true,
+                downstream_continuation_id: None,
             }),
             FlowError::Internal(_)
         ));
@@ -5032,7 +5122,8 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
         worker_error_to_flow(WorkerError {
             code: "worker.cancelled".into(),
             message: "HTTP 403: denied".into(),
-            retryable: false
+            retryable: false,
+            downstream_continuation_id: None,
         }),
         FlowError::Internal(_)
     ));
@@ -5045,6 +5136,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             code: "worker.error".into(),
             message: "HTTP 403: denied".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     };
     let response = report_worker_response(response, "verified.worker");
@@ -5058,6 +5150,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             code: "worker.cancelled".into(),
             message: "HTTP 403: denied".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     };
     assert!(matches!(
@@ -5597,4 +5690,417 @@ async fn short_callbacks_keep_their_rpc_deadline() {
         .unwrap()
         .unwrap();
     assert_eq!(cancellation.invocation_id, invocation_id);
+}
+
+fn enable_test_diagnostics(
+    state: &mut Arc<WorkerHostRuntimeState>,
+) -> crate::diagnostics::Diagnostics {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity};
+    let diagnostics = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    Arc::get_mut(state).unwrap().observer = super::super::diagnostics::PluginDiagnostics::new(
+        &diagnostics,
+        "fixture_worker",
+        PluginExecution::WorkerProtocol,
+        Uuid::now_v7(),
+    );
+    diagnostics
+}
+
+fn provenance_failure_total(diagnostics: &crate::diagnostics::Diagnostics) -> u64 {
+    diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+        .lifetime
+        .totals
+        .failures_total
+        .value
+        .get()
+}
+
+#[tokio::test]
+async fn worker_callback_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service(|request| {
+        let mut error = flow_error_to_worker(FlowError::Internal("provider failed".into()));
+        match request.registration_name.as_str() {
+            "forwarded" => error.downstream_continuation_id = Some(request.continuation_id),
+            "foreign" => error.downstream_continuation_id = Some("next-other".into()),
+            "cancelled" => error.code = "worker.cancelled".into(),
+            _ => {}
+        }
+        let result = if request.invocation_id.ends_with('0') {
+            InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(error),
+            })
+        } else {
+            InvokeResult::Error(error)
+        };
+        InvokeResponse {
+            result: Some(result),
+        }
+    })
+    .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+    // Three forwarding boundaries add no plugin failure. A later, distinct local
+    // error and foreign/absent invocation provenance remain countable.
+    for (index, (name, continuation, expected)) in [
+        ("forwarded", "next-1", 0),
+        ("forwarded", "next-2", 0),
+        ("forwarded", "next-3", 0),
+        ("local", "next-4", 1),
+        ("foreign", "next-5", 2),
+        ("forwarded", "", 3),
+        ("cancelled", "next-6", 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = callback
+            .base_request(
+                name,
+                RegistrationSurface::LlmExecutionIntercept,
+                Some(continuation.into()),
+                None,
+            )
+            .unwrap();
+        request.invocation_id = format!("invoke-{}", index % 2);
+        let response = callback.invoke_async(request).await.unwrap();
+        assert!(json_from_invoke_response(response).is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse::default(),
+        |request| {
+            let mut error =
+                flow_error_to_worker(FlowError::Internal("provider stream failed".into()));
+            if request.registration_name != "local" {
+                error.downstream_continuation_id = Some(request.continuation_id.clone());
+            }
+            let item = if request.registration_name == "status" {
+                Err(downstream_status(
+                    Status::internal("provider stream failed"),
+                    &request.continuation_id,
+                ))
+            } else {
+                Ok(StreamChunk {
+                    item: Some(StreamItem::Error(error)),
+                })
+            };
+            Box::pin(tokio_stream::once(item))
+        },
+    )
+    .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+    for (name, expected) in [("forwarded", 0), ("status", 0), ("local", 1)] {
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                name,
+                "model",
+                valid_llm_request(),
+                LlmExecutionContext::default(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        assert!(stream.next().await.unwrap().is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_opening_failures_preserve_provenance_and_release_invocation_state() {
+    for origin in ["matching", "absent", "foreign"] {
+        let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_async_handlers(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            move |request| {
+                let mut error = Status::unavailable("stream opening failed");
+                match origin {
+                    "matching" => error = downstream_status(error, &request.continuation_id),
+                    "foreign" => error = downstream_status(error, "next-other"),
+                    _ => {}
+                }
+                observed_tx.send(request).unwrap();
+                Box::pin(async move { Err(error) })
+            },
+        )
+        .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                "stream_open_failure",
+                "model",
+                valid_llm_request(),
+                openai_stream_execution_codec_context(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        let error = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("stream opening failed"), "{origin}: {error}");
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        let request = observed_rx.recv().await.unwrap();
+        let cancellation = cancel_rx
+            .try_recv()
+            .expect("opening failure sends cancellation");
+        assert_eq!(cancellation.invocation_id, request.invocation_id);
+        assert!(
+            cancel_rx.try_recv().is_err(),
+            "cancellation must be sent once"
+        );
+        let (request_codec, _, invocation_id) = execution_codec_capabilities(request);
+        assert_request_codec_expired(&callback.host_state, &request_codec, &invocation_id);
+        assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+        assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+        assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+        let snapshot = diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let expected = u64::from(origin != "matching");
+        assert_eq!(
+            snapshot.lifetime.totals.failures_total.value.get(),
+            expected,
+            "{origin}"
+        );
+        assert_eq!(snapshot.events.len() as u64, expected, "{origin}");
+        if let Some(event) = snapshot.events.first() {
+            assert_eq!(event.code(), "plugin.worker.transport_failed");
+            assert_eq!(event.classification.failure_class(), Some("unavailable"));
+            assert_eq!(event.count.get(), 1);
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_continuation_errors_carry_provenance_only_after_downstream_execution() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let llm_id = state
+        .insert_continuation(Continuation::llm(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("provider failed".into())) })
+        })))
+        .unwrap();
+    let request = LlmNextRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        continuation_id: llm_id.clone(),
+        request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+        scope: None,
+    };
+    let (a, b) = tokio::join!(
+        service.llm_next(Request::new(request.clone())),
+        service.llm_next(Request::new(request.clone()))
+    );
+    for response in [a, b] {
+        let error = response.unwrap().into_inner().error.unwrap();
+        assert_eq!(
+            error.downstream_continuation_id.as_deref(),
+            Some(llm_id.as_str())
+        );
+        assert_eq!(error.code, "host.runtime_error");
+        assert!(!is_worker_callback_failure(&error, &llm_id));
+    }
+    let invalid = service
+        .llm_next(Request::new(LlmNextRequest {
+            request: None,
+            ..request
+        }))
+        .await
+        .unwrap_err();
+    assert!(!is_downstream_status(&invalid, &llm_id));
+    let tool_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("tool failed".into())) })
+        })))
+        .unwrap();
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+            scope: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .error
+        .unwrap();
+    assert_eq!(
+        error.downstream_continuation_id.as_deref(),
+        Some(tool_id.as_str())
+    );
+    // Opening and polling a downstream stream preserve their existing wire/error shapes.
+    for opening in [true, false] {
+        let id = state
+            .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+                Box::pin(async move {
+                    if opening {
+                        Err(FlowError::Internal("stream open failed".into()))
+                    } else {
+                        Ok(LlmJsonStream::new(tokio_stream::once(Err(
+                            FlowError::Internal("stream item failed".into()),
+                        ))))
+                    }
+                })
+            })))
+            .unwrap();
+        let response = service
+            .llm_stream_next(Request::new(LlmStreamNextRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                continuation_id: id.clone(),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+                scope: None,
+            }))
+            .await;
+        if opening {
+            let error = response.err().unwrap();
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert!(is_downstream_status(&error, &id));
+        } else {
+            let chunk = response
+                .unwrap()
+                .into_inner()
+                .next()
+                .await
+                .unwrap()
+                .unwrap();
+            let Some(StreamItem::Error(error)) = chunk.item else {
+                panic!("expected stream error")
+            };
+            assert_eq!(
+                error.downstream_continuation_id.as_deref(),
+                Some(id.as_str())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
+    for wait in [false, true] {
+        // Return the failure from an established gRPC connection. Refusing a
+        // connection to a closed port can take longer than this test on Windows.
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_cancel_error(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            |_| Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream) }),
+            Some(Status::unavailable("fixture cancellation failure")),
+        )
+        .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let request = InvokeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            invocation_id: Uuid::now_v7().to_string(),
+            ..Default::default()
+        };
+        let mut guard = WorkerInvocationGuard::new(&callback, &request);
+        if wait {
+            assert!(guard.cancel_and_wait("test cancellation").await.is_err());
+        } else {
+            guard.cancel("test cancellation");
+        }
+        guard.finish();
+        assert!(guard.cleaned);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while provenance_failure_total(&diagnostics) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let view = diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].code(), "plugin.worker.cancellation_failed");
+        assert_eq!(
+            view.events[0].classification.failure_class(),
+            Some("unavailable")
+        );
+        assert_eq!(
+            view.events[0].context.phase.as_ref().unwrap().as_str(),
+            "runtime"
+        );
+        assert_eq!(
+            cancel_rx.try_recv().unwrap().invocation_id,
+            request.invocation_id
+        );
+        assert!(cancel_rx.try_recv().is_err(), "cancellation is sent once");
+        assert!(guard.cancellation("already finished").is_none());
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors() {
+    for unread_error in [false, true] {
+        let (tx, rx) = mpsc::channel(16);
+        let chunk_count = if unread_error { 15 } else { 16 };
+        for index in 0..chunk_count {
+            tx.try_send(Ok(json!({"chunk": index}))).unwrap();
+        }
+        if unread_error {
+            tx.send(Err(FlowError::Internal("producer failed".into())))
+                .await
+                .unwrap();
+        }
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let mut stream = WorkerForwardedLlmStream {
+            receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            completion: completion_rx,
+            close_result: None,
+        };
+        completion_tx.send_replace(Some(Err("cleanup failed".into())));
+        for _ in 0..2 {
+            let close = Pin::new(&mut stream).close();
+            assert!(
+                tx.is_closed(),
+                "close must stop new chunks before awaiting cleanup"
+            );
+            let error = close.await.unwrap_err();
+            assert!(error.to_string().contains(if unread_error {
+                "producer failed"
+            } else {
+                "cleanup failed"
+            }));
+        }
+        assert!(tx.is_closed());
+        assert!(stream.next().await.is_none());
+    }
 }

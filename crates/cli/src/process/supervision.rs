@@ -3,6 +3,11 @@
 
 //! Ownership and cleanup for coding-agent wrapper process trees.
 
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::{
+    Classification, CliFailureCode, FailureClass, NoticeCode, SuccessCode,
+};
+
 use std::process::ExitStatus;
 
 #[cfg(not(any(unix, windows)))]
@@ -33,7 +38,14 @@ impl SupervisedChild {
     /// Spawns a command into an independently terminable process tree.
     pub(crate) async fn spawn(command: &mut tokio::process::Command) -> std::io::Result<Self> {
         command.kill_on_drop(true);
-        let (child, tree) = platform::spawn(command).await?;
+        let (child, tree) = platform::spawn(command).await.inspect_err(|_| {
+            diag::failure(
+                Operation::Child,
+                CliFailureCode::ChildSpawn,
+                FailureClass::Io,
+            )
+        })?;
+        diag::success(Operation::Child, SuccessCode::CliChildSpawned);
         Ok(Self {
             child,
             tree,
@@ -55,8 +67,25 @@ impl SupervisedChild {
     /// Waits for the wrapper and terminates any descendants it left behind.
     pub(crate) async fn wait(&mut self) -> std::io::Result<ExitStatus> {
         let status = match platform::wait(&mut self.tree, &mut self.child).await {
-            Ok(status) => status,
-            Err(wait_error) => return Err(self.clean_up_wait_error(wait_error).await),
+            Ok(status) => {
+                if status.success() {
+                    diag::success(Operation::Child, SuccessCode::CliChildWaited);
+                } else {
+                    diag::record(
+                        Operation::Child,
+                        Classification::notice(NoticeCode::CliChildExited),
+                    );
+                }
+                status
+            }
+            Err(wait_error) => {
+                diag::failure(
+                    Operation::Child,
+                    CliFailureCode::ChildWait,
+                    FailureClass::Io,
+                );
+                return Err(self.clean_up_wait_error(wait_error).await);
+            }
         };
         let terminal_result = self.tree.restore_terminal();
         let tree_result = self.tree.terminate(&mut self.child);
@@ -66,7 +95,15 @@ impl SupervisedChild {
         combine_cleanup_results([
             ("restore foreground terminal", terminal_result),
             ("terminate remaining coding-agent descendants", tree_result),
-        ])?;
+        ])
+        .inspect(|_| diag::success(Operation::Child, SuccessCode::CliChildCleaned))
+        .inspect_err(|_| {
+            diag::failure(
+                Operation::Child,
+                CliFailureCode::ChildCleanup,
+                FailureClass::Io,
+            )
+        })?;
         Ok(status)
     }
 
@@ -107,6 +144,14 @@ impl SupervisedChild {
             ("terminate coding-agent process tree", tree_result),
             ("reap coding-agent wrapper", wait_result),
         ])
+        .inspect(|_| diag::success(Operation::Child, SuccessCode::CliChildCleaned))
+        .inspect_err(|_| {
+            diag::failure(
+                Operation::Child,
+                CliFailureCode::ChildCleanup,
+                FailureClass::Io,
+            )
+        })
     }
 }
 

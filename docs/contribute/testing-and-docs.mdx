@@ -178,13 +178,16 @@ Before opening a PR, confirm:
 
 Use `just docs` to validate the Fern documentation site after relevant docs
 changes. It regenerates the ignored Python, Node.js, and Rust API reference
-pages before checking links and navigation. `just docs-linkcheck` is the
+pages before checking links and navigation. It also compiles and runs the Rust
+examples that share source files with the guides. `just docs-linkcheck` is the
 compatibility entry point for a link-focused run; the recipes currently perform
 the same validation, so do not run both.
 
 ```bash
 just docs
 ```
+
+To check only the shared Rust examples, run `just docs-examples`.
 
 ## Fern Publishing
 

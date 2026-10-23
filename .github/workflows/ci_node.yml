@@ -404,20 +404,16 @@ jobs:
           npm install --ignore-scripts "${native[0]}" "${metapackage[0]}"
           node - <<'NODE'
           const assert = require('node:assert/strict');
-          const { readdirSync } = require('node:fs');
+          const { readFileSync, readdirSync } = require('node:fs');
+          const path = require('node:path');
+          const packageDir = path.dirname(require.resolve('nemo-relay-node'));
+          const manifest = JSON.parse(readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
           const nativePackages = readdirSync('node_modules').filter(
             (name) => name.startsWith('nemo-relay-node-') && name !== 'nemo-relay-node',
           );
           assert.equal(nativePackages.length, 1);
-          for (const entrypoint of [
-            'nemo-relay-node',
-            'nemo-relay-node/typed',
-            'nemo-relay-node/plugin',
-            'nemo-relay-node/adaptive',
-            'nemo-relay-node/observability',
-            'nemo-relay-node/pii_redaction',
-            'nemo-relay-node/model_pricing',
-          ]) {
+          for (const subpath of Object.keys(manifest.exports)) {
+            const entrypoint = subpath === '.' ? 'nemo-relay-node' : 'nemo-relay-node' + subpath.slice(1);
             require(entrypoint);
           }
           NODE
@@ -446,22 +442,18 @@ jobs:
               npm install --ignore-scripts "$native" "$metapackage"
               node -e "
                 const assert = require(\"node:assert/strict\");
-                const { readdirSync } = require(\"node:fs\");
+                const { readFileSync, readdirSync } = require(\"node:fs\");
+                const path = require(\"node:path\");
+                const packageDir = path.dirname(require.resolve(\"nemo-relay-node\"));
+                const packageManifest = JSON.parse(readFileSync(path.join(packageDir, \"package.json\"), \"utf8\"));
                 const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
                 const nativePackages = readdirSync(\"node_modules\").filter(
                   (name) => name.startsWith(\"nemo-relay-node-\") && name !== \"nemo-relay-node\",
                 );
                 assert.equal(nativePackages.length, 1);
                 assert.deepEqual(manifest.libc, [\"musl\"]);
-                for (const entrypoint of [
-                  \"nemo-relay-node\",
-                  \"nemo-relay-node/typed\",
-                  \"nemo-relay-node/plugin\",
-                  \"nemo-relay-node/adaptive\",
-                  \"nemo-relay-node/observability\",
-                  \"nemo-relay-node/pii_redaction\",
-                  \"nemo-relay-node/model_pricing\",
-                ]) {
+                for (const subpath of Object.keys(packageManifest.exports)) {
+                  const entrypoint = subpath === \".\" ? \"nemo-relay-node\" : \"nemo-relay-node\" + subpath.slice(1);
                   require(entrypoint);
                 }
               "

@@ -22,8 +22,9 @@ use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
-    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
+    PricingCatalog, PricingResolver, ResponseToolCall, Usage, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -353,6 +354,30 @@ impl SpanExporter for SensitiveFailingSpanExporter {
         Err(OTelSdkError::InternalFailure(
             "Authorization: Bearer exporter-secret".to_string(),
         ))
+    }
+}
+
+/// Fail the first request, then allow later requests to succeed.
+#[derive(Debug)]
+struct RecoveringTraceHttpClient {
+    first_error: rustls::Error,
+    attempts: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl opentelemetry_http::HttpClient for RecoveringTraceHttpClient {
+    async fn send_bytes(
+        &self,
+        _request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            Err(std::io::Error::other(self.first_error.clone()).into())
+        } else {
+            Ok(opentelemetry_http::Response::new(Default::default()))
+        }
     }
 }
 
@@ -4913,6 +4938,9 @@ fn gen_ai_projection_prefers_standard_names_and_normalized_provider_details() {
     for (name, expected) in [
         ("azure_openai.chat", "azure.ai.openai"),
         ("azure_ai_inference.chat", "azure.ai.inference"),
+        ("azure", "azure.ai.openai"),
+        ("azure/openai", "azure.ai.openai"),
+        ("azure_ai", "azure.ai.inference"),
     ] {
         let event = Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
@@ -7340,6 +7368,87 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
 }
 
 #[test]
+fn http_trace_client_recovers_from_connection_errors_but_stops_after_fatal_tls_errors() {
+    use opentelemetry_http::{HttpClient, Request};
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for (error, terminal) in [
+        (
+            rustls::Error::InvalidMessage(rustls::InvalidMessage::MessageTooShort),
+            false,
+        ),
+        (
+            rustls::Error::InappropriateMessage {
+                expect_types: vec![rustls::ContentType::Handshake],
+                got_type: rustls::ContentType::ApplicationData,
+            },
+            false,
+        ),
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+            true,
+        ),
+        (rustls::Error::DecryptError, true),
+        (
+            rustls::Error::AlertReceived(rustls::AlertDescription::HandshakeFailure),
+            true,
+        ),
+    ] {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let diagnostics = SignalRuntimeDiagnostics::new(None);
+        let client = DiagnosticTraceHttpClient {
+            inner: RecoveringTraceHttpClient {
+                first_error: error.clone(),
+                attempts: attempts.clone(),
+            },
+            diagnostics: diagnostics.clone(),
+        };
+        futures::executor::block_on(async {
+            let request = || {
+                Request::builder()
+                    .uri("https://collector.example/v1/traces")
+                    .body(Default::default())
+                    .unwrap()
+            };
+            assert!(client.send_bytes(request()).await.is_err());
+            assert_eq!(attempts.load(Ordering::Relaxed), 1);
+            for _ in 0..2 {
+                let next = client.send_bytes(request()).await;
+                assert_eq!(next.is_err(), terminal, "{error:?}");
+            }
+        });
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            if terminal { 1 } else { 3 },
+            "{error:?}"
+        );
+        assert_eq!(
+            diagnostics.trace_tls_failure().is_some(),
+            terminal,
+            "{error:?}"
+        );
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(
+            snapshot.get("otel.tls_failed").map(|entry| entry.count),
+            terminal.then_some(1)
+        );
+    }
+}
+
+#[test]
+fn tls_failure_classification_uses_typed_causes_without_exposing_error_strings() {
+    let error = std::io::Error::other(rustls::Error::InvalidCertificate(
+        rustls::CertificateError::UnknownIssuer,
+    ));
+    assert_eq!(
+        safe_tls_failure_reason(&error),
+        Some("TLS certificate verification failed: unknown issuer; check the configured CA bundle")
+    );
+    let sensitive = std::io::Error::other("TLS certificate Authorization: Bearer secret");
+    assert_eq!(safe_tls_failure_reason(&sensitive), None);
+}
+
+#[test]
 fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
     let runtime = test_tokio_runtime();
     let _runtime_guard = runtime.enter();
@@ -7878,5 +7987,96 @@ fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
             assert_eq!(span.start_time, to_system_time(timestamp));
             assert_eq!(span.end_time, to_system_time(timestamp));
         }
+    }
+}
+
+#[test]
+fn provider_build_drains_the_startup_resource_message_before_the_first_span() {
+    use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let _held_worker = runtime.spawn(async { thread::sleep(Duration::from_millis(250)) });
+    let directory = tempfile::tempdir().unwrap();
+    let config = TraceConfig::File(
+        OpenTelemetryFileSinkConfig::new(
+            OpenTelemetryType::Full,
+            OtlpFileSinkSettings {
+                output_directory: directory.path().to_path_buf(),
+                filename: "trace.jsonl".to_string(),
+                format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
+                mode: crate::observability::otel::OtlpFileSinkMode::Overwrite,
+            },
+        )
+        .with_max_queue_size(1)
+        .with_max_export_batch_size(1),
+    );
+    let attributes = configured_resource_attributes(&config);
+    let provider = build_tracer_provider_with_resource(
+        &config,
+        SignalRuntimeDiagnostics::new(None),
+        attributes,
+    )
+    .unwrap();
+    provider.tracer("drain-test").start("first").end();
+    provider.force_flush().unwrap();
+    provider.shutdown().unwrap();
+
+    let contents = std::fs::read_to_string(directory.path().join("trace.jsonl")).unwrap();
+    let names = contents
+        .lines()
+        .map(|line| serde_json::from_str::<Json>(line).unwrap())
+        .flat_map(|request| request["resourceSpans"].as_array().unwrap().clone())
+        .flat_map(|resource| resource["scopeSpans"].as_array().unwrap().clone())
+        .flat_map(|scope| scope["spans"].as_array().unwrap().clone())
+        .map(|span| span["name"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["first"],
+        "the first span must survive the startup message: {contents}"
+    );
+}
+
+#[test]
+fn gen_ai_projection_reads_cache_tokens_by_the_declared_api_shape() {
+    let usage = Usage {
+        prompt_tokens: Some(150),
+        completion_tokens: Some(20),
+        total_tokens: Some(170),
+        cache_read_tokens: Some(40),
+        cache_write_tokens: None,
+        uncached_input_tokens: Some(110),
+        cost: None,
+    };
+    let openai_shaped = ApiSpecificResponse::OpenAIChat {
+        logprobs: None,
+        system_fingerprint: None,
+        service_tier: None,
+    };
+    for (api_specific, input_tokens) in [(Some(openai_shaped), "150"), (None, "190")] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "anthropic",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(usage.clone()),
+                        api_specific,
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.usage.input_tokens"),
+            Some(&input_tokens.to_string())
+        );
     }
 }

@@ -322,11 +322,11 @@ The three related facts are intentionally distinct:
 
 Consumers should not treat any one of them as proof of the others.
 
-Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
-tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
-and Deep Agents paths use this observed contract. The existing Deep Agents
-`DeepAgents Skills Configured` mark remains a separate configuration summary;
-it does not mean that a skill body was loaded.
+Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`,
+Google ADK `load_skill`, and tool calls made through the Rust, Python, Node.js,
+Go/FFI, LangChain, LangGraph, and Deep Agents paths use this observed contract.
+The existing Deep Agents `DeepAgents Skills Configured` mark remains a separate
+configuration summary; it does not mean that a skill body was loaded.
 
 Claude Code exposes slash-command expansion without saying whether the command
 came from a skill or a legacy command. For a nonempty slash-command expansion,

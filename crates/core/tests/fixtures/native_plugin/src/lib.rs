@@ -45,6 +45,19 @@ impl Drop for DropScope {
     }
 }
 
+// Make the distinction between terminal delivery and producer cleanup observable.
+struct StreamCleanup {
+    marker_path: String,
+    _scope: DropScope,
+}
+
+impl Drop for StreamCleanup {
+    fn drop(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&self.marker_path, "dropped").expect("write stream cleanup marker");
+    }
+}
+
 static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
@@ -83,6 +96,13 @@ impl NativePlugin for FixtureNativePlugin {
         plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        if plugin_config
+            .get("diagnostics_fixture")
+            .and_then(Json::as_bool)
+            == Some(true)
+        {
+            return register_diagnostics_fixture(ctx, plugin_config);
+        }
         let event_metadata_injector_error = plugin_config
             .get("event_metadata_injector_error")
             .and_then(Json::as_bool)
@@ -354,6 +374,41 @@ impl NativePlugin for FixtureNativePlugin {
                 move |name, request, _context, next| {
                     let runtime = runtime.clone();
                     async move {
+                        if name == "native-fixture-cleanup-stream" {
+                            let cleanup = StreamCleanup {
+                                marker_path: request.content["marker_path"]
+                                    .as_str()
+                                    .ok_or("missing marker path")?
+                                    .to_owned(),
+                                _scope: DropScope {
+                                    runtime,
+                                    name: "fixture.native.stream.cleanup",
+                                },
+                            };
+                            let mode = request.content["mode"]
+                                .as_str()
+                                .unwrap_or("pending")
+                                .to_owned();
+                            let mut first = true;
+                            let stream: LlmJsonAsyncStream =
+                                Box::pin(futures::stream::poll_fn(move |_| {
+                                    let _ = &cleanup;
+                                    if first {
+                                        first = false;
+                                        return std::task::Poll::Ready(Some(Ok(
+                                            json!({"token": "first"}),
+                                        )));
+                                    }
+                                    match mode.as_str() {
+                                        "end" => std::task::Poll::Ready(None),
+                                        "error" => std::task::Poll::Ready(Some(Err(
+                                            "native cleanup stream failed".into(),
+                                        ))),
+                                        _ => std::task::Poll::Pending,
+                                    }
+                                }));
+                            return Ok(stream);
+                        }
                         if name != "native-fixture-cancelled-stream" {
                             return next.call(request).await;
                         }
@@ -1932,4 +1987,79 @@ unsafe fn raw_host_string_value(
         unsafe { std::slice::from_raw_parts(data, len) }
     };
     std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+fn register_diagnostics_fixture(
+    ctx: &mut PluginContext<'_>,
+    config: &Map<String, Json>,
+) -> nemo_relay_plugin::Result<()> {
+    use nemo_relay_plugin::diagnostics::*;
+    use std::num::NonZeroU64;
+    let diagnostics = ctx.runtime().diagnostics();
+    let codes = [DiagnosticCode::Extension {
+        name: "lookup_failed",
+        description: "Fixture internal lookup",
+        outcome: DiagnosticOutcome::Failure,
+        allowed_classes: &[FailureClass::Unavailable],
+    }];
+    let component = diagnostics
+        .component_lazy(|| ComponentDeclaration {
+            name: "fixture.internal",
+            codes: &codes,
+        })
+        .map_err(|e| e.to_string())?;
+    for delta in [2, 3] {
+        component
+            .try_record_lazy(|| {
+                let mut observation = Observation::failure(
+                    1,
+                    FailureClass::Unavailable,
+                    "native-private-sentinel",
+                    NonZeroU64::new(delta).unwrap(),
+                );
+                observation.correlation = DiagnosticCorrelation {
+                    request_id: Some("native-request".into()),
+                    session_id: Some(format!("native-session-{delta}").into()),
+                };
+                observation
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    if config.get("expect_read").and_then(Json::as_bool) == Some(true) {
+        let reader = diagnostics.reader().map_err(|e| e.to_string())?;
+        let snapshot = reader
+            .snapshot(&DiagnosticQuery::default())
+            .map_err(|e| e.to_string())?;
+        if !snapshot.events.iter().any(|event| {
+            event
+                .detail
+                .as_ref()
+                .is_some_and(|d| d.message == "native-private-sentinel")
+        }) {
+            return Err("native diagnostics did not read its selected context".into());
+        }
+        reader
+            .inspect_memory(&DiagnosticQuery::default())
+            .map_err(|e| e.to_string())?;
+    } else if !matches!(diagnostics.reader(), Err(DiagnosticError::PermissionDenied)) {
+        return Err("native diagnostics unexpectedly granted context reads".into());
+    }
+    if config.get("registration_failure").and_then(Json::as_bool) == Some(true) {
+        return Err("fixture registration failure".into());
+    }
+    ctx.register_tool_request_intercept("diagnostic_lookup", 0, false, move |_name, args| {
+        let component = component.clone();
+        async move {
+            // Diagnostic admission is independent of the existing execution result.
+            let _ = component.try_record_lazy(|| {
+                Observation::failure(
+                    1,
+                    FailureClass::Unavailable,
+                    "native-private-sentinel",
+                    NonZeroU64::MIN,
+                )
+            });
+            Ok(args)
+        }
+    })
 }

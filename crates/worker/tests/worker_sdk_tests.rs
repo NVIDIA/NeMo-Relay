@@ -501,6 +501,7 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     .expect("unary cancellation should complete")
     .expect("active unary cancellation should return an ack")
     .into_inner();
+    assert!(plugin.unary_cancelled.load(Ordering::SeqCst));
     let unary_response = tokio::time::timeout(timeout, unary_task)
         .await
         .expect("unary invocation should finish after cancellation")
@@ -562,6 +563,7 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     .expect("stream cancellation should complete")
     .expect("active stream cancellation should return an ack")
     .into_inner();
+    assert!(plugin.stream_cancelled.load(Ordering::SeqCst));
     let stream_error = tokio::time::timeout(timeout, async {
         loop {
             let chunk = stream
@@ -2140,6 +2142,7 @@ impl Stream for FillThenPendingStream {
 
 impl Drop for FillThenPendingStream {
     fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(50));
         self.cancelled.store(true, Ordering::SeqCst);
         self.cancelled_notified.notify_one();
     }
@@ -4012,6 +4015,7 @@ fn worker_error(message: &str) -> WorkerError {
         code: "mock.error".into(),
         message: message.into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 

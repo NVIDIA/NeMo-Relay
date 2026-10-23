@@ -83,7 +83,8 @@ async fn run_with(
     let result: Result<(), CliError> = async {
         let token = route_token_header(&credential)?;
         let payload = payload?;
-        let body = forward(&options, payload, token, &operational).await?;
+        let trace_headers = crate::hooks::launcher_trace_headers();
+        let body = forward(&options, payload, token, &trace_headers, &operational).await?;
         if !body.is_empty() {
             output.write_all(&body)?;
         }
@@ -91,6 +92,12 @@ async fn run_with(
     }
     .await;
 
+    crate::runtime_diagnostics::result(
+        crate::runtime_diagnostics::Operation::Hook,
+        nemo_relay::diagnostics::CliFailureCode::HookForward,
+        Some(nemo_relay::diagnostics::SuccessCode::CliHookForwarded),
+        &result,
+    );
     match result {
         Ok(()) => {
             operational::hook_completed(&operational, "daemon_hook_forward", "completed");
@@ -167,17 +174,22 @@ fn route_token(value: &str) -> Result<HeaderValue, CliError> {
         .map_err(|_| CliError::Config(format!("{CLIENT_TOKEN_ENV} is not valid HTTP header text")))
 }
 
+/// Posts one hook payload to the daemon.
+///
+/// `trace_headers` carries the W3C context the agent inherited from its launcher, so the session
+/// this hook opens can join the launcher's trace.
 async fn forward(
     options: &Options,
     payload: Vec<u8>,
     token: HeaderValue,
+    trace_headers: &[(&'static str, String)],
     operational: &OperationalContext,
 ) -> Result<Vec<u8>, CliError> {
     let endpoint = hook_endpoint(&options.daemon_address, options.agent)?;
     if endpoint.scheme() == "http" {
         let url = options.daemon_address.clone();
         let path = options.agent.hook_path().to_owned();
-        let headers = vec![
+        let mut headers = vec![
             (
                 CLIENT_TOKEN_HEADER.to_owned(),
                 token
@@ -190,6 +202,11 @@ async fn forward(
                 operational.operation_id().to_owned(),
             ),
         ];
+        headers.extend(
+            trace_headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone())),
+        );
         let response = tokio::task::spawn_blocking(move || {
             crate::gateway::client::post_daemon_verified(
                 &url,
@@ -206,7 +223,7 @@ async fn forward(
         return handle_response(response.status, response.body);
     }
     // HTTPS authenticates remote daemons through the platform trust store.
-    let response = reqwest::Client::builder()
+    let mut request = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(HOOK_FORWARD_TIMEOUT)
@@ -217,10 +234,11 @@ async fn forward(
         .header(
             crate::operational::OPERATION_ID_HEADER,
             operational.operation_id(),
-        )
-        .body(payload)
-        .send()
-        .await?;
+        );
+    for (name, value) in trace_headers {
+        request = request.header(*name, value.as_str());
+    }
+    let response = request.body(payload).send().await?;
     let status = response.status();
     let body = read_response(response, operational).await?;
     handle_response(status.as_u16(), body)

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use nemo_relay::error::FlowError;
 use nemo_relay::logging::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES,
 };
 use serde::Deserialize;
@@ -31,6 +31,8 @@ pub(super) struct FileLoggingConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFileLogSinkConfig {
+    #[serde(default)]
+    failure_policy: FileLogSinkFailurePolicy,
     /// Required. Every `[[logging.sinks]]` entry is a file sink.
     path: Option<PathBuf>,
     level: Option<String>,
@@ -126,6 +128,7 @@ fn parse_file_log_sink(
         format,
         queue_capacity,
         rotation,
+        failure_policy: config.failure_policy,
     }))
 }
 

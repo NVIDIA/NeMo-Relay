@@ -16,6 +16,15 @@ asynchronous callback and offload it with :func:`asyncio.to_thread` or another
 appropriate executor.
 
 Public data types:
+    DiagnosticCodeDefinition: A built-in name or bounded extension definition.
+    DiagnosticExtensionDefinition: Extension name, outcome, and allowed failure classes.
+    DiagnosticObservation: One positive occurrence delta and optional restricted detail.
+    DiagnosticObservationOutcome: Explicit failure, success, or unknown outcome.
+    DiagnosticObservationSeverity: Evidence severity, independent of outcome.
+    DiagnosticDeliveryError: Delivery rejection, loss, or uncertain acceptance.
+    DiagnosticDeliveryStats: Saturating local dropped, rejected, and uncertain totals.
+    DiagnosticComponent: Bounded component-scoped diagnostic producer.
+    WorkerDiagnostics: Negotiated diagnostic delivery facade owned by an activation.
     Json: Any JSON-serializable Python value.
     DataSchema: Schema identity for a mark's opaque data payload.
     EventCategory: Well-known semantic category for a Relay event.
@@ -163,8 +172,28 @@ from ._api import (
     http_error_message,
     serve_plugin,
 )
+from ._diagnostics import (
+    DiagnosticCodeDefinition,
+    DiagnosticComponent,
+    DiagnosticDeliveryError,
+    DiagnosticDeliveryStats,
+    DiagnosticExtensionDefinition,
+    DiagnosticObservation,
+    DiagnosticObservationOutcome,
+    DiagnosticObservationSeverity,
+    WorkerDiagnostics,
+)
 
 __all__ = [
+    "DiagnosticCodeDefinition",
+    "DiagnosticComponent",
+    "DiagnosticDeliveryError",
+    "DiagnosticDeliveryStats",
+    "DiagnosticExtensionDefinition",
+    "DiagnosticObservation",
+    "DiagnosticObservationOutcome",
+    "DiagnosticObservationSeverity",
+    "WorkerDiagnostics",
     "AnnotatedLlmRequest",
     "ConditionalMiddlewareCallback",
     "ConditionalMiddlewareGuardrailHandle",

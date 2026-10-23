@@ -11,6 +11,17 @@ use std::time::{Duration, Instant};
 
 static TEST_LOGGING: Once = Once::new();
 
+/// Bind a local provider on a non-loopback interface without sending external packets.
+pub(crate) async fn http_model_listener() -> (tokio::net::TcpListener, std::net::SocketAddr) {
+    let route = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    route.connect("192.0.2.1:9").unwrap();
+    let ip = route.local_addr().unwrap().ip();
+    assert!(!ip.is_loopback());
+    let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    (listener, address)
+}
+
 pub(crate) fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =

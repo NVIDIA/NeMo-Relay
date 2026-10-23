@@ -1946,6 +1946,7 @@ def llm_call(
     metadata: _Json | None = None,
     model_name: str | None = None,
     timestamp: datetime | None = None,
+    codec: object | None = None,
 ) -> LLMHandle:
     """Begin a manual LLM lifecycle span.
 
@@ -1962,6 +1963,8 @@ def llm_call(
             category profile.
         timestamp: Optional timezone-aware datetime recorded on the start event.
             When omitted, the current runtime time is used.
+        codec: Optional request codec used to sanitize and annotate the request
+            copy saved in telemetry. The caller's request stays unchanged.
 
     Returns:
         LLM handle that must be passed to ``llm_call_end``.
@@ -2879,3 +2882,34 @@ class ScopeStackSnapshot:
     def scopes(self) -> list[ScopeStackEntry]: ...
 
 def current_scope_stack_snapshot(stack: ScopeStack | None = None) -> ScopeStackSnapshot | None: ...
+
+class DiagnosticsReader:
+    """Restricted in-process reader; returned pages never retain core leases."""
+
+    def snapshot_json(self, query_json: str = "{}") -> str:
+        """Return canonical JSON using a bounded canonical query."""
+        ...
+
+    def snapshot(self, query_json: str = "{}") -> dict[str, object]:
+        """Return a snapshot dictionary with lossless integer values."""
+        ...
+
+    def inspect_memory_json(self, query_json: str = "{}") -> str:
+        """Return canonical memory-page JSON using a bounded canonical query."""
+        ...
+
+    def inspect_memory(self, query_json: str = "{}") -> dict[str, object]:
+        """Return a memory-page dictionary with lossless integer values."""
+        ...
+
+    def info(self) -> dict[str, object]:
+        """Return core/adapter budgets, memory usage, and integration coverage."""
+        ...
+
+def _diagnostics_query_contract() -> str:
+    """Return the internal core query contract consumed by the Python adapter."""
+    ...
+
+def diagnostics_reader() -> DiagnosticsReader:
+    """Obtain inspection authority without initializing diagnostics."""
+    ...

@@ -227,6 +227,20 @@ pub enum LogSinkConfig {
     File(FileLogSinkConfig),
 }
 
+/// Startup policy for an operational file sink.
+///
+/// Only filesystem failures while opening the sink may be optional. Invalid configuration,
+/// logger installation, and delivery infrastructure failures always propagate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileLogSinkFailurePolicy {
+    /// Fail logging initialization when the configured file cannot be opened.
+    #[default]
+    Required,
+    /// Disable an unavailable file for this logging runtime's lifetime, without retry or replay.
+    Optional,
+}
+
 /// File sink settings for non-blocking operational logging.
 ///
 /// Relative `path` values are resolved against the process current working directory at sink open
@@ -248,6 +262,8 @@ pub struct FileLogSinkConfig {
     pub queue_capacity: usize,
     /// Optional size-based rotation and retention settings.
     pub rotation: Option<FileLogRotationConfig>,
+    /// Whether a filesystem opening failure aborts startup. Defaults to required.
+    pub failure_policy: FileLogSinkFailurePolicy,
 }
 
 impl Default for FileLogSinkConfig {
@@ -258,6 +274,7 @@ impl Default for FileLogSinkConfig {
             format: LogFormat::Jsonl,
             queue_capacity: DEFAULT_FILE_SINK_QUEUE_ENTRIES,
             rotation: None,
+            failure_policy: FileLogSinkFailurePolicy::Required,
         }
     }
 }
@@ -352,6 +369,8 @@ impl RawLoggingConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFileLogSinkConfig {
+    #[serde(default)]
+    failure_policy: FileLogSinkFailurePolicy,
     path: Option<PathBuf>,
     level: Option<String>,
     format: Option<String>,
@@ -419,6 +438,7 @@ impl RawFileLogSinkConfig {
             format,
             queue_capacity,
             rotation,
+            failure_policy: self.failure_policy,
         }))
     }
 }

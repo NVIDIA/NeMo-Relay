@@ -113,7 +113,7 @@ async function main() {
       const result = await toolCallExecute(
         "search",
         { query: "runtime instrumentation" },
-        async (args) => ({
+        (args) => ({
           result: {
             query: args.query,
             hits: [{ title: "NeMo Relay" }],
@@ -129,7 +129,6 @@ async function main() {
     });
   } finally {
     await flushSubscribers();
-    await new Promise((resolve) => setImmediate(resolve));
     deregisterSubscriber("instrumentation-check");
   }
 }
@@ -232,7 +231,8 @@ Check both behavior and instrumentation:
 
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
-and then one event-loop turn. Do this before validating printed output.
+before validating printed output. If a subscriber callback emits a native event,
+await `flushSubscribers()` again to observe that event.
 - Tool start input contains the request arguments after request intercepts and
   sanitize-request guardrails.
 - Tool end output contains the tool result after response guardrails.

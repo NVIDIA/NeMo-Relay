@@ -1005,3 +1005,25 @@ process-sampling counts above JavaScript's safe-integer range.
 
 For plugin configuration files, precedence, and CLI editing, refer to
 [Configure](/configure-plugins/plugin-configuration-files).
+
+## Diagnostic Memory Context
+
+Successful resource collections can retain one memory-only sample for
+[diagnostic memory inspection](/reference/diagnostics/memory#detailed-memory-inspection).
+In the existing component configuration, set `memory_inspection.enabled`
+(default `true`) and `memory_inspection.stale_after_millis` (default `30000`, which
+must be positive). This policy does not enable the component,
+polling, or diagnostic collection. Reading the sample does not schedule collection
+or reload configuration. Disabling the memory category also disables this sample.
+
+For example, extend an existing resource component definition:
+
+<Code src="_code/diagnostics/resource_metrics.toml" language="toml" title="Resource metrics configuration" lines="4-12" showLineNumbers={false} />
+
+The sample preserves target and sample identity, process coverage, units, and
+numeric precision. Runtime or target changes invalidate it. Storage supports a
+fixed set of memory fields and eight limit-event slots. If metadata exceeds those
+limits, the status reports unavailable capacity and keeps a valid older sample.
+
+Diagnostic pages and restricted component identities never enter resource marks
+or exporter events. The existing resource API and its serialization stay the same.

@@ -26,7 +26,7 @@ Three version values answer different questions:
 |---|---|---|
 | Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
 | Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
-| C host-table ABI | v8, compatible with v7 | Append-only scope inspection extension. Existing v7 plugins remain compatible; the snapshot getter requires v8. |
+| C host-table ABI | v8, compatible with v7 | Scope inspection uses v8. An optional, independently versioned diagnostics table follows the frozen v8 prefix. Existing v7 plugins remain compatible. |
 
 The checked example registers a tool execution intercept, so it declares
 `compat.relay = ">=0.10.0,<1.0"`. Every native plugin built with this SDK must use
@@ -46,8 +46,14 @@ adds the context-carrying tool execution callback as the v5 host-table extension
 
 In Relay 0.8, the v4 SDK also let a plugin add a data schema and log severity to a
 mark, or emit validated metric measurements. `PluginRuntime::runtime_diagnostics()`
-returns the current host-level diagnostic snapshot. The snapshot is ordered by code
-and is not attributed to a particular plugin.
+returns the legacy host-level report. Entries are ordered by code and are not
+attributed to a particular plugin. The separate `PluginRuntime::diagnostics()`
+API records internal observations in the selected canonical store. It can also
+read that store when host policy grants whole-context access.
+
+For host-recorded load, validation, registration, and callback outcomes, refer to
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics). That guide explains
+how the canonical diagnostic service differs from the ABI v4 report.
 
 ## What the SDK Owns
 

@@ -33,6 +33,8 @@ mod callable_extra_tests;
 mod callable_tests;
 #[path = "../coverage/convert_tests.rs"]
 mod convert_coverage_tests;
+#[path = "../coverage/diagnostics_tests.rs"]
+mod diagnostics_tests;
 #[path = "../coverage/error_tests.rs"]
 mod error_coverage_tests;
 mod plugin_activation_tests;

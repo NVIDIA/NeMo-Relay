@@ -15,5 +15,5 @@ path = "src/main.rs"
 [dependencies]
 nemo-relay-worker = { path = "../../../../worker" }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1"

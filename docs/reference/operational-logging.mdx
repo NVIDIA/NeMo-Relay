@@ -12,8 +12,16 @@ separate from agent observability through ATOF, ATIF, OpenTelemetry, or
 OpenInference.
 
 Relay writes operational logs to stderr by default. Set `stderr_enabled` to
-`false` to disable that sink; optional file sinks continue receiving records.
+`false` to disable that sink; configured file sinks continue receiving records.
 Each record includes a root Relay ID for correlation.
+
+Rust hosts can create a [diagnostic context](/reference/diagnostics) before
+logging initialization and pass it to
+`LoggingRuntime::configure_with_diagnostics`. Sink failures remain inspectable
+through that context even if logging cannot initialize. This opt-in API also
+projects typed diagnostic events through the configured logging destinations.
+File sinks are required by default. Set `failure_policy = "optional"` on an
+individual file sink to let startup continue when its file cannot be opened.
 
 MCP failure records include `error_kind`. The `mcp_session_failed` record and
 the matching `command_failed` record for `command = "mcp"` also include
@@ -298,6 +306,7 @@ path = ".nemo-relay/logs/relay.log.jsonl"
 format = "jsonl"
 level = "debug"
 queue_capacity = 1024
+failure_policy = "required" # Default; use "optional" for best-effort startup.
 max_file_size_bytes = 10485760
 retained_files = 5
 ```
@@ -332,6 +341,66 @@ path = "/var/log/nemo-relay/daemon.jsonl"
 format = "jsonl"
 ```
 
+### File Sink Startup Failure Policy
+
+Each entry in `[[logging.sinks]]` or `[[daemon.logging.sinks]]` accepts
+`failure_policy`:
+
+| Value | Behavior when the file cannot be opened |
+| --- | --- |
+| `required` (default) | Logging initialization fails and startup reports the error. |
+| `optional` | Relay disables this sink for the logging runtime's lifetime and continues with the other sinks. |
+
+For example, make the general operational file optional while requiring the
+error-only file:
+
+```toml
+[logging]
+level = "info"
+
+[[logging.sinks]]
+path = "/var/log/nemo-relay/relay.jsonl"
+failure_policy = "optional"
+
+[[logging.sinks]]
+path = "/var/log/nemo-relay/errors.jsonl"
+level = "error"
+failure_policy = "required"
+```
+
+The policy applies to filesystem failures during initialization of both append-only
+and rotating files. Invalid settings, duplicate or colliding destinations, and
+failures to create logging delivery infrastructure still fail initialization.
+Relay validates all sink settings and reserves their destinations before opening
+any files. An unavailable optional sink does not conceal invalid configuration.
+The interactive configuration editor exposes this setting as **Startup failure
+policy**. Configuration layering merges it by destination path like other sink fields.
+
+An unavailable optional sink produces one direct stderr warning with its stable
+`logging.file.<index>` identity and a fixed filesystem reason. This warning is
+emitted even when stderr logging or diagnostics is disabled. It excludes the file
+path and backend error text. With diagnostics enabled, the sink also records
+`logging.sink.initialize_failed` with failure class `io`. If the embedded
+service starts after logging, attaching it observes the sink's current unavailable
+state once; it does not replay earlier log records. This observation does not
+change the daemon health probe or classify application readiness.
+
+Disabled sinks have no delivery queue, retry buffer, or replay. Copies of records
+that would have gone to that sink are lost. Repairing the filesystem does not
+activate the sink: restart Relay, or shut down and reinitialize the owned Rust
+logging runtime, to retry. Other sinks keep receiving their copies. Successful
+sinks retain their existing queue, rotation, and runtime write-error handling.
+This policy controls initialization only.
+
+Sinks are shared destinations. Diagnostic components do not each create a sink.
+The same sink policy applies to ordinary operational records and eligible diagnostic
+summaries delivered to that destination; diagnostic retention has its own budget
+and remains independent of delivery. The policy does not affect ATOF, ATIF, or
+OpenTelemetry exporters.
+
+Python, Node.js, and Go use the same setting through the TOML file selected by
+`NEMO_RELAY_LOG_CONFIG_PATH`. No binding-specific startup option is needed.
+
 ## Rust Library API
 
 Initialize operational logging once during application startup by choosing one
@@ -349,4 +418,6 @@ let _logging_runtime =
 ```
 
 Keep the returned runtime alive until application shutdown so pending file
-records can be flushed.
+records can be flushed. For programmatic configuration, set
+`FileLogSinkConfig.failure_policy` to `FileLogSinkFailurePolicy::Optional` or
+`FileLogSinkFailurePolicy::Required`.

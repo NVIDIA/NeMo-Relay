@@ -16,6 +16,42 @@ use serde_json::json;
 
 struct FixtureWorkerPlugin;
 
+struct StreamCleanup(String);
+
+impl Drop for StreamCleanup {
+    fn drop(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&self.0, "dropped").expect("write stream cleanup marker");
+    }
+}
+
+struct CleanupStream {
+    _cleanup: StreamCleanup,
+    mode: String,
+    first: bool,
+}
+
+impl tokio_stream::Stream for CleanupStream {
+    type Item = nemo_relay_worker::Result<Json>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.first {
+            self.first = false;
+            return std::task::Poll::Ready(Some(Ok(json!({"token": "first"}))));
+        }
+        match self.mode.as_str() {
+            "end" => std::task::Poll::Ready(None),
+            "error" => std::task::Poll::Ready(Some(Err(WorkerSdkError::Callback(
+                "worker cleanup stream failed".into(),
+            )))),
+            _ => std::task::Poll::Pending,
+        }
+    }
+}
+
 impl WorkerPlugin for FixtureWorkerPlugin {
     fn plugin_id(&self) -> &str {
         "fixture_worker"
@@ -46,6 +82,48 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     }
 
     fn register(&self, ctx: &mut PluginContext, config: &Json) -> nemo_relay_worker::Result<()> {
+        if fixture_flag(config, "emit_internal_diagnostics") {
+            let runtime = ctx.runtime().expect("host runtime");
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    use nemo_relay_worker::diagnostics::{
+                        DiagnosticExtensionDefinition, DiagnosticObservation,
+                        DiagnosticObservationOutcome, DiagnosticObservationSeverity,
+                        extension_code,
+                    };
+                    let diagnostics = runtime.diagnostics().await;
+                    let component = diagnostics
+                        .component(
+                            "fixture.internal",
+                            vec![extension_code(DiagnosticExtensionDefinition {
+                                name: "internal_attempt_failed".into(),
+                                description: "Internal fixture operation".into(),
+                                outcome: DiagnosticObservationOutcome::Failure as i32,
+                                allowed_failure_classes: vec!["unknown".into()],
+                            })],
+                        )
+                        .await
+                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                    for count in [2, 3] {
+                        component
+                            .try_record_lazy(|| DiagnosticObservation {
+                                code: 1,
+                                count,
+                                outcome: DiagnosticObservationOutcome::Failure as i32,
+                                severity: DiagnosticObservationSeverity::Error as i32,
+                                failure_class: Some("unknown".into()),
+                                detail: Some("restricted-worker-fixture-evidence".into()),
+                                ..Default::default()
+                            })
+                            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                    }
+                    diagnostics
+                        .flush(std::time::Duration::from_secs(2))
+                        .await
+                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))
+                })
+            })?;
+        }
         if fixture_flag(config, "discover_observability") {
             let runtime = ctx.runtime().expect("host runtime should be available");
             let registrations = tokio::task::block_in_place(|| {
@@ -432,6 +510,24 @@ fn register_fixture_llm_hooks(
             let runtime = stream_runtime.clone();
             let name = name.to_owned();
             async move {
+                if name == "worker-fixture-cleanup-stream" {
+                    let cleanup = StreamCleanup(
+                        request.content["marker_path"]
+                            .as_str()
+                            .ok_or_else(|| WorkerSdkError::Callback("missing marker path".into()))?
+                            .to_owned(),
+                    );
+                    let mode = request.content["mode"]
+                        .as_str()
+                        .unwrap_or("pending")
+                        .to_owned();
+                    let stream: JsonStream = Box::pin(CleanupStream {
+                        _cleanup: cleanup,
+                        mode,
+                        first: true,
+                    });
+                    return Ok(stream);
+                }
                 if llm_stream_open_error {
                     return Err(WorkerSdkError::Callback(
                         "fixture LLM stream open error requested".into(),

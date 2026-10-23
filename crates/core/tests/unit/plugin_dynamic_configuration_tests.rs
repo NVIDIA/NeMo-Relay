@@ -179,7 +179,7 @@ manifest = {:?}
     );
 
     let startup_error =
-        match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
+        match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None) {
             Err(error) => error.to_string(),
             Ok(_) => panic!("required trust failure must reject startup"),
         };
@@ -213,7 +213,7 @@ manifest = {:?}
         Some("integrity_failed")
     );
     let optional_resolved =
-        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)).unwrap();
+        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None).unwrap();
     assert!(optional_resolved.dynamic_plugins.is_empty());
     assert!(optional_resolved.load_trust.is_empty());
 
@@ -570,7 +570,8 @@ fn policy_and_utf8_file_loading_fail_closed_with_secure_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
     let resolved =
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false).unwrap();
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false, None)
+            .unwrap();
     assert!(resolved.diagnostics.iter().any(|diagnostic| {
         diagnostic.level == DiagnosticLevel::Warning
             && diagnostic.code == "plugin.configuration_file_missing"
@@ -599,7 +600,7 @@ attestation = "integrity_only"
     )
     .unwrap();
     let policy =
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false, None)
             .unwrap()
             .policy;
     assert_eq!(policy.defaults.allowed, Some(true));
@@ -614,7 +615,7 @@ attestation = "integrity_only"
 
     fs::write(&plugins_toml, "{").unwrap();
     assert!(
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false, None)
             .is_err()
     );
 
@@ -687,7 +688,7 @@ attestation = "integrity_only"
         ..PluginConfig::default()
     };
 
-    let resolved = resolve_plugin_host_config_inner(programmatic, Some(&plugins_toml), false)
+    let resolved = resolve_plugin_host_config_inner(programmatic, Some(&plugins_toml), false, None)
         .expect("static and dynamic policies should resolve independently");
 
     assert_eq!(
@@ -758,56 +759,7 @@ fn trust_failures_disqualify_both_runtime_kinds_under_each_startup_class() {
                 "missing_signature",
                 "invalid_signature",
             ] {
-                let compatibility = if kind == "rust_dynamic" {
-                    "native_api = \"1\""
-                } else {
-                    "worker_protocol = \"grpc-v1\""
-                };
-                let load = if kind == "rust_dynamic" {
-                    "library = \"artifact.bin\"\nsymbol = \"never_load\""
-                } else {
-                    "runtime = \"command\"\nentrypoint = \"artifact.bin\""
-                };
-                let capability = if kind == "rust_dynamic" {
-                    "plugin_native"
-                } else {
-                    "plugin_worker"
-                };
-                let integrity = match failure {
-                    "missing_digest" => String::new(),
-                    "digest_mismatch" => format!(
-                        "[integrity]\nsha256 = {:?}\n",
-                        format!("sha256:{}", "0".repeat(64))
-                    ),
-                    "missing_signature" => format!("[integrity]\nsha256 = {digest:?}\n"),
-                    _ => {
-                        format!("[integrity]\nsha256 = {digest:?}\nsignature = \"artifact.sig\"\n")
-                    }
-                };
-                fs::write(
-                    &manifest_path,
-                    format!(
-                        r#"
-manifest_version = 1
-[plugin]
-id = "fixture.trust"
-kind = {kind:?}
-[compat]
-relay = ">=0.8.0,<1.0"
-{compatibility}
-[defaults]
-enabled = false
-[capabilities]
-items = ["{capability}"]
-[source]
-artifact = "artifact.bin"
-[load]
-{load}
-{integrity}
-"#
-                    ),
-                )
-                .unwrap();
+                write_trust_failure_manifest(&manifest_path, &digest, kind, failure);
                 fs::write(
                     &plugins_toml,
                     format!(
@@ -836,14 +788,383 @@ manifest = "relay-plugin.toml"
                     code,
                     "{kind}/{startup}/{failure}"
                 );
-                match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
-                    Ok(resolved) => {
+                let baseline =
+                    resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None);
+                let context = configuration_diagnostic_context();
+                let observed = resolve_plugin_host_config(
+                    PluginConfig::default(),
+                    Some(&plugins_toml),
+                    Some(&context),
+                );
+                match (baseline, observed) {
+                    (Ok(baseline), Ok(observed)) => {
                         assert_eq!(startup, "optional");
-                        assert!(resolved.dynamic_plugins.is_empty());
+                        assert!(baseline.dynamic_plugins.is_empty());
+                        assert!(observed.dynamic_plugins.is_empty());
+                        assert_eq!(observed.dynamic_reports.len(), 1);
+                        assert_eq!(
+                            serde_json::to_value(&observed.dynamic_reports[0].report).unwrap(),
+                            serde_json::to_value(&baseline.dynamic_reports[0].report).unwrap(),
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&observed.dynamic_reports[0].report).unwrap(),
+                            serde_json::to_value(dynamic).unwrap(),
+                        );
                     }
-                    Err(_) => assert_eq!(startup, "required"),
+                    (Err(baseline), Err(observed)) => {
+                        assert_eq!(startup, "required");
+                        assert_eq!(observed.to_string(), baseline.to_string());
+                    }
+                    _ => panic!("diagnostics changed resolution for {kind}/{startup}/{failure}"),
                 }
+                assert_trust_failure_evidence(&context, kind, startup, failure);
             }
         }
+    }
+}
+
+fn write_trust_failure_manifest(manifest_path: &Path, digest: &str, kind: &str, failure: &str) {
+    let compatibility = if kind == "rust_dynamic" {
+        "native_api = \"1\""
+    } else {
+        "worker_protocol = \"grpc-v1\""
+    };
+    let load = if kind == "rust_dynamic" {
+        "library = \"artifact.bin\"\nsymbol = \"never_load\""
+    } else {
+        "runtime = \"command\"\nentrypoint = \"artifact.bin\""
+    };
+    let capability = if kind == "rust_dynamic" {
+        "plugin_native"
+    } else {
+        "plugin_worker"
+    };
+    let integrity = match failure {
+        "missing_digest" => String::new(),
+        "digest_mismatch" => format!(
+            "[integrity]\nsha256 = {:?}\n",
+            format!("sha256:{}", "0".repeat(64))
+        ),
+        "missing_signature" => format!("[integrity]\nsha256 = {digest:?}\n"),
+        _ => {
+            format!("[integrity]\nsha256 = {digest:?}\nsignature = \"artifact.sig\"\n")
+        }
+    };
+    fs::write(
+        manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+[plugin]
+id = "fixture.trust"
+kind = {kind:?}
+[compat]
+relay = ">=0.8.0,<1.0"
+{compatibility}
+[defaults]
+enabled = false
+[capabilities]
+items = ["{capability}"]
+[source]
+artifact = "artifact.bin"
+[load]
+{load}
+{integrity}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn assert_trust_failure_evidence(
+    context: &crate::diagnostics::Diagnostics,
+    kind: &str,
+    startup: &str,
+    failure: &str,
+) {
+    // Required failures return early, but their evidence must survive
+    // in the process-owned context just as optional exclusions do.
+    let snapshot = context
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1, "{kind}/{startup}/{failure}");
+    assert_eq!(snapshot.components.len(), 1);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.artifact_verification_failed");
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(
+        event.classification.failure_class(),
+        Some(match failure {
+            "digest_mismatch" => "authentication",
+            "invalid_signature" => "unknown",
+            _ => "invalid_input",
+        }),
+    );
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "validation");
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        if kind == "rust_dynamic" {
+            "native_abi"
+        } else {
+            "worker_protocol"
+        },
+    );
+    assert_eq!(event.component, snapshot.components[0].identity);
+    let instance = event.origin.ownership.plugin_instance_id.unwrap();
+    assert_eq!(
+        snapshot.components[0]
+            .since_refresh
+            .ownership
+            .plugin_instance_id,
+        Some(instance),
+    );
+}
+
+#[test]
+fn configuration_observations_preserve_validation_reports_and_isolate_projections() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+    use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+    use sha2::{Digest, Sha256};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use uuid::Uuid;
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("artifact.bin"), b"fixture").unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(b"fixture")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let manifest_ref = temp
+        .path()
+        .join("relay-plugin.toml")
+        .to_string_lossy()
+        .into_owned();
+    for scenario in ["valid", "policy", "trust", "schema"] {
+        let context = Diagnostics::from_settings(
+            SourceIdentity {
+                instance_id: Uuid::now_v7(),
+                process_id: None,
+                process_role: "test".into(),
+                relay_version: "test".into(),
+            },
+            DiagnosticsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = Arc::new(AtomicUsize::new(0));
+        let calls = projected.clone();
+        let _projection = context
+            .subscribe_projection(move |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        let mut manifest = worker_manifest(
+            "fixture.validation",
+            (scenario == "schema").then_some("missing.schema.json"),
+        );
+        manifest.source = Some(DynamicPluginManifestSource {
+            artifact: Some("artifact.bin".into()),
+            ..Default::default()
+        });
+        manifest.integrity = Some(DynamicPluginManifestIntegrity {
+            sha256: Some(if scenario == "trust" {
+                format!("sha256:{}", "00".repeat(32))
+            } else {
+                digest.clone()
+            }),
+            ..Default::default()
+        });
+        let mut policy = DynamicPluginHostPolicy::default();
+        policy.defaults.allowed = Some(scenario != "policy");
+        let policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+        let baseline =
+            validate_declaration(&manifest, manifest_ref.clone(), true, &Map::new(), &policy);
+        let (report, _) = validate_declaration_with_artifact(
+            &manifest,
+            manifest_ref.clone(),
+            true,
+            &Map::new(),
+            &policy,
+            Some(&context),
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
+        assert_eq!(report.selected, scenario == "valid");
+        let view = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let expected = match scenario {
+            "policy" => Some(("plugin.policy_failed", "policy_rejected", "policy")),
+            "trust" => Some((
+                "plugin.artifact_verification_failed",
+                "authentication",
+                "validation",
+            )),
+            "schema" => Some(("plugin.schema_validation_failed", "unknown", "validation")),
+            _ => None,
+        };
+        if let Some((code, class, phase)) = expected {
+            assert_eq!(view.events.len(), 1, "{scenario}");
+            assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+            let event = &view.events[0];
+            assert_eq!(event.code(), code);
+            assert_eq!(event.classification.failure_class(), Some(class));
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+        } else {
+            assert!(view.components.is_empty());
+            assert!(view.events.is_empty());
+        }
+        assert_eq!(projected.load(Ordering::Relaxed), 0);
+    }
+}
+
+fn configuration_diagnostic_context() -> crate::diagnostics::Diagnostics {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+
+    Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: uuid::Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn multiple_validation_failures_preserve_report_precedence_and_skipped_checks() {
+    use crate::diagnostics::DiagnosticQuery;
+    use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("artifact.bin"), b"fixture").unwrap();
+    let manifest_ref = temp
+        .path()
+        .join("relay-plugin.toml")
+        .to_string_lossy()
+        .into_owned();
+    for policy_blocks in [true, false] {
+        let context = configuration_diagnostic_context();
+        let mut manifest = worker_manifest("fixture.multiple", Some("missing.schema.json"));
+        manifest.source = Some(DynamicPluginManifestSource {
+            artifact: Some("artifact.bin".into()),
+            ..Default::default()
+        });
+        manifest.integrity = Some(DynamicPluginManifestIntegrity {
+            sha256: Some(format!("sha256:{}", "00".repeat(32))),
+            ..Default::default()
+        });
+        let mut policy = DynamicPluginHostPolicy::default();
+        policy.defaults.allowed = Some(!policy_blocks);
+        let policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+        let baseline =
+            validate_declaration(&manifest, manifest_ref.clone(), true, &Map::new(), &policy);
+        let (report, artifact) = validate_declaration_with_artifact(
+            &manifest,
+            manifest_ref.clone(),
+            true,
+            &Map::new(),
+            &policy,
+            Some(&context),
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::to_value(&baseline).unwrap(),
+        );
+        assert!(!report.selected);
+        assert!(artifact.is_none());
+        assert_eq!(report.status.manifest, DynamicPluginCheckState::Invalid);
+        assert_eq!(
+            report.failure.as_ref().unwrap().code,
+            if policy_blocks {
+                "policy_blocked"
+            } else {
+                "integrity_failed"
+            },
+        );
+        let snapshot = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(snapshot.events.len(), 2);
+        assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 2);
+        assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
+        let expected = if policy_blocks {
+            // Trust verification is skipped after policy refusal. Only the
+            // independently executed schema check supplies another failure.
+            assert_eq!(report.status.integrity, DynamicPluginCheckState::Unknown);
+            assert!(
+                !snapshot
+                    .events
+                    .iter()
+                    .any(|event| { event.code() == "plugin.artifact_verification_failed" })
+            );
+            [
+                ("plugin.policy_failed", "policy_rejected", "policy"),
+                ("plugin.schema_validation_failed", "unknown", "validation"),
+            ]
+        } else {
+            assert_eq!(report.status.integrity, DynamicPluginCheckState::Invalid);
+            [
+                (
+                    "plugin.artifact_verification_failed",
+                    "authentication",
+                    "validation",
+                ),
+                ("plugin.schema_validation_failed", "unknown", "validation"),
+            ]
+        };
+        assert_validation_failure_attribution(&snapshot, &expected);
+    }
+}
+
+fn assert_validation_failure_attribution(
+    snapshot: &crate::diagnostics::DiagnosticSnapshot,
+    expected: &[(&str, &str, &str)],
+) {
+    let instance = snapshot.events[0]
+        .origin
+        .ownership
+        .plugin_instance_id
+        .unwrap();
+    for &(code, class, phase) in expected {
+        let event = snapshot
+            .events
+            .iter()
+            .find(|event| event.code() == code)
+            .unwrap();
+        assert_eq!(event.classification.failure_class(), Some(class));
+        assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+        assert_eq!(
+            event.context.execution.as_ref().unwrap().as_str(),
+            "worker_protocol"
+        );
+        assert_eq!(event.count.get(), 1);
+        assert_eq!(event.origin.ownership.plugin_instance_id, Some(instance));
     }
 }

@@ -143,6 +143,10 @@ The diagnostic snapshot is bounded and ordered by code. It is a host-level view,
 does not identify the plugin that recorded a diagnostic. These operations require the
 native host ABI v4 extensions.
 
+`runtime_diagnostics()` reads the legacy host report. For canonical recording and
+authorized reads, use `runtime.diagnostics()` as described in
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics).
+
 ## Control Global Runtime Registrations
 
 Native host ABI v4 adds activation-owned registration discovery and conditional
@@ -254,3 +258,28 @@ failure cleanup:
 Success means event parentage is intentional, no scope or isolated stack leaks on
 failure, later work regains its original context, and unload begins only after callback
 ownership has ended.
+
+## Record Internal Diagnostics
+
+Use `ctx.runtime().diagnostics()` to obtain the canonical SDK facade. Register a
+stable component during setup and retain it in callbacks that perform internal
+work. Disabled or unsupported facades skip lazy declaration and observation
+factories. The host still owns recording load, validation, registration, and
+callback failures.
+
+The [native SDK diagnostics guide](/build-plugins/native/diagnostics#record-internal-observations)
+provides a complete recording example. The
+[shared plugin guide](/build-plugins/diagnostics) compares the same example across
+Rust native, Rust gRPC, and Python gRPC.
+
+### Inspect Canonical Diagnostics
+
+Call `runtime.diagnostics().reader()` only when host policy grants
+`native_diagnostics_read_context`. This permission covers the whole selected
+context, including other components' restricted detail. It defaults to false and
+does not grant read access to workers. Recording needs no read grant.
+
+Refer to [Read Host Evidence](/build-plugins/native/diagnostics#read-host-evidence)
+for host-policy configuration and examples of discovery, snapshot, and memory
+reads. Each call checks live authority. Reader results are caller-owned and
+never automatically feed logs or exporters.

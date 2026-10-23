@@ -248,6 +248,10 @@ crates/ffi/nemo_relay.h
 
 Cargo writes the shared and static libraries under `target/release/`.
 
+The release profile disables stripping for the FFI package to avoid a
+[Mach-O string-table alignment bug](https://github.com/rust-lang/rust/issues/157750)
+in the pinned Rust toolchain on macOS. Size optimization and thin LTO still apply.
+
 ## Getting Started
 
 Include the generated header and link against the release library for your

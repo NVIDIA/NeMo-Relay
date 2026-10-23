@@ -133,6 +133,220 @@ fn tls_rejects_invalid_configuration_and_identity_without_disclosing_pem() {
     );
 }
 
+// Preflight is synchronous and must work without a Tokio runtime or collector.
+#[test]
+fn tls_preflight_checks_files_and_identity_for_every_signal_and_transport() {
+    let certificates = Certificates::new();
+    assert_tls_preflight(&certificates.tls, true);
+    assert_tls_preflight(&OpenTelemetryTlsConfig::default(), true);
+    assert_tls_preflight(
+        &OpenTelemetryTlsConfig {
+            certificate: certificates.tls.certificate.clone(),
+            ..Default::default()
+        },
+        true,
+    );
+    assert_tls_preflight(
+        &OpenTelemetryTlsConfig {
+            certificate: None,
+            ..certificates.tls.clone()
+        },
+        true,
+    );
+    for field in ["certificate", "client_certificate", "private_key"] {
+        for contents in [
+            None,
+            Some(""),
+            Some("SECRET not PEM"),
+            Some("-----BEGIN CERTIFICATE-----\nSECRET invalid base64\n-----END CERTIFICATE-----"),
+        ] {
+            let path = certificates._directory.path().join("invalid.pem");
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).unwrap();
+            }
+            let mut tls = certificates.tls.clone();
+            let path = Some(path.to_str().unwrap().to_string());
+            match field {
+                "certificate" => tls.certificate = path,
+                "client_certificate" => tls.client_certificate = path,
+                _ => tls.private_key = path,
+            }
+            assert_tls_preflight(&tls, false);
+            if contents.is_some() {
+                std::fs::remove_file(certificates._directory.path().join("invalid.pem")).unwrap();
+            }
+        }
+    }
+    let other = Certificates::new();
+    let mut tls = certificates.tls.clone();
+    tls.private_key = other.tls.private_key.clone();
+    assert_tls_preflight(&tls, false);
+
+    // Startup must recheck files even after a successful preflight.
+    std::fs::write(
+        certificates.tls.private_key.as_ref().unwrap(),
+        "SECRET invalid key",
+    )
+    .unwrap();
+    assert_tls_preflight(&certificates.tls, false);
+    assert!(
+        certificates
+            .tls
+            .http_client("https://127.0.0.1:4318", None)
+            .is_err()
+    );
+    assert!(
+        certificates
+            .tls
+            .grpc_config("https://127.0.0.1:4317")
+            .is_err()
+    );
+}
+
+fn assert_tls_preflight(tls: &OpenTelemetryTlsConfig, valid: bool) {
+    for transport in ["http_binary", "grpc"] {
+        for signal in ["traces", "logs", "metrics"] {
+            let mut otel = json!({"enabled":true});
+            let mut endpoint =
+                json!({"endpoint":"https://127.0.0.1:4318", "transport":transport, "tls":tls});
+            if signal == "traces" {
+                endpoint["type"] = json!("full");
+                otel["endpoints"] = json!([endpoint]);
+            } else {
+                otel[signal] = json!({"enabled":true,"endpoints":[endpoint]});
+            };
+            let config = serde_json::from_value(json!({
+                "version":1,
+                "components":[{"kind":OBSERVABILITY_PLUGIN_KIND,"config":{"version":4,"opentelemetry":otel}}]
+            })).unwrap();
+            let report = crate::plugin::dynamic::validate_exact(config).config;
+            if valid {
+                assert!(
+                    report.diagnostics.is_empty(),
+                    "{signal}/{transport}: {report:?}"
+                );
+            } else {
+                assert_eq!(
+                    report.diagnostics.len(),
+                    1,
+                    "{signal}/{transport}: {report:?}"
+                );
+                let diagnostic = &report.diagnostics[0];
+                assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+                assert_eq!(diagnostic.field.as_deref(), Some("endpoints[0].tls"));
+                assert!(diagnostic.message.contains("tls."));
+                assert!(!diagnostic.message.contains("SECRET"));
+            }
+        }
+    }
+}
+
+#[test]
+fn tls_attributes_invalid_material_to_trust_or_identity_without_disclosing_pem() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _entered = runtime.enter();
+    let endpoint = "https://127.0.0.1:4318";
+    let invalid_certificate = "-----BEGIN CERTIFICATE-----\nU0VDUkVU\n-----END CERTIFICATE-----\n";
+    let invalid_key = "-----BEGIN PRIVATE KEY-----\nU0VDUkVU\n-----END PRIVATE KEY-----\n";
+    for (field, contents, diagnostic) in [
+        (
+            "client_certificate",
+            "SECRET INVALID CERTIFICATE".to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            "SECRET INVALID KEY".to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "client_certificate",
+            invalid_certificate.to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            invalid_key.to_string(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "private_key",
+            KeyPair::generate().unwrap().serialize_pem(),
+            "tls.client_certificate/private_key: invalid PEM client identity",
+        ),
+        (
+            "certificate",
+            invalid_certificate.to_string(),
+            "tls.certificate: invalid PEM CA bundle",
+        ),
+    ] {
+        let certificates = Certificates::new();
+        let path = match field {
+            "client_certificate" => &certificates.tls.client_certificate,
+            "private_key" => &certificates.tls.private_key,
+            _ => &certificates.tls.certificate,
+        };
+        std::fs::write(path.as_ref().unwrap(), &contents).unwrap();
+        for grpc in [false, true] {
+            let result = if grpc {
+                certificates.tls.grpc_config(endpoint).map(|_| ())
+            } else {
+                certificates.tls.http_client(endpoint, None).map(|_| ())
+            };
+            let error = result.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                format!("failed to build the OTLP exporter: {diagnostic}"),
+                "field={field}, grpc={grpc}"
+            );
+            assert!(!error.contains("SECRET"));
+            assert!(!error.contains(&contents));
+        }
+    }
+}
+
+#[test]
+fn tls_validates_the_last_private_key_in_a_pem_bundle() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        for grpc in [false, true] {
+            let certificates = Certificates::new();
+            let key_path = certificates.tls.private_key.as_ref().unwrap();
+            let matching = std::fs::read_to_string(key_path).unwrap();
+            let mismatched = KeyPair::generate().unwrap().serialize_pem();
+            let (endpoint, count, server) = collector(&certificates, grpc, true).await;
+            let transport = if grpc { OtlpTransport::Grpc } else { OtlpTransport::HttpBinary };
+
+            std::fs::write(key_path, format!("{mismatched}\n{matching}")).unwrap();
+            let export_endpoint = endpoint.clone();
+            let tls = certificates.tls.clone();
+            tokio::task::spawn_blocking(move || export_all(&export_endpoint, transport, tls, "code"))
+                .await
+                .unwrap();
+            assert!(count.load(Ordering::SeqCst) >= 3);
+            assert_eq!(count.signals.load(Ordering::SeqCst), 7);
+
+            std::fs::write(key_path, format!("{matching}\n{mismatched}")).unwrap();
+            let result = if grpc {
+                certificates.tls.grpc_config(&endpoint).map(|_| ())
+            } else {
+                certificates.tls.http_client(&endpoint, None).map(|_| ())
+            };
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "failed to build the OTLP exporter: tls.client_certificate/private_key: invalid PEM client identity"
+            );
+            server.abort();
+        }
+    });
+}
+
 #[test]
 fn tls_schema_aliases_editor_and_signal_inheritance() {
     let config: OpenTelemetrySectionConfig = serde_json::from_value(json!({
@@ -182,6 +396,7 @@ fn tls_schema_aliases_editor_and_signal_inheritance() {
 
 #[derive(Default)]
 struct CollectorCounts {
+    connections: AtomicUsize,
     requests: AtomicUsize,
     signals: AtomicU8,
 }
@@ -330,6 +545,7 @@ async fn collector(
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
+                count.connections.fetch_add(1, Ordering::SeqCst);
                 let acceptor = acceptor.clone();
                 let count = count.clone();
                 tokio::spawn(async move {
@@ -590,6 +806,162 @@ fn tls_endpoint_identities_stay_isolated_from_each_other_and_environment() {
             server_a.abort();
             server_b.abort();
         }
+    });
+}
+
+#[test]
+fn tls_failure_stops_later_http_trace_connections_until_exporter_is_recreated() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        let certificates = Certificates::new();
+        let other = Certificates::new();
+        let (endpoint, count, server) = collector(&certificates, false, false).await;
+        let correct_tls = certificates.tls.clone();
+        tokio::task::spawn_blocking(move || {
+            let config = CoreOpenTelemetryConfig::new(OpenTelemetryType::Full, &endpoint)
+                .with_scheduled_delay(Duration::from_secs(600));
+            let failed =
+                OpenTelemetrySubscriber::new(config.clone().with_tls(other.tls.clone())).unwrap();
+            for batch in 0..3 {
+                let uuid = uuid::Uuid::now_v7();
+                for category in [ScopeCategory::Start, ScopeCategory::End] {
+                    failed.subscriber()(&Event::Scope(ScopeEvent::new(
+                        BaseEvent::builder()
+                            .uuid(uuid)
+                            .name(format!("tls.batch.{batch}"))
+                            .build(),
+                        category,
+                        Vec::new(),
+                        EventCategory::agent(),
+                        None,
+                    )));
+                }
+                let error = failed.force_flush().unwrap_err().to_string();
+                assert!(error.contains("TLS certificate verification failed"));
+                assert_eq!(
+                    count.connections.load(Ordering::SeqCst),
+                    1,
+                    "later batches must not open another connection"
+                );
+                assert_eq!(count.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    failed
+                        .runtime_diagnostics()
+                        .get("otel.tls_failed")
+                        .unwrap()
+                        .count,
+                    1
+                );
+            }
+            failed.shutdown().unwrap();
+
+            let recovered = OpenTelemetrySubscriber::new(config.with_tls(correct_tls)).unwrap();
+            let uuid = uuid::Uuid::now_v7();
+            for category in [ScopeCategory::Start, ScopeCategory::End] {
+                recovered.subscriber()(&Event::Scope(ScopeEvent::new(
+                    BaseEvent::builder()
+                        .uuid(uuid)
+                        .name("tls.recreated")
+                        .build(),
+                    category,
+                    Vec::new(),
+                    EventCategory::agent(),
+                    None,
+                )));
+            }
+            recovered.force_flush().unwrap();
+            recovered.shutdown().unwrap();
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert_eq!(count.connections.load(Ordering::SeqCst), 2);
+        })
+        .await
+        .unwrap();
+        server.abort();
+    });
+}
+
+#[test]
+fn wrong_ca_trace_export_during_shutdown_reports_tls_and_releases_host() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        let certificates = Certificates::new();
+        let other = Certificates::new();
+        let (endpoint, count, server) = collector(&certificates, false, false).await;
+        for trusted in [false, true] {
+            for file_headers in [false, true] {
+                let before = count.load(Ordering::SeqCst);
+                let endpoint = endpoint.clone();
+                let ca = if trusted { &certificates } else { &other }
+                    .tls.certificate.clone().unwrap();
+                let token = certificates._directory.path().join("token");
+                std::fs::write(&token, "secret-token").unwrap();
+                tokio::task::spawn_blocking(move || {
+                    use crate::plugin::dynamic::PluginHostActivation;
+                    let config = serde_json::from_value(json!({
+                        "components": [{"kind": "observability", "config": {
+                            "version": 4,
+                            "opentelemetry": {"enabled": true, "traces": [{
+                                "type": "full", "endpoint": if trusted { endpoint.clone() } else { format!("{endpoint}/private-path?secret-query") },
+                                "transport": "http_binary", "tls": {"certificate": ca},
+                                "scheduled_delay_millis": 600_000,
+                                "header_file": if file_headers { json!({"x-token": token}) } else { json!({}) }
+                            }]}
+                        }}]
+                    })).unwrap();
+                    let mut activation = futures::executor::block_on(
+                        PluginHostActivation::initialize_exact(config),
+                    ).unwrap();
+                    let callbacks: Vec<_> = crate::api::runtime::global_context()
+                        .read().unwrap().event_subscribers.values().cloned().collect();
+                    let uuid = uuid::Uuid::now_v7();
+                    for category in [ScopeCategory::Start, ScopeCategory::End] {
+                        let event = Event::Scope(ScopeEvent::new(
+                            BaseEvent::builder().uuid(uuid).name("tls.trace").build(),
+                            category, Vec::new(), EventCategory::agent(), None,
+                        ));
+                        for callback in &callbacks { callback(&event); }
+                    }
+                    // Do not force-flush: the first export must fail inside
+                    // shutdown, rather than taking the preexisting-failure path.
+                    let result = activation.close();
+                    assert!(!activation.is_active(), "one close must release ownership: {result:?}");
+                    let report = activation.report();
+                    if trusted {
+                        result.unwrap();
+                        assert!(report.config.runtime_diagnostics.is_empty());
+                    } else {
+                        assert!(result.unwrap_err().to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER));
+                        let diagnostic = report.config.runtime_diagnostics.iter()
+                            .find(|diagnostic| diagnostic.code == "otel.tls_failed")
+                            .expect("actionable TLS diagnostic");
+                        assert!(diagnostic.message.contains(&endpoint));
+                        assert!(diagnostic.message.contains("TLS certificate verification failed"));
+                        for secret in ["private-path", "secret-query", "secret-token"] {
+                            assert!(!diagnostic.message.contains(secret));
+                        }
+                        assert_eq!(diagnostic.count, 1);
+                    }
+                    let mut next = futures::executor::block_on(
+                        PluginHostActivation::initialize_exact(Default::default()),
+                    ).expect("host must be available without a second close");
+                    next.close().unwrap();
+                }).await.unwrap();
+                assert_eq!(count.load(Ordering::SeqCst), before + usize::from(trusted));
+            }
+        }
+        server.abort();
     });
 }
 

@@ -95,19 +95,29 @@ pub(crate) fn total_tokens_including_cache(
     }
 }
 
+/// Return whether the usage reports cache tokens outside `prompt_tokens`, as Anthropic does.
+///
+/// A declared Anthropic Messages shape returns true, and any other declared API shape returns
+/// false, so the input total of an OpenAI-shaped response for a Claude model does not count its
+/// cache tokens twice. A custom or undeclared shape returns true only when the provider name
+/// starts with `anthropic` or `claude` in any case.
 fn uses_separate_anthropic_cache_tokens(
     provider: Option<&str>,
     response: Option<&AnnotatedLlmResponse>,
 ) -> bool {
-    response.is_some_and(|response| {
-        matches!(
-            response.api_specific.as_ref(),
-            Some(ApiSpecificResponse::AnthropicMessages { .. })
-        )
-    }) || provider.is_some_and(|provider| {
-        let provider = provider.to_ascii_lowercase();
-        provider.starts_with("anthropic") || provider.starts_with("claude")
-    })
+    match response.and_then(|response| response.api_specific.as_ref()) {
+        Some(ApiSpecificResponse::AnthropicMessages { .. }) => true,
+        Some(
+            ApiSpecificResponse::OpenAIChat { .. }
+            | ApiSpecificResponse::OpenAIResponses { .. }
+            | ApiSpecificResponse::OCIGenAI { .. }
+            | ApiSpecificResponse::GeminiGenerateContent { .. },
+        ) => false,
+        Some(ApiSpecificResponse::Custom { .. }) | None => provider.is_some_and(|provider| {
+            let provider = provider.to_ascii_lowercase();
+            provider.starts_with("anthropic") || provider.starts_with("claude")
+        }),
+    }
 }
 
 /// Export representation for point-in-time mark events.

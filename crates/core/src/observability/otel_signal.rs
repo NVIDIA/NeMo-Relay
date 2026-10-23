@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -110,6 +110,9 @@ struct RuntimeDiagnosticEntry {
 pub(super) struct SignalRuntimeDiagnostics {
     state: Arc<Mutex<RuntimeDiagnosticState>>,
     plugin_field: Option<String>,
+    // Shared by every resource pipeline for this trace endpoint. Once set,
+    // recreating the subscriber is the only way to resume sending.
+    terminal_trace_tls_failure: Arc<OnceLock<&'static str>>,
 }
 
 impl SignalRuntimeDiagnostics {
@@ -117,7 +120,17 @@ impl SignalRuntimeDiagnostics {
         Self {
             state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
             plugin_field,
+            terminal_trace_tls_failure: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(super) fn trace_tls_failure(&self) -> Option<&'static str> {
+        self.terminal_trace_tls_failure.get().copied()
+    }
+
+    /// Latch the failure and return whether this caller must report it.
+    pub(super) fn stop_trace_exports_after_tls_failure(&self, reason: &'static str) -> bool {
+        self.terminal_trace_tls_failure.set(reason).is_ok()
     }
 
     pub(super) fn record(&self, code: impl Into<String>, message: String, count: u64) -> u64 {
@@ -229,6 +242,15 @@ pub(super) fn retry_batch_processor_channel_full(
 
         thread::sleep(RETRY_DELAY.min(timeout - elapsed));
     }
+}
+
+/// Clears SDK's startup resource message from a new provider's batch channel so first span or record is accepted.
+pub(super) fn drain_startup_queue(force_flush: impl FnOnce() -> OTelSdkResult) -> Result<()> {
+    force_flush().map_err(|error| {
+        OpenTelemetryError::ExporterBuild(format!(
+            "OpenTelemetry batch processor did not drain its startup message: {error}"
+        ))
+    })
 }
 
 fn truncate_runtime_diagnostic_message(message: String) -> String {

@@ -1797,6 +1797,7 @@ async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bo
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -3859,6 +3860,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4524,6 +4526,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4719,6 +4722,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
 #[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4804,6 +4808,7 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
 #[tokio::test]
 async fn out_of_order_started_subagent_end_does_not_leak_scope() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4885,6 +4890,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
 #[tokio::test]
 async fn agent_end_closes_nested_active_subagents_lifo() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4950,6 +4956,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
 #[tokio::test]
 async fn llm_lifecycle_starts_implicit_gateway_session() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5612,6 +5619,7 @@ async fn claude_internal_agent_stops_keep_unclassified_marks() {
 #[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5756,6 +5764,7 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
 #[tokio::test]
 async fn single_pending_llm_hint_claims_next_gateway_llm() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5862,6 +5871,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
 #[tokio::test]
 async fn multiple_llm_hints_resolve_by_generation_id() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5986,6 +5996,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
 #[tokio::test]
 async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -6088,6 +6099,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
 #[tokio::test]
 async fn no_active_hint_reuses_last_llm_owner() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -7932,6 +7944,7 @@ fn merge_metadata_handles_objects_nulls_and_scalars() {
 fn session_test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -7955,6 +7968,7 @@ fn session_test_config() -> GatewayConfig {
 async fn turn_ended_is_noop_without_active_turn_scope() {
     let temp = tempfile::tempdir().unwrap();
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -11028,5 +11042,149 @@ async fn blocked_gateway_response_does_not_block_another_session_and_can_be_canc
     }
     drop(held);
     assert!(manager.try_record_gateway_response_hints("blocked-response", None, &response));
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+const LAUNCHER_TRACE_ID: &str = "aaaabbbbccccddddeeeeffff00001111";
+const LAUNCHER_SPAN_ID: &str = "1111222233334444";
+
+fn launcher_trace_headers(trace_id: &str, span_id: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "traceparent",
+        format!("00-{trace_id}-{span_id}-01").parse().unwrap(),
+    );
+    headers.insert("tracestate", "vendor=value".parse().unwrap());
+    headers
+}
+
+#[tokio::test]
+async fn hook_launcher_trace_context_parents_the_session_once() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-launcher-trace-context-test";
+    let session_id = "launcher-trace-context";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) =
+        make_typed_test_subscriber("launcher-trace-test-scope", OpenTelemetryType::Full);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+
+    manager
+        .apply_events(
+            &launcher_trace_headers(LAUNCHER_TRACE_ID, LAUNCHER_SPAN_ID),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::PromptSubmitted(session_event(session_id, "UserPromptSubmit")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    {
+        // Provider requests made by a subagent derive their outbound context from its stack.
+        let sessions = manager.inner.lock().await;
+        let stack = sessions.get(session_id).unwrap().subagent_stacks["worker"].clone();
+        let traceparent = TASK_SCOPE_STACK
+            .sync_scope(stack, nemo_relay::api::runtime::capture_traceparent)
+            .unwrap();
+        assert!(
+            traceparent.starts_with(&format!("00-{LAUNCHER_TRACE_ID}-")),
+            "{traceparent}"
+        );
+    }
+    // A later hook carrying another context must not re-parent the open session.
+    manager
+        .apply_events(
+            &launcher_trace_headers("bbbbccccddddeeeeffff000011112222", "5555666677778888"),
+            vec![
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::PromptSubmitted(session_event(session_id, "UserPromptSubmit")),
+                NormalizedEvent::AgentEnded(session_event(session_id, "SessionEnd")),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+
+    let spans = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .filter(|span| {
+            attr_map(&span.attributes)
+                .get("nemo_relay.start.metadata.session_id")
+                .is_some_and(|id| id == session_id)
+        })
+        .collect::<Vec<_>>();
+    let span_ids = spans
+        .iter()
+        .map(|span| span.span_context.span_id())
+        .collect::<HashSet<_>>();
+    let roots = spans
+        .iter()
+        .filter(|span| !span_ids.contains(&span.parent_span_id))
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 2, "each turn is a top-level session span");
+    for span in &spans {
+        assert_eq!(span.span_context.trace_id().to_string(), LAUNCHER_TRACE_ID);
+    }
+    for root in roots {
+        assert_eq!(root.parent_span_id.to_string(), LAUNCHER_SPAN_ID);
+        assert!(root.parent_span_is_remote);
+        assert_eq!(root.span_context.trace_state().header(), "vendor=value");
+    }
+}
+
+#[tokio::test]
+async fn invalid_or_provider_trace_context_leaves_the_session_in_a_new_trace() {
+    let manager = SessionManager::new(session_test_config());
+    let mut invalid = HeaderMap::new();
+    invalid.insert("traceparent", "not-a-traceparent".parse().unwrap());
+    manager
+        .apply_events(
+            &invalid,
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "invalid-launcher-trace",
+                "SessionStart",
+            ))],
+        )
+        .await
+        .unwrap();
+    let prep = manager
+        .prepare_gateway_call(
+            &launcher_trace_headers(LAUNCHER_TRACE_ID, LAUNCHER_SPAN_ID),
+            llm_start(),
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    for session_id in ["invalid-launcher-trace", prep.session_id.as_str()] {
+        let session = sessions.get(session_id).unwrap();
+        assert!(session.launcher_trace_parent.is_none(), "{session_id}");
+        let stack = session.scope_stack.read().unwrap();
+        assert!(
+            !stack.is_propagated_parent(stack.root_uuid()),
+            "{session_id}"
+        );
+    }
+    drop(sessions);
     manager.close_all("test_shutdown").await.unwrap();
 }

@@ -60,11 +60,39 @@ stderr_enabled = true
 stderr_format = "jsonl"
 ```
 
-Provider base URLs must use HTTPS for remote hosts, including private Kubernetes
-service addresses. Plain HTTP is allowed only for loopback hosts such as
-`localhost`, `127.0.0.1`, or `::1`. Managed workers validate these URLs when
-loading configuration and check destination transport requirements when forwarding
-requests. Base URLs must not include user information, query strings, or fragments.
+Provider base URLs use HTTPS by default. Plain HTTP is allowed for loopback hosts
+such as `localhost`, `127.0.0.1`, or `::1`. For unauthenticated remote inference
+hosts, including private Kubernetes services, managed workers and daemon
+pass-through routing also accept an explicit `[upstream] insecure_http_model_hosts`
+list in `config.toml`:
+
+```toml
+[upstream]
+openai_base_url = "http://inference-gateway.internal:8000/v1"
+insecure_http_model_hosts = ["inference-gateway.internal"]
+```
+
+Entries are exact bare DNS hostnames or canonical IP addresses, without schemes,
+ports, paths, or wildcards. HTTP exposes model content without encryption.
+Configured provider credentials and API-key helpers conflict with remote HTTP;
+provider environment-key fallbacks are ignored. Only the documented content and
+protocol headers are forwarded, including in request trailers. Credentials,
+cookies, custom headers, and middleware-added authorization are removed before
+forwarding. The client does not use environment proxies, follow redirects, or
+retry automatically. Each final destination must match a trusted host and the
+origin of a configured OpenAI or Anthropic upstream. Remote HTTP WebSockets and
+caller-selected destinations retain their existing restrictions.
+
+For hardened deployments, set `insecure_http_model_hosts = []` under `[upstream]`
+in the system `config.toml` to prevent user configuration from enabling remote HTTP
+model hosts. An omitted setting preserves the lower-priority list; an explicit
+empty list replaces it. System configuration has higher file-level precedence than
+user configuration. This setting does not relax daemon-to-worker transport or
+worker authentication requirements.
+
+Managed workers validate base URLs when loading configuration and check the final
+destination when forwarding requests. Base URLs must not include user information,
+query strings, or fragments.
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same
@@ -119,9 +147,11 @@ Copy-Item .\config.toml, .\plugins.toml 'C:\ProgramData\nemo-relay\'
 ```
 
 For an existing installation, merge approved settings rather than replacing files
-or ACLs blindly. Managed workers ignore personal runtime configuration, plugin
-directories, and lifecycle state. Install required plugin binaries and dependencies
-in the administrator-managed locations referenced by the system manifest.
+or ACLs blindly. Local and remote-client workers load personal runtime
+configuration, plugin manifests, and dynamic plugins alongside the system layer.
+System settings take priority. Install required system plugin binaries and
+dependencies in the administrator-managed locations referenced by the system
+manifest.
 
 ## Provision Client Credentials
 
@@ -803,15 +833,16 @@ selects Anthropic. Relay uses OpenAI when neither header is present. The API
 key's format does not select a provider.
 
 Model lists use the same auth rules as the provider's managed routes. These
-requests do not create LLM events. Relay keeps provider API keys sent by the
-caller.
+requests do not create LLM events. A configured helper replaces the caller's
+provider credential. Without a helper, Relay keeps provider API keys sent by
+the caller.
 
-OpenAI requests use `openai_base_url`. For auth, Relay tries `openai_auth_header`,
-`openai_api_key`, `[upstream.openai_api_key_helper]`, then `OPENAI_API_KEY`.
-Anthropic requests use `anthropic_base_url` with the corresponding
-`anthropic_auth_header`, `anthropic_api_key`,
-`[upstream.anthropic_api_key_helper]`, or `ANTHROPIC_API_KEY`. The caller must
-have Relay access to use Relay's credentials.
+OpenAI model requests normally use `openai_base_url`. With the default URL and
+no replacement credential, requests with recognized ChatGPT OAuth use the ChatGPT
+Codex backend instead. Anthropic model requests use `anthropic_base_url`.
+The caller must have Relay access to use Relay's credentials. For the credential
+selection order, refer to
+[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
 
 If Relay has no replacement, OpenAI model requests keep the caller's credential.
 This also applies to a custom `openai_base_url`.
@@ -826,7 +857,10 @@ These settings apply when Relay has no replacement credential.
 With the default `openai_base_url`, Relay sends ChatGPT requests to the native
 ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
-ChatGPT backend and keep the caller's credential.
+ChatGPT backend and keep the caller's credential. With the default
+`openai_base_url` and a recognized ChatGPT credential, `POST /realtime/calls`
+and `POST /v1/realtime/calls` also use the ChatGPT backend. These voice calls
+never receive Relay's provider credentials, even when configured.
 
 Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
 voice call creation, to an approved endpoint instead of the default
@@ -841,11 +875,11 @@ ignore `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, consistent with the other managed
 provider endpoint settings. Personal gateways also accept that environment
 variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
 
-Live and Realtime connections use the configured OpenAI upstream and keep the
-caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
-Relay does not replace a ChatGPT sideband credential with an administrator key.
-With a custom `openai_base_url`, Relay removes recognized ChatGPT tokens and
-`chatgpt-account-id` from sideband requests.
+Live and Realtime sideband connections use `openai_base_url`. Relay never adds its own
+provider credentials to these requests. By default, the upstream is
+`api.openai.com`, which matches Codex's WebRTC sideband destination. Relay keeps
+the caller's provider credential by default. With a custom `openai_base_url`,
+Relay removes recognized ChatGPT tokens and `chatgpt-account-id`.
 
 The daemon also accepts Codex's ChatGPT-shaped
 `POST /backend-api/codex/responses` path and canonicalizes it to the ordinary

@@ -146,6 +146,13 @@ not-recommended
 [`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
 setting. Automatic log and metric headers have the same transport requirement,
 so credentials reach a remote plaintext endpoint only when you list its host.
+To allow a host only for automatic exporters created from `OTEL_*` environment
+variables, set `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS` to a comma-separated list
+of bare hostnames or IP addresses, such as `collector.example,10.0.0.4`.
+This variable does not allow plaintext for Relay-configured OpenTelemetry
+endpoints, ATOF sinks, or ATIF storage. An empty or whitespace-only value is
+treated as unset. Invalid nonempty lists are ignored and produce an activation
+warning; they do not prevent activation.
 An endpoint environment variable that the OTLP exporter cannot parse fails
 activation instead of falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
@@ -395,12 +402,14 @@ yourself, set TLS on each one. They use their own settings even if they share
 a collector with traces.
 
 Use absolute file paths or paths relative to the process working directory.
-Relay reads the PEM files when it creates the exporter. Recreate the exporter
-after you replace certificates or keys.
+Make the TLS files available wherever you run plugin validation.
 
-Relay rejects blank paths and files that it cannot read or parse.
-It also rejects a client certificate without a matching private key, or a key
-without a certificate.
+Plugin validation reports blank paths, missing or unreadable files, and invalid
+PEM files. If you set a client certificate or private key, you must supply both.
+The certificate and key must match. Validation does not connect to the collector.
+
+Relay checks the files again when the exporter starts. Recreate the exporter
+after you replace certificates or keys.
 The plugin reports the failed endpoint and keeps valid endpoints active.
 TLS settings apply only to network endpoints.
 
@@ -442,6 +451,10 @@ Relay does not use these variables for endpoints that you configure in plugins
 or code. Set `tls` on those endpoints.
 To enable automatic export, also set `OTEL_EXPORTER_OTLP_ENDPOINT` or a
 signal-specific endpoint variable.
+
+If the client certificate or private key is invalid, Relay reports
+`invalid PEM client identity`. Relay reports the same error if the certificate
+and key do not match.
 
 ## Trace File Sinks
 
@@ -775,6 +788,23 @@ failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
 </Warning>
 
+For HTTP trace exports, a fatal TLS error stops the exporter. This includes
+certificate errors. NeMo Relay logs the error once. The message identifies the
+endpoint and the TLS problem. If the message reports an unknown certificate
+issuer, check the CA bundle. Temporary connection errors do not stop the
+exporter.
+
+Fix the TLS problem, then recreate the exporter to send traces again. Traces
+created while the exporter is stopped are lost. Calling `force_flush()`
+continues to report the error.
+
+If cleanup finishes but trace delivery fails, closing the plugin reports the
+error. You can start a new plugin without closing the old one again.
+
+`subscribers.flush_async()` waits for callbacks. It does not confirm trace
+delivery. For direct subscribers, use `force_flush()` to check for export
+errors.
+
 Increasing an endpoint's `max_queue_size`, or the process-wide
 `OTEL_BSP_MAX_QUEUE_SIZE` fallback, can reduce the risk for a known burst size,
 but a finite queue does not guarantee lossless telemetry. Always clear the
@@ -833,6 +863,15 @@ percent escapes before building each automatic exporter. If the selected header
 list contains an invalid escape, such as `%ZZ` or a trailing `%`, Relay skips
 that signal's automatic exporter without logging header values. Signal-specific
 header lists take precedence over the generic list, including empty lists.
+
+When Relay skips an automatic exporter during activation, the plugin activation
+report includes a warning with code `observability.automatic_otel_signal_skipped`.
+It identifies the signal, the endpoint environment variable used, and the
+endpoint's scheme, host, and port when they can be parsed. The report omits URL
+credentials, paths, and queries. Check the endpoint and exporter settings; for
+plain HTTP, add the intended host to `insecure_http_hosts`.
+For an automatic exporter alone, you can instead list the host in
+`NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`.
 
 A configured endpoint skipped because of process-global headers does not prevent
 activation when at least one automatic exporter is active. The automatic
@@ -1192,7 +1231,7 @@ metadata promotion cannot be used to add an unsupported GenAI attribute.
 | `gen_ai.usage.audio.cache_read.input_tokens` | Not supported | Audio input tokens served from a provider cache. Relay's normalized usage contract has no audio and cache modality breakdown. |
 | `gen_ai.usage.audio.input_tokens` | Not supported | Audio input-token count. Relay's normalized usage contract has no audio modality breakdown. |
 | `gen_ai.usage.audio.output_tokens` | Not supported | Audio output-token count. Relay's normalized usage contract has no audio modality breakdown. |
-| `gen_ai.usage.cache_read.input_tokens` | Supported | Input tokens served from a provider-managed cache. Relay projects normalized cache-read usage and includes known provider cache accounting in the aggregate input count. |
+| `gen_ai.usage.cache_read.input_tokens` | Supported | Input tokens served from a provider-managed cache. Relay projects normalized cache-read usage and includes known provider cache accounting in the aggregate input count: a response that declares a known API shape is read by that shape, and a response with a custom or no declared shape is read the Anthropic way when its provider is named after Anthropic. |
 | `gen_ai.usage.cache_write.input_tokens` | Supported | Input tokens written to a provider-managed cache. Relay projects normalized cache-write usage. This newer spelling replaces `gen_ai.usage.cache_creation.input_tokens` from the v1.42-era registry snapshot. |
 | `gen_ai.usage.image.cache_read.input_tokens` | Not supported | Image input tokens served from a provider cache. Relay's normalized usage contract has no image and cache modality breakdown. |
 | `gen_ai.usage.image.input_tokens` | Not supported | Image input-token count. Relay's normalized usage contract has no image modality breakdown. |

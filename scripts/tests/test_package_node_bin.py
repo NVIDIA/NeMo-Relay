@@ -60,12 +60,22 @@ class PackageNodeBinTests(unittest.TestCase):
                 "exports": {
                     ".": {"types": "./index.d.ts", "default": "./index.js"},
                     "./typed": {"types": "./typed.d.ts", "default": "./typed.js"},
+                    "./diagnostics": {"types": "./diagnostics.d.ts", "default": "./diagnostics.js"},
                 },
                 "engines": {"node": ">=24.0.0"},
                 "license": "Apache-2.0",
             }
             (node_dir / "package.json").write_text(json.dumps(source_manifest))
-            for filename in ("index.js", "index.d.ts", "typed.js", "typed.d.ts", "README.md"):
+            for filename in (
+                "index.js",
+                "index.d.ts",
+                "typed.js",
+                "typed.d.ts",
+                "diagnostics.js",
+                "diagnostics.d.ts",
+                "diagnostics_query_contract.js",
+                "README.md",
+            ):
                 (node_dir / filename).write_text(filename)
             binary_name = "nemo-relay.linux-x64-gnu.node"
             (node_dir / binary_name).write_bytes(b"native")
@@ -93,6 +103,12 @@ class PackageNodeBinTests(unittest.TestCase):
                     "0.7.0-rc.1",
                 )
                 self.assertIn("package/index.js", archive.getnames())
+                self.assertIn("package/diagnostics.js", archive.getnames())
+                self.assertEqual(
+                    required_member(archive, "package/diagnostics_query_contract.js").read(),
+                    b"diagnostics_query_contract.js",
+                )
+                self.assertNotIn("./diagnostics_query_contract.js", manifest["exports"])
                 self.assertFalse(any(name.endswith(".node") for name in archive.getnames()))
 
             development = PACKAGE_NODE_BIN.build_metapackage(node_dir, "0.7.0+deadbeef", output)

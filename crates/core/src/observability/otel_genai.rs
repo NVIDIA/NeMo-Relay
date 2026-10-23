@@ -972,6 +972,8 @@ fn provider_from_event_name(event: &Event) -> Option<String> {
         ("azure ai inference", "azure.ai.inference"),
         ("azure_openai", "azure.ai.openai"),
         ("azure openai", "azure.ai.openai"),
+        ("azure_ai", "azure.ai.inference"),
+        ("azure", "azure.ai.openai"),
         ("anthropic", "anthropic"),
         ("claude", "anthropic"),
         ("bedrock", "aws.bedrock"),

@@ -14,8 +14,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::diagnostics::{
+    FailureClass as DiagnosticFailureClass, PluginOperationFailureCode as DiagnosticOperation,
+    PluginPhase as DiagnosticPhase,
+};
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
+use nemo_relay_worker_proto::DOWNSTREAM_CONTINUATION_METADATA;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
@@ -199,7 +204,19 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, false, &HashMap::new(), &mut Vec::new())
+    load_worker_plugins_with_diagnostics(specs, crate::diagnostics::Diagnostics::process_default())
+}
+
+/// Load plugin workers using the runtime owner's selected diagnostic context.
+/// Diagnostic admission never controls whether an execution activation succeeds.
+pub fn load_worker_plugins_with_diagnostics<I>(
+    specs: I,
+    diagnostics: &crate::diagnostics::Diagnostics,
+) -> crate::plugin::Result<WorkerPluginActivation>
+where
+    I: IntoIterator<Item = WorkerPluginLoadSpec>,
+{
+    load_worker_plugins_inner(specs, false, &HashMap::new(), &mut Vec::new(), diagnostics)
 }
 
 /// Prepare workers without calling Register until their host component activates.
@@ -207,11 +224,12 @@ pub(super) fn prepare_worker_plugins_with_trust<I>(
     specs: I,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, true, trust, skipped)
+    load_worker_plugins_inner(specs, true, trust, skipped, diagnostics)
 }
 
 fn load_worker_plugins_inner<I>(
@@ -219,6 +237,7 @@ fn load_worker_plugins_inner<I>(
     defer_registration: bool,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -235,7 +254,7 @@ where
             },
             None => None,
         };
-        let instance = load_one_worker_plugin(&spec, defer_registration, manifest)?;
+        let instance = load_one_worker_plugin(&spec, defer_registration, manifest, diagnostics)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -352,7 +371,15 @@ impl WorkerPluginInstance {
         };
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             block_on_runtime(self.runtime.runtime(), async move {
-                worker_rpc(client.shutdown(worker_rpc_request(request))).await
+                worker_rpc(client.shutdown(worker_rpc_request(request)))
+                    .await
+                    .inspect_err(|error| {
+                        self.host_state.observer.rpc_failure(
+                            DiagnosticOperation::WorkerShutdown,
+                            error,
+                            DiagnosticPhase::Shutdown,
+                        );
+                    })
             })
         })) {
             Ok(Ok(_)) => {}
@@ -373,6 +400,9 @@ impl WorkerPluginInstance {
             ),
         }
 
+        if let Some(diagnostics) = &self.host_state.diagnostics {
+            diagnostics.revoke();
+        }
         match self.shutdown.lock() {
             Ok(mut shutdown) => {
                 if let Some(sender) = shutdown.take()
@@ -396,7 +426,20 @@ impl WorkerPluginInstance {
             ),
         }
 
+        let exit_errors = outcome.errors.len();
         self.stop_process_checked(&mut outcome);
+        if outcome.errors.len() > exit_errors {
+            self.host_state.observer.failure(
+                DiagnosticOperation::WorkerExit,
+                DiagnosticFailureClass::Unknown,
+                DiagnosticPhase::Shutdown,
+            );
+        } else {
+            self.host_state.observer.success(
+                crate::diagnostics::SuccessCode::PluginWorkerProcessCleaned,
+                DiagnosticPhase::Shutdown,
+            );
+        }
         if outcome.safe_to_unload
             && let Err(error) = std::fs::remove_dir_all(&self.activation_dir)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -505,7 +548,18 @@ fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
     verified_manifest: Option<DynamicPluginManifest>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
+    use crate::diagnostics::{
+        FailureClass, PluginExecution, PluginOperationFailureCode as Operation, PluginPhase,
+    };
+    let activation_uuid = Uuid::now_v7();
+    let observer = super::diagnostics::PluginDiagnostics::new(
+        diagnostics,
+        &spec.plugin_id,
+        PluginExecution::WorkerProtocol,
+        activation_uuid,
+    );
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_starting",
@@ -514,51 +568,82 @@ fn load_one_worker_plugin(
     );
     let (manifest, manifest_ref) = match verified_manifest {
         Some(manifest) => (manifest, spec.manifest_ref.clone()),
-        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref)?,
+        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref).inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerValidation,
+                FailureClass::Unknown,
+                PluginPhase::Validation,
+            );
+        })?,
     };
-    if manifest.plugin.id.trim() != spec.plugin_id {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin manifest id '{}' does not match expected id '{}'",
-            manifest.plugin.id, spec.plugin_id
-        )));
-    }
-    if manifest.plugin.kind != DynamicPluginKind::Worker {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{}' is kind {}; worker loader only supports worker",
-            spec.plugin_id, manifest.plugin.kind
-        )));
-    }
-    validate_relay_compatibility(manifest.compat.relay.as_deref())?;
-    let relay_compat = manifest
-        .compat
-        .relay
-        .as_deref()
-        .expect("validated worker manifest must declare compat.relay")
-        .to_string();
-    let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
-        unreachable!("validated worker manifest must carry worker load contract");
-    };
-    let runtime = load
-        .runtime
-        .ok_or_else(|| PluginError::InvalidConfig("load.runtime is required".into()))?;
-    let entrypoint = load
-        .entrypoint
-        .as_deref()
-        .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?;
+    let (relay_compat, runtime, entrypoint, callback_timeouts) = (|| {
+        if manifest.plugin.id.trim() != spec.plugin_id {
+            return Err(PluginError::InvalidConfig(format!(
+                "dynamic plugin manifest id '{}' does not match expected id '{}'",
+                manifest.plugin.id, spec.plugin_id
+            )));
+        }
+        if manifest.plugin.kind != DynamicPluginKind::Worker {
+            return Err(PluginError::InvalidConfig(format!(
+                "dynamic plugin '{}' is kind {}; worker loader only supports worker",
+                spec.plugin_id, manifest.plugin.kind
+            )));
+        }
+        validate_relay_compatibility(manifest.compat.relay.as_deref())?;
+        let relay_compat = manifest
+            .compat
+            .relay
+            .as_deref()
+            .expect("validated worker manifest must declare compat.relay")
+            .to_string();
+        let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
+            unreachable!("validated worker manifest must carry worker load contract");
+        };
+        let runtime = load
+            .runtime
+            .ok_or_else(|| PluginError::InvalidConfig("load.runtime is required".into()))?;
+        let entrypoint = load
+            .entrypoint
+            .as_deref()
+            .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?
+            .to_string();
+        let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
+        Ok((relay_compat, runtime, entrypoint, callback_timeouts))
+    })()
+    .inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
+    })?;
 
-    let activation_uuid = Uuid::now_v7();
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));
     std::fs::create_dir_all(&activation_dir)
-        .map_err(|err| PluginError::Internal(format!("worker activation directory: {err}")))?;
+        .map_err(|err| PluginError::Internal(format!("worker activation directory: {err}")))
+        .inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerLaunch,
+                FailureClass::Unknown,
+                PluginPhase::Activation,
+            );
+        })?;
     let mut activation_dir_guard = ActivationDirGuard::new(activation_dir.clone());
     let runtime_handle = OwnedWorkerRuntime::new(
         RuntimeBuilder::new_multi_thread()
             .enable_all()
             .thread_name("nemo-relay-worker-host")
             .build()
-            .map_err(|err| PluginError::Internal(format!("worker runtime: {err}")))?,
+            .map_err(|err| PluginError::Internal(format!("worker runtime: {err}")))
+            .inspect_err(|_| {
+                observer.failure(
+                    Operation::WorkerLaunch,
+                    FailureClass::Unknown,
+                    PluginPhase::Activation,
+                );
+            })?,
     );
     let WorkerEndpoints {
         host_server,
@@ -566,11 +651,20 @@ fn load_one_worker_plugin(
         worker_advertise,
         worker_connect,
         worker_endpoint_file,
-    } = WorkerEndpoints::new(&activation_dir)?;
-    let host_state = Arc::new(WorkerHostRuntimeState::new(
-        activation_id.clone(),
-        auth_token.clone(),
-    ));
+    } = WorkerEndpoints::new(&activation_dir).inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerTransport,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        );
+    })?;
+    let mut host_state = WorkerHostRuntimeState::new(activation_id.clone(), auth_token.clone());
+    host_state.diagnostics = Some(Arc::new(diagnostic_transport::WorkerDiagnostics::new(
+        diagnostics.clone(),
+        activation_uuid,
+    )));
+    host_state.observer = observer.clone();
+    let host_state = Arc::new(host_state);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     runtime_handle.runtime().spawn(serve_host_runtime(
         host_server,
@@ -579,18 +673,31 @@ fn load_one_worker_plugin(
     ));
 
     let manifest_path = PathBuf::from(&manifest_ref);
-    let mut child = ChildGuard::new(spawn_worker_process(WorkerProcessLaunch {
-        runtime,
-        manifest_path: &manifest_path,
-        environment_ref: spec.environment_ref.as_deref(),
-        plugin_id: &spec.plugin_id,
-        entrypoint,
-        activation_id: &activation_id,
-        auth_token: &auth_token,
-        host_endpoint: &host_advertise,
-        worker_endpoint: &worker_advertise,
-        worker_endpoint_file: worker_endpoint_file.as_deref(),
-    })?);
+    let mut child = ChildGuard::new(
+        spawn_worker_process(WorkerProcessLaunch {
+            runtime,
+            manifest_path: &manifest_path,
+            environment_ref: spec.environment_ref.as_deref(),
+            plugin_id: &spec.plugin_id,
+            entrypoint: &entrypoint,
+            activation_id: &activation_id,
+            auth_token: &auth_token,
+            host_endpoint: &host_advertise,
+            worker_endpoint: &worker_advertise,
+            worker_endpoint_file: worker_endpoint_file.as_deref(),
+        })
+        .inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerLaunch,
+                FailureClass::Unknown,
+                PluginPhase::Activation,
+            )
+        })?,
+    );
+    observer.success(
+        crate::diagnostics::SuccessCode::PluginWorkerStarted,
+        PluginPhase::Activation,
+    );
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_started",
@@ -605,7 +712,14 @@ fn load_one_worker_plugin(
     let mut client = block_on_runtime(
         runtime_handle.runtime(),
         connect_worker_with_retry(&worker_connect, &spec.plugin_id),
-    )?;
+    )
+    .inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerTransport,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        )
+    })?;
 
     let health = block_on_runtime(
         runtime_handle.runtime(),
@@ -614,9 +728,17 @@ fn load_one_worker_plugin(
             auth_token: auth_token.clone(),
         }))),
     )
-    .map_err(|err| PluginError::RegistrationFailed(format!("worker health check failed: {err}")))?;
+    .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerHandshake, &err, PluginPhase::Activation);
+        PluginError::RegistrationFailed(format!("worker health check failed: {err}"))
+    })?;
     let health = health.into_inner();
     if !health.ok {
+        observer.failure(
+            Operation::WorkerHandshake,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        );
         let message = format!("worker plugin health check failed: {}", health.message);
         return Err(PluginError::RegistrationFailed(message));
     }
@@ -632,10 +754,22 @@ fn load_one_worker_plugin(
             host_endpoint: host_advertise.clone(),
         }))),
     )
-    .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
+    .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerHandshake, &err, PluginPhase::Activation);
+        PluginError::RegistrationFailed(format!("worker handshake failed: {err}"))
+    })?;
     let handshake = handshake.into_inner();
-    validate_worker_handshake(&spec.plugin_id, &handshake)?;
-    let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
+    validate_worker_handshake(&spec.plugin_id, &handshake).inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerHandshake,
+            FailureClass::Incompatible,
+            PluginPhase::Activation,
+        );
+    })?;
+    observer.success(
+        crate::diagnostics::SuccessCode::PluginWorkerHandshakeCompleted,
+        PluginPhase::Activation,
+    );
     host_state.set_gate_callback(WorkerGateCallback {
         callback_timeouts: callback_timeouts.clone(),
         plugin_kind: spec.plugin_id.clone(),
@@ -655,10 +789,16 @@ fn load_one_worker_plugin(
         }))),
     )
     .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerValidation, &err, PluginPhase::Validation);
         PluginError::RegistrationFailed(format!("worker validation RPC failed: {err}"))
     })?;
     let validate = validate.into_inner();
     if let Some(error) = validate.error {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
         return Err(worker_error_to_plugin(error, "worker validation failed"));
     }
     let validation_diagnostics = match validate.diagnostics {
@@ -666,6 +806,18 @@ fn load_one_worker_plugin(
             .map_err(PluginError::Serialization)?,
         None => Vec::new(),
     };
+    if diagnostics_have_errors(&validation_diagnostics) {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
+    } else {
+        observer.success(
+            crate::diagnostics::SuccessCode::PluginWorkerValidated,
+            PluginPhase::Validation,
+        );
+    }
 
     let instance = Arc::new(WorkerPluginInstance {
         callback_timeouts,
@@ -765,6 +917,15 @@ async fn serve_host_runtime(
     state: Arc<WorkerHostRuntimeState>,
     shutdown: oneshot::Receiver<()>,
 ) {
+    let diagnostics = diagnostic_limits::BoundedService::new(
+        nemo_relay_worker_proto::v1::relay_diagnostics_server::RelayDiagnosticsServer::new(
+            diagnostic_transport::Service {
+                state: state.clone(),
+            },
+        )
+        .max_decoding_message_size(diagnostic_transport::REQUEST_BYTES)
+        .max_encoding_message_size(diagnostic_transport::RESPONSE_BYTES),
+    );
     let service = RelayHostRuntimeServer::new(WorkerHostRuntimeService { state });
     let result = match endpoint {
         #[cfg(unix)]
@@ -782,6 +943,7 @@ async fn serve_host_runtime(
                 }
             };
             Server::builder()
+                .add_service(diagnostics)
                 .add_service(service)
                 .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async {
                     let _ = shutdown.await;
@@ -803,6 +965,7 @@ async fn serve_host_runtime(
                 }
             };
             Server::builder()
+                .add_service(diagnostics)
                 .add_service(service)
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     let _ = shutdown.await;
@@ -1116,7 +1279,21 @@ impl WorkerPluginInstance {
     // Cache its plan once per worker so multiple components do not repeat setup.
     async fn prepare_registrations(&self) -> crate::plugin::Result<()> {
         self.registrations
-            .get_or_try_init(|| self.request_registration_plan())
+            .get_or_try_init(|| async {
+                let result = self.request_registration_plan().await;
+                match &result {
+                    Ok(_) => self.host_state.observer.success(
+                        crate::diagnostics::SuccessCode::PluginWorkerRegistered,
+                        DiagnosticPhase::Activation,
+                    ),
+                    Err(_) => self.host_state.observer.failure(
+                        DiagnosticOperation::WorkerRegistration,
+                        DiagnosticFailureClass::Unknown,
+                        DiagnosticPhase::Activation,
+                    ),
+                }
+                result
+            })
             .await?;
         Ok(())
     }
@@ -1705,16 +1882,37 @@ impl WorkerInvocationGuard {
 
     fn cancel(&mut self, reason: impl Into<String>) {
         if let Some((mut client, request)) = self.cancellation(reason) {
+            let observer = self.host_state.observer.clone();
             self.runtime.spawn(async move {
-                let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+                let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
+                    .await
+                    .inspect_err(|error| {
+                        observer.rpc_failure(
+                            DiagnosticOperation::WorkerCancellation,
+                            error,
+                            DiagnosticPhase::Runtime,
+                        );
+                    });
             });
         }
     }
 
-    async fn cancel_and_wait(&mut self, reason: impl Into<String>) {
+    async fn cancel_and_wait(&mut self, reason: impl Into<String>) -> FlowResult<()> {
         if let Some((mut client, request)) = self.cancellation(reason) {
-            let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+            worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
+                .await
+                .inspect_err(|error| {
+                    self.host_state.observer.rpc_failure(
+                        DiagnosticOperation::WorkerCancellation,
+                        error,
+                        DiagnosticPhase::Runtime,
+                    );
+                })
+                .map_err(|error| {
+                    FlowError::Internal(format!("worker stream cleanup failed: {error}"))
+                })?;
         }
+        Ok(())
     }
 
     fn finish(&mut self) {
@@ -1744,17 +1942,28 @@ impl Drop for WorkerInvocationGuard {
     }
 }
 
-struct WorkerStreamCompletionSignal(watch::Sender<bool>);
+type WorkerStreamCloseResult = std::result::Result<(), String>;
+
+struct WorkerStreamCompletionSignal(watch::Sender<Option<WorkerStreamCloseResult>>);
 
 impl Drop for WorkerStreamCompletionSignal {
     fn drop(&mut self) {
-        self.0.send_replace(true);
+        self.0.send_if_modified(|outcome| {
+            if outcome.is_some() {
+                return false;
+            }
+            *outcome = Some(Err(
+                "worker stream task ended before cleanup completed".into()
+            ));
+            true
+        });
     }
 }
 
 struct WorkerForwardedLlmStream {
     receiver: Option<tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>>,
-    completion: watch::Receiver<bool>,
+    completion: watch::Receiver<Option<WorkerStreamCloseResult>>,
+    close_result: Option<FlowResult<()>>,
 }
 
 impl Stream for WorkerForwardedLlmStream {
@@ -1776,16 +1985,33 @@ impl LlmStreamInner for WorkerForwardedLlmStream {
 
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
         let this = self.get_mut();
-        this.receiver.take();
-        // Keep the stored observer reusable if this close future is cancelled.
-        let mut completion = this.completion.clone();
-        Box::pin(async move {
-            while !*completion.borrow_and_update() {
-                if completion.changed().await.is_err() {
-                    break;
+        // Disconnect before waiting so the forwarder requests worker cancellation.
+        if let Some(receiver) = this.receiver.take() {
+            let mut receiver = receiver.into_inner();
+            receiver.close();
+            while let Ok(item) = receiver.try_recv() {
+                if let Err(error) = item {
+                    this.close_result.get_or_insert(Err(error));
                 }
             }
-            Ok(())
+        }
+        let mut completion = this.completion.clone();
+        Box::pin(async move {
+            let outcome = completion
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|_| {
+                    FlowError::Internal("worker stream task ended before cleanup completed".into())
+                })?
+                .clone()
+                .expect("completion checked above")
+                .map_err(FlowError::Internal);
+            if this.close_result.is_none() {
+                this.close_result = Some(outcome);
+            }
+            this.close_result
+                .clone()
+                .expect("close result stored above")
         })
     }
 }
@@ -2158,67 +2384,88 @@ impl WorkerPluginCallback {
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
         let (next_ready_tx, next_ready_rx) = oneshot::channel();
-        let (completion_tx, completion_rx) = watch::channel(false);
+        let (completion_tx, completion_rx) = watch::channel(None);
         let plugin_id = self.plugin_kind.clone();
+        let observer = self.host_state.observer.clone();
         self.runtime.spawn(async move {
-            let _completion = WorkerStreamCompletionSignal(completion_tx);
-            let _codec_capabilities = codec_capabilities;
-            let result = tokio::select! {
-                result = client.invoke_stream(worker_rpc_request(invoke)) => result,
-                _ = tx.closed() => {
-                    guard.cancel_and_wait("host stopped consuming the worker stream").await;
-                    guard.finish();
-                    return;
-                }
-            };
-            let _ = next_ready_tx.send(());
-            match result {
-                Ok(response) => {
-                    let mut stream = response.into_inner();
-                    loop {
-                        let item = tokio::select! {
-                            item = stream.next() => item,
-                            _ = tx.closed() => {
-                                guard.cancel_and_wait("host stopped consuming the worker stream").await;
+            let completion = WorkerStreamCompletionSignal(completion_tx);
+            let outcome = async move {
+                let _codec_capabilities = codec_capabilities;
+                let result = tokio::select! {
+                    result = client.invoke_stream(worker_rpc_request(invoke)) => result,
+                    _ = tx.closed() => {
+                        guard.cancel_and_wait("host stopped consuming the worker stream").await?;
+                        guard.finish();
+                        return Ok(());
+                    }
+                };
+                let _ = next_ready_tx.send(());
+                match result {
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        loop {
+                            let item = tokio::select! {
+                                item = stream.next() => item,
+                                _ = tx.closed() => {
+                                    guard.cancel_and_wait("host stopped consuming the worker stream").await?;
+                                    break;
+                                }
+                            };
+                            let Some(item) = item else {
+                                break;
+                            };
+                            let result = match item {
+                                Ok(chunk) => {
+                                    if let Some(stream_chunk_item::Item::Error(error)) = &chunk.item
+                                        && is_worker_callback_failure(error, &guard.continuation_id)
+                                    {
+                                        observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime);
+                                    }
+                                    json_from_stream_chunk(chunk)
+                                        .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker"))
+                                }
+                                Err(err) => {
+                                    if !is_downstream_status(&err, &guard.continuation_id) {
+                                        observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                                    }
+                                    Err(FlowError::Internal(format!("worker stream transport failed: {err}")))
+                                }
+                            };
+                            let terminal = result.is_err();
+                            if tx.send(result).await.is_err() {
+                                guard.cancel_and_wait("host stopped consuming the worker stream").await?;
                                 break;
                             }
-                        };
-                        let Some(item) = item else {
-                            break;
-                        };
-                        let result = match item {
-                            Ok(chunk) => json_from_stream_chunk(chunk)
-                                .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker")),
-                            Err(err) => Err(FlowError::Internal(format!(
-                                "worker stream transport failed: {err}"
-                            ))),
-                        };
-                        let terminal = result.is_err();
-                        if tx.send(result).await.is_err() {
-                            guard.cancel_and_wait("host stopped consuming the worker stream").await;
-                            break;
-                        }
-                        if terminal {
-                            break;
+                            if terminal {
+                                // Error delivery can precede producer cleanup on the worker.
+                                guard.cancel_and_wait("worker stream failed").await?;
+                                break;
+                            }
                         }
                     }
+                    Err(err) => {
+                        if !is_downstream_status(&err, &guard.continuation_id) {
+                            observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                        }
+                        let reason = if err.code() == tonic::Code::DeadlineExceeded {
+                            "worker stream invocation timed out"
+                        } else {
+                            "worker stream transport failed"
+                        };
+                        let _ = tx
+                            .send(Err(worker_status_to_flow(
+                                "worker stream invoke failed",
+                                err,
+                            )))
+                            .await;
+                        guard.cancel_and_wait(reason).await?;
+                    }
                 }
-                Err(err) => {
-                    let reason = if err.code() == tonic::Code::DeadlineExceeded {
-                        "worker stream invocation timed out"
-                    } else {
-                        "worker stream transport failed"
-                    };
-                    let _ = tx
-                        .send(Err(worker_status_to_flow(
-                            "worker stream invoke failed",
-                            err,
-                        )))
-                        .await;
-                    guard.cancel_and_wait(reason).await;
-                }
+                guard.finish();
+                Ok::<(), FlowError>(())
             }
-            guard.finish();
+            .await;
+            completion.0.send_replace(Some(outcome.map_err(|error| error.to_string())));
         });
         next_ready_rx.await.map_err(|_| {
             FlowError::Internal(
@@ -2228,6 +2475,7 @@ impl WorkerPluginCallback {
         Ok(LlmJsonStream::from_closeable(WorkerForwardedLlmStream {
             receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
             completion: completion_rx,
+            close_result: None,
         }))
     }
 
@@ -2408,8 +2656,18 @@ impl WorkerPluginCallback {
         }
         guard.finish();
         result
-            .map(|response| report_worker_response(response.into_inner(), &self.plugin_kind))
+            .map(|response| {
+                let response = response.into_inner();
+                let failed = match &response.result {
+                    Some(invoke_response_result::Result::Error(error)) => is_worker_callback_failure(error, &guard.continuation_id),
+                    Some(invoke_response_result::Result::Json(result)) => result.error.as_ref().is_some_and(|error| is_worker_callback_failure(error, &guard.continuation_id)),
+                    _ => false,
+                };
+                if failed { self.host_state.observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime); }
+                report_worker_response(response, &self.plugin_kind)
+            })
             .map_err(|err| {
+                self.host_state.observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
                 if err.code() == tonic::Code::DeadlineExceeded {
                     FlowError::Internal(format!(
                         "worker invocation timed out (surface={surface_name}, callback={callback_name}): {err}"
@@ -2567,7 +2825,14 @@ where
     }
 }
 
+#[path = "worker_diagnostic_transport.rs"]
+mod diagnostic_limits;
+#[path = "worker_diagnostics.rs"]
+mod diagnostic_transport;
+
 struct WorkerHostRuntimeState {
+    observer: super::diagnostics::PluginDiagnostics,
+    diagnostics: Option<Arc<diagnostic_transport::WorkerDiagnostics>>,
     activation_id: String,
     auth_token: String,
     scope_stacks: Mutex<HashMap<String, StoredScopeStack>>,
@@ -2669,6 +2934,8 @@ impl Drop for ScopeStackCleanupGuard<'_> {
 impl WorkerHostRuntimeState {
     fn new(activation_id: String, auth_token: String) -> Self {
         Self {
+            diagnostics: None,
+            observer: super::diagnostics::PluginDiagnostics::default(),
             activation_id,
             auth_token,
             scope_stacks: Mutex::new(HashMap::new()),
@@ -3753,7 +4020,12 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 panic_payload_message(payload.as_ref())
             )))
         });
-        Ok(Response::new(tool_execution_result_response(result)))
+        let downstream_failed = result.is_err();
+        let mut response = tool_execution_result_response(result);
+        if downstream_failed && let Some(error) = &mut response.error {
+            error.downstream_continuation_id = Some(request.continuation_id);
+        }
+        Ok(Response::new(response))
     }
 
     /// Run an LLM call and drop its future if the worker invocation ends.
@@ -3771,6 +4043,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             ));
         };
         let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
+        let continuation_id = request.continuation_id;
         let request =
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
@@ -3786,7 +4059,11 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 panic_payload_message(payload.as_ref())
             )))
         });
-        Ok(Response::new(json_result(result)))
+        let mut response = json_result(result);
+        if let Some(error) = &mut response.error {
+            error.downstream_continuation_id = Some(continuation_id);
+        }
+        Ok(Response::new(response))
     }
 
     type LlmStreamNextStream =
@@ -3807,6 +4084,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             ));
         };
         let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
+        let continuation_id = request.continuation_id;
         let request = required_envelope(request.request, "llm stream next request")
             .map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
@@ -3818,12 +4096,15 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         )
         .await?
         .map_err(|payload| {
-            Status::internal(format!(
-                "worker stream continuation panicked: {}",
-                panic_payload_message(payload.as_ref())
-            ))
+            downstream_status(
+                Status::internal(format!(
+                    "worker stream continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )),
+                &continuation_id,
+            )
         })?
-        .map_err(status_from_flow)?;
+        .map_err(|error| downstream_status(status_from_flow(error), &continuation_id))?;
         let (tx, rx) = mpsc::channel(16);
         tokio::spawn(async move {
             context
@@ -3863,16 +4144,20 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 })
                 .await;
         });
-        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(|item| match item {
+        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |item| match item {
             Ok(value) => Ok(StreamChunk {
                 item: Some(stream_chunk_item::Item::Value(json_envelope_infallible(
                     JSON_SCHEMA,
                     &value,
                 ))),
             }),
-            Err(err) => Ok(StreamChunk {
-                item: Some(stream_chunk_item::Item::Error(flow_error_to_worker(err))),
-            }),
+            Err(err) => {
+                let mut error = flow_error_to_worker(err);
+                error.downstream_continuation_id = Some(continuation_id.clone());
+                Ok(StreamChunk {
+                    item: Some(stream_chunk_item::Item::Error(error)),
+                })
+            }
         });
         Ok(Response::new(Box::pin(mapped)))
     }
@@ -4356,6 +4641,7 @@ fn flow_error_to_worker(err: FlowError) -> WorkerError {
         code: "host.runtime_error".into(),
         message: super::http_error::to_message(&err),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -4529,6 +4815,37 @@ fn unix_endpoint_display(path: &Path) -> String {
 #[cfg(test)]
 #[path = "../../../tests/unit/dynamic_worker_tests.rs"]
 mod tests;
+
+// Attribution follows the returned error, never a mutable "last next failed" flag.
+// Existing continuation IDs are bounded host-issued identities; no error ledger is retained.
+fn is_propagated_continuation(origin: Option<&str>, continuation_id: &str) -> bool {
+    !continuation_id.is_empty() && origin == Some(continuation_id)
+}
+
+fn is_worker_callback_failure(error: &WorkerError, continuation_id: &str) -> bool {
+    error.code != "worker.cancelled"
+        && !is_propagated_continuation(error.downstream_continuation_id.as_deref(), continuation_id)
+}
+
+fn is_downstream_status(status: &Status, continuation_id: &str) -> bool {
+    is_propagated_continuation(
+        status
+            .metadata()
+            .get(DOWNSTREAM_CONTINUATION_METADATA)
+            .and_then(|value| value.to_str().ok()),
+        continuation_id,
+    )
+}
+
+fn downstream_status(mut status: Status, continuation_id: &str) -> Status {
+    // IDs originate in insert_continuation and are ASCII, including the UUID.
+    if let Ok(value) = continuation_id.parse() {
+        status
+            .metadata_mut()
+            .insert(DOWNSTREAM_CONTINUATION_METADATA, value);
+    }
+    status
+}
 
 fn report_worker_response(mut response: InvokeResponse, plugin_id: &str) -> InvokeResponse {
     let error = match response.result.as_mut() {

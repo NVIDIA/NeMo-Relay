@@ -5,6 +5,9 @@ mod types;
 
 pub(crate) use types::GatewayOverrides;
 
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -51,6 +54,7 @@ const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
+    pub(crate) diagnostics_http: Option<crate::diagnostics_http::DiagnosticsHttp>,
     pub(crate) config: GatewayConfig,
     #[allow(dead_code)]
     pub(crate) bootstrap_fingerprint: Option<String>,
@@ -61,6 +65,8 @@ pub(crate) struct AppState {
     pub(crate) http: Client,
     /// Configured helper requests cannot reuse credentials through redirects or transport retries.
     pub(crate) http_helper: Client,
+    /// Credential-free HTTP must not inherit proxy credentials from the environment.
+    pub(crate) http_plaintext: Client,
     /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
     pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
@@ -142,24 +148,33 @@ pub(crate) async fn serve_with_dynamic(
 
 /// Binds a gateway listener and translates address conflicts into actionable diagnostics.
 pub(crate) async fn bind_listener(bind: SocketAddr) -> Result<TcpListener, CliError> {
-    TcpListener::bind(bind).await.map_err(|err| {
-        // Translate the common bind-failure (port already in use) into an actionable message.
-        // Plain `io error: Address already in use (os error 48)` is unhelpful; the friendly
-        // version names the likely cause and points at the real fixes.
-        if err.kind() == std::io::ErrorKind::AddrInUse {
-            CliError::Launch(format!(
-                "cannot bind {} — port is already in use. Most likely cause: another \
+    TcpListener::bind(bind)
+        .await
+        .inspect(|_| diag::success(Operation::Gateway, SuccessCode::CliGatewayBound))
+        .map_err(|err| {
+            let class = match err.kind() {
+                std::io::ErrorKind::AddrInUse => FailureClass::Conflict,
+                std::io::ErrorKind::PermissionDenied => FailureClass::PermissionDenied,
+                _ => FailureClass::Io,
+            };
+            diag::failure(Operation::Gateway, CliFailureCode::GatewayBind, class);
+            // Translate the common bind-failure (port already in use) into an actionable message.
+            // Plain `io error: Address already in use (os error 48)` is unhelpful; the friendly
+            // version names the likely cause and points at the real fixes.
+            if err.kind() == std::io::ErrorKind::AddrInUse {
+                CliError::Launch(format!(
+                    "cannot bind {} — port is already in use. Most likely cause: another \
                  `nemo-relay` daemon is already running. Fix one of:\n  \
                  • use the managed shutdown command, or identify the owning daemon PID and \
                  terminate only that process\n  \
                  • use an ephemeral port: `nemo-relay --bind 127.0.0.1:0`\n  \
                  • pick a free port: `nemo-relay --bind 127.0.0.1:4041`",
-                bind
-            ))
-        } else {
-            CliError::Io(err)
-        }
-    })
+                    bind
+                ))
+            } else {
+                CliError::Io(err)
+            }
+        })
 }
 
 pub(crate) fn print_startup_status(bind: SocketAddr, config: &GatewayConfig) {
@@ -317,6 +332,7 @@ async fn serve_listener_with_dynamic_inner(
     let instance_id = state.instance_id.clone();
     let sessions = state.sessions.clone();
     let idle_state = state.clone();
+    let diagnostics_shutdown = state.diagnostics_http.clone();
     let app = router_with_state(state);
     let local_address = listener.local_addr()?;
     if let Some(identity) = managed_bootstrap.as_ref() {
@@ -348,7 +364,22 @@ async fn serve_listener_with_dynamic_inner(
         };
     let shutdown = server_shutdown_future(shutdown_mode, idle_shutdown);
     let shutdown = combine_shutdown_futures(shutdown, bootstrap_shutdown_rx);
-    let shutdown = shutdown.map(|shutdown| log_shutdown_started(shutdown, instance_id.clone()));
+    let shutdown = shutdown.map(|shutdown| {
+        log_shutdown_started(shutdown, instance_id.clone(), diagnostics_shutdown.clone())
+    });
+    // Streaming responses must not wait for a delayed ACK before sending small frames.
+    // Apply this to accepted sockets, including connections later upgraded to TLS.
+    use axum::serve::ListenerExt as _;
+    let listener = listener.tap_io(|stream| {
+        if let Err(error) = stream.set_nodelay(true) {
+            log::warn!(
+                target: "nemo_relay.server",
+                event = "socket_nodelay_failed",
+                error_kind = format!("{:?}", error.kind()).as_str();
+                "Failed to enable TCP_NODELAY"
+            );
+        }
+    });
     let serve_result = match shutdown {
         Some(shutdown) => {
             axum::serve(listener, app)
@@ -357,6 +388,10 @@ async fn serve_listener_with_dynamic_inner(
         }
         None => axum::serve(listener, app).await,
     };
+    if let Some(diagnostics) = diagnostics_shutdown {
+        diagnostics.close();
+    }
+
     finish_server_shutdown(serve_result, &sessions, plugin_activation, &instance_id).await
 }
 
@@ -382,9 +417,16 @@ fn server_shutdown_future(
     }
 }
 
-fn log_shutdown_started(shutdown: ShutdownFuture, instance_id: String) -> ShutdownFuture {
+fn log_shutdown_started(
+    shutdown: ShutdownFuture,
+    instance_id: String,
+    diagnostics: Option<crate::diagnostics_http::DiagnosticsHttp>,
+) -> ShutdownFuture {
     Box::pin(async move {
         shutdown.await;
+        if let Some(diagnostics) = diagnostics {
+            diagnostics.close();
+        }
         log::info!(
             target: "nemo_relay.server",
             event = "server_shutdown_started",
@@ -424,6 +466,11 @@ async fn finish_server_shutdown(
         .map(ServerPluginActivation::clear)
         .unwrap_or(Ok(()));
     if let Err(serve_error) = serve_result {
+        diag::failure(
+            Operation::Gateway,
+            CliFailureCode::GatewayServe,
+            FailureClass::Io,
+        );
         log::error!(
             target: "nemo_relay.server",
             event = "server_failed",
@@ -438,6 +485,7 @@ async fn finish_server_shutdown(
     close_result?;
     flush_result?;
     clear_result?;
+    diag::success(Operation::Gateway, SuccessCode::CliGatewayStopped);
     log::info!(
         target: "nemo_relay.server",
         event = "server_stopped",
@@ -528,6 +576,26 @@ impl AppState {
         let idle_read_timeout = config.response_timeout();
         let mut state = Self::with_sessions_and_timeout(config, sessions, idle_read_timeout);
         state.bootstrap_fingerprint = bootstrap_fingerprint;
+        state.diagnostics_http = crate::runtime_diagnostics::runtime()
+            .filter(|runtime| runtime.http_read)
+            .and_then(|runtime| {
+                let key = bootstrap_challenge_key.clone()?;
+                match crate::diagnostics_http::DiagnosticsHttp::new(
+                    runtime.context.reader(),
+                    key,
+                    runtime.coverage(),
+                ) {
+                    Ok(adapter) => Some(adapter),
+                    Err(_) => {
+                        log::warn!(
+                            target: "nemo_relay.diagnostics",
+                            event = "diagnostic_http_unavailable";
+                            "Diagnostic HTTP backing could not be admitted"
+                        );
+                        None
+                    }
+                }
+            });
         state.bootstrap_challenge_key = bootstrap_challenge_key;
         state.require_provider_client_token = require_provider_client_token;
         state.bootstrap_shutdown = bootstrap_shutdown;
@@ -547,6 +615,9 @@ impl AppState {
         idle_read_timeout: Option<Duration>,
     ) -> Self {
         let http = gateway_http_client(idle_read_timeout, false, false);
+        let http_plaintext = credential_free_http_client(idle_read_timeout)
+            .build()
+            .expect("credential-free HTTP client configuration is valid");
         let http_helper = if config.openai_api_key_helper.is_some()
             || config.anthropic_api_key_helper.is_some()
         {
@@ -564,6 +635,7 @@ impl AppState {
         let http_no_redirect = gateway_http_client(idle_read_timeout, true, false);
         Self {
             config,
+            diagnostics_http: None,
             bootstrap_fingerprint: None,
             bootstrap_challenge_key: None,
             require_provider_client_token: false,
@@ -571,6 +643,7 @@ impl AppState {
             http,
             http_no_redirect,
             http_helper,
+            http_plaintext,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             active_websockets: Arc::new(AtomicUsize::new(0)),
@@ -733,6 +806,19 @@ impl AppState {
     }
 }
 
+// Shared builder lets local network tests resolve a synthetic hostname without replacing policy.
+fn credential_free_http_client(idle_read_timeout: Option<Duration>) -> reqwest::ClientBuilder {
+    let builder = Client::builder()
+        .no_proxy()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never());
+    match idle_read_timeout {
+        Some(timeout) => builder.read_timeout(timeout),
+        None => builder,
+    }
+}
+
 fn gateway_http_client(
     idle_read_timeout: Option<Duration>,
     no_redirect: bool,
@@ -771,7 +857,8 @@ fn gateway_http_client(
 
 fn router_with_state(state: AppState) -> Router {
     let max_hook_payload_bytes = state.config.max_hook_payload_bytes;
-    Router::new()
+    let diagnostics = state.diagnostics_http.clone();
+    let router = Router::new()
         .route("/healthz", get(healthz))
         .route("/bootstrap/tunnel", get(bootstrap_tls_tunnel))
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
@@ -907,7 +994,11 @@ fn router_with_state(state: AppState) -> Router {
         })
         .layer(middleware::from_fn(responses_websocket_fallback))
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
-        .with_state(state)
+        .with_state(state);
+    match diagnostics {
+        Some(diagnostics) => router.merge(diagnostics.unsecured_router()),
+        None => router,
+    }
 }
 
 // Codex treats 426 from its Responses WebSocket probe as a signal to use HTTP/SSE. Keep ordinary
@@ -976,25 +1067,66 @@ async fn bootstrap_tls_tunnel(
         ),
         nonce,
     );
+    let inspection = fingerprint == "diagnostics-read/v1";
+    let diagnostics = if inspection {
+        let Some(adapter) = state.diagnostics_http.clone() else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        Some(adapter)
+    } else {
+        None
+    };
+    let diagnostic_connection = match diagnostics
+        .as_ref()
+        .map(|adapter| adapter.try_connection())
+        .transpose()
+    {
+        Ok(permit) => permit,
+        Err(_) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+    };
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
-        let Ok(upgraded) = upgrade.await else {
-            return;
+        let _diagnostic_connection = diagnostic_connection;
+        let serve = async {
+            let Ok(upgraded) = upgrade.await else {
+                return;
+            };
+            let acceptor = tokio_rustls::TlsAcceptor::from(tls);
+            let handshake = tokio::time::timeout(
+                TLS_HANDSHAKE_TIMEOUT,
+                acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
+            )
+            .await;
+            drop(handshake_permit);
+            let Ok(Ok(mut encrypted)) = handshake else {
+                return;
+            };
+            if let Some(adapter) = diagnostics.as_ref() {
+                // The entire diagnostic connection, including body delivery and idle
+                // clients, has a deadline. Its router never reaches execution handlers.
+                encrypted.get_mut().1.set_buffer_limit(Some(32 * 1024));
+                let service =
+                    hyper_util::service::TowerToHyperService::new(adapter.clone().router());
+                let io = hyper_util::rt::TokioIo::new(encrypted);
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                builder.max_buf_size(16 * 1024).max_headers(16);
+                let _ = builder.serve_connection(io, service).await;
+                return;
+            }
+            let Ok(mut local) = tokio::net::TcpStream::connect(local_address).await else {
+                return;
+            };
+            let _ = tokio::io::copy_bidirectional(&mut encrypted, &mut local).await;
         };
-        let acceptor = tokio_rustls::TlsAcceptor::from(tls);
-        let handshake = tokio::time::timeout(
-            TLS_HANDSHAKE_TIMEOUT,
-            acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
-        )
-        .await;
-        drop(handshake_permit);
-        let Ok(Ok(mut encrypted)) = handshake else {
-            return;
-        };
-        let Ok(mut local) = tokio::net::TcpStream::connect(local_address).await else {
-            return;
-        };
-        let _ = tokio::io::copy_bidirectional(&mut encrypted, &mut local).await;
+        if let Some(adapter) = diagnostics.as_ref() {
+            // Bound upgrade, TLS handshake, request parsing, and delivery together.
+            tokio::select! {
+                _ = tokio::time::timeout(Duration::from_secs(5), serve) => {},
+                _ = adapter.wait_closed() => {},
+            }
+        } else {
+            serve.await;
+        }
     });
     Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
@@ -1495,3 +1627,7 @@ fn hook_payload_rejection(
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/diagnostic_transport_tests.rs"]
+mod diagnostic_transport_tests;

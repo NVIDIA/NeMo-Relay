@@ -63,8 +63,8 @@ def repository_metadata(source: dict[str, object]) -> dict[str, object]:
 
 
 def metapackage_files(manifest: dict[str, object]) -> list[str]:
-    """Return the JavaScript and declaration files exported by the package."""
-    files = {str(manifest["main"]), str(manifest["types"]), "README.md"}
+    """Return public entry points, declarations, and private runtime dependencies."""
+    files = {str(manifest["main"]), str(manifest["types"]), "README.md", "diagnostics_query_contract.js"}
     exports = manifest.get("exports")
     if not isinstance(exports, dict):
         raise ValueError("Node package manifest is missing exports")

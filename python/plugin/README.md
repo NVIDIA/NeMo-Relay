@@ -48,6 +48,19 @@ The following rows describe the plugin authoring surfaces available through this
 The worker process isolates Python dependencies and crashes from Relay while preserving
 host-owned execution, event, scope, cancellation, and shutdown semantics.
 
+## Propagating Continuation Errors
+
+Re-raise an unchanged error from `ToolNext`, `LlmNext`, or `LlmStreamNext` to
+preserve its downstream origin. Host-returned error envelopes remain catchable
+as `WorkerSdkError`; stream transport failures retain their gRPC exception type.
+Constructing a new exception represents a distinct plugin failure.
+
+The SDK preserves the host-issued continuation identity through callback and
+stream responses. The host excludes a forwarded error from plugin callback
+failure counts only when that identity matches the current invocation. Existing
+error text and execution behavior are preserved. Older SDKs may discard this
+additive provenance; absent identity retains the existing attribution behavior.
+
 ## Installation
 
 Add the SDK to the Python worker project's dependencies:

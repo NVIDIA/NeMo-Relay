@@ -25,9 +25,9 @@ Choose the entry point that matches the user's current outcome:
   [`nemo-relay-get-started`](nemo-relay-get-started/SKILL.md).
 - **Want the fastest proof of value**: use
   [`nemo-relay-get-started`](nemo-relay-get-started/SKILL.md). It selects the
-  first path compatible with the user's goal and environment: the CLI for a
-  generic trial, a maintained integration such as LangChain or LangGraph when
-  already present, or language-specific manual integration.
+  smallest compatible path from the current quick-start index for the user's
+  goal and environment. It asks one concise question when the execution
+  boundary is unclear.
 - **Already know where your application calls tools or models**: use
   [`nemo-relay-instrument-calls`](nemo-relay-instrument-calls/SKILL.md).
 - **Integrating Relay into an unsupported framework or harness**: use
@@ -38,11 +38,10 @@ Choose the entry point that matches the user's current outcome:
   [`nemo-relay-plugin-observability`](nemo-relay-plugin-observability/SKILL.md).
 - **Something is not loading or emitting events**: use
   [`nemo-relay-debug-runtime-integration`](nemo-relay-debug-runtime-integration/SKILL.md).
-- **Using Codex Desktop**: prefer the temporary CLI try-now path. Before a
-  persistent Codex install changes global provider configuration,
-  [`nemo-relay-install`](nemo-relay-install/SKILL.md) warns about the current
-  [history-visibility bug](https://github.com/openai/codex/issues/24648) and
-  creates a workspace recovery file with undo instructions.
+- **Using Codex Desktop**: prefer the temporary CLI try-now path when it
+  satisfies the user's goal. Before persistent setup changes global provider
+  configuration, follow the current Codex Desktop continuity guidance in
+  [`nemo-relay-install`](nemo-relay-install/SKILL.md).
 
 ## Onboarding
 

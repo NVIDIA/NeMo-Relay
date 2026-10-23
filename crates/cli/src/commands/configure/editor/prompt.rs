@@ -10,8 +10,8 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Password, Select};
 
 use super::{
-    ConfigDocument, ConfigEditCommand, LOG_FORMATS, LOG_LEVELS, ensure_tty_with,
-    resolve_edit_target,
+    ConfigDocument, ConfigEditCommand, LOG_FAILURE_POLICIES, LOG_FORMATS, LOG_LEVELS,
+    ensure_tty_with, resolve_edit_target,
 };
 use crate::error::CliError;
 
@@ -156,6 +156,7 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 "Anthropic API key helper: {}",
                 document.secret_summary("anthropic_api_key_helper")
             ),
+            "Credential-free HTTP model hosts (explicit opt-in)".into(),
             "Back".into(),
         ];
         match select(theme, "Provider upstreams", &choices)? {
@@ -175,7 +176,23 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
             7 => edit_secret(theme, document, "anthropic_api_key")?,
             8 => edit_api_key_helper(theme, document, "openai")?,
             9 => edit_api_key_helper(theme, document, "anthropic")?,
-            10 => return Ok(()),
+            10 => {
+                println!(
+                    "HTTP exposes model content without encryption. Credentials and custom headers will not be forwarded."
+                );
+                println!(
+                    "Use Add/Edit/Remove to update hosts; Reset or Clear writes an empty deny list."
+                );
+                if let Some(hosts) = crate::plugins::edit_string_list(
+                    theme,
+                    "upstream.insecure_http_model_hosts",
+                    &document.http_model_hosts()?,
+                    "config.toml",
+                )? {
+                    document.set_http_model_hosts(hosts)?;
+                }
+            }
+            11 => return Ok(()),
             _ => unreachable!(),
         }
     }
@@ -538,6 +555,10 @@ fn edit_sink(
                 document.sink_integer_summary(index, "queue_capacity")
             ),
             format!("Rotation: {}", document.sink_rotation_summary(index)),
+            format!(
+                "Startup failure policy: {}",
+                document.sink_string_summary(index, "failure_policy")
+            ),
             "Remove sink".into(),
             "Back".into(),
         ];
@@ -547,7 +568,14 @@ fn edit_sink(
             2 => edit_sink_enum(theme, document, index, "format", LOG_FORMATS)?,
             3 => edit_sink_queue_capacity(theme, document, index)?,
             4 => edit_sink_rotation(theme, document, index)?,
-            5 => {
+            5 => edit_sink_enum(
+                theme,
+                document,
+                index,
+                "failure_policy",
+                LOG_FAILURE_POLICIES,
+            )?,
+            6 => {
                 document.remove_sink(index)?;
                 return Ok(());
             }
