@@ -314,8 +314,11 @@ These existing interfaces retain their own contracts:
 - Native legacy callbacks.
 - Worker `GetRuntimeDiagnostics`.
  Snapshot
-readers do not fall back to those reports. OTel diagnostics integration, CPU
-attribution, and durable restart history are not supported.
+readers do not fall back to those reports. Skipped automatic OTel exporters are
+recorded directly as activation-phase `plugin.registration_failed` observations;
+their activation warnings remain in plugin reports independently. Broader OTel
+pipeline diagnostics integration, CPU attribution, and durable restart history
+are not supported.
 
 ## Detailed Memory Inspection
 

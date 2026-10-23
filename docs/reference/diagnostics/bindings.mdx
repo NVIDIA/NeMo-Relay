@@ -51,8 +51,9 @@ A reader grants access to detail that can contain unsanitized data. Query filter
 do not restrict that authority. Snapshots also contain totals for the whole context.
 If your application serves reads to other clients, it must authorize each client.
 Snapshots do not flow into subscribers, exporters, legacy reports, exception
-attachments, or operational logs. OpenTelemetry (OTel) integration is not yet
-supported. Among embedded application bindings, only the Rust runtime API creates
+attachments, or operational logs. Automatic OpenTelemetry (OTel) exporter
+construction failures are recorded at plugin activation; broader OTel pipeline
+integration is not yet supported. Among embedded application bindings, only the Rust runtime API creates
 custom components and recorders. Native Rust and Rust/Python worker SDKs also
 support plugin-internal recording through their separate diagnostic facades.
 Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for those APIs. The

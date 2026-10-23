@@ -873,6 +873,15 @@ plain HTTP, add the intended host to `insecure_http_hosts`.
 For an automatic exporter alone, you can instead list the host in
 `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`.
 
+When runtime diagnostics are enabled, each skipped automatic exporter also records
+one `plugin.registration_failed` observation with activation phase and warning
+severity. Its detail uses the same redacted explanation as the activation report.
+Typed header validation failures have cause `invalid_input`; errors whose causes
+have already been flattened by the exporter retain cause `unknown`. Relay does
+not infer causes from error strings or include backend error text in this detail.
+The activation report remains available when runtime diagnostics are disabled.
+This recording does not change plugin activation success or mark the process unhealthy.
+
 A configured endpoint skipped because of process-global headers does not prevent
 activation when at least one automatic exporter is active. The automatic
 exporters retain their environment headers; skipped configured endpoints receive

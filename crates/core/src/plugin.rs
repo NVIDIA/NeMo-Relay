@@ -1125,6 +1125,31 @@ impl PluginRegistrationContext {
         self.activation_diagnostics.push(diagnostic);
     }
 
+    /// Record a nonfatal subresource failure once, retaining the legacy warning.
+    /// The producer supplies safe detail and a classification before flattening.
+    /// State-only recording preserves the existing operational log boundary.
+    pub(crate) fn record_nonfatal_activation_failure(
+        &mut self,
+        classification: Classification,
+        diagnostic: ConfigDiagnostic,
+    ) {
+        if let Some(recorder) = &self.diagnostic_recorder {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    classification,
+                    DiagnosticDetailRef::Text(&diagnostic.message),
+                    NonZeroU64::MIN,
+                )
+                .with_severity(DiagnosticSeverity::Warning)
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation.into()),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+        self.record_activation_diagnostic(diagnostic);
+    }
+
     pub(crate) fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
         &self.activation_diagnostics
     }

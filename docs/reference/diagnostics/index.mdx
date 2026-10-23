@@ -368,8 +368,11 @@ Diagnostic retention remains independent of these delivery policies. Refer to
 [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
-OpenTelemetry subscriber diagnostics and OTel-dependent plugin reports remain
-legacy-only. They are not projections of this canonical store.
+OpenTelemetry subscriber delivery diagnostics remain legacy-only. Skipped
+automatic exporters record `plugin.registration_failed` at activation with a
+warning severity and a safe explanation shared with the plugin activation report.
+This uses Plugin/Common ownership and leaves the execution mechanism unset.
+The legacy report is maintained independently; it is not replayed from snapshots.
 
 ## Classifiers and Producer Coverage
 
@@ -432,7 +435,7 @@ integrations. It outlives individual plugin activations.
 | Surface | Production Coverage |
 | --- | --- |
 | Logging adapter and sinks | Typed recording and optional log projection |
-| Common component activation | Registration failures and activation unwinds, recorded once at the owning operation |
+| Common component activation | Registration failures, activation unwinds, and nonfatal automatic OTel exporter construction failures, recorded once at the owning operation |
 | Shared host configuration | One canonical inheritance notice per contributing ambient file, preserving existing warnings/reports |
 | Native ABI and dynamic trust/policy | Records failures in policy, artifact, and schema checks. Also records native load, validation, registration, and callback failures. |
 | Worker host lifecycle and execution | Launch, handshake, validation, registration, callback and transport failures, cancellation, shutdown, exit, and process cleanup |

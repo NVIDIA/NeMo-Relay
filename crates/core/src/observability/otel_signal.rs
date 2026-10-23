@@ -548,9 +548,10 @@ pub(super) fn validate_automatic_header_environment(signal_variable: &'static st
                 .get(index + 1..index + 3)
                 .is_some_and(|escape| escape.iter().all(u8::is_ascii_hexdigit))
         {
-            return Err(OpenTelemetryError::ExporterBuild(format!(
-                "{variable} contains a malformed percent escape"
-            )));
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: variable.to_string(),
+                message: "contains a malformed percent escape".to_string(),
+            });
         }
     }
     Ok(())

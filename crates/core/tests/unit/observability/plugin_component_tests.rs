@@ -8554,3 +8554,154 @@ fn signal_shutdown_distinguishes_delivery_failures_from_provider_failures() {
         }
     }
 }
+
+#[test]
+fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, PluginPhase};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variables = [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_SDK_DISABLED",
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "https://user:secret@collector.example/private?token=secret-query",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "authorization=secret-header%ZZ",
+        );
+    }
+    for enabled in [true, false] {
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let projected = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&projected);
+        let _projection = diagnostics
+            .subscribe_projection(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        let config = serde_json::from_value(json!({"version": 4})).unwrap();
+        register_observability(config, &mut ctx).unwrap();
+        let reports = ctx.activation_diagnostics();
+        assert_eq!(reports.len(), 3);
+        for report in reports {
+            assert!(report.message.contains("invalid exporter headers"));
+            assert_eq!(report.code, "observability.automatic_otel_signal_skipped");
+        }
+        if enabled {
+            let snapshot = diagnostics
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            assert_eq!(snapshot.events.len(), 3);
+            for (event, report) in snapshot.events.iter().zip(reports) {
+                assert_eq!(event.code(), "plugin.registration_failed");
+                assert_eq!(event.classification.failure_class(), Some("invalid_input"));
+                assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
+                assert_eq!(
+                    event.severity,
+                    crate::diagnostics::DiagnosticSeverity::Warning
+                );
+                assert!(
+                    serde_json::to_string(&event.detail)
+                        .unwrap()
+                        .contains(&report.message)
+                );
+            }
+            let serialized = serde_json::to_string(&snapshot).unwrap();
+            for secret in ["user", "secret", "/private", "%ZZ"] {
+                assert!(!serialized.contains(secret), "diagnostics exposed {secret}");
+            }
+        }
+        // Existing operational logging owns output; the adapter must not duplicate it.
+        assert_eq!(projected.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchanged() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let failed = automatic_subscriber::<()>(
+        true,
+        "traces",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        &mut ctx,
+        || {
+            Err(
+                crate::observability::otel::OpenTelemetryError::ExporterBuild(
+                    "TLS private-key secret: invalid input unavailable".to_string(),
+                ),
+            )
+        },
+    );
+    assert!(failed.is_empty());
+    let healthy = automatic_subscriber(
+        true,
+        "metrics",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        &mut ctx,
+        || Ok(()),
+    );
+    assert_eq!(healthy.len(), 1);
+    let disabled = automatic_subscriber::<()>(
+        false,
+        "logs",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        &mut ctx,
+        || panic!("disabled exporter built"),
+    );
+    assert!(disabled.is_empty());
+    assert_eq!(ctx.activation_diagnostics().len(), 1);
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].classification.failure_class(),
+        Some("unknown")
+    );
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("private-key secret")
+    );
+}

@@ -2168,6 +2168,56 @@ fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) 
     });
 }
 
+/// Classify from typed evidence only; backend strings can contain credentials and
+/// flatten several causes, so they must neither be parsed nor copied into reports.
+fn automatic_exporter_failure(
+    error: &crate::observability::otel::OpenTelemetryError,
+) -> (crate::diagnostics::Classification, &'static str) {
+    use crate::diagnostics::{
+        Classification, CommonPluginFailureCode, FailureClass, FailureCode, PluginFailureCode,
+    };
+    use crate::observability::otel::OpenTelemetryError;
+
+    let (class, reason) = match error {
+        OpenTelemetryError::InvalidGrpcHeader { .. } | OpenTelemetryError::InvalidHeader { .. } => {
+            (
+                FailureClass::InvalidInput,
+                "invalid exporter headers; check the selected OTLP header settings",
+            )
+        }
+        OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { .. } => (
+            FailureClass::InvalidInput,
+            "unsupported process-global header configuration",
+        ),
+        OpenTelemetryError::InvalidAttributeMappings(_) => (
+            FailureClass::InvalidInput,
+            "invalid attribute mapping configuration",
+        ),
+        OpenTelemetryError::InvalidMetadataPromotionPrefixes(_) => (
+            FailureClass::InvalidInput,
+            "invalid metadata promotion prefix configuration",
+        ),
+        OpenTelemetryError::ExporterBuild(_)
+        | OpenTelemetryError::TraceProvider(_)
+        | OpenTelemetryError::LogProvider(_)
+        | OpenTelemetryError::MetricProvider(_)
+        | OpenTelemetryError::Core(_) => (
+            FailureClass::Unknown,
+            "exporter initialization failed; the underlying cause is unavailable in structured form; check endpoint, TLS, and exporter settings",
+        ),
+    };
+    (
+        Classification::failure(
+            FailureCode::Plugin(PluginFailureCode::Common(
+                CommonPluginFailureCode::RegistrationFailed,
+            )),
+            class,
+        )
+        .expect("registration failure supports the producer's cause class"),
+        reason,
+    )
+}
+
 /// Build one automatic subscriber without preventing healthy signals from activating.
 fn automatic_subscriber<T>(
     enabled: bool,
@@ -2202,13 +2252,14 @@ fn automatic_subscriber<T>(
                 .and_then(|endpoint| redacted_origin(&endpoint))
                 .map(|origin| format!(" ({origin})"))
                 .unwrap_or_default();
-            ctx.record_activation_diagnostic(ConfigDiagnostic {
+            let (classification, reason) = automatic_exporter_failure(&error);
+            ctx.record_nonfatal_activation_failure(classification, ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 code: "observability.automatic_otel_signal_skipped".to_string(),
                 component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
                 field: Some(endpoint_source.to_string()),
                 message: format!(
-                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped; check the endpoint and exporter settings. Plain HTTP requires its host in insecure_http_hosts."
+                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped: {reason}. For remote plain HTTP destinations, check insecure_http_hosts."
                 ),
             });
             Vec::new()
