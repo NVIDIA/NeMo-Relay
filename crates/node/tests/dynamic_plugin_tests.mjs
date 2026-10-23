@@ -335,6 +335,79 @@ enabled = true
     }
   });
 
+  for (const forwarded of [false, true]) {
+    for (const mode of ['pending', 'end', 'error']) {
+      it(`waits for native producer cleanup after ${mode} (forwarded=${forwarded})`, async () => {
+        const activation = await initializePluginHostWithDeclarations({ version: 1, components: [] }, [
+          activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
+        ]);
+        const events = [];
+        const subscriber = `native-cleanup-${mode}-${forwarded}`;
+        const markerPath = path.join(tempRoot, `${subscriber}.marker`);
+        let stream;
+        lib.registerSubscriber(subscriber, (event) => events.push(event));
+        lib.__testForceStreamForwarding(forwarded);
+        try {
+          const request = nativeRequest();
+          request.content.marker_path = markerPath;
+          request.content.mode = mode;
+          stream = await lib.llmStreamCallExecute('native-fixture-cleanup-stream', request, async function* () {
+            throw new Error('native fixture should replace the provider');
+          });
+          assert.deepEqual(await stream.next(), { token: 'first' });
+          if (mode === 'end') {
+            assert.equal(await stream.next(), null);
+          } else if (mode === 'error') {
+            await assert.rejects(() => stream.next(), /native cleanup stream failed/);
+          }
+          await Promise.all([stream.close(), stream.close()]);
+          assert.equal(readFileSync(markerPath, 'utf8'), 'dropped');
+          await lib.flushSubscribers();
+          assert.ok(
+            events.some((event) => event.name === 'fixture.native.stream.cleanup' && event.scope_category === 'end'),
+          );
+          await stream.close();
+          assert.equal(await stream.next(), null);
+        } finally {
+          await stream?.close();
+          lib.__testForceStreamForwarding(false);
+          lib.deregisterSubscriber(subscriber);
+          await activation.close();
+        }
+      });
+    }
+  }
+
+  for (const mode of ['pending', 'end', 'error']) {
+    it(`waits for gRPC worker producer cleanup after ${mode}`, async () => {
+      const activation = await initializePluginHostWithDeclarations({ version: 1, components: [] }, [
+        activationSpec('fixture_worker', 'worker', workerManifestRef),
+      ]);
+      const markerPath = path.join(tempRoot, `worker-cleanup-${mode}.marker`);
+      let stream;
+      try {
+        const request = nativeRequest();
+        request.content.marker_path = markerPath;
+        request.content.mode = mode;
+        stream = await lib.llmStreamCallExecute('worker-fixture-cleanup-stream', request, async function* () {
+          throw new Error('worker fixture should replace the provider');
+        });
+        assert.deepEqual(await stream.next(), { token: 'first' });
+        if (mode === 'end') {
+          assert.equal(await stream.next(), null);
+        } else if (mode === 'error') {
+          await assert.rejects(() => stream.next(), /worker cleanup stream failed/);
+        }
+        await stream.close();
+        assert.equal(readFileSync(markerPath, 'utf8'), 'dropped');
+        await stream.close();
+      } finally {
+        await stream?.close();
+        await activation.close();
+      }
+    });
+  }
+
   it('rejects a required native plugin with an incorrect digest before registering callbacks', async () => {
     const invalidManifestRef = path.join(tempRoot, 'invalid-integrity.toml');
     writeFileSync(

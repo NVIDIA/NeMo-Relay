@@ -38,7 +38,7 @@ use crate::api::runtime::{
     LlmCodecIdentity, LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
     LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, ToolConditionalFn,
     ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
@@ -2441,6 +2441,8 @@ fn remove_native_next_operation(owner: &Option<NativeAsyncNextOwner>, id: tokio:
 }
 
 struct NativeAsyncStream {
+    // ABI references are released by the plugin after its producer has dropped.
+    plugin_references: tokio::sync::watch::Sender<usize>,
     sender: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
     settled: AtomicBool,
@@ -2456,6 +2458,7 @@ struct NativeAsyncStream {
 struct NativeAsyncStreamReceiver {
     receiver: tokio::sync::mpsc::Receiver<FlowResult<Json>>,
     stream: Arc<NativeAsyncStream>,
+    close_result: Option<FlowResult<()>>,
 }
 
 struct NativeAsyncStreamCallbackGuard {
@@ -2534,8 +2537,8 @@ impl Stream for NativeAsyncStreamReceiver {
     }
 }
 
-impl Drop for NativeAsyncStreamReceiver {
-    fn drop(&mut self) {
+impl NativeAsyncStreamReceiver {
+    fn cancel(&self) {
         let _settlement = self
             .stream
             .settlement
@@ -2556,6 +2559,37 @@ impl Drop for NativeAsyncStreamReceiver {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take();
+    }
+}
+
+impl LlmStreamInner for NativeAsyncStreamReceiver {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        Box::pin(async move {
+            if let Some(result) = &this.close_result {
+                return result.clone();
+            }
+            this.cancel();
+            this.receiver.close();
+            // Finish/reject only settle chunk delivery. The plugin's final release is
+            // the acknowledgement that its stream and scope guards have been dropped.
+            let mut references = this.stream.plugin_references.subscribe();
+            let _ = references.wait_for(|count| *count == 0).await;
+            let mut result = Ok(());
+            while let Ok(item) = this.receiver.try_recv() {
+                if result.is_ok() {
+                    result = item.map(|_| ());
+                }
+            }
+            this.close_result = Some(result.clone());
+            result
+        })
+    }
+}
+
+impl Drop for NativeAsyncStreamReceiver {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -3192,6 +3226,8 @@ unsafe extern "C" fn native_async_stream_retain(
         return NemoRelayStatus::NullPointer;
     }
     unsafe { Arc::increment_strong_count(stream.cast::<NativeAsyncStream>()) };
+    let stream = unsafe { &*stream.cast::<NativeAsyncStream>() };
+    stream.plugin_references.send_modify(|count| *count += 1);
     NemoRelayStatus::Ok
 }
 
@@ -3256,6 +3292,7 @@ unsafe extern "C" fn native_async_stream_llm_request_codec_encode(
 unsafe extern "C" fn native_async_stream_release(stream: *const NemoRelayNativeAsyncStream) {
     if !stream.is_null() {
         let stream = unsafe { Arc::from_raw(stream as *const NativeAsyncStream) };
+        stream.plugin_references.send_modify(|count| *count -= 1);
         if stream._callback_user_data.is_some() {
             defer_native_handle_drop(stream);
         }
@@ -4464,6 +4501,7 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
             let (sender, receiver) =
                 tokio::sync::mpsc::channel(NATIVE_ASYNC_STREAM_CHANNEL_CAPACITY);
             let stream = Arc::new(NativeAsyncStream {
+                plugin_references: tokio::sync::watch::channel(1).0,
                 sender: Mutex::new(Some(sender)),
                 cancelled: AtomicBool::new(false),
                 settled: AtomicBool::new(false),
@@ -4476,6 +4514,7 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
                 _callback_user_data: Some(user_data.clone()),
             });
             let output = NativeAsyncStreamReceiver {
+                close_result: None,
                 receiver,
                 stream: Arc::clone(&stream),
             };
@@ -4547,7 +4586,7 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
                     "native async stream callback returned Complete without finishing".into(),
                 ));
             }
-            Ok(LlmJsonStream::new(output))
+            Ok(LlmJsonStream::from_closeable(output))
         })
     })
 }

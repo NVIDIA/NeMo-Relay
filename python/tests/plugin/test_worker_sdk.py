@@ -2955,27 +2955,35 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
     invoke_task = asyncio.create_task(service.Invoke(request, AbortContext()))
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    first = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-unary",
-            auth_token=AUTH_TOKEN,
-            reason="test timeout",
-        ),
-        AbortContext(),
+    first_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-unary",
+                auth_token=AUTH_TOKEN,
+                reason="test timeout",
+            ),
+            AbortContext(),
+        )
     )
     await asyncio.wait_for(cancelled.wait(), timeout=1)
-    second = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-unary",
-            auth_token=AUTH_TOKEN,
-            reason="repeat",
-        ),
-        AbortContext(),
+    second_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-unary",
+                auth_token=AUTH_TOKEN,
+                reason="repeat",
+            ),
+            AbortContext(),
+        )
     )
+    await asyncio.sleep(0)
+    assert not first_task.done()
+    assert not second_task.done()
     reused = await asyncio.wait_for(service.Invoke(request, AbortContext()), timeout=1)
     release.set()
+    first, second = await asyncio.wait_for(asyncio.gather(first_task, second_task), timeout=1)
     response = await asyncio.wait_for(invoke_task, timeout=1)
 
     assert first.accepted
@@ -2990,6 +2998,8 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
 async def test_cancel_invocation_stops_active_async_stream() -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
 
     class CancelStreamPlugin(WorkerPlugin):
         plugin_id = "tests.cancel_stream"
@@ -3002,9 +3012,10 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
                 started.set()
                 try:
                     await asyncio.Event().wait()
-                except asyncio.CancelledError:
+                finally:
+                    cleanup_started.set()
+                    await finish_cleanup.wait()
                     cancelled.set()
-                    raise
                 if False:
                     yield {}
 
@@ -3024,15 +3035,22 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
 
     consume_task = asyncio.create_task(consume())
     await asyncio.wait_for(started.wait(), timeout=1)
-    ack = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-stream",
-            auth_token=AUTH_TOKEN,
-            reason="stream abandoned",
-        ),
-        AbortContext(),
+    cancel_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-stream",
+                auth_token=AUTH_TOKEN,
+                reason="stream abandoned",
+            ),
+            AbortContext(),
+        )
     )
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    assert not cancel_task.done()
+    finish_cleanup.set()
+    ack = await asyncio.wait_for(cancel_task, timeout=1)
+    assert cancelled.is_set()
     chunks = await asyncio.wait_for(consume_task, timeout=1)
 
     assert ack.accepted

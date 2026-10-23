@@ -135,6 +135,12 @@ The SDK handles the host push protocol; the plugin still must avoid producing un
 work ahead of demand and must release per-invocation state after clean completion, error,
 or cancellation.
 
+Await the managed stream's explicit close operation before flushing or shutting down
+exporters. Close waits until the native producer has dropped its returned stream and
+stream-owned scope guards, including after exhaustion or a stream error. For example,
+Node.js callers await `stream.close()`, then flush exporters to collect events emitted
+during cleanup. Dropping a stream requests cancellation but does not wait for cleanup.
+
 ## Verify Execution Behavior
 
 Use the following procedure to verify unary, repeated, and streaming continuation

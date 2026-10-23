@@ -1897,9 +1897,9 @@ impl WorkerInvocationGuard {
         }
     }
 
-    async fn cancel_and_wait(&mut self, reason: impl Into<String>) {
+    async fn cancel_and_wait(&mut self, reason: impl Into<String>) -> FlowResult<()> {
         if let Some((mut client, request)) = self.cancellation(reason) {
-            let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
+            worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
                 .await
                 .inspect_err(|error| {
                     self.host_state.observer.rpc_failure(
@@ -1907,8 +1907,12 @@ impl WorkerInvocationGuard {
                         error,
                         DiagnosticPhase::Runtime,
                     );
-                });
+                })
+                .map_err(|error| {
+                    FlowError::Internal(format!("worker stream cleanup failed: {error}"))
+                })?;
         }
+        Ok(())
     }
 
     fn finish(&mut self) {
@@ -1938,17 +1942,28 @@ impl Drop for WorkerInvocationGuard {
     }
 }
 
-struct WorkerStreamCompletionSignal(watch::Sender<bool>);
+type WorkerStreamCloseResult = std::result::Result<(), String>;
+
+struct WorkerStreamCompletionSignal(watch::Sender<Option<WorkerStreamCloseResult>>);
 
 impl Drop for WorkerStreamCompletionSignal {
     fn drop(&mut self) {
-        self.0.send_replace(true);
+        self.0.send_if_modified(|outcome| {
+            if outcome.is_some() {
+                return false;
+            }
+            *outcome = Some(Err(
+                "worker stream task ended before cleanup completed".into()
+            ));
+            true
+        });
     }
 }
 
 struct WorkerForwardedLlmStream {
     receiver: Option<tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>>,
-    completion: watch::Receiver<bool>,
+    completion: watch::Receiver<Option<WorkerStreamCloseResult>>,
+    close_result: Option<FlowResult<()>>,
 }
 
 impl Stream for WorkerForwardedLlmStream {
@@ -1970,16 +1985,32 @@ impl LlmStreamInner for WorkerForwardedLlmStream {
 
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
         let this = self.get_mut();
-        this.receiver.take();
-        // Keep the stored observer reusable if this close future is cancelled.
-        let mut completion = this.completion.clone();
-        Box::pin(async move {
-            while !*completion.borrow_and_update() {
-                if completion.changed().await.is_err() {
-                    break;
+        // Disconnect before waiting so the forwarder requests worker cancellation.
+        if let Some(receiver) = this.receiver.take() {
+            let mut receiver = receiver.into_inner();
+            while let Ok(item) = receiver.try_recv() {
+                if let Err(error) = item {
+                    this.close_result.get_or_insert(Err(error));
                 }
             }
-            Ok(())
+        }
+        let mut completion = this.completion.clone();
+        Box::pin(async move {
+            let outcome = completion
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|_| {
+                    FlowError::Internal("worker stream task ended before cleanup completed".into())
+                })?
+                .clone()
+                .expect("completion checked above")
+                .map_err(FlowError::Internal);
+            if this.close_result.is_none() {
+                this.close_result = Some(outcome);
+            }
+            this.close_result
+                .clone()
+                .expect("close result stored above")
         })
     }
 }
@@ -2352,81 +2383,88 @@ impl WorkerPluginCallback {
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
         let (next_ready_tx, next_ready_rx) = oneshot::channel();
-        let (completion_tx, completion_rx) = watch::channel(false);
+        let (completion_tx, completion_rx) = watch::channel(None);
         let plugin_id = self.plugin_kind.clone();
         let observer = self.host_state.observer.clone();
         self.runtime.spawn(async move {
-            let _completion = WorkerStreamCompletionSignal(completion_tx);
-            let _codec_capabilities = codec_capabilities;
-            let result = tokio::select! {
-                result = client.invoke_stream(worker_rpc_request(invoke)) => result,
-                _ = tx.closed() => {
-                    guard.cancel_and_wait("host stopped consuming the worker stream").await;
-                    guard.finish();
-                    return;
-                }
-            };
-            let _ = next_ready_tx.send(());
-            match result {
-                Ok(response) => {
-                    let mut stream = response.into_inner();
-                    loop {
-                        let item = tokio::select! {
-                            item = stream.next() => item,
-                            _ = tx.closed() => {
-                                guard.cancel_and_wait("host stopped consuming the worker stream").await;
+            let completion = WorkerStreamCompletionSignal(completion_tx);
+            let outcome = async move {
+                let _codec_capabilities = codec_capabilities;
+                let result = tokio::select! {
+                    result = client.invoke_stream(worker_rpc_request(invoke)) => result,
+                    _ = tx.closed() => {
+                        guard.cancel_and_wait("host stopped consuming the worker stream").await?;
+                        guard.finish();
+                        return Ok(());
+                    }
+                };
+                let _ = next_ready_tx.send(());
+                match result {
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        loop {
+                            let item = tokio::select! {
+                                item = stream.next() => item,
+                                _ = tx.closed() => {
+                                    guard.cancel_and_wait("host stopped consuming the worker stream").await?;
+                                    break;
+                                }
+                            };
+                            let Some(item) = item else {
+                                break;
+                            };
+                            let result = match item {
+                                Ok(chunk) => {
+                                    if let Some(stream_chunk_item::Item::Error(error)) = &chunk.item
+                                        && is_worker_callback_failure(error, &guard.continuation_id)
+                                    {
+                                        observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime);
+                                    }
+                                    json_from_stream_chunk(chunk)
+                                        .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker"))
+                                }
+                                Err(err) => {
+                                    if !is_downstream_status(&err, &guard.continuation_id) {
+                                        observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                                    }
+                                    Err(FlowError::Internal(format!("worker stream transport failed: {err}")))
+                                }
+                            };
+                            let terminal = result.is_err();
+                            if tx.send(result).await.is_err() {
+                                guard.cancel_and_wait("host stopped consuming the worker stream").await?;
                                 break;
                             }
-                        };
-                        let Some(item) = item else {
-                            break;
-                        };
-                        let result = match item {
-                            Ok(chunk) => {
-                                if let Some(stream_chunk_item::Item::Error(error)) = &chunk.item
-                                    && is_worker_callback_failure(error, &guard.continuation_id)
-                                {
-                                    observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime);
-                                }
-                                json_from_stream_chunk(chunk)
-                                    .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker"))
+                            if terminal {
+                                // Error delivery can precede producer cleanup on the worker.
+                                guard.cancel_and_wait("worker stream failed").await?;
+                                break;
                             }
-                            Err(err) => {
-                                if !is_downstream_status(&err, &guard.continuation_id) {
-                                    observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
-                                }
-                                Err(FlowError::Internal(format!("worker stream transport failed: {err}")))
-                            }
-                        };
-                        let terminal = result.is_err();
-                        if tx.send(result).await.is_err() {
-                            guard.cancel_and_wait("host stopped consuming the worker stream").await;
-                            break;
-                        }
-                        if terminal {
-                            break;
                         }
                     }
-                }
-                Err(err) => {
-                    if !is_downstream_status(&err, &guard.continuation_id) {
-                        observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                    Err(err) => {
+                        if !is_downstream_status(&err, &guard.continuation_id) {
+                            observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                        }
+                        let reason = if err.code() == tonic::Code::DeadlineExceeded {
+                            "worker stream invocation timed out"
+                        } else {
+                            "worker stream transport failed"
+                        };
+                        let _ = tx
+                            .send(Err(worker_status_to_flow(
+                                "worker stream invoke failed",
+                                err,
+                            )))
+                            .await;
+                        guard.cancel_and_wait(reason).await?;
                     }
-                    let reason = if err.code() == tonic::Code::DeadlineExceeded {
-                        "worker stream invocation timed out"
-                    } else {
-                        "worker stream transport failed"
-                    };
-                    let _ = tx
-                        .send(Err(worker_status_to_flow(
-                            "worker stream invoke failed",
-                            err,
-                        )))
-                        .await;
-                    guard.cancel_and_wait(reason).await;
                 }
+                guard.finish();
+                Ok::<(), FlowError>(())
             }
-            guard.finish();
+            .await;
+            completion.0.send_replace(Some(outcome.map_err(|error| error.to_string())));
         });
         next_ready_rx.await.map_err(|_| {
             FlowError::Internal(
@@ -2436,6 +2474,7 @@ impl WorkerPluginCallback {
         Ok(LlmJsonStream::from_closeable(WorkerForwardedLlmStream {
             receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
             completion: completion_rx,
+            close_result: None,
         }))
     }
 

@@ -1468,6 +1468,7 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
 fn native_stream_callback_guard_covers_terminal_drop_modes() {
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -1528,6 +1529,7 @@ async fn native_async_stream_forwarding_reports_conversion_and_stream_errors() {
     let make_stream_state = || {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         Arc::new(NativeAsyncStream {
+            plugin_references: tokio::sync::watch::channel(1).0,
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -1790,6 +1792,7 @@ fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
 
     let (stream_sender, stream_receiver) = tokio::sync::mpsc::channel(1);
     let stream_owner = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(stream_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -1835,6 +1838,7 @@ fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
         NemoRelayStatus::Ok
     );
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver: stream_receiver,
         stream: Arc::clone(&stream_owner),
     });
@@ -1882,6 +1886,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let chunk = native_string("null");
 
     let no_sender = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(None),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -1910,6 +1915,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let (full_sender, _full_receiver) = tokio::sync::mpsc::channel::<FlowResult<Json>>(1);
     full_sender.try_send(Ok(Json::Null)).unwrap();
     let full = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(full_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -1936,6 +1942,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let (closed_sender, closed_receiver) = tokio::sync::mpsc::channel::<FlowResult<Json>>(1);
     drop(closed_receiver);
     let closed = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(closed_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -1960,6 +1967,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
 
     let (settled_sender, _settled_receiver) = tokio::sync::mpsc::channel(1);
     let settled = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(settled_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(true),
@@ -2037,6 +2045,7 @@ async fn native_async_result_entrypoint_reports_provider_errors_and_panics() {
 async fn native_async_stream_next_entrypoint_validates_handle_kind_and_request() {
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -3327,6 +3336,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                                 Arc::into_raw(stream_next) as *const NemoRelayNativeAsyncNext;
                             let (sender, receiver) = tokio::sync::mpsc::channel(1);
                             let stream = Arc::new(NativeAsyncStream {
+                                plugin_references: tokio::sync::watch::channel(1).0,
                                 sender: Mutex::new(Some(sender)),
                                 cancelled: AtomicBool::new(false),
                                 settled: AtomicBool::new(false),
@@ -3361,6 +3371,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                             );
                             assert_eq!(observed_rx.await.unwrap(), expected);
                             drop(NativeAsyncStreamReceiver {
+                                close_result: None,
                                 receiver,
                                 stream: Arc::clone(&stream),
                             });
@@ -3561,6 +3572,7 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     let output_stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -3726,6 +3738,7 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
     let stream_next_ref = Arc::into_raw(stream_next) as *const NemoRelayNativeAsyncNext;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
         settled: AtomicBool::new(false),
@@ -3762,6 +3775,7 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
     assert!(!stream_started.load(Ordering::SeqCst));
 
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     });
@@ -3841,6 +3855,7 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -3913,6 +3928,7 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
     );
 
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     });
@@ -3959,6 +3975,7 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
         let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let stream = Arc::new(NativeAsyncStream {
+            plugin_references: tokio::sync::watch::channel(1).0,
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -4049,6 +4066,7 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
         assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
 
         drop(NativeAsyncStreamReceiver {
+            close_result: None,
             receiver,
             stream: Arc::clone(&stream),
         });
@@ -4081,6 +4099,7 @@ fn native_async_stream_next_stops_callbacks_after_false() {
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -4122,6 +4141,7 @@ fn native_async_stream_next_stops_callbacks_after_false() {
     assert_eq!(callbacks.load(Ordering::SeqCst), 1);
 
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     });
@@ -4156,6 +4176,7 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -4197,6 +4218,7 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
     );
     runtime.block_on(started_rx).unwrap();
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     });
@@ -4239,6 +4261,7 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
     let next_ref = Arc::into_raw(next) as *const NemoRelayNativeAsyncNext;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -4281,6 +4304,7 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
     // The current-thread runtime has not been driven, so cancellation happens
     // before the spawned continuation can be polled for the first time.
     drop(NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     });
@@ -4805,6 +4829,7 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let settlement_checkpoint = Arc::new(std::sync::Barrier::new(2));
         let stream = Arc::new(NativeAsyncStream {
+            plugin_references: tokio::sync::watch::channel(1).0,
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -4855,6 +4880,7 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
             Settlement::Finish => None,
         };
         drop(NativeAsyncStreamReceiver {
+            close_result: None,
             receiver,
             stream: Arc::clone(&stream),
         });
@@ -4875,6 +4901,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
         .unwrap();
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -4898,6 +4925,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
     );
     assert_last_error_contains("backpressured");
     let mut receiver = NativeAsyncStreamReceiver {
+        close_result: None,
         receiver,
         stream: Arc::clone(&stream),
     };
@@ -7085,6 +7113,7 @@ fn native_completion_scoped_codecs_enforce_direction_and_expiration() {
 fn native_stream_scoped_codec_expires_after_stream_settlement() {
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -9300,6 +9329,7 @@ async fn native_async_http_error_rejection_preserves_status() {
 async fn native_async_stream_http_error_rejection_preserves_status() {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     let stream = Arc::new(NativeAsyncStream {
+        plugin_references: tokio::sync::watch::channel(1).0,
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
@@ -9704,6 +9734,7 @@ async fn native_async_rejection_observations_exclude_duplicate_and_cancelled_set
         });
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         let stream = Arc::new(NativeAsyncStream {
+            plugin_references: tokio::sync::watch::channel(1).0,
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
@@ -9715,6 +9746,7 @@ async fn native_async_rejection_observations_exclude_duplicate_and_cancelled_set
             _callback_user_data: Some(user_data),
         });
         let mut receiver = NativeAsyncStreamReceiver {
+            close_result: None,
             receiver,
             stream: stream.clone(),
         };
@@ -9815,5 +9847,81 @@ async fn native_pull_stream_observations_count_malformed_output_once_and_ignore_
         );
         assert_eq!(drop_count.load(Ordering::SeqCst), 1);
         assert_native_diagnostic_observations(&context, &[]);
+    }
+}
+
+#[tokio::test]
+async fn native_stream_close_waits_for_release_after_terminal_delivery() {
+    for mode in ["pending", "end", "error", "unread_error"] {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let stream = Arc::new(NativeAsyncStream {
+            plugin_references: tokio::sync::watch::channel(1).0,
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            backpressured: AtomicBool::new(false),
+            downstream_aborts: Mutex::new(HashMap::new()),
+            settlement: Mutex::new(()),
+            request_codec: None,
+            before_settlement_lock: None,
+            _callback_user_data: None,
+        });
+        let raw = Arc::into_raw(Arc::clone(&stream)).cast::<NemoRelayNativeAsyncStream>();
+        let mut receiver = LlmJsonStream::from_closeable(NativeAsyncStreamReceiver {
+            close_result: None,
+            receiver,
+            stream: Arc::clone(&stream),
+        });
+        assert_eq!(
+            unsafe { native_async_stream_retain(raw) },
+            NemoRelayStatus::Ok
+        );
+        match mode {
+            "end" => {
+                assert_eq!(
+                    unsafe { native_async_stream_finish(raw) },
+                    NemoRelayStatus::Ok
+                );
+                assert!(receiver.next().await.is_none());
+            }
+            "error" | "unread_error" => {
+                let message = native_string("producer error");
+                assert_eq!(
+                    unsafe { native_async_stream_reject(raw, message) },
+                    NemoRelayStatus::Ok
+                );
+                unsafe { native_string_free(message) };
+                if mode == "error" {
+                    assert!(
+                        receiver
+                            .next()
+                            .await
+                            .unwrap()
+                            .unwrap_err()
+                            .to_string()
+                            .contains("producer error")
+                    );
+                }
+            }
+            _ => {}
+        }
+        {
+            let close = receiver.close();
+            tokio::pin!(close);
+            assert!(futures::poll!(&mut close).is_pending());
+            assert!(stream.cancelled.load(Ordering::Acquire));
+            unsafe { native_async_stream_release(raw) };
+            assert!(futures::poll!(&mut close).is_pending());
+            unsafe { native_async_stream_release(raw) };
+            let result = close.await;
+            if mode == "unread_error" {
+                assert!(result.unwrap_err().to_string().contains("producer error"));
+            } else {
+                result.unwrap();
+            }
+        }
+        let repeated = receiver.close().await;
+        assert_eq!(repeated.is_err(), mode == "unread_error");
+        assert!(receiver.next().await.is_none());
     }
 }
