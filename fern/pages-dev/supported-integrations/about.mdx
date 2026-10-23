@@ -22,7 +22,7 @@ security middleware, and optimization features.
 | LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
-| Google ADK | Yes | Yes | Yes | Wrapped tool and LLM calling through the ADK plugin. |
+| Google ADK | Yes | Yes | Yes | Record model and tool calls and apply guardrails with the ADK plugin. |
 | OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
 
 ## Guides
@@ -41,8 +41,8 @@ instructions.
   Agents extra and capturing Deep Agents-specific marks, skills, subagents, and
   human-in-the-loop lifecycle events.
 - [Google ADK Integration Guide](/supported-integrations/google-adk) covers installing the Google
-  ADK extra, attaching the plugin to an ADK `App`, wrapping workflows,
-  and the built-in tool boundaries.
+  ADK extra, adding the plugin to your app, and recording workflows. It also
+  explains which tools Relay can protect.
 
 Across LangChain, LangGraph, Deep Agents, and Google ADK, instrumented tool lifecycles also
 inherit Relay's automatic `skill.load` detection when a tool requests a
