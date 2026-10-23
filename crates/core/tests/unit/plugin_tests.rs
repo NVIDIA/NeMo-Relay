@@ -3938,3 +3938,153 @@ fn plugin_attribution_truncation_preserves_utf8_boundaries() {
     );
     assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
 }
+
+#[test]
+fn nonfatal_exporter_signal_counters_keep_child_owner_without_event_history() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_events: 0,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let responsibility = "test.observability:1";
+    let parent = PluginRegistrationContext::with_plugin_component_namespace(
+        responsibility.to_string(),
+        &service,
+    );
+    let mut child = parent.with_child_namespace("inner");
+    let keys = [
+        "opentelemetry.automatic.traces",
+        "opentelemetry.automatic.logs",
+        "opentelemetry.automatic.metrics",
+    ];
+    for key in keys {
+        child.record_nonfatal_activation_failure(
+            key,
+            Classification::failure(
+                FailureCode::Plugin(PluginFailureCode::Common(
+                    CommonPluginFailureCode::ExporterInitializationFailed,
+                )),
+                FailureClass::PolicyRejected,
+            )
+            .unwrap(),
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some("observability".to_string()),
+                field: None,
+                message: "Plaintext destination rejected".to_string(),
+            },
+        );
+    }
+    assert_eq!(child.activation_diagnostics().len(), 3);
+    drop(child);
+    drop(parent);
+    for key in keys {
+        let snapshot = service
+            .snapshot(&DiagnosticQuery {
+                component_key: Some(key.to_string()),
+                code: Some("plugin.exporter_initialization_failed".to_string()),
+                ownership: ComponentOwnership {
+                    responsibility: Some(responsibility.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert!(snapshot.events.is_empty());
+        assert_eq!(snapshot.components.len(), 1);
+        let row = &snapshot.components[0];
+        assert_eq!(row.identity.key, key);
+        assert!(row.closed_at.is_some());
+        assert_eq!(row.counters.len(), 1);
+        assert_eq!(row.counters[0].occurrences.value.get(), 1);
+        assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    }
+    let parent_snapshot = service
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("plugin.activation".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(parent_snapshot.components.len(), 1);
+    assert_eq!(
+        parent_snapshot.components[0]
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        0
+    );
+    assert!(
+        parent_snapshot.components[0]
+            .counters
+            .iter()
+            .all(|counter| { counter.code != "plugin.exporter_initialization_failed" })
+    );
+}
+
+#[test]
+fn nonfatal_exporter_admission_is_best_effort_and_preserves_legacy_warning() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    let blocked = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    for service in [Diagnostics::default(), blocked.clone()] {
+        // The parent retains the only slot in the enabled context.
+        let parent = PluginRegistrationContext::with_diagnostics(&service);
+        let mut child = parent.with_child_namespace("exporters");
+        child.record_nonfatal_activation_failure(
+            "opentelemetry.automatic.traces",
+            Classification::failure(
+                FailureCode::Plugin(PluginFailureCode::Common(
+                    CommonPluginFailureCode::ExporterInitializationFailed,
+                )),
+                FailureClass::Unknown,
+            )
+            .unwrap(),
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some("observability".to_string()),
+                field: None,
+                message: "Exporter initialization failed".to_string(),
+            },
+        );
+        assert_eq!(child.activation_diagnostics().len(), 1);
+        assert_eq!(
+            child.activation_diagnostics()[0].message,
+            "Exporter initialization failed"
+        );
+        assert_eq!(service.memory_usage().events, 0);
+    }
+    let snapshot = blocked
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.coverage.loss.components_rejected.value.get(), 1);
+    assert_eq!(
+        snapshot.lifetime.totals.recorded_events_total.value.get(),
+        0
+    );
+}

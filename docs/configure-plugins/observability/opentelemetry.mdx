@@ -873,15 +873,24 @@ plain HTTP, add the intended host to `insecure_http_hosts`.
 For an automatic exporter alone, you can instead list the host in
 `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`.
 
-When runtime diagnostics are enabled, each skipped automatic exporter also records
-one `plugin.exporter_initialization_failed` observation with activation phase and warning
-severity. Its detail uses the same redacted explanation as the activation report.
+When runtime diagnostics are enabled and recorder admission succeeds, each skipped
+automatic exporter records one `plugin.exporter_initialization_failed` observation
+with activation phase and warning severity. The stable component key identifies the
+signal: `opentelemetry.automatic.traces`, `opentelemetry.automatic.logs`, or
+`opentelemetry.automatic.metrics`. These keys retain plugin owner attribution and
+can select per-signal counters even when recent event detail is not retained.
+Each attempt closes its recorder after recording; this represents a historical
+initialization failure, not a current exporter health state. Component and event
+evidence remain subject to the shared retention budgets. Endpoint values never
+become component keys. Optional detail uses the same redacted explanation as the
+activation report.
 Header validation, invalid endpoint, and invalid TLS configuration failures have
 cause `invalid_input`. Rejected plaintext destinations have cause `policy_rejected`,
 and TLS file-read failures have cause `io`. Backend errors whose causes have
 already been flattened retain cause `unknown`. Relay does not infer causes from
 error strings or include backend error text or TLS file paths in this detail.
-The activation report remains available when runtime diagnostics are disabled.
+The activation report remains available when runtime diagnostics are disabled or
+recorder admission fails. Admission loss is reflected in diagnostics coverage.
 This recording does not change plugin activation success or mark the process unhealthy.
 
 A configured endpoint skipped because of process-global headers does not prevent

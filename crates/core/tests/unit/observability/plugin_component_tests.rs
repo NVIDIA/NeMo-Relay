@@ -8555,9 +8555,66 @@ fn signal_shutdown_distinguishes_delivery_failures_from_provider_failures() {
     }
 }
 
+fn assert_automatic_exporter_signal_counter(
+    diagnostics: &crate::diagnostics::Diagnostics,
+    component_key: &str,
+) {
+    use crate::diagnostics::DiagnosticQuery;
+    let selected = diagnostics
+        .snapshot(&DiagnosticQuery {
+            component_key: Some(component_key.to_string()),
+            code: Some("plugin.exporter_initialization_failed".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(selected.events.len(), 1);
+    assert_eq!(selected.components.len(), 1);
+    assert!(selected.components[0].closed_at.is_some());
+    assert_eq!(
+        selected.components[0].counters[0].occurrences.value.get(),
+        1
+    );
+}
+
+fn assert_automatic_exporter_observations(
+    diagnostics: &crate::diagnostics::Diagnostics,
+    reports: &[ConfigDiagnostic],
+) {
+    use crate::diagnostics::{DiagnosticQuery, PluginPhase};
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 3);
+    let signal_keys = [
+        "opentelemetry.automatic.traces",
+        "opentelemetry.automatic.logs",
+        "opentelemetry.automatic.metrics",
+    ];
+    for ((event, report), component_key) in snapshot.events.iter().zip(reports).zip(signal_keys) {
+        assert_eq!(event.component.key, component_key);
+        assert_automatic_exporter_signal_counter(diagnostics, component_key);
+        assert_eq!(event.code(), "plugin.exporter_initialization_failed");
+        assert_eq!(event.classification.failure_class(), Some("invalid_input"));
+        assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
+        assert_eq!(
+            event.severity,
+            crate::diagnostics::DiagnosticSeverity::Warning
+        );
+        assert_eq!(event.detail.as_ref().unwrap().message, report.message);
+    }
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    for secret in ["user", "secret", "/private", "%ZZ"] {
+        assert!(!serialized.contains(secret), "diagnostics exposed {secret}");
+    }
+}
+
 #[test]
 fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, PluginPhase};
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let variables = [
         "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -8615,30 +8672,7 @@ fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once()
             assert_eq!(report.code, "observability.automatic_otel_signal_skipped");
         }
         if enabled {
-            let snapshot = diagnostics
-                .snapshot(&DiagnosticQuery::default())
-                .unwrap()
-                .to_snapshot()
-                .unwrap();
-            assert_eq!(snapshot.events.len(), 3);
-            for (event, report) in snapshot.events.iter().zip(reports) {
-                assert_eq!(event.code(), "plugin.exporter_initialization_failed");
-                assert_eq!(event.classification.failure_class(), Some("invalid_input"));
-                assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
-                assert_eq!(
-                    event.severity,
-                    crate::diagnostics::DiagnosticSeverity::Warning
-                );
-                assert!(
-                    serde_json::to_string(&event.detail)
-                        .unwrap()
-                        .contains(&report.message)
-                );
-            }
-            let serialized = serde_json::to_string(&snapshot).unwrap();
-            for secret in ["user", "secret", "/private", "%ZZ"] {
-                assert!(!serialized.contains(secret), "diagnostics exposed {secret}");
-            }
+            assert_automatic_exporter_observations(&diagnostics, reports);
         }
         // Existing operational logging owns output; the adapter must not duplicate it.
         assert_eq!(projected.load(Ordering::Relaxed), 0);
@@ -8695,6 +8729,10 @@ fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchan
         .to_snapshot()
         .unwrap();
     assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].component.key,
+        "opentelemetry.automatic.traces"
+    );
     assert_eq!(
         snapshot.events[0].classification.failure_class(),
         Some("unknown")

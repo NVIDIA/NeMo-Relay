@@ -2269,7 +2269,15 @@ fn automatic_subscriber<T>(
                 .map(|origin| format!(" ({origin})"))
                 .unwrap_or_default();
             let (classification, reason) = automatic_exporter_failure(&error);
-            ctx.record_nonfatal_activation_failure(classification, ConfigDiagnostic {
+            // Only the three signal constants supplied by this private dispatch
+            // become component keys. Endpoint strings remain optional detail.
+            let component_key = match signal {
+                "traces" => "opentelemetry.automatic.traces",
+                "logs" => "opentelemetry.automatic.logs",
+                "metrics" => "opentelemetry.automatic.metrics",
+                _ => unreachable!("automatic exporter dispatch uses a supported signal"),
+            };
+            ctx.record_nonfatal_activation_failure(component_key, classification, ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 code: "observability.automatic_otel_signal_skipped".to_string(),
                 component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
