@@ -198,6 +198,29 @@ fn tls_attributes_invalid_material_to_trust_or_identity_without_disclosing_pem()
 }
 
 #[test]
+fn tls_validates_the_last_private_key_in_a_pem_bundle() {
+    let certificates = Certificates::new();
+    let endpoint = "https://127.0.0.1:4318";
+    let key_path = certificates.tls.private_key.as_ref().unwrap();
+    let matching = std::fs::read_to_string(key_path).unwrap();
+    let mismatched = KeyPair::generate().unwrap().serialize_pem();
+
+    std::fs::write(key_path, format!("{mismatched}\n{matching}")).unwrap();
+    certificates.tls.http_client(endpoint, None).unwrap();
+
+    std::fs::write(key_path, format!("{matching}\n{mismatched}")).unwrap();
+    let error = certificates
+        .tls
+        .http_client(endpoint, None)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "failed to build the OTLP exporter: tls.client_certificate/private_key: invalid PEM client identity"
+    );
+}
+
+#[test]
 fn tls_schema_aliases_editor_and_signal_inheritance() {
     let config: OpenTelemetrySectionConfig = serde_json::from_value(json!({
         "enabled": true,

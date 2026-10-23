@@ -177,9 +177,13 @@ impl TlsPem {
             let certificates = CertificateDer::pem_slice_iter(cert)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|_| invalid_identity())?;
+            // Reqwest selects the last private key in the PEM bundle.
             let key =
-                PrivateKeyDer::from_pem_slice(self.private_key.as_deref().unwrap_or_default())
-                    .map_err(|_| invalid_identity())?;
+                PrivateKeyDer::pem_slice_iter(self.private_key.as_deref().unwrap_or_default())
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|_| invalid_identity())?
+                    .pop()
+                    .ok_or_else(invalid_identity)?;
             let provider = rustls::crypto::CryptoProvider::get_default()
                 .cloned()
                 .unwrap_or_else(|| rustls::crypto::ring::default_provider().into());
