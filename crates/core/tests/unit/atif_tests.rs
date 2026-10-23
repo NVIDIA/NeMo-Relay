@@ -4492,6 +4492,45 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
 
 #[test]
 fn test_exporter_distinguishes_images_when_matching_overlapping_llm_spans() {
+    assert_overlapping_image_requests(|data| {
+        json!({"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "inspect"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": data
+            }}
+        ]}]})
+    });
+}
+
+#[test]
+fn test_exporter_distinguishes_responses_images_when_matching_overlapping_llm_spans() {
+    assert_overlapping_image_requests(|data| {
+        json!({"input": [
+            {"role": "user", "content": "Earlier request"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "inspect"},
+                {"type": "input_image", "image_url": format!("data:image/png;base64,{data}")}
+            ]}
+        ]})
+    });
+}
+
+#[test]
+fn test_responses_text_only_request_signatures_keep_string_equivalence() {
+    let string_input = json!({"input": "inspect"});
+    for text_type in ["input_text", "text"] {
+        let parts_input = json!({"input": [{"role": "user", "content": [
+            {"type": text_type, "text": "inspect"}
+        ]}]});
+        assert_eq!(
+            llm_request_signature(&string_input),
+            llm_request_signature(&parts_input)
+        );
+    }
+}
+
+fn assert_overlapping_image_requests(request: fn(&str) -> Json) {
     for same_image in [true, false] {
         let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
         let parent_uuid = Uuid::now_v7();
@@ -4507,12 +4546,7 @@ fn test_exporter_distinguishes_images_when_matching_overlapping_llm_spans() {
                 .scope_type(ScopeType::Llm)
                 .model_name("test-model")
                 .metadata(json!({"provider_payload_exact": index == 0}))
-                .input(json!({"messages": [{"role": "user", "content": [
-                    {"type": "text", "text": "inspect"},
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": "image/png", "data": data
-                    }}
-                ]}]}))
+                .input(request(data))
                 .build();
             let mut end = event_builder(uuid, EventType::End)
                 .parent_uuid(parent_uuid)

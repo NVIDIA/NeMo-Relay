@@ -1845,9 +1845,36 @@ impl LlmSpanCandidate {
 
 fn llm_request_signature(input: &Json) -> String {
     let content = unwrap_llm_request(input);
+    // Responses display extraction joins text and omits accompanying image/file
+    // parts. Match multimodal requests using their raw latest user content.
+    if content.get("messages").is_none()
+        && let Some(message) = content
+            .get("input")
+            .and_then(raw_openai_responses_input_message)
+        && message.as_array().is_some_and(|parts| {
+            parts.iter().any(|part| {
+                !matches!(
+                    part.get("type").and_then(Json::as_str),
+                    Some("text" | "input_text")
+                )
+            })
+        })
+    {
+        return json_to_string(&atif_content_value(message));
+    }
     // Matching spans must retain unsupported parts, including image bytes, even
     // when the user-facing message omits them.
     json_to_string(&atif_content_value(&extract_user_message_content(&content)))
+}
+
+fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
+    input.as_array()?.iter().rev().find_map(|item| {
+        if item.get("role").and_then(Json::as_str) == Some("user") {
+            item.get("content")
+        } else {
+            None
+        }
+    })
 }
 
 fn llm_response_signature(output: &Json) -> String {
