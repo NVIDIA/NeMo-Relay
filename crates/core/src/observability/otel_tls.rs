@@ -3,6 +3,7 @@
 
 //! TLS certificates and private keys for OTLP endpoints.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use serde::{Deserialize, Serialize};
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
@@ -31,6 +32,36 @@ pub struct OpenTelemetryTlsConfig {
 
 fn invalid(field: &str, reason: &str) -> OpenTelemetryError {
     OpenTelemetryError::ExporterBuild(format!("tls.{field}: {reason}"))
+}
+
+fn invalid_identity() -> OpenTelemetryError {
+    invalid(
+        "client_certificate/private_key",
+        "invalid PEM client identity",
+    )
+}
+
+fn normalize_private_key(pem: &[u8]) -> Result<Vec<u8>> {
+    // Preserve reqwest's last-key selection, but give both transports one key.
+    let key = PrivateKeyDer::pem_slice_iter(pem)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid_identity())?
+        .pop()
+        .ok_or_else(invalid_identity)?;
+    let label = match &key {
+        PrivateKeyDer::Pkcs1(_) => "RSA PRIVATE KEY",
+        PrivateKeyDer::Pkcs8(_) => "PRIVATE KEY",
+        PrivateKeyDer::Sec1(_) => "EC PRIVATE KEY",
+        _ => return Err(invalid_identity()),
+    };
+    let encoded = STANDARD.encode(key.secret_der());
+    let mut normalized = format!("-----BEGIN {label}-----\n").into_bytes();
+    for line in encoded.as_bytes().chunks(64) {
+        normalized.extend_from_slice(line);
+        normalized.push(b'\n');
+    }
+    normalized.extend_from_slice(format!("-----END {label}-----\n").as_bytes());
+    Ok(normalized)
 }
 
 impl OpenTelemetryTlsConfig {
@@ -112,9 +143,9 @@ impl OpenTelemetryTlsConfig {
     }
 
     pub(crate) fn grpc_config(&self, endpoint: &str) -> Result<ClientTlsConfig> {
-        let pem = self.load(endpoint)?;
-        // Validate the same file snapshot for both transports, including key
-        // compatibility. Never return backend errors containing PEM material.
+        let mut pem = self.load(endpoint)?;
+        // Validate the same snapshot and normalize its private key for both
+        // transports. Never return backend errors containing PEM material.
         let _ = pem.http_client(None)?;
         // Tonic uses the process provider. Preserve an embedding application's
         // choice, and select Relay's ring provider when none has been installed.
@@ -142,7 +173,7 @@ struct TlsPem {
 }
 
 impl TlsPem {
-    fn http_client(&self, timeout: Option<std::time::Duration>) -> Result<reqwest::Client> {
+    fn http_client(&mut self, timeout: Option<std::time::Duration>) -> Result<reqwest::Client> {
         let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
@@ -166,24 +197,17 @@ impl TlsPem {
             }
             builder = builder.tls_certs_only(certificates);
         }
+        if let Some(pem) = self.private_key.as_deref() {
+            self.private_key = Some(normalize_private_key(pem)?);
+        }
         if let Some(cert) = &self.client_certificate {
-            let invalid_identity = || {
-                invalid(
-                    "client_certificate/private_key",
-                    "invalid PEM client identity",
-                )
-            };
             // PEM decoding alone does not validate DER or certificate/key pairing.
             let certificates = CertificateDer::pem_slice_iter(cert)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|_| invalid_identity())?;
-            // Reqwest selects the last private key in the PEM bundle.
             let key =
-                PrivateKeyDer::pem_slice_iter(self.private_key.as_deref().unwrap_or_default())
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|_| invalid_identity())?
-                    .pop()
-                    .ok_or_else(invalid_identity)?;
+                PrivateKeyDer::from_pem_slice(self.private_key.as_deref().unwrap_or_default())
+                    .map_err(|_| invalid_identity())?;
             let provider = rustls::crypto::CryptoProvider::get_default()
                 .cloned()
                 .unwrap_or_else(|| rustls::crypto::ring::default_provider().into());

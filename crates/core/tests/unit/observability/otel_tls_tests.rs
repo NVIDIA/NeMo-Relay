@@ -199,25 +199,44 @@ fn tls_attributes_invalid_material_to_trust_or_identity_without_disclosing_pem()
 
 #[test]
 fn tls_validates_the_last_private_key_in_a_pem_bundle() {
-    let certificates = Certificates::new();
-    let endpoint = "https://127.0.0.1:4318";
-    let key_path = certificates.tls.private_key.as_ref().unwrap();
-    let matching = std::fs::read_to_string(key_path).unwrap();
-    let mismatched = KeyPair::generate().unwrap().serialize_pem();
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    runtime.block_on(async {
+        for grpc in [false, true] {
+            let certificates = Certificates::new();
+            let key_path = certificates.tls.private_key.as_ref().unwrap();
+            let matching = std::fs::read_to_string(key_path).unwrap();
+            let mismatched = KeyPair::generate().unwrap().serialize_pem();
+            let (endpoint, count, server) = collector(&certificates, grpc, true).await;
+            let transport = if grpc { OtlpTransport::Grpc } else { OtlpTransport::HttpBinary };
 
-    std::fs::write(key_path, format!("{mismatched}\n{matching}")).unwrap();
-    certificates.tls.http_client(endpoint, None).unwrap();
+            std::fs::write(key_path, format!("{mismatched}\n{matching}")).unwrap();
+            let export_endpoint = endpoint.clone();
+            let tls = certificates.tls.clone();
+            tokio::task::spawn_blocking(move || export_all(&export_endpoint, transport, tls, "code"))
+                .await
+                .unwrap();
+            assert!(count.load(Ordering::SeqCst) >= 3);
+            assert_eq!(count.signals.load(Ordering::SeqCst), 7);
 
-    std::fs::write(key_path, format!("{matching}\n{mismatched}")).unwrap();
-    let error = certificates
-        .tls
-        .http_client(endpoint, None)
-        .unwrap_err()
-        .to_string();
-    assert_eq!(
-        error,
-        "failed to build the OTLP exporter: tls.client_certificate/private_key: invalid PEM client identity"
-    );
+            std::fs::write(key_path, format!("{matching}\n{mismatched}")).unwrap();
+            let result = if grpc {
+                certificates.tls.grpc_config(&endpoint).map(|_| ())
+            } else {
+                certificates.tls.http_client(&endpoint, None).map(|_| ())
+            };
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "failed to build the OTLP exporter: tls.client_certificate/private_key: invalid PEM client identity"
+            );
+            server.abort();
+        }
+    });
 }
 
 #[test]
