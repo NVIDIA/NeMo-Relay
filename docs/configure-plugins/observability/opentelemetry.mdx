@@ -445,6 +445,10 @@ or code. Set `tls` on those endpoints.
 To enable automatic export, also set `OTEL_EXPORTER_OTLP_ENDPOINT` or a
 signal-specific endpoint variable.
 
+If the client certificate or private key is invalid, Relay reports
+`invalid PEM client identity`. Relay reports the same error if the certificate
+and key do not match.
+
 ## Trace File Sinks
 
 A file sink writes spans to a local file instead of exporting them to a
