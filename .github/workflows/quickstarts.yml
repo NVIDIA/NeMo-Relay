@@ -100,6 +100,8 @@ jobs:
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          # Exercise the documented consumer build without adding a warning gate.
+          rustflags: ''
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -136,6 +138,8 @@ jobs:
           QUICKSTART_RUN_ID: ${{ inputs.run_id }}
           QUICKSTART_CASES: ${{ inputs.cases || 'all' }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/quickstarts
+          # Disposable example directories are outside setup-rust's checkout override.
+          RUSTUP_TOOLCHAIN: ${{ steps.ci-config.outputs.rust_version }}
         run: |
           just test-quickstarts \
             --version "$QUICKSTART_VERSION" \
