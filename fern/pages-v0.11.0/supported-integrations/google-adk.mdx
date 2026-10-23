@@ -1,0 +1,253 @@
+---
+title: "NeMo Relay Google ADK Integration"
+sidebar-title: "Google ADK Integration Guide"
+description: "Record Google ADK runs and apply NeMo Relay guardrails to model and tool calls."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use NeMo Relay with [Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/)
+to record agent activity and apply guardrails to model and tool calls.
+Add `NemoRelayPlugin` to your ADK `App` to get started.
+
+For a guided first run, follow the [Google ADK Quick Start](/getting-started/quick-start/google-adk).
+This guide covers adding Relay to your app, using the ADK command line, and
+recording workflows.
+
+## Setup
+
+Install NeMo Relay with the Google ADK extra in your project.
+
+<Tabs>
+<Tab title="uv">
+```bash
+uv add "nemo-relay[google-adk]"
+```
+</Tab>
+<Tab title="pip">
+```bash
+pip install "nemo-relay[google-adk]"
+```
+</Tab>
+</Tabs>
+
+The examples use Gemini. Set your [Gemini API key](https://aistudio.google.com/apikey)
+in the shell where you run the app.
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+export GOOGLE_API_KEY="your-api-key"
+```
+</Tab>
+<Tab title="Windows PowerShell">
+```powershell
+$env:GOOGLE_API_KEY = "your-api-key"
+```
+</Tab>
+</Tabs>
+
+Set the credentials for your chosen provider. Install any additional packages
+listed below.
+
+## Supported Models and Providers
+
+Use these ADK model classes to connect to a supported provider. The packages
+in the last column are in addition to `nemo-relay[google-adk]`.
+
+| Provider or Service | ADK Model Class | Additional Package |
+| --- | --- | --- |
+| Google Gemini API | `Gemini`, including a `gemini-*` model name | None |
+| Vertex AI with Gemini | `Gemini` | None |
+| Anthropic Claude | `AnthropicLlm` or `Claude` | `anthropic` |
+| Vertex AI with Claude | `AnthropicLlm` or `Claude` | `anthropic[vertex]` |
+| Microsoft Foundry with Claude | `AnthropicLlm` or `Claude` | `anthropic` |
+| OpenAI | `OpenAILlm` for Chat Completions or `OpenAIResponsesLlm` for Responses | `google-adk[openai]` |
+| Azure OpenAI | `OpenAILlm`, `OpenAIResponsesLlm`, or `AzureOpenAIResponsesLlm` | `google-adk[openai]` |
+| Amazon Bedrock through the OpenAI SDK | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` and `openai[bedrock]` |
+| OpenAI-compatible endpoints | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` |
+| Apigee | `ApigeeLlm` in GenAI or Chat Completions mode | None |
+
+For Vertex AI, Microsoft Foundry, Azure OpenAI, and Amazon Bedrock, configure
+ADK with the client for that service. For an OpenAI-compatible endpoint, set
+the client's `base_url`. The endpoint must support the API used by your ADK
+model class.
+
+Other built-in ADK model classes are not supported and fail when called.
+
+<Note>
+Custom `BaseLlm` classes can also use Relay. Provider-specific usage and cost
+details depend on the response data the custom model supplies.
+</Note>
+
+## Usage Example
+
+Add `NemoRelayPlugin()` to your app's `plugins` list.
+Use a separate plugin for each `Runner`. One runner can handle several requests
+at the same time when each request runs in its own task or thread.
+
+The example below asks an agent for the weather. Its tool returns sample data,
+so you don't need a weather service account.
+
+First, save this configuration as `plugins.toml`. It writes Relay events to
+`logs/events.jsonl`.
+
+<Code src="../getting-started/quick-start/_code/plugins.toml" language="toml" title="plugins.toml" />
+
+<Warning>
+Event files can contain prompts, responses, tool arguments, and tool results.
+Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
+</Warning>
+
+Save this example as `weather.py` beside `plugins.toml`.
+
+<Code src="_code/google-adk/weather.py" language="python" title="weather.py" />
+
+Run the app from that directory.
+
+```bash
+uv run python weather.py
+```
+
+The app prints a weather response and saves the recorded activity. It closes
+the runner and writes any queued events before it exits.
+
+To use your own agent, replace `root_agent` with your agent. Keep the plugin
+in the app and the configuration around the run. The outer `adk-request` scope
+groups the activity for one request. You can omit it if you don't need that group.
+
+### Use with the ADK CLI and Dev UI
+
+You can also use Relay with `adk web`, `adk run`, and `adk api_server`.
+Save the following example as `weather_agent/agent.py` inside your agents
+directory. Add an `__init__.py` file in `weather_agent` with `from . import agent`.
+
+<Code src="_code/google-adk/agent.py" language="python" title="weather_agent/agent.py" />
+
+From the agents directory, start the ADK development UI.
+
+```bash
+uv run adk web
+```
+
+Select `weather_agent` and ask for the weather in San Francisco. The example
+prints Relay events in the terminal. For other export options, refer to
+[Observability](/configure-plugins/observability/about).
+
+Your `agent.py` must export an `App` with the plugin in its `plugins` list.
+An agent defined only in `root_agent.yaml` cannot use this setup.
+
+### Record a Workflow
+
+If your app uses an ADK `Workflow`, pass it to `wrap_node` before running it.
+Relay then records the workflow and its steps, including their inputs and outputs.
+
+Save this example as `workflow.py` beside `weather.py`. It selects a city and
+calls the sample weather tool.
+
+<Code src="_code/google-adk/workflow.py" language="python" title="workflow.py" />
+
+Run it from the same directory. It uses the runner and export setup from
+`weather.py`. The workflow uses a fixed city, so it doesn't need a model call.
+
+```bash
+uv run python workflow.py
+```
+
+The workflow prints each step's result, including the city and sample forecast.
+Check `logs/events.jsonl` for the `weather_pipeline`, `pick_city`, and
+`get_weather` activity. This run replaces the event file from the earlier example.
+
+Without `wrap_node`, Relay still records agents within the workflow. Other
+steps have completion or failure events, but no recorded input or duration.
+Pass nodes created during a run to `wrap_node` if you need those details too.
+
+## Verify the Integration
+
+After running `weather.py`, check the following results:
+
+- The app prints a final response.
+- `logs/events.jsonl` contains the request, agent, and model activity.
+- If the agent calls `get_weather`, the file also contains that tool call.
+- Each recorded start event has a matching end event.
+
+The [quick start](/getting-started/quick-start/google-adk#verify) includes an
+example that checks its tool call and event file for you.
+
+## Observability
+
+Relay groups recorded activity into scopes. A scope has a start event and an
+end event. The end event includes the result or error.
+
+For the weather example, the request contains the ADK run. That run contains
+the weather agent. The agent contains its model and tool calls.
+
+Relay records the following activity:
+
+| Activity | Recorded Details |
+| --- | --- |
+| ADK runs | App, session, user, input message, and final response |
+| Agents | Agent name, output, and errors, including child agents |
+| Model calls | Provider, model name, request, response, and available token usage and cost |
+| Streaming model calls | Response chunks and the final response |
+| Fallback models | A separate call for each model tried, including failed attempts |
+| Tool calls | Tool name, arguments, result, and errors |
+| Workflows passed to `wrap_node` | Workflow and step inputs, outputs, and errors |
+| Agent handoffs and tool approvals | Events for transfers, approval requests, and approval answers |
+
+Tool calls include tools from ADK toolsets and agents used as tools.
+Relay also records code execution by executors that run outside the model provider.
+
+Provider tools, such as Google Search and the built-in code executor, run at
+the model provider. Relay records the activity that the provider reports.
+These records don't include tool duration.
+
+Cancelled runs are marked as cancelled. Some cancellation records can appear
+when the task finishes, the next run starts, or the runner closes.
+
+For export options, refer to [Observability](/configure-plugins/observability/about).
+
+## Security and Optimization
+
+Configured Relay guardrails and intercepts apply to model and tool calls.
+Guardrails can block a call or remove sensitive data. Intercepts can change
+requests and results, retry calls, or use a fallback. ADK tool approvals still
+apply.
+
+For example, you can check a weather tool's arguments before it runs. You can
+also remove sensitive text before Relay exports an event.
+
+When a guardrail blocks a call, Relay raises a `RuntimeError` with a message
+that starts with `guardrail rejected`. ADK can handle the error through its
+model or tool error callbacks. If no callback handles it, the run stops.
+
+When you edit a model request, keep the tool names, count, and order unchanged.
+Edits must use values that ADK and the model provider accept. Invalid edits
+fail the call.
+
+If you write a tool intercept, refer to
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+for the result format.
+
+For configuration, refer to [Plugin Configuration](/configure-plugins/plugin-configuration-files) and
+[Adaptive Configuration](/configure-plugins/adaptive/about).
+
+## Limitations
+
+Keep these limits in mind when choosing features for your app:
+
+- **Live model calls:** `Runner.run_live` and `RunConfig.support_cfc` record
+  runs and agents. Their model calls have no Relay model events or middleware.
+- **Response caching:** Relay's response cache skips ADK model calls.
+- **PII redaction:** While redaction is active, Relay leaves the model
+  response out of exported model end events.
+- **Streaming:** Chunk events contain a brief summary. Custom models that rely
+  on when chunks are requested or when a stream closes can behave differently.
+- **Parallel workflow workers:** Steps run with ADK's `parallel_worker` option
+  have completion events rather than full step scopes.
+- **Provider tools:** Relay cannot block or change tools that run at the model
+  provider. It can sanitize their recorded events. To record `url_context`,
+  enable `include_server_side_tool_invocations` in your Gemini request.
+- **Custom extensions:** Code that relies on exact model, tool, or agent
+  classes, or changes class attributes during a run, can behave differently.

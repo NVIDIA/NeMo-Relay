@@ -1,0 +1,24 @@
+---
+title: "Struct Component Declaration"
+sidebar-title: "ComponentDeclaration"
+description: "Borrowed component declaration evaluated only when collection is available."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ComponentDeclaration&lt;'a&gt; &#123;\n    pub name: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub codes: &amp;'a [<a href=\"enum-diagnosticcode\">DiagnosticCode</a>&lt;'a&gt;],\n&#125;"}} /></pre>
+
+Borrowed component declaration evaluated only when collection is available.
+
+## Fields
+
+### `name: &'a str`
+
+Stable name, excluding request/session identity.
+
+### `codes: &'a [DiagnosticCode<'a>]`
+
+Complete bounded vocabulary; code handles are one-based positions.

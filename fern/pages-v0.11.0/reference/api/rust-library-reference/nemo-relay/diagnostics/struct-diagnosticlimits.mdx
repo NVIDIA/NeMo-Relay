@@ -1,0 +1,178 @@
+---
+title: "Struct Diagnostic Limits"
+sidebar-title: "DiagnosticLimits"
+description: "Independent capacities of one diagnostic context. All backing allocations are admitted during startup; these limits are not a whole-process RSS ceiling."
+position: 26
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticLimits &#123;Show 21 fields\n    pub max_components: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_counters: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_events: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_window_buckets: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_extensions: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_metadata_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_identity_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_detail_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_correlation_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub detail_pool_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub detail_block_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_queries: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_query_components: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_query_events: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_query_counters: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_query_window_buckets: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_snapshot_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub query_text_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_projections: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_projection_workspaces: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_owned_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n&#125;"}} /></pre>
+
+Independent capacities of one diagnostic context. All backing allocations are admitted during startup; these limits are not a whole-process RSS ceiling.
+
+## Fields
+
+### `max_components: usize`
+
+Active and retained closed registration slots shared by this context.
+
+### `max_counters: usize`
+
+Declared lifetime code-counter slots shared by admitted components.
+
+### `max_events: usize`
+
+Shared circular-history headers; zero retains summaries without event history.
+
+### `max_window_buckets: usize`
+
+Aggregate outcome-bucket slots shared by admitted components.
+
+### `max_extensions: usize`
+
+Registered extension descriptors across all retained components.
+
+### `max_metadata_bytes: usize`
+
+Combined admitted component-key, ownership, and extension-description bytes.
+
+### `max_identity_bytes: usize`
+
+Bytes admitted per component key or ownership string, at most 128.
+
+### `max_detail_bytes: usize`
+
+Bytes copied or formatted per observation detail, at most 4096.
+
+### `max_correlation_bytes: usize`
+
+Bytes admitted per request or session correlation field, at most 128.
+
+### `detail_pool_bytes: usize`
+
+Payload-byte capacity of the shared detail pool, rounded down to whole blocks.
+
+### `detail_block_bytes: usize`
+
+Payload bytes per reclaimable detail block, at least four for UTF-8 scalars.
+
+### `max_queries: usize`
+
+Simultaneously leased query workspaces; zero disables reads and their pool.
+
+### `max_query_components: usize`
+
+Maximum component rows materialized in one query page.
+
+### `max_query_events: usize`
+
+Maximum recent-event rows materialized in one query page.
+
+### `max_query_counters: usize`
+
+Code-counter rows materialized per page, independent of store reservations.
+
+### `max_query_window_buckets: usize`
+
+Outcome buckets materialized per page, independent of store reservations.
+
+### `max_snapshot_bytes: usize`
+
+Serialized bytes per query response, including its envelope and coverage.
+
+### `query_text_bytes: usize`
+
+Text-arena bytes reserved for each leased query workspace.
+
+### `max_projections: usize`
+
+Simultaneously registered callbacks; arbitrary callback captures are caller-owned.
+
+### `max_projection_workspaces: usize`
+
+Concurrent publications with independent payload and callback-reference storage.
+
+### `max_owned_bytes: usize`
+
+Startup ceiling for context backing allocations, excluding whole-process RSS.
+
+## Implementations
+
+### `impl DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Validate capacities and checked backing sizes without allocating a store.
+
+## Trait Implementations
+
+### `impl Clone for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for DiagnosticLimitswhere DiagnosticLimits: Default,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>where\n    <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a>,"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Eq for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DiagnosticLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>

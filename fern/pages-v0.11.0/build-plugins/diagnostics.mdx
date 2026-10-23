@@ -1,0 +1,238 @@
+---
+title: "Plugin Diagnostics"
+description: "Record the same internal operations with the Rust native, Rust gRPC, and Python gRPC SDKs."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use plugin diagnostics to record internal work that the Relay host cannot observe.
+All three SDKs send observations to the host's selected diagnostic context. They
+share its counters, recent history, and storage limits. They do not create a
+separate diagnostic store or enable collection.
+
+The host already records plugin loading, validation, registration, and callback
+failures. Do not record those failures again inside the plugin. Refer to
+[producer boundaries](/reference/diagnostics#plugin-producer-boundaries) for the
+operations each layer owns.
+
+## Follow the Same Recording Pattern
+
+Use this pattern in each SDK:
+
+1. Obtain diagnostics from the activation's runtime handle.
+2. Register one stable component and its complete code list.
+3. Retain the component in the callbacks that perform the internal work.
+4. Record only the outcome you observed. Keep delivery failures separate from the
+   operation's result.
+5. Close the registration when that work ends. Let activation shutdown release the
+   remaining diagnostic resources.
+
+Component names describe a responsibility, such as `example.lookup`. Do not put
+request IDs or session IDs in component names or code names. Put those values in
+observation correlation fields instead.
+
+## Register and Record a Lookup
+
+The examples below implement the same contract in all three SDKs:
+
+- `lookup_failed` has code position `1`. It records a lookup that failed because
+  the backend was unavailable.
+- `lookup_completed` has code position `2`. It records an independent successful
+  lookup. Success does not erase earlier failures or declare recovery.
+- Each call records one new occurrence and attaches a request ID.
+
+Call `register_lookup_diagnostics` once for each stable responsibility with the
+runtime supplied by Relay. Retain both returned handles. Call the matching recording function after a
+lookup completes or its backend is known to be unavailable. Do not call both
+functions for one outcome.
+
+Registration and recording helpers return diagnostic errors in Rust and can raise
+`DiagnosticDeliveryError` in Python. Handle those errors at the call site without
+replacing the lookup's original result. These are SDK usage examples, not complete
+plugin entrypoints.
+
+<Tabs>
+<Tab title="Rust (Native)" language="rust">
+<Code src="native/_code/internal_diagnostics.rs" language="rust" title="Native lookup diagnostics" lines="4-64" showLineNumbers={false} />
+</Tab>
+<Tab title="Rust (gRPC)" language="rust">
+<Code src="workers/_code/internal_diagnostics.rs" language="rust" title="Rust worker lookup diagnostics" lines="4-69" showLineNumbers={false} />
+</Tab>
+<Tab title="Python (gRPC)" language="python">
+<Code src="workers/_code/internal_diagnostics.py" language="python" title="Python worker lookup diagnostics" lines="4-72" showLineNumbers={false} />
+</Tab>
+</Tabs>
+
+The host assigns the extension namespace and component ownership. A local code
+position is its one-based position in the declaration. It is not a global
+catalogue ID. Failure observations must use an allowed failure class. Success
+observations have no failure class. Severity describes the evidence and is
+independent of outcome.
+
+Counts are positive occurrence deltas. Two accepted calls with counts of two and
+three add five occurrences. Rust native uses `NonZeroU64`. The worker SDKs reject
+zero. Correlation and detail can contain private data. Byte limits do not sanitize
+that data, and diagnostic evidence does not flow into logs or exporters.
+
+### Connect to Plugin Registration
+
+The helpers use the same recording contract, but the SDK lifecycle hooks differ:
+
+- Rust native registration is synchronous. Pass `&ctx.runtime()` to the native
+  helper during `NativePlugin::register`, then capture its component in callbacks.
+- Python worker registration can be synchronous or asynchronous. In an
+  `async def register`, await the helper with `ctx.runtime`. Capture its component
+  in the callbacks registered for that activation.
+- Rust worker `WorkerPlugin::register` is synchronous. Obtain the runtime from
+  `context.runtime()`, handle its `Option` result, and capture it with shared
+  initialization state. Initialize
+  diagnostics once from an asynchronous callback, such as with a Tokio `OnceCell`.
+  Cache an initialization failure too, so later calls do not repeatedly register
+  the same component or replay an uncertain attempt.
+
+Keep the retained handles inside their activation. Do not block the worker runtime
+with a nested `block_on` to force asynchronous setup into a synchronous hook.
+
+### Use a Built-In Code
+
+Use a built-in code only when it describes the internal operation accurately.
+Plugin authors can select common plugin failure codes. They cannot author the
+host's lifecycle codes. Declare a built-in with the helper for your SDK:
+
+| SDK | Declaration |
+| --- | --- |
+| Rust native | `DiagnosticCode::Builtin(code)` accepts a typed `BuiltinDiagnosticCode`. |
+| Rust gRPC | `builtin_code(code)` accepts a typed `BuiltinDiagnosticCode` from `nemo-relay-types`. Add that crate as a direct dependency when using it. |
+| Python gRPC | `DiagnosticCodeDefinition(builtin_name="plugin.internal")` selects a canonical built-in name. |
+
+The examples use extensions because a backend lookup is a distinct internal
+operation. Extension names are local to the host-assigned namespace.
+
+### Observation Fields
+
+All SDKs record an outcome independently of its severity. Extensions can declare
+failure, success, or an unspecified outcome. Native uses `DiagnosticOutcome::Unknown`
+for unspecified outcomes. Rust workers use `DiagnosticObservationOutcome::Unknown`.
+Python workers use `Outcome.DIAGNOSTIC_OBSERVATION_OUTCOME_UNKNOWN` with the import
+alias from the example. Nonfailure extensions have no allowed failure classes.
+
+The SDKs expose the same information with different field types:
+
+| Information | Rust Native | Rust and Python gRPC |
+| --- | --- | --- |
+| New occurrences | `count` is a positive `NonZeroU64`. | `count` is a positive unsigned 64-bit value. |
+| Failure cause | `failure_class` uses a typed `FailureClass`. | `failure_class` uses a canonical name such as `unavailable`. |
+| Restricted evidence | `detail` borrows a UTF-8 string for the host call. | `detail` is copied into a frozen queued message. |
+| Request and session IDs | `correlation.request_id` and `correlation.session_id`. | `request_id` and `session_id` fields on the observation. |
+| Producer wall time | No producer-time field in the native observation. | Optional `observed_unix_micros` preserves the producer's timestamp. |
+
+The host assigns the canonical recording sequence and host recording times. Worker events
+also retain remote provenance. Host summaries use receipt time because worker
+clocks can differ. A producer timestamp does not replace that receipt time.
+
+## Check Availability and Delivery
+
+The SDKs have different delivery contracts:
+
+| Operation | Rust Native | Rust gRPC | Python gRPC |
+| --- | --- | --- | --- |
+| Obtain diagnostics | `runtime.diagnostics()` | `runtime.diagnostics().await` | `await runtime.diagnostics()` |
+| Check availability | `diagnostics.availability()` | `diagnostics.availability()` | `diagnostics.availability` |
+| Inspect adapter capabilities | `diagnostics.capabilities()` | SDK negotiates and validates host limits. No public capabilities getter is exposed. | SDK negotiates and validates host limits. No public capabilities getter is exposed. |
+| Register a component | `component_lazy(factory)` | `component(name, codes).await` | `await component(name, codes)` |
+| Record lazily | `component.try_record_lazy(factory)` | `component.try_record_lazy(factory)` | `component.try_record_lazy(factory)` |
+| Successful recording return | `RecordOutcome::Recorded(receipt)` confirms host acceptance. `Disabled` means nothing was recorded. | `Ok(())` confirms local queue admission, or an inactive no-op. | Returns `None` after local queue admission, or an inactive no-op. |
+| Inspect delivery losses | `diagnostics.delivery_stats()` | `diagnostics.delivery_stats()` | `diagnostics.delivery_stats()` |
+| Wait for queued work | No queue or flush operation. | `diagnostics.flush(Duration).await` | `await diagnostics.flush(timeout)` uses seconds. |
+| Close a component | `component.close()` or last drop. | `component.close().await` | `await component.close()` |
+| Close worker delivery | Activation teardown owns cleanup. | `diagnostics.close(Duration).await` | `await diagnostics.close(timeout)` |
+
+Disabled or unsupported facades skip lazy recording factories. Native registration
+also skips its declaration factory. Worker registration takes an already built
+code list, so creating that list can still allocate. Worker recording skips its
+factory when the queue is full. Native calls can return `busy` when another call
+on the same runtime is in progress.
+
+Native receipts report the accepted sequence, optional updated code total, and
+evidence disposition. Evidence can be retained, truncated, or dropped while
+counts remain accepted. Native recording is synchronous and never automatically
+retries an uncertain result.
+
+Worker recording returns before host acceptance. Neither worker SDK exposes a
+per-record acceptance receipt through `try_record_lazy`. `flush` waits for earlier
+queued work, but does not return each observation's receipt or acknowledge disk
+storage. Check delivery loss totals as well. The SDK retries identical requests
+within the negotiated policy. Applications must not replay uncertain observations
+into a new session. Refer to the
+[delivery protocol](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+for rejection and retry rules.
+
+Delivery statistics separate dropped, rejected, and uncertain submissions. They
+are SDK-local totals, not host occurrence counts or complete retention-loss
+counters. Inspect canonical snapshot coverage to understand retained evidence.
+Rust native errors expose `reason()`. Rust worker errors are
+`DiagnosticDeliveryError` variants. Python worker errors expose `kind`.
+
+### Handle Worker Delivery Errors
+
+Rust uses `DiagnosticDeliveryError` variants. Python uses the corresponding
+`DiagnosticDeliveryError.kind` strings:
+
+| Rust Variant | Python Kind | Meaning |
+| --- | --- | --- |
+| `Full` | `full` | The local queue cannot admit the submission. The recording factory is skipped. |
+| `Invalid` | `invalid` | The count, payload, or encoded request is invalid or too large. |
+| `NotConsumed` | `not_consumed` | The host explicitly rejected an attempt without consuming its sequence. |
+| `Rejected` | `rejected` | The host returned a terminal rejection. |
+| `Uncertain` | `uncertain` | Acceptance could not be confirmed, or a lifecycle wait timed out. Do not replay the observation. |
+| `Closed` | `closed` | Delivery no longer accepts the operation. |
+
+Errors can arise during registration, recording admission, flush, or close.
+Host rejection after a fire-and-forget record is reflected in delivery statistics.
+The public recording call does not wait for that rejection or expose its receipt.
+
+### Plan for Different Admission Limits
+
+The native adapter and worker transport have separate budgets. They also share
+the host's core storage limits. These differences affect component reuse:
+
+| Resource | Rust Native | Rust and Python gRPC |
+| --- | --- | --- |
+| Components | Eight live registrations per session. Closing one frees a live slot. | Eight registrations per session, including closed registrations. |
+| Codes | 32 per component. | 32 per component. |
+| Extensions | 16 cumulative declarations per session. | 16 cumulative declarations per session. |
+| Registration text | 16 KiB cumulative text per session. | 16 KiB cumulative metadata per session. |
+| Input size | 16 KiB aggregate text per call. | Host-negotiated protobuf frame limit within the SDK's 16 KiB safety ceiling. |
+| Pending work | Synchronous calls with no SDK queue. | Host-negotiated queue capacity, up to 32 pending submissions plus one in flight. |
+
+Closing a component does not restore cumulative extension or registration-text
+budgets. Keep one component for each stable responsibility in either model.
+A worker that exhausts its session's registration count needs a new activation.
+It cannot reopen a replacement session within the same activation.
+
+The [native guide](/build-plugins/native/diagnostics#admission-limits) explains
+native session and call admission. The
+[worker protocol](/build-plugins/workers/grpc-v1-protocol#delivery-limits) explains
+transport buffers and concurrent decode admission.
+
+## Read Access and Cleanup
+
+Rust native plugins can read the whole context only after an explicit host-policy
+grant. Refer to [Native Plugin Diagnostics](/build-plugins/native/diagnostics)
+for configuration, reader methods, errors, and limits. A query filter does not
+narrow that permission.
+
+Rust and Python gRPC workers cannot read canonical snapshots or memory pages.
+Their recording credentials do not grant read access. Use an authorized host
+reader to inspect worker observations. The older `runtime_diagnostics()` report
+is a separate API and does not substitute for canonical reads.
+
+For native plugins, explicit component close fences all clones. Last drop also
+closes the registration. Activation teardown revokes handles and releases adapter
+storage. For workers, close the component through its ordered delivery session.
+SDK shutdown limits the time spent draining queued work and closes delivery tasks.
+Do not keep recording after close in either model.
+
+Closing a plugin or component does not reset the context's lifetime counters.
+The host controls how long closed rows and recent events remain available.
+The service does not provide durable restart history.

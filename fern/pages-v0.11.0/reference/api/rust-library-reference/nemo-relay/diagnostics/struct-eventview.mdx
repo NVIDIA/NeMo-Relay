@@ -1,0 +1,74 @@
+---
+title: "Struct Event View"
+sidebar-title: "EventView"
+description: "Borrowed view of an event copied into a query workspace."
+position: 48
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct EventView<'a> { /* private fields */ }
+```
+
+Borrowed view of an event copied into a query workspace.
+
+## Implementations
+
+### `impl EventView<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-eventview\">EventView</a>&lt;'_&gt;"}} /></pre>
+
+#### `sequence`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sequence(&amp;self) -&gt; <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>"}} /></pre>
+
+Source acceptance sequence.
+
+#### `component_instance_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn component_instance_id(&amp;self) -&gt; <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
+
+Original registration incarnation.
+
+#### `component_key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn component_key(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Original logical component key.
+
+#### `code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn code(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Canonical code, including opaque extension names.
+
+#### `count`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn count(&amp;self) -&gt; <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>"}} /></pre>
+
+Accepted occurrence delta.
+
+#### `detail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn detail(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Optional retained detail, borrowed from copied workspace text.
+
+#### `outcome`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn outcome(&amp;self) -&gt; <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>"}} /></pre>
+
+Producer's observed outcome, independent of health interpretation.
+
+## Trait Implementations
+
+### `impl Serialize for EventView<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-eventview\">EventView</a>&lt;'_&gt;"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;(&amp;self, s: S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;"}} /></pre>

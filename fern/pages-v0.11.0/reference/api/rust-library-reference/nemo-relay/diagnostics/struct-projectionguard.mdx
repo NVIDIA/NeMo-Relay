@@ -1,0 +1,47 @@
+---
+title: "Struct Projection Guard"
+sidebar-title: "ProjectionGuard"
+description: "Bounded projection subscription, or inert disabled-mode handle."
+position: 60
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ProjectionGuard { /* private fields */ }
+```
+
+Bounded projection subscription, or inert disabled-mode handle.
+
+Dropping unsubscribes future publication. A callback copied before removal may still finish; adapters can add stronger shutdown ordering when needed.
+
+Retain the guard for the subscription's intended lifetime:
+
+```rust
+#![deny(unused_must_use)]
+use nemo_relay::diagnostics::{DiagnosticError, Diagnostics};
+fn subscribe(diagnostics: &Diagnostics) -> Result<(), DiagnosticError> {
+    diagnostics.subscribe_projection(|_| {})?; // Immediately unsubscribes.
+    Ok(())
+}
+```
+
+## Trait Implementations
+
+### `impl Debug for ProjectionGuard`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-projectionguard\">ProjectionGuard</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Drop for ProjectionGuard`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-projectionguard\">ProjectionGuard</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

@@ -1,0 +1,85 @@
+---
+title: "Quick Starts"
+sidebar-title: "Quick Starts"
+description: "Choose the shortest NeMo Relay path for your agent, framework, or application."
+position: 0
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Choose the runtime or language you already use. Relay attaches where your
+agent, framework, or application owns model requests and tool execution.
+
+<Note icon="circle-info">
+Relay has no required or default model. Each guide that makes live
+inference requests identifies the credentials and model access it needs.
+The application API examples below use local callbacks.
+</Note>
+
+## Agent Harnesses
+
+When a coding-agent runtime owns invocation, start with
+[CLI Basic Usage](/nemo-relay-cli/basic-usage). For persistent Claude Code or
+Codex installation, use [Coding Agent Installation](/nemo-relay-cli/plugin-installation).
+For agent-owned integrations, refer to
+[Supported Integrations](/supported-integrations/about).
+
+<CardGroup cols={2}>
+<Card title="Codex" icon="fa-brands fa-openai" href="/getting-started/quick-start/codex">
+Run one Codex CLI task with Relay model and tool observability.
+</Card>
+<Card title="Claude Code" icon="fa-brands fa-claude" href="/getting-started/quick-start/claude-code">
+Run one Claude Code session with Relay model and tool observability.
+</Card>
+<Card title="Hermes Agent" icon="fa-solid fa-terminal" href="/getting-started/quick-start/hermes">
+Configure Hermes Agent's native Relay observability and run one agent turn.
+</Card>
+<Card title="pi" icon="fa-solid fa-pi" href="/getting-started/quick-start/pi">
+Install the proof-of-concept extension and observe one pi task.
+</Card>
+</CardGroup>
+
+## Agent Frameworks
+
+If a framework owns callbacks or tool execution, choose its path in
+[Supported Integrations](/supported-integrations/about).
+
+<CardGroup cols={2}>
+<Card title="Deep Agents" icon="fa-solid fa-layer-group" href="/getting-started/quick-start/deep-agents">
+Run one Deep Agents workflow with Relay's maintained integration.
+</Card>
+<Card title="Google ADK" icon="fa-brands fa-google" href="/getting-started/quick-start/google-adk">
+Run one tool-calling agent with Relay ADK plugin.
+</Card>
+<Card title="LangChain" icon="fa-solid fa-link" href="/getting-started/quick-start/langchain">
+Run one tool-using agent with Relay middleware and callbacks.
+</Card>
+<Card title="LangGraph" icon="fa-solid fa-diagram-project" href="/getting-started/quick-start/langgraph">
+Run one credential-free graph with Relay callbacks.
+</Card>
+</CardGroup>
+
+## Application APIs
+
+Use these paths when your application directly owns the tool or model call.
+
+<CardGroup cols={3}>
+<Card title="Python" icon="fa-brands fa-python" href="/getting-started/quick-start/python">
+Instrument application-owned Python calls.
+</Card>
+
+<Card title="Node.js" icon="fa-brands fa-node-js" href="/getting-started/quick-start/nodejs">
+Instrument application-owned Node.js calls.
+</Card>
+
+<Card title="Rust" icon="fa-brands fa-rust" href="/getting-started/quick-start/rust">
+Instrument application-owned Rust calls.
+</Card>
+</CardGroup>
+
+## For More Details
+
+For installation and exporter options, refer to:
+
+- [Installation Overview](/getting-started/installation)
+- [Observability](/configure-plugins/observability/about)

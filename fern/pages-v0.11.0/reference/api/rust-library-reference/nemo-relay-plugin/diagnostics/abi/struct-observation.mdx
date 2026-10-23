@@ -1,0 +1,48 @@
+---
+title: "Struct Observation"
+sidebar-title: "Observation"
+description: "Borrowed observation. Empty optional strings mean absent values."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct Observation &#123;\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub severity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub failure_class: <a href=\"struct-bytes\">Bytes</a>,\n    pub detail: <a href=\"struct-bytes\">Bytes</a>,\n    pub request_id: <a href=\"struct-bytes\">Bytes</a>,\n    pub session_id: <a href=\"struct-bytes\">Bytes</a>,\n&#125;"}} /></pre>
+
+Borrowed observation. Empty optional strings mean absent values.
+
+## Fields
+
+### `code: u32`
+
+One-based code position in the declaration.
+
+### `outcome: u32`
+
+0 = unspecified, 1 = success, 2 = failure.
+
+### `severity: u32`
+
+0 = trace, 1 = debug, 2 = info, 3 = warning, 4 = error.
+
+### `count: u64`
+
+Positive occurrence delta.
+
+### `failure_class: Bytes`
+
+Canonical class name, or empty.
+
+### `detail: Bytes`
+
+Diagnostic-only UTF-8 detail. Core reports retention truncation.
+
+### `request_id: Bytes`
+
+Optional correlation; never an aggregation key.
+
+### `session_id: Bytes`
+
+Optional correlation; never an aggregation key.

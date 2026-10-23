@@ -1,0 +1,66 @@
+---
+title: "Struct Code"
+sidebar-title: "Code"
+description: "One declaration. Kind 0 selects a built-in; kind 1 declares an extension."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct Code &#123;\n    pub kind: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub name: <a href=\"struct-bytes\">Bytes</a>,\n    pub description: <a href=\"struct-bytes\">Bytes</a>,\n    pub classes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-bytes\">Bytes</a>,\n    pub class_count: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n&#125;"}} /></pre>
+
+One declaration. Kind 0 selects a built-in; kind 1 declares an extension.
+
+## Fields
+
+### `kind: u32`
+
+0 = built-in, 1 = extension.
+
+### `outcome: u32`
+
+0 = unspecified, 1 = success, 2 = failure (extension only).
+
+### `name: Bytes`
+
+Built-in canonical name or local extension name.
+
+### `description: Bytes`
+
+Extension description; empty for a built-in.
+
+### `classes: *const Bytes`
+
+Array of canonical failure-class names.
+
+### `class_count: usize`
+
+Number of class spans.
+
+## Trait Implementations
+
+### `impl Clone for Code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-code\">Code</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-code\">Code</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Default for Code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-code\">Code</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-code\">Code</a>"}} /></pre>
+
+### `impl Copy for Code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-code\">Code</a>"}} /></pre>

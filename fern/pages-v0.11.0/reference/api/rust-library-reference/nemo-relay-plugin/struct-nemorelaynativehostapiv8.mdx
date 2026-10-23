@@ -1,0 +1,50 @@
+---
+title: "Struct Nemo Relay Native Host ApiV8"
+sidebar-title: "NemoRelayNativeHostApiV8"
+description: "ABI-v8 append-only scope inspection extension."
+position: 50
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeHostApiV8 &#123;\n    pub v7: <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>,\n    pub current_scope_stack_snapshot: <a href=\"type-nemorelaynativescopestacksnapshotfn\">NemoRelayNativeScopeStackSnapshotFn</a>,\n&#125;"}} /></pre>
+
+ABI-v8 append-only scope inspection extension.
+
+## Fields
+
+### `v7: NemoRelayNativeHostApiV7`
+
+Unchanged ABI-v7 table and callback layouts.
+
+### `current_scope_stack_snapshot: NemoRelayNativeScopeStackSnapshotFn`
+
+Return host-owned snapshot JSON; null on successful absence. Release every non-null result with the inherited string_free callback.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeHostApiV8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayNativeHostApiV8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>"}} /></pre>
+
+### `impl Send for NemoRelayNativeHostApiV8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>"}} /></pre>
+
+### `impl Sync for NemoRelayNativeHostApiV8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>"}} /></pre>

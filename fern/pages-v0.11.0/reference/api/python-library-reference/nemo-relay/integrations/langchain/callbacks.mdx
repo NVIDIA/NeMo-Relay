@@ -1,0 +1,55 @@
+---
+title: "nemo_relay.integrations.langchain.callbacks"
+sidebar-title: "callbacks"
+description: "LangChain callback handler that maps run hierarchy to NeMo Relay scopes."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/integrations/langchain/callbacks.py`.
+
+Module `nemo_relay.integrations.langchain.callbacks`.
+
+LangChain callback handler that maps run hierarchy to NeMo Relay scopes.
+
+## Classes
+
+### `NemoRelayCallbackHandler(BaseCallbackHandler)`
+
+Bridge LangChain chain run IDs to NeMo Relay Agent scopes.
+
+#### Methods
+
+##### `NemoRelayCallbackHandler`
+
+```python
+def NemoRelayCallbackHandler() -> None
+```
+
+Create an instance.
+
+##### `on_chain_start`
+
+```python
+def on_chain_start(serialized: dict[str, typing.Any], inputs: dict[str, typing.Any], *, run_id: UUID, parent_run_id: UUID | None = None, tags: list[str] | None = None, metadata: dict[str, typing.Any] | None = None, **kwargs: typing.Any) -> typing.Any
+```
+
+Push a NeMo Relay Agent scope for a LangChain chain run.
+
+##### `on_chain_end`
+
+```python
+def on_chain_end(outputs: dict[str, typing.Any], *, run_id: UUID, parent_run_id: UUID | None = None, **kwargs: typing.Any) -> typing.Any
+```
+
+Pop the NeMo Relay scope associated with a LangChain chain run.
+
+##### `on_chain_error`
+
+```python
+def on_chain_error(error: BaseException, *, run_id: UUID, parent_run_id: UUID | None = None, **kwargs: typing.Any) -> typing.Any
+```
+
+Pop the NeMo Relay scope associated with a failed LangChain chain run.
+

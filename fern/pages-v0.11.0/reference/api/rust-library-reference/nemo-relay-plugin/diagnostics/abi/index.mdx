@@ -1,0 +1,34 @@
+---
+title: "Module abi"
+sidebar-title: "abi"
+description: "Append-only native diagnostic ABI. All input spans are borrowed for one call. Nonempty spans and output pointers must be valid for their stated size; arrays must be aligned. No callback retains plugin memory. Integer tags are validated."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Append-only native diagnostic ABI. All input spans are borrowed for one call. Nonempty spans and output pointers must be valid for their stated size; arrays must be aligned. No callback retains plugin memory. Integer tags are validated.
+
+## Structs
+
+- [Bytes](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-bytes): Borrowed bytes. A null pointer is permitted only for an empty span.
+- [Capabilities](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-capabilities): Non-sensitive recording capabilities; no source-wide diagnostic content.
+- [Code](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-code): One declaration. Kind 0 selects a built-in; kind 1 declares an extension.
+- [NativeDiagnosticsApiV1](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-nativediagnosticsapiv1): Frozen diagnostics callback table. Status 0 means success; other values are defined by `DiagnosticError::from_status`. Read kinds: 0 discovery, 1 snapshot, 2 memory. Read output is caller-owned; `written` is zero on any failure.
+- [NativeHostApiV8WithDiagnostics](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-nativehostapiv8withdiagnostics): Size-discovered tail of the unchanged ABI-8 execution table.
+- [Observation](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-observation): Borrowed observation. Empty optional strings mean absent values.
+- [Receipt](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-receipt): Allocation-free receipt written only after acceptance.
+- [Registration](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/struct-registration): Borrowed registration, whose complete vocabulary is admitted together.
+
+## Constants
+
+- [CONTRACT_VERSION](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-contract-version): Independent diagnostic transport version; execution ABI remains 8.
+- [MAX_CALLS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-calls): Maximum concurrent native data calls per host process.
+- [MAX_CLASSES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-classes): Maximum classes per extension.
+- [MAX_CODES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-codes): Maximum declared codes per component.
+- [MAX_COMPONENTS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-components): Maximum simultaneously live component registrations per activation.
+- [MAX_EXTENSIONS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-extensions): Maximum cumulative extension declarations per activation.
+- [MAX_REQUEST_BYTES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-request-bytes): Maximum total text bytes in a native request.
+- [MAX_SESSIONS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi/constant-max-sessions): Maximum concurrently admitted authoring sessions per host process.

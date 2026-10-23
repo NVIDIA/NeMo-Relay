@@ -1,0 +1,16 @@
+---
+title: "Function initialize_with_diagnostics"
+sidebar-title: "initialize_with_diagnostics"
+description: "Initializes the plugin host using an explicitly selected diagnostic context."
+position: 60
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn initialize_with_diagnostics(\n    config: <a href=\"../struct-pluginconfig\">PluginConfig</a>,\n    additional_plugins_toml: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>&gt;,\n    diagnostic_context: &amp;<a href=\"../../diagnostics/struct-diagnostics\">Diagnostics</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"struct-pluginhostactivation\">PluginHostActivation</a>&gt;"}} /></pre>
+
+Initializes the plugin host using an explicitly selected diagnostic context.
+
+Configuration inheritance and common component activation use this same context. Discovery and validation APIs do not consume the process default. Diagnostic admission is best-effort and never changes plugin execution or legacy report results. Native and worker producers receive this context through the owned activation lifecycle.

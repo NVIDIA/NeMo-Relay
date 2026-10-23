@@ -1,0 +1,62 @@
+---
+title: "Struct Observation"
+sidebar-title: "Observation"
+description: "Typed observation with borrowed detail and shared caller correlation."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Observation&lt;'a&gt; &#123;\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub failure_class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n    pub detail: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'a&gt;,\n&#125;"}} /></pre>
+
+Typed observation with borrowed detail and shared caller correlation.
+
+## Fields
+
+### `code: u32`
+
+One-based code position returned by registration.
+
+### `outcome: DiagnosticOutcome`
+
+Observed outcome, checked against the declaration.
+
+### `severity: DiagnosticSeverity`
+
+Severity is independent of outcome.
+
+### `failure_class: Option<FailureClass>`
+
+Evidence-based cause, never inferred from text.
+
+### `count: NonZeroU64`
+
+Positive input delta, not an accumulated total.
+
+### `detail: &'a str`
+
+Restricted diagnostic-only detail; core reports any truncation.
+
+### `correlation: DiagnosticCorrelation<'a>`
+
+Optional request/session identifiers, excluded from aggregation keys.
+
+## Implementations
+
+### `impl<'a> Observation<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-observation\">Observation</a>&lt;'a&gt;"}} /></pre>
+
+#### `failure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn failure(\n    code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    class: <a href=\"enum-failureclass\">FailureClass</a>,\n    detail: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n) -&gt; Self"}} /></pre>
+
+Author a failed internal operation with error severity.
+
+#### `success`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn success(code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>, detail: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>) -&gt; Self"}} /></pre>
+
+Author independent successful evidence.

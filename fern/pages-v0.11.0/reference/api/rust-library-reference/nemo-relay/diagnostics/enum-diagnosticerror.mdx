@@ -1,0 +1,267 @@
+---
+title: "Enum Diagnostic Error"
+sidebar-title: "DiagnosticError"
+description: "Validation, admission, or availability failure, independent of operational logging."
+position: 78
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub enum DiagnosticError {
+Show 22 variants    Disabled,
+    InvalidLimits,
+    Allocation,
+    InvalidComponentKey,
+    InvalidCode,
+    InvalidClassification,
+    InvalidContext,
+    ComponentCapacity,
+    KeyCapacity,
+    MetadataCapacity,
+    WindowCapacity,
+    ComponentClosed,
+    SequenceExhausted,
+    QueryDisabled,
+    QueryCapacity,
+    UnsupportedSchema,
+    InvalidQuery,
+    InvalidCursor,
+    SnapshotCapacity,
+    InconsistentAccounting,
+    ProjectionCapacity,
+    AlreadyInitialized,
+}
+```
+
+Validation, admission, or availability failure, independent of operational logging.
+
+## Variants
+
+### `Disabled`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Disabled"}} /></pre>
+
+Reads report configured disablement instead of available empty evidence.
+
+### `InvalidLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidLimits"}} /></pre>
+
+Enabled capacities are invalid, overflow arithmetic, or exceed the byte ceiling.
+
+### `Allocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Allocation"}} /></pre>
+
+An admitted startup backing allocation could not be reserved.
+
+### `InvalidComponentKey`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidComponentKey"}} /></pre>
+
+The logical key is empty, oversized, or outside the supported syntax.
+
+### `InvalidCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidCode"}} /></pre>
+
+The code is undeclared or its handle names another/stale registration.
+
+### `InvalidClassification`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidClassification"}} /></pre>
+
+The code or extension does not permit the supplied cause.
+
+### `InvalidContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidContext"}} /></pre>
+
+Plugin context contains a name unsupported by this recording runtime.
+
+### `ComponentCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ComponentCapacity"}} /></pre>
+
+Admission cannot fit another component without displacing active state.
+
+### `KeyCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "KeyCapacity"}} /></pre>
+
+Declared built-in or extension counter reservations cannot fit.
+
+### `MetadataCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MetadataCapacity"}} /></pre>
+
+A key, ownership value, or descriptor exceeds metadata capacity.
+
+### `WindowCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "WindowCapacity"}} /></pre>
+
+The requested outcome series cannot reserve its bucket storage.
+
+### `ComponentClosed`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ComponentClosed"}} /></pre>
+
+The handle names a closed or replaced registration.
+
+### `SequenceExhausted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "SequenceExhausted"}} /></pre>
+
+A sequence or generation cannot advance without identity reuse.
+
+### `QueryDisabled`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "QueryDisabled"}} /></pre>
+
+Startup intentionally disabled query materialization with max_queries = 0.
+
+### `QueryCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "QueryCapacity"}} /></pre>
+
+Every bounded query workspace is currently leased.
+
+### `UnsupportedSchema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedSchema"}} /></pre>
+
+The requested snapshot envelope version is unsupported.
+
+### `InvalidQuery`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidQuery"}} /></pre>
+
+A selector or page request exceeds its admission constraints.
+
+### `InvalidCursor`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidCursor"}} /></pre>
+
+Continuation has the wrong source/scope or its captured state changed.
+
+### `SnapshotCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "SnapshotCapacity"}} /></pre>
+
+A selected atomic row or required envelope cannot fit the query budgets.
+
+### `InconsistentAccounting`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InconsistentAccounting"}} /></pre>
+
+Backing ownership could not be reconciled; no partial accounting is returned.
+
+### `ProjectionCapacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ProjectionCapacity"}} /></pre>
+
+Subscription slots or unique registration IDs are exhausted.
+
+### `AlreadyInitialized`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AlreadyInitialized"}} /></pre>
+
+The process context was already installed or consumed, even while disabled.
+
+## Implementations
+
+### `impl DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `read_reason`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn read_reason(self) -&gt; <a href=\"enum-diagnosticreadreason\">DiagnosticReadReason</a>"}} /></pre>
+
+Safe transport-neutral meaning for read/startup failures. Recording-only errors are internal here; they must never be mislabeled invalid input.
+
+## Trait Implementations
+
+### `impl Clone for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Display for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Error for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `source`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
+
+#### `description`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `cause`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
+
+#### `provide`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+
+### `impl From<DiagnosticError> for EmbeddedDiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt; for <a href=\"embedded/enum-embeddeddiagnosticerror\">EmbeddedDiagnosticError</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-diagnosticerror\">DiagnosticError</a>) -&gt; Self"}} /></pre>
+
+### `impl PartialEq for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-diagnosticerror\">DiagnosticError</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+### `impl Eq for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>

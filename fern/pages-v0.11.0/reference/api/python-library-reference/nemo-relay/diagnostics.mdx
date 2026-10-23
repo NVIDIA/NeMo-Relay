@@ -1,0 +1,95 @@
+---
+title: "nemo_relay.diagnostics"
+sidebar-title: "diagnostics"
+description: "Optional readers for configuration-driven, process-local diagnostics."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/diagnostics.py`.
+
+Module `nemo_relay.diagnostics`.
+
+Optional readers for configuration-driven, process-local diagnostics.
+
+## Classes
+
+### `DiagnosticsError(RuntimeError)`
+
+Reader failure with a stable machine-readable `reason`.
+
+#### Methods
+
+##### `DiagnosticsError`
+
+```python
+def DiagnosticsError(reason: str) -> None
+```
+
+Create an instance.
+
+### `DiagnosticsReader`
+
+Read-only service capability, independent of plugin activation lifetime.
+
+#### Methods
+
+##### `DiagnosticsReader`
+
+```python
+def DiagnosticsReader(native: _NativeReader) -> None
+```
+
+Create an instance.
+
+##### `snapshot`
+
+```python
+def snapshot(query: dict[str, Any] | None = None) -> dict[str, Any]
+```
+
+Return one bounded page; diagnostic counters and durations are int.
+
+##### `snapshot_json`
+
+```python
+def snapshot_json(query: dict[str, Any] | None = None) -> str
+```
+
+Return canonical JSON with decimal-string diagnostic integers.
+
+##### `inspect_memory`
+
+```python
+def inspect_memory(query: dict[str, Any] | None = None) -> dict[str, Any]
+```
+
+Return one bounded memory page; diagnostic counters and durations are int.
+
+##### `inspect_memory_json`
+
+```python
+def inspect_memory_json(query: dict[str, Any] | None = None) -> str
+```
+
+Return canonical JSON with decimal-string diagnostic integers.
+
+##### `info`
+
+```python
+def info() -> dict[str, Any]
+```
+
+Return separate core/copy budgets, occupancy, and logging coverage.
+
+## Functions
+
+### `reader`
+
+```python
+def reader() -> DiagnosticsReader
+```
+
+Obtain a reader for the process diagnostics service.
+

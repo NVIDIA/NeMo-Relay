@@ -1,0 +1,58 @@
+---
+title: "Struct Plugin Error Classifier"
+sidebar-title: "PluginErrorClassifier"
+description: "Plugin-operation mapping before errors are flattened into reports or SDK strings."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginErrorClassifier;
+```
+
+Plugin-operation mapping before errors are flattened into reports or SDK strings.
+
+## Trait Implementations
+
+### `impl Clone for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+### `impl DiagnosticClassifier<PluginError> for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../trait-diagnosticclassifier\">DiagnosticClassifier</a>&lt;<a href=\"../../plugin/enum-pluginerror\">PluginError</a>&gt; for <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>
+
+#### `classify`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../trait-diagnosticclassifier\">classify</a>(&amp;self, error: &amp;<a href=\"../../plugin/enum-pluginerror\">PluginError</a>) -&gt; <a href=\"../struct-classification\">Classification</a>"}} /></pre>
+
+### `impl Copy for PluginErrorClassifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-pluginerrorclassifier\">PluginErrorClassifier</a>"}} /></pre>

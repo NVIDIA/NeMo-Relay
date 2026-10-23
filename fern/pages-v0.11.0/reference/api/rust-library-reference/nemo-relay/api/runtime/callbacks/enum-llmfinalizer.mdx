@@ -1,0 +1,58 @@
+---
+title: "Enum LlmFinalizer"
+sidebar-title: "LlmFinalizer"
+description: "Finalizer used to synthesize the aggregate streaming response payload."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum LlmFinalizer &#123;\n    Sync(<a href=\"type-llmfinalizerfn\">LlmFinalizerFn</a>),\n    Fallible(<a href=\"type-llmfalliblefinalizerfn\">LlmFallibleFinalizerFn</a>),\n    Async(<a href=\"type-llmasyncfinalizerfn\">LlmAsyncFinalizerFn</a>),\n&#125;"}} /></pre>
+
+Finalizer used to synthesize the aggregate streaming response payload.
+
+A failed finalizer yields a `null` aggregate with no `data` fallback and marks the END event ERROR. Any `FnOnce() -> Json` converts into the infallible form.
+
+## Variants (Non-exhaustive)
+
+### `Sync(LlmFinalizerFn)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Sync(<a href=\"type-llmfinalizerfn\">LlmFinalizerFn</a>)"}} /></pre>
+
+Returns the aggregate directly.
+
+### `Fallible(LlmFallibleFinalizerFn)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Fallible(<a href=\"type-llmfalliblefinalizerfn\">LlmFallibleFinalizerFn</a>)"}} /></pre>
+
+Returns the aggregate or a failure.
+
+### `Async(LlmAsyncFinalizerFn)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Async(<a href=\"type-llmasyncfinalizerfn\">LlmAsyncFinalizerFn</a>)"}} /></pre>
+
+Awaited before the END publication, so a flush inside it does not wait on this stream or other unfinished terminal publications.
+
+## Implementations
+
+### `impl LlmFinalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-llmfinalizer\">LlmFinalizer</a>"}} /></pre>
+
+#### `new_async`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new_async&lt;F, Fut&gt;(finalizer: F) -&gt; Selfwhere\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Wrap a future-returning closure as an asynchronous finalizer.
+
+## Trait Implementations
+
+### `impl<F> From<F> for LlmFinalizerwhere F: FnOnce() -> Json + Send + 'static,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;F&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;F&gt; for <a href=\"enum-llmfinalizer\">LlmFinalizer</a>where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"../../../json/type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(finalizer: F) -&gt; Self"}} /></pre>

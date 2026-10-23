@@ -1,0 +1,128 @@
+---
+title: "Struct Observation"
+sidebar-title: "Observation"
+description: "One observation. Its count is a positive input delta, never a cumulative total."
+position: 55
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Observation&lt;'a&gt; &#123;\n    pub detail: <a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'a&gt;,\n    pub context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>,\n    /* private fields */\n&#125;"}} /></pre>
+
+One observation. Its count is a positive input delta, never a cumulative total.
+
+```rust
+use nemo_relay::diagnostics::{Classification, Observation, SuccessCode};
+// Constructors require NonZeroU64, so a zero integer is not a valid input.
+let observation = Observation::new(
+    Classification::success(SuccessCode::SinkInitialized), "initialized", 0,
+);
+```
+
+## Fields
+
+### `detail: DiagnosticDetailRef<'a>`
+
+Optional producer-approved explanation; bounding does not perform redaction.
+
+### `count: NonZeroU64`
+
+Positive input occurrence delta, never a cumulative report total.
+
+### `severity: DiagnosticSeverity`
+
+Operational evidence severity, independent of deployment health.
+
+### `outcome: DiagnosticOutcome`
+
+Explicit observed operation outcome for summaries and windows.
+
+### `correlation: DiagnosticCorrelation<'a>`
+
+Borrowed caller correlation, never an aggregate key.
+
+### `context: PluginObservationContext`
+
+Plugin execution and phase names, validated before fixed-size core retention.
+
+## Implementations
+
+### `impl<'a> Observation<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-observation\">Observation</a>&lt;'a&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    classification: <a href=\"struct-classification\">Classification</a>,\n    detail: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;&gt;,\n    count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n) -&gt; Self"}} /></pre>
+
+Author built-in evidence with severity/outcome defaults from its code.
+
+The type guarantees a positive count; recording validates the reservation. Constructing this value does not retain its borrowed detail or source error.
+
+#### `extension`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn extension(\n    handle: <a href=\"struct-extensionhandle\">ExtensionHandle</a>,\n    class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;,\n    outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    detail: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;&gt;,\n    count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n) -&gt; Self"}} /></pre>
+
+Author evidence using an admitted extension handle and supported cause.
+
+Recording validates ownership, descriptor generation, and class. A stale handle cannot reserve a replacement code or create another counter.
+
+#### `extension_with_class`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn extension_with_class(\n    handle: <a href=\"struct-extensionhandle\">ExtensionHandle</a>,\n    class: <a href=\"struct-extensionclasshandle\">ExtensionClassHandle</a>,\n    detail: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"enum-diagnosticdetailref\">DiagnosticDetailRef</a>&lt;'a&gt;&gt;,\n    count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n) -&gt; Self"}} /></pre>
+
+Author an extension failure with its own admitted immutable cause name. Handles from another code/registration or expired metadata are rejected.
+
+#### `classification_overflow`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn classification_overflow(\n    outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    count: <a href=\"https://doc.rust-lang.org/1.96.1/core/num/nonzero/type.NonZeroU64.html\">NonZeroU64</a>,\n) -&gt; Self"}} /></pre>
+
+Explicit summary-only admission when extension vocabulary could not fit. This is not a way to reinterpret an invalid or undeclared code.
+
+#### `with_plugin_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_plugin_context(self, context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>) -&gt; Self"}} /></pre>
+
+Attach known plugin execution and lifecycle facts without another series.
+
+#### `with_outcome`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_outcome(self, outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>) -&gt; Self"}} /></pre>
+
+Set the observed outcome without changing classification or health policy.
+
+#### `with_severity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_severity(self, severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>) -&gt; Self"}} /></pre>
+
+Set output severity independently of operation outcome and cause.
+
+#### `with_correlation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_correlation(self, correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'a&gt;) -&gt; Self"}} /></pre>
+
+Attach safe borrowed correlation to be capped outside aggregate keys.
+
+## Trait Implementations
+
+### `impl<'a> Clone for Observation<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-observation\">Observation</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-observation\">Observation</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Debug for Observation<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-observation\">Observation</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

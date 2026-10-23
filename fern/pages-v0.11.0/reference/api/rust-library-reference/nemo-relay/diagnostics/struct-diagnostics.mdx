@@ -1,0 +1,148 @@
+---
+title: "Struct Diagnostics"
+sidebar-title: "Diagnostics"
+description: "Independent diagnostics context with immutable startup enablement."
+position: 42
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct Diagnostics { /* private fields */ }
+```
+
+Independent diagnostics context with immutable startup enablement.
+
+Clones share this context only. State and budgets are independent of logger lifetime and of any other explicitly isolated embedded contexts.
+
+## Implementations
+
+### `impl Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `from_settings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_settings(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Construct a context using the startup owner's selected mode and capacities.
+
+Enabled mode validates arithmetic and admits backend storage before use. The circular-history allocation uses the global allocation-error handler on allocation failure; fallible pool reservations return an error. Disabled mode retains lightweight source/settings state without registry, history, detail, query, or projection pools. Source role/version metadata is capped at 128 UTF-8 bytes; the supplied UUID is preserved.
+
+#### `selected_process_default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn selected_process_default() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;'static Self&gt;"}} /></pre>
+
+Inspect a selected context without consuming an uninitialized default.
+
+#### `install_process_default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn install_process_default(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&amp;'static Self, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Install before handing out default handles. Once used, inert handles are never silently upgraded to a different startup mode.
+
+#### `process_default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn process_default() -&gt; &amp;'static Self"}} /></pre>
+
+Return the installed process context or initialize a disabled default.
+
+Install enabled settings before the first lookup. Early disabled handles are never implicitly upgraded by logger or plugin construction.
+
+#### `limits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn limits(&amp;self) -&gt; &amp;<a href=\"struct-diagnosticlimits\">DiagnosticLimits</a>"}} /></pre>
+
+Configured capacities, independently of current occupancy or disablement.
+
+#### `source`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn source(&amp;self) -&gt; &amp;<a href=\"struct-sourceidentity\">SourceIdentity</a>"}} /></pre>
+
+Source incarnation shared by every observation from this context.
+
+#### `reader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn reader(&amp;self) -&gt; <a href=\"struct-diagnosticsreader\">DiagnosticsReader</a>"}} /></pre>
+
+Issue a read capability without materializing or allocating a query page.
+
+#### `snapshot`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn snapshot(\n    &amp;self,\n    query: &amp;<a href=\"struct-diagnosticquery\">DiagnosticQuery</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-snapshotlease\">SnapshotLease</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Capture a bounded page through this context's reader.
+
+The lease holds a query permit until dropped. Reads never reset counters or pin history; configured disablement is returned explicitly. The query is borrowed only during capture and can be reused after this call.
+
+#### `register_component`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_component(\n    &amp;self,\n    registration: <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-componentrecorder\">ComponentRecorder</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Reserve a component vocabulary and return its producer lease.
+
+Admission cannot displace active summaries. The final recorder drop closes the component. Use [`Self::register_owned_component`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics) for explicit close and refresh authority. Disabled mode returns an inert recorder.
+
+#### `register_owned_component`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_owned_component(\n    &amp;self,\n    registration: <a href=\"struct-componentregistration\">ComponentRegistration</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;(<a href=\"struct-componentowner\">ComponentOwner</a>, <a href=\"struct-componentrecorder\">ComponentRecorder</a>), <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Reserve a component and separately issue owner and producer capabilities.
+
+The owner can close or rotate this registration. Disabled mode issues inert handles without an active identity or backend reservation. Admission failures are explicit and recorded in reserved loss accounting.
+
+#### `subscribe_projection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticoutputsummary\">DiagnosticOutputSummary</a>) + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Attach a bounded subscriber to approved operational summaries. Restricted retained evidence is never supplied to projection callbacks.
+
+Callbacks run outside the store lock, may run concurrently, and have isolated panics. Disabled mode retains no callback and returns an inert guard. Arbitrary callback captures and retained copies remain caller-owned.
+
+#### `subscribe_fallible_projection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_fallible_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticoutputsummary\">DiagnosticOutputSummary</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-projectionerror\">ProjectionError</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Attach a subscriber that reports bounded conversion or delivery failure.
+
+Errors update projection-loss accounting without undoing numeric acceptance. Separate publication workspaces cannot pin history. Disabled mode retains no callback and returns an inert guard.
+
+#### `memory_usage`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn memory_usage(&amp;self) -&gt; <a href=\"struct-diagnosticmemoryusage\">DiagnosticMemoryUsage</a>"}} /></pre>
+
+Inspect reserved backend bytes and occupancy without changing evidence.
+
+Inspection scans admitted slots and detail-block metadata without allocating. Disabled contexts report zero backend capacity. Lightweight facade state, caller-owned copies, thread stacks, and independent outputs are excluded.
+
+## Trait Implementations
+
+### `impl Clone for Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

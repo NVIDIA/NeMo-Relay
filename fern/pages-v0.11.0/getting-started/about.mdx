@@ -1,0 +1,103 @@
+---
+title: "About"
+description: "Choose where NeMo Relay attaches to your agent system."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+NeMo Relay observes and controls agent work at the boundary where it runs.
+Choose the path that matches the agent runtime, framework, or application you
+already use.
+
+## Choose Where Relay Attaches
+
+Use the boundary that owns the model request or tool execution:
+
+- **Agent runtime:** Observe a coding agent without changing application code.
+- **Framework:** Use a maintained integration when the framework owns callbacks
+  and tool execution.
+- **Application:** Instrument Python, Node.js, or Rust code when your
+  application owns the tool or model call.
+
+You do not need a Rust compiler, a source checkout, or repository development
+tools to install a published CLI binary.
+
+## Try Relay Now
+
+<CardGroup cols={1}>
+<Card title="Quick Starts" icon="fa-solid fa-bolt" href="/getting-started/quick-start">
+Choose the shortest path for your runtime or application, then verify its output.
+</Card>
+</CardGroup>
+
+## Using an AI Coding Assistant
+
+<CardGroup cols={1}>
+<Card
+  title="Using an AI Coding Assistant?"
+  icon="terminal"
+  iconPosition="left"
+>
+
+Install [NVIDIA agent skills](https://docs.nvidia.com/skills) to give
+compatible coding agents product-specific Relay workflows and references. After
+the NeMo Relay skills are published in `nvidia/skills`, install the full Relay
+skill set without cloning the catalog:
+
+```bash
+npx skills add nvidia/skills \
+  --skill nemo-relay-install \
+  --skill nemo-relay-get-started \
+  --skill nemo-relay-instrument-calls \
+  --skill nemo-relay-instrument-context-isolation \
+  --skill nemo-relay-instrument-typed-wrappers \
+  --skill nemo-relay-plugin-observability \
+  --skill nemo-relay-plugin-adaptive-tuning \
+  --skill nemo-relay-plugin-build \
+  --skill nemo-relay-migrate-from-flow \
+  --skill nemo-relay-debug-runtime-integration \
+  --agent codex
+```
+
+Use `--agent claude-code`, `--agent cursor`, or another supported agent target
+when that is where you want the skill installed. To inspect the current NVIDIA
+skill catalog first, run:
+
+```bash
+npx skills add nvidia/skills --list
+```
+
+Agent skills help your coding assistant apply Relay documentation and workflows.
+They do not replace installing NeMo Relay packages, configuring runtime
+plugins, or validating emitted events.
+</Card>
+</CardGroup>
+
+## Go Beyond the First Run
+
+After a working first run, choose an advanced path to build reusable behavior
+or operate Relay as a long-running service:
+
+<CardGroup cols={2}>
+<Card title="Build a Plugin" icon="fa-solid fa-puzzle-piece" href="/build-plugins/about">
+Create reusable behavior that observes or controls agent work.
+</Card>
+
+<Card title="Deploy a Daemon" icon="fa-solid fa-server" href="/daemon/about">
+Run Relay as a managed service for local users or remote clients.
+</Card>
+</CardGroup>
+
+For deeper guidance, refer to:
+
+- [Installation Overview](/getting-started/installation): Compare packages,
+  supported platforms, and alternative installers.
+- [Configuration / Setup Overview](/getting-started/configuration): Configure
+  runtime behavior and plugins in more detail.
+- [Development Setup](/contribute/development-setup): Build from source or
+  contribute to the repository.
+- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
+  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
+- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
+  framework integrations.

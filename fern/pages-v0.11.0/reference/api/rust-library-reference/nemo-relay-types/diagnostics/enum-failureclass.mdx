@@ -1,0 +1,435 @@
+---
+title: "Enum Failure Class"
+sidebar-title: "FailureClass"
+description: "Supported general cause, independent of health, retries, and operation outcome."
+position: 59
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+#[non_exhaustive]pub enum FailureClass {
+Show 16 variants    InvalidInput,
+    InvalidState,
+    NotFound,
+    Conflict,
+    Authentication,
+    PermissionDenied,
+    Unsupported,
+    Incompatible,
+    Timeout,
+    Unavailable,
+    ResourceExhausted,
+    Io,
+    ExecutionFailed,
+    PolicyRejected,
+    Internal,
+    Unknown,
+}
+```
+
+Supported general cause, independent of health, retries, and operation outcome.
+
+## Variants (Non-exhaustive)
+
+### `InvalidInput`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidInput"}} /></pre>
+
+The supplied input is invalid.
+
+### `InvalidState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidState"}} /></pre>
+
+The operation is invalid in the observed state.
+
+### `NotFound`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NotFound"}} /></pre>
+
+The requested resource was not found.
+
+### `Conflict`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Conflict"}} /></pre>
+
+The operation conflicts with an existing resource or state.
+
+### `Authentication`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Authentication"}} /></pre>
+
+Authentication or the existing authentication classification failed.
+
+### `PermissionDenied`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PermissionDenied"}} /></pre>
+
+Structured evidence establishes denied permission.
+
+### `Unsupported`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unsupported"}} /></pre>
+
+The requested capability is unsupported.
+
+### `Incompatible`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Incompatible"}} /></pre>
+
+Observed versions or protocols are incompatible.
+
+### `Timeout`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Timeout"}} /></pre>
+
+The operation exceeded its deadline.
+
+### `Unavailable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unavailable"}} /></pre>
+
+The dependency or service was unavailable.
+
+### `ResourceExhausted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ResourceExhausted"}} /></pre>
+
+An observed capacity limit was reached.
+
+### `Io`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Io"}} /></pre>
+
+Structured evidence establishes an I/O failure.
+
+### `ExecutionFailed`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ExecutionFailed"}} /></pre>
+
+A callback or operation failed during execution.
+
+### `PolicyRejected`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PolicyRejected"}} /></pre>
+
+An existing policy refused the operation.
+
+### `Internal`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Internal"}} /></pre>
+
+The source reported an internal failure.
+
+### `Unknown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown"}} /></pre>
+
+A failure was observed without a supported more specific cause.
+
+## Implementations
+
+### `impl FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `from_canonical_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_canonical_name(name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+
+Interpret an exact supported canonical name without allocating.
+
+#### `as_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn as_str(self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Stable portable name, also available in const contexts.
+
+## Trait Implementations
+
+### `impl<O: Into<EnumSet<FailureClass>>> BitAnd<O> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;O: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;&gt;&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitAnd.html\">BitAnd</a>&lt;O&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitAnd.html#associatedtype.Output\">Output</a> = EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;"}} /></pre>
+
+#### `bitand`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitAnd.html#tymethod.bitand\">bitand</a>(self, other: O) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitAnd.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+### `impl<O: Into<EnumSet<FailureClass>>> BitOr<O> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;O: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;&gt;&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitOr.html\">BitOr</a>&lt;O&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitOr.html#associatedtype.Output\">Output</a> = EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;"}} /></pre>
+
+#### `bitor`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitOr.html#tymethod.bitor\">bitor</a>(self, other: O) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitOr.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+### `impl<O: Into<EnumSet<FailureClass>>> BitXor<O> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;O: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;&gt;&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitXor.html\">BitXor</a>&lt;O&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitXor.html#associatedtype.Output\">Output</a> = EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;"}} /></pre>
+
+#### `bitxor`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitXor.html#tymethod.bitxor\">bitxor</a>(self, other: O) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.BitXor.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+### `impl Clone for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EnumSetConstHelper for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EnumSetConstHelper for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `CONST_INIT_HELPER`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const CONST_INIT_HELPER: __EnumSetInitHelper = __EnumSetInitHelper"}} /></pre>
+
+#### `CONST_OP_HELPER`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const CONST_OP_HELPER: __EnumSetOpHelper = __EnumSetOpHelper"}} /></pre>
+
+#### `ConstInitHelper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type ConstInitHelper = __EnumSetInitHelper"}} /></pre>
+
+#### `ConstOpHelper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type ConstOpHelper = __EnumSetOpHelper"}} /></pre>
+
+### `impl EnumSetTypePrivate for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EnumSetTypePrivate for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `ALL_BITS`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const ALL_BITS: Self::Repr = 65535"}} /></pre>
+
+#### `BIT_WIDTH`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const BIT_WIDTH: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a> = 16u32"}} /></pre>
+
+#### `VARIANT_COUNT`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const VARIANT_COUNT: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a> = 16u32"}} /></pre>
+
+#### `Repr`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Repr = <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u16.html\">u16</a>"}} /></pre>
+
+#### `enum_into_u32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn enum_into_u32(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>"}} /></pre>
+
+#### `enum_from_u32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "unsafe fn enum_from_u32(val: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>) -&gt; Self"}} /></pre>
+
+#### `enum_from_u32_checked`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "unsafe fn enum_from_u32_checked(val: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>) -&gt; Self"}} /></pre>
+
+### `impl<'_derivative_strum> From<&'_derivative_strum FailureClass> for &'static str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'_derivative_strum&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;&amp;'_derivative_strum <a href=\"enum-failureclass\">FailureClass</a>&gt; for &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(x: &amp;'_derivative_strum <a href=\"enum-failureclass\">FailureClass</a>) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+### `impl From<FailureClass> for &'static str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt; for &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(x: <a href=\"enum-failureclass\">FailureClass</a>) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+### `impl FromStr for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html\">FromStr</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Err`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html#associatedtype.Err\">Err</a> = ParseError"}} /></pre>
+
+#### `from_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html#tymethod.from_str\">from_str</a>(s: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-failureclass\">FailureClass</a>, &lt;Self as <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html\">FromStr</a>&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html#associatedtype.Err\">Err</a>&gt;"}} /></pre>
+
+### `impl Hash for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Not for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.Not.html\">Not</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.Not.html#associatedtype.Output\">Output</a> = EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;"}} /></pre>
+
+#### `not`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.Not.html#tymethod.not\">not</a>(self) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.96.1/core/ops/bit/trait.Not.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+### `impl Ord for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#tymethod.cmp\">cmp</a>(&amp;self, other: &amp;<a href=\"enum-failureclass\">FailureClass</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/enum.Ordering.html\">Ordering</a>"}} /></pre>
+
+#### `max`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.max\">max</a>(self, other: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `min`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.min\">min</a>(self, other: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `clamp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.clamp\">clamp</a>(self, min: Self, max: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl PartialEq<EnumSet<FailureClass>> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a>&lt;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl PartialEq for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-failureclass\">FailureClass</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl PartialOrd for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html\">PartialOrd</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `partial_cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#tymethod.partial_cmp\">partial_cmp</a>(&amp;self, other: &amp;<a href=\"enum-failureclass\">FailureClass</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/enum.Ordering.html\">Ordering</a>&gt;"}} /></pre>
+
+#### `lt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.lt\">lt</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `le`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.le\">le</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `gt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.gt\">gt</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.ge\">ge</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl<O: Into<EnumSet<FailureClass>>> Sub<O> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;O: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;&gt;&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/arith/trait.Sub.html\">Sub</a>&lt;O&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/arith/trait.Sub.html#associatedtype.Output\">Output</a> = EnumSet&lt;<a href=\"enum-failureclass\">FailureClass</a>&gt;"}} /></pre>
+
+#### `sub`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/arith/trait.Sub.html#tymethod.sub\">sub</a>(self, other: O) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.96.1/core/ops/arith/trait.Sub.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+### `impl TryFrom<&str> for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html\">TryFrom</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt; for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#associatedtype.Error\">Error</a> = ParseError"}} /></pre>
+
+#### `try_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#tymethod.try_from\">try_from</a>(s: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-failureclass\">FailureClass</a>, &lt;Self as <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html\">TryFrom</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#associatedtype.Error\">Error</a>&gt;"}} /></pre>
+
+### `impl Copy for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+### `impl EnumSetType for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EnumSetType for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+### `impl Eq for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>
+
+### `impl StructuralPartialEq for FailureClass`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-failureclass\">FailureClass</a>"}} /></pre>

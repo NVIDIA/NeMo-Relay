@@ -1,0 +1,62 @@
+---
+title: "Struct Entry Memory View"
+sidebar-title: "EntryMemoryView"
+description: "Borrowed retained-entry footprint from copied query storage, without its text."
+position: 47
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct EntryMemoryView<'a> { /* private fields */ }
+```
+
+Borrowed retained-entry footprint from copied query storage, without its text.
+
+## Implementations
+
+### `impl EntryMemoryView<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-entrymemoryview\">EntryMemoryView</a>&lt;'_&gt;"}} /></pre>
+
+#### `key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn key(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Original owner key.
+
+#### `instance_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn instance_id(&amp;self) -&gt; <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
+
+Original registration incarnation.
+
+#### `generation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn generation(&amp;self) -&gt; <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>"}} /></pre>
+
+Original registration generation.
+
+#### `sequence`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sequence(&amp;self) -&gt; <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>"}} /></pre>
+
+Source acceptance sequence.
+
+#### `footprint`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn footprint(&amp;self) -&gt; &amp;<a href=\"struct-entrymemoryfootprint\">EntryMemoryFootprint</a>"}} /></pre>
+
+Compiled entry footprint, not serialized size.
+
+## Trait Implementations
+
+### `impl Serialize for EntryMemoryView<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-entrymemoryview\">EntryMemoryView</a>&lt;'_&gt;"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;(&amp;self, s: S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;"}} /></pre>

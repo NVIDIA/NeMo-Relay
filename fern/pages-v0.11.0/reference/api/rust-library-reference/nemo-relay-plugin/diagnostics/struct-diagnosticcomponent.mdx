@@ -1,0 +1,48 @@
+---
+title: "Struct Diagnostic Component"
+sidebar-title: "DiagnosticComponent"
+description: "Shared producer registration. Last drop closes it; explicit close fences clones."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct DiagnosticComponent { /* private fields */ }
+```
+
+Shared producer registration. Last drop closes it; explicit close fences clones.
+
+## Implementations
+
+### `impl DiagnosticComponent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnosticcomponent\">DiagnosticComponent</a>"}} /></pre>
+
+#### `try_record_lazy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_record_lazy&lt;'a&gt;(\n    &amp;self,\n    make: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"struct-observation\">Observation</a>&lt;'a&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-recordoutcome\">RecordOutcome</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Record an occurrence delta once. No retry, log, or exporter projection.
+
+#### `close`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn close(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Close explicitly; this never resets source totals or classifies recovery.
+
+## Trait Implementations
+
+### `impl Clone for DiagnosticComponent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnosticcomponent\">DiagnosticComponent</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnosticcomponent\">DiagnosticComponent</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

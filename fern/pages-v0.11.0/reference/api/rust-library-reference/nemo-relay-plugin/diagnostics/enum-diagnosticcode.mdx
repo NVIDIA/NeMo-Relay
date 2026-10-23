@@ -1,0 +1,64 @@
+---
+title: "Enum Diagnostic Code"
+sidebar-title: "DiagnosticCode"
+description: "One declared code. Extension namespace and component ownership are host-assigned."
+position: 20
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum DiagnosticCode&lt;'a&gt; &#123;\n    Builtin(<a href=\"enum-builtindiagnosticcode\">BuiltinDiagnosticCode</a>),\n    Extension &#123;\n        name: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n        description: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n        outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n        allowed_classes: &amp;'a [<a href=\"enum-failureclass\">FailureClass</a>],\n    &#125;,\n&#125;"}} /></pre>
+
+One declared code. Extension namespace and component ownership are host-assigned.
+
+## Variants
+
+### `Builtin(BuiltinDiagnosticCode)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Builtin(<a href=\"enum-builtindiagnosticcode\">BuiltinDiagnosticCode</a>)"}} /></pre>
+
+Existing semantic code; host restricts plugin authors to common plugin failures.
+
+### `Extension`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Extension"}} /></pre>
+
+A distinct plugin-internal operation.
+
+#### Fields
+
+### `name: &'a str`
+
+Stable local name (at most 32 UTF-8 bytes).
+
+### `description: &'a str`
+
+Safe metadata retained once (at most 256 UTF-8 bytes).
+
+### `outcome: DiagnosticOutcome`
+
+Declared outcome; success is independent evidence, not recovery.
+
+### `allowed_classes: &'a [FailureClass]`
+
+Allowed causes; empty for a nonfailure extension.
+
+## Trait Implementations
+
+### `impl<'a> Clone for DiagnosticCode<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-diagnosticcode\">DiagnosticCode</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-diagnosticcode\">DiagnosticCode</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Copy for DiagnosticCode<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-diagnosticcode\">DiagnosticCode</a>&lt;'a&gt;"}} /></pre>

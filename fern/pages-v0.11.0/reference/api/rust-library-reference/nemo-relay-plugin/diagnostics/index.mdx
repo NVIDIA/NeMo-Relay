@@ -1,0 +1,54 @@
+---
+title: "Module diagnostics"
+sidebar-title: "diagnostics"
+description: "Native diagnostic authoring and authorized reads. Native diagnostic authoring and explicitly authorized canonical reads. Recording is synchronous, state-only, and independent of operational logs. Disabled/unsupported facades skip factories. Diagnostic errors must not be propagated as plugin execution failures unless the application chooses so."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Native diagnostic authoring and authorized reads. Native diagnostic authoring and explicitly authorized canonical reads. Recording is synchronous, state-only, and independent of operational logs. Disabled/unsupported facades skip factories. Diagnostic errors must not be propagated as plugin execution failures unless the application chooses so.
+
+## Modules
+
+- [abi](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/abi): Append-only native diagnostic ABI. All input spans are borrowed for one call. Nonempty spans and output pointers must be valid for their stated size; arrays must be aligned. No callback retains plugin memory. Integer tags are validated.
+
+## Structs
+
+- [Classification](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-classification): Shared classification payload for producers, projections, and decoded evidence.
+- [ClassificationError](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-classificationerror): A cause is missing, forbidden, or unsupported by the selected catalogue code.
+- [ComponentDeclaration](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-componentdeclaration): Borrowed component declaration evaluated only when collection is available.
+- [DeliveryStats](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-deliverystats): Local delivery totals, not core observation or retention totals.
+- [DiagnosticComponent](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticcomponent): Shared producer registration. Last drop closes it; explicit close fences clones.
+- [DiagnosticCorrelation](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticcorrelation): Optional caller correlation identifiers, excluded from aggregation keys.
+- [DiagnosticCount](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticcount): Magnitude of an occurrence or loss counter, including overflow visibility.
+- [DiagnosticDiscovery](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticdiscovery): Side-effect-free discovery, available even when snapshot queries are disabled.
+- [DiagnosticMemoryPage](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticmemorypage): Bounded independent memory view; inspection neither records nor freezes history.
+- [DiagnosticQuery](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticquery): Portable bounded selection; consumers never reset or mutate evidence.
+- [DiagnosticReader](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticreader): Authorized read facade; each call independently checks live host authority.
+- [DiagnosticSnapshot](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnosticsnapshot): Read evidence from one source incarnation, using the canonical snapshot schema.
+- [Diagnostics](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-diagnostics): Cloneable activation-scoped diagnostic facade. It does not start a service. Clones share four concurrent-call slots and one in-flight read-buffer slot. Same-thread recursion into the same activation returns [`DiagnosticError::Busy`](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticerror).
+- [Observation](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-observation): Typed observation with borrowed detail and shared caller correlation.
+- [RecordReceipt](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/struct-recordreceipt): Accepted lifetime and current-summary update.
+
+## Enums
+
+- [BuiltinDiagnosticCode](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-builtindiagnosticcode): Fixed-size canonical authoring value with one authoritative hierarchy.
+- [CommonPluginFailureCode](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-commonpluginfailurecode): Plugin failures supported by phase-one activation recording.
+- [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticavailability): Availability of evidence, without applying deployment or application health.
+- [DiagnosticCode](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticcode): One declared code. Extension namespace and component ownership are host-assigned.
+- [DiagnosticError](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticerror): Diagnostic operation error. These values never classify plugin execution.
+- [DiagnosticOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticoutcome): Observed operation outcome; severity does not imply this value.
+- [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticreadreason): Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons.
+- [DiagnosticSeverity](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticseverity): Severity of evidence, independent of an operation's outcome.
+- [EvidenceDisposition](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-evidencedisposition): Evidence retention is independent of numeric acceptance.
+- [FailureClass](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-failureclass): Supported general cause, independent of health, retries, and operation outcome.
+- [FailureCode](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-failurecode): Failure event hierarchy for integrated producers.
+- [PluginFailureCode](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-pluginfailurecode): Plugin failure hierarchy for integrated producers.
+- [RecordOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-recordoutcome): Accepted collection or intentional disablement.
+
+## Traits
+
+- [DiagnosticClassifier](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/trait-diagnosticclassifier): Pure producer behavior: borrow original evidence and return shared classification metadata.

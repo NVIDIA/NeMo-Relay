@@ -1,0 +1,60 @@
+---
+title: "Use Plugins"
+sidebar-title: "About"
+description: "Configure plugin settings, manage installed plugins, and initialize plugins through the language SDKs."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this section to configure and run built-in and separately installed NeMo
+Relay plugins. Choose a guide based on how you use plugins:
+
+| Goal | Start here |
+| --- | --- |
+| Set plugin options in files or with `nemo-relay plugins edit` | [Configure](/configure-plugins/plugin-configuration-files) |
+| Install, inspect, enable, disable, or remove a discoverable plugin with the CLI | [Manage](/configure-plugins/discoverable-plugins) |
+| Validate, activate, and close a plugin host through a language SDK | [Initialize](/configure-plugins/initialize-plugins) |
+| Create a reusable plugin | [Build Plugins](/build-plugins/about) |
+
+## Built-in Plugins
+
+Relay includes these built-in components. Configure them as `[[components]]`
+entries in `plugins.toml`.
+
+- [Observability](/configure-plugins/observability/about) exports ATOF, ATIF,
+  or typed OpenTelemetry data.
+- [Adaptive](/configure-plugins/adaptive/about) configures adaptive runtime
+  behavior.
+- [NeMo Guardrails (Deprecated)](/configure-plugins/nemo-guardrails/about)
+  installs Guardrails-backed policy checks. The built-in plugin is scheduled
+  for removal in NeMo Relay 0.9 and should not be used for new deployments.
+- [PII Redaction](/configure-plugins/pii-redaction/about) sanitizes sensitive
+  data in observability payloads.
+- [Model Pricing](/configure-plugins/model-pricing) configures catalog sources
+  for cost estimates on managed or manually observed LLM responses.
+- [Resource Metrics](/configure-plugins/resource-metrics) explains optional
+  polling marks and on-demand snapshots for CPU, memory, processes, disk,
+  network, and GPUs.
+
+## First Party Plugins
+
+First-party plugins are published separately by NVIDIA. Install and manage them
+with the Relay CLI for a user account or a system-wide deployment.
+
+- [NeMo Switchyard](/configure-plugins/switchyard) routes model requests across
+  models and providers. The guide covers installation, configuration, a routed
+  request, and removal.
+
+Use [Build Plugins](/build-plugins/about) only when you are authoring the
+plugin itself. It covers generic plugin components, manifests, native ABI
+plugins, Python workers, and the `grpc-v1` protocol.
+
+## Embedded Diagnostics Service
+
+For language-hosted Relay, add a root `[diagnostics]` section to `plugins.toml`.
+Initialization uses it to select a service owned by the process. The service
+remains available after individual plugins close. Refer to
+[Embedded Diagnostics](/reference/diagnostics/bindings#embedded-language-runtimes)
+for configuration precedence, startup limits, and optional readers.

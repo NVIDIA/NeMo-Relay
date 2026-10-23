@@ -1,0 +1,66 @@
+---
+title: "Struct Diagnostic Reader"
+sidebar-title: "DiagnosticReader"
+description: "Authorized read facade; each call independently checks live host authority."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct DiagnosticReader { /* private fields */ }
+```
+
+Authorized read facade; each call independently checks live host authority.
+
+## Implementations
+
+### `impl DiagnosticReader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnosticreader\">DiagnosticReader</a>"}} /></pre>
+
+#### `discovery`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn discovery(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticdiscovery\">DiagnosticDiscovery</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Canonical discovery for the selected source.
+
+#### `snapshot`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn snapshot(\n    &amp;self,\n    query: &amp;<a href=\"struct-diagnosticquery\">DiagnosticQuery</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticsnapshot\">DiagnosticSnapshot</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Independently owned canonical snapshot, outside the host memory ceiling.
+
+#### `inspect_memory`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn inspect_memory(\n    &amp;self,\n    query: &amp;<a href=\"struct-diagnosticquery\">DiagnosticQuery</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticmemorypage\">DiagnosticMemoryPage</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Independently owned canonical memory page; starts no resource collector.
+
+#### `snapshot_json`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn snapshot_json(\n    &amp;self,\n    query: &amp;<a href=\"struct-diagnosticquery\">DiagnosticQuery</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Complete canonical JSON snapshot, preserving exact decimal counter strings.
+
+#### `inspect_memory_json`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn inspect_memory_json(\n    &amp;self,\n    query: &amp;<a href=\"struct-diagnosticquery\">DiagnosticQuery</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Complete canonical JSON memory page.
+
+## Trait Implementations
+
+### `impl Clone for DiagnosticReader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnosticreader\">DiagnosticReader</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnosticreader\">DiagnosticReader</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

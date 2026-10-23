@@ -1,0 +1,16 @@
+---
+title: "Function http_error_message"
+sidebar-title: "http_error_message"
+description: "Formats an upstream HTTP error for transport through string-based plugin callbacks."
+position: 66
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn http_error_message(status: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u16.html\">u16</a>, message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Formats an upstream HTTP error for transport through string-based plugin callbacks.
+
+Relay recognizes this HTTP prefix at runtime plugin error boundaries. Status codes must be in `400..=599`. Older hosts continue to treat the result as an ordinary error string.

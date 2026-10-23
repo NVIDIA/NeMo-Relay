@@ -1,0 +1,62 @@
+---
+title: "Struct Embedded Diagnostic Info"
+sidebar-title: "EmbeddedDiagnosticInfo"
+description: "Independent budgets and coverage of the binding adapter; excludes language object overhead and caller-retained copies, and is not an RSS measurement."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EmbeddedDiagnosticInfo &#123;\n    pub discovery: <a href=\"../struct-diagnosticdiscovery\">DiagnosticDiscovery</a>,\n    pub limits: <a href=\"../struct-diagnosticlimits\">DiagnosticLimits</a>,\n    pub memory: <a href=\"../struct-diagnosticmemoryusage\">DiagnosticMemoryUsage</a>,\n    pub binding_copy_concurrency: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub binding_max_page_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub binding_reserved_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub logging_coverage: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n&#125;"}} /></pre>
+
+Independent budgets and coverage of the binding adapter; excludes language object overhead and caller-retained copies, and is not an RSS measurement.
+
+## Fields
+
+### `discovery: DiagnosticDiscovery`
+
+Canonical core discovery and source identity.
+
+### `limits: DiagnosticLimits`
+
+Configured capacities, even when disabled.
+
+### `memory: DiagnosticMemoryUsage`
+
+Core allocated backing and occupancy.
+
+### `binding_copy_concurrency: usize`
+
+Concurrent adapter conversion limit.
+
+### `binding_max_page_bytes: usize`
+
+Maximum payload in each adapter copy.
+
+### `binding_reserved_bytes: usize`
+
+Total adapter payload reservation, independent of core's memory ceiling.
+
+### `logging_coverage: &'static str`
+
+Logging attachment availability. Pre-startup log records are never replayed.
+
+## Trait Implementations
+
+### `impl Debug for EmbeddedDiagnosticInfo`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-embeddeddiagnosticinfo\">EmbeddedDiagnosticInfo</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Serialize for EmbeddedDiagnosticInfo`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-embeddeddiagnosticinfo\">EmbeddedDiagnosticInfo</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

@@ -1,0 +1,50 @@
+---
+title: "Struct Native Host ApiV8 With Diagnostics"
+sidebar-title: "NativeHostApiV8WithDiagnostics"
+description: "Size-discovered tail of the unchanged ABI-8 execution table."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NativeHostApiV8WithDiagnostics &#123;\n    pub v8: <a href=\"../../struct-nemorelaynativehostapiv8\">NemoRelayNativeHostApiV8</a>,\n    pub diagnostics_api: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nativediagnosticsapiv1\">NativeDiagnosticsApiV1</a>,\n&#125;"}} /></pre>
+
+Size-discovered tail of the unchanged ABI-8 execution table.
+
+## Fields
+
+### `v8: NemoRelayNativeHostApiV8`
+
+Frozen ABI-8 prefix, including every existing callback.
+
+### `diagnostics_api: *const NativeDiagnosticsApiV1`
+
+Immutable host-lifetime diagnostic table; null means unsupported.
+
+## Trait Implementations
+
+### `impl Clone for NativeHostApiV8WithDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nativehostapiv8withdiagnostics\">NativeHostApiV8WithDiagnostics</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nativehostapiv8withdiagnostics\">NativeHostApiV8WithDiagnostics</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NativeHostApiV8WithDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nativehostapiv8withdiagnostics\">NativeHostApiV8WithDiagnostics</a>"}} /></pre>
+
+### `impl Send for NativeHostApiV8WithDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nativehostapiv8withdiagnostics\">NativeHostApiV8WithDiagnostics</a>"}} /></pre>
+
+### `impl Sync for NativeHostApiV8WithDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nativehostapiv8withdiagnostics\">NativeHostApiV8WithDiagnostics</a>"}} /></pre>

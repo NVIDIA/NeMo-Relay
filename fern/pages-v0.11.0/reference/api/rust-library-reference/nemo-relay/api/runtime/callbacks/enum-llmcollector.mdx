@@ -1,0 +1,52 @@
+---
+title: "Enum LlmCollector"
+sidebar-title: "LlmCollector"
+description: "Collector used to accumulate streaming response chunks."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum LlmCollector &#123;\n    Sync(<a href=\"type-llmcollectorfn\">LlmCollectorFn</a>),\n    Async(<a href=\"type-llmasynccollectorfn\">LlmAsyncCollectorFn</a>),\n&#125;"}} /></pre>
+
+Collector used to accumulate streaming response chunks.
+
+An asynchronous collector still pending at `close()` is awaited after the producer closes, so it must settle once the producer does. Any `FnMut(Json) -> Result<()>` converts into the synchronous form.
+
+## Variants (Non-exhaustive)
+
+### `Sync(LlmCollectorFn)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Sync(<a href=\"type-llmcollectorfn\">LlmCollectorFn</a>)"}} /></pre>
+
+Runs inline while the stream is polled.
+
+### `Async(LlmAsyncCollectorFn)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Async(<a href=\"type-llmasynccollectorfn\">LlmAsyncCollectorFn</a>)"}} /></pre>
+
+Awaited before its chunk is yielded.
+
+## Implementations
+
+### `impl LlmCollector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-llmcollector\">LlmCollector</a>"}} /></pre>
+
+#### `new_async`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new_async&lt;F, Fut&gt;(collector: F) -&gt; Selfwhere\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"../../../json/type-json\">Json</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Wrap a future-returning closure as an asynchronous collector.
+
+## Trait Implementations
+
+### `impl<F> From<F> for LlmCollectorwhere F: FnMut(Json) -> Result<()> + Send + 'static,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;F&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;F&gt; for <a href=\"enum-llmcollector\">LlmCollector</a>where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"../../../json/type-json\">Json</a>) -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(collector: F) -&gt; Self"}} /></pre>

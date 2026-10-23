@@ -1,0 +1,66 @@
+---
+title: "Struct Diagnostics"
+sidebar-title: "Diagnostics"
+description: "Cloneable activation-scoped diagnostic facade. It does not start a service. Clones share four concurrent-call slots and one in-flight read-buffer slot. Same-thread recursion into the same activation returns `DiagnosticError::Busy`."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct Diagnostics { /* private fields */ }
+```
+
+Cloneable activation-scoped diagnostic facade. It does not start a service. Clones share four concurrent-call slots and one in-flight read-buffer slot. Same-thread recursion into the same activation returns [`DiagnosticError::Busy`](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/enum-diagnosticerror).
+
+## Implementations
+
+### `impl Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capabilities(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"abi/struct-capabilities\">Capabilities</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Non-sensitive limits and the separately resolved read grant.
+
+#### `availability`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn availability(&amp;self) -&gt; <a href=\"enum-diagnosticavailability\">DiagnosticAvailability</a>"}} /></pre>
+
+Live host availability; startup enablement remains host-owned.
+
+#### `delivery_stats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn delivery_stats(&amp;self) -&gt; <a href=\"struct-deliverystats\">DeliveryStats</a>"}} /></pre>
+
+Fixed local delivery totals shared by runtime/component clones.
+
+#### `component_lazy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn component_lazy&lt;'a&gt;(\n    &amp;self,\n    make: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"struct-componentdeclaration\">ComponentDeclaration</a>&lt;'a&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticcomponent\">DiagnosticComponent</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Admit a component and its vocabulary, skipping the factory when inert.
+
+#### `reader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn reader(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticreader\">DiagnosticReader</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+
+Obtain a reader only when the host explicitly grants whole-context access.
+
+## Trait Implementations
+
+### `impl Clone for Diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
