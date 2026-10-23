@@ -84,7 +84,7 @@ Live execution and cross-platform quickstart validation remain separate work.
 
 ## Execute Quick Starts
 
-Run all ten Quick Starts with the same command locally and in the
+Run all discovered Quick Starts with the same command locally and in the
 `Execute Quick Starts` GitHub Actions workflow. The runner discovers cases from
 the contracts. `all` is the default; `local` selects Python, Node.js, Rust, and
 LangGraph. Individual IDs select a focused run:
@@ -123,7 +123,7 @@ run's `packages` directory. Its generated build manifest retains the original
 commit and verifies the reused asset hashes. The current checkout supplies the
 guides for this repeated run.
 
-Hermes, pi, Codex, Claude Code, LangChain, and Deep Agents use a loopback HTTP
+Hermes, pi, Codex, Claude Code, LangChain, Deep Agents, and Google ADK use a loopback HTTP
 provider implementing their actual model protocol. It requests the documented
 tool action and returns the completion marker after receiving a successful tool
 result. The real agent executes the tool; Relay writes the event stream. The
@@ -131,6 +131,10 @@ fixture writes neither the marker file nor ATOF. No inference credentials are
 needed. Passing establishes the installation, execution, tool, and contracted
 observability path with deterministic responses; it does not establish live
 model quality or provider authentication.
+
+Google ADK uses its native Gemini API through the SDK's base URL override.
+Its adapter supports the guide on development refs that include Google ADK;
+older documentation checkouts retain their own discovered case list.
 
 Install supported Codex and Claude Code hosts before selecting their cases
 locally. CI installs pinned host versions. pi is installed at the guide's exact

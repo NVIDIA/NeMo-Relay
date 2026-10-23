@@ -14,7 +14,7 @@ from typing import Any
 
 from quickstarts.provider import Fixture
 
-PYTHON_CASES = {"python", "langgraph", "langchain", "deep-agents"}
+PYTHON_CASES = {"python", "langgraph", "langchain", "deep-agents", "google-adk"}
 HERMES_COMMIT = "4d04303818b61bf3aa09278af48356315515965b"
 
 
@@ -32,6 +32,11 @@ def prepare(
         execute(command, work, environment, folder / (label + ".stdout.log"), folder / (label + ".stderr.log"), timeout)
 
     url = fixture.url
+    if name == "google-adk":
+        # google-genai exposes a Gemini base-URL override, so the guide's
+        # native model and ADK plugin can run without altering its program.
+        environment.update(GOOGLE_API_KEY="quickstart-fixture", GOOGLE_GEMINI_BASE_URL=url)
+        return {"provider": "local-gemini"}
     if name in PYTHON_CASES:
         environment.update(NVIDIA_API_KEY="quickstart-fixture", NVIDIA_BASE_URL=url + "/v1")
         return {"provider": "local-chat-completions"}
@@ -150,7 +155,8 @@ def command(block: dict[str, Any], name: str, work: Path, fixture: Fixture) -> t
             # Doctor also checks unrelated optional services. Preserve its diagnostics;
             # actual native Relay lifecycle checks remain mandatory below.
             return "hermes doctor", "diagnostic"
-    if block["role"] == "input" and block["id"] == "credentials" and block.get("env") == "NVIDIA_API_KEY":
+    credential = "GOOGLE_API_KEY" if name == "google-adk" else "NVIDIA_API_KEY"
+    if block["role"] == "input" and block["id"] == "credentials" and block.get("env") == credential:
         return None, "Dummy key provisioned for the loopback provider"
     if name in {"codex", "claude-code", "pi"} and block["id"] == "install":
         if name == "pi":
