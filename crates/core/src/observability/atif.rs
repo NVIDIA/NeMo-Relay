@@ -1306,8 +1306,8 @@ fn tool_call_id_for_origin(
     }
 }
 
-// Annotation adapters: read the normalized message from an annotation, returning
-// None for multimodal content so the caller falls back to the raw extractor.
+// Annotation adapters: project user content from normalized parts. Assistant
+// responses still use the raw extractor for multimodal content.
 
 fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
     let content = request
@@ -1320,7 +1320,27 @@ fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<
         })?;
     match content {
         MessageContent::Text(text) => Some(Json::String(text.clone())),
-        MessageContent::Parts(_) => None,
+        MessageContent::Parts(parts) => {
+            let supported = Json::Array(
+                parts
+                    .iter()
+                    .filter_map(atif_annotated_user_content_part)
+                    .collect(),
+            );
+            Some(atif_content_value(&supported))
+        }
+    }
+}
+
+fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
+    match part {
+        ContentPart::Text { text, .. } => Some(serde_json::json!({"type": "text", "text": text})),
+        ContentPart::Image { image, .. } => Some(serde_json::json!({
+            "type": "image",
+            "source": atif_image_source(image.get("source")?)?,
+        })),
+        ContentPart::ProviderNative { value, .. } => canonicalize_atif_content_part(value),
+        _ => None,
     }
 }
 

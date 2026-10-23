@@ -12,7 +12,9 @@ use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
 use crate::codec::model_pricing::pricing_test_mutex;
+use crate::codec::oci_genai::OCIGenAIChatCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
@@ -3360,6 +3362,101 @@ fn test_exporter_prefers_annotated_request_message() {
     let step = &trajectory.steps[0];
     assert_eq!(step.source, "user");
     assert_eq!(step.message, json!("hello from annotation"));
+}
+
+#[test]
+fn test_exporter_annotated_gemini_multimodal_display() {
+    for texts in [vec![], vec!["first"], vec!["first", "second"]] {
+        for image in [
+            json!({"inlineData": {"mimeType": "image/png", "data": "YQ=="}}),
+            json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/image.png"}}),
+        ] {
+            let mut parts: Vec<_> = texts.iter().map(|text| json!({"text": text})).collect();
+            parts.insert(usize::from(!parts.is_empty()), image);
+            assert_annotated_user_display(
+                &GeminiGenerateContentCodec,
+                json!({"contents": [{"role": "user", "parts": parts}]}),
+                json!(texts.join("\n")),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_exporter_annotated_oci_multimodal_display() {
+    for texts in [vec![], vec!["first"], vec!["first", "second"]] {
+        let mut parts: Vec<_> = texts
+            .iter()
+            .map(|text| json!({"type": "TEXT", "text": text}))
+            .collect();
+        parts.insert(
+            usize::from(!parts.is_empty()),
+            json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,YQ=="}}),
+        );
+        let body =
+            json!({"apiFormat": "GENERIC", "messages": [{"role": "USER", "content": parts}]});
+        for request in [
+            body.clone(),
+            json!({
+                "servingMode": {"servingType": "ON_DEMAND", "modelId": "vision-test"},
+                "compartmentId": "ocid1.compartment.oc1..example",
+                "chatRequest": body
+            }),
+        ] {
+            assert_annotated_user_display(&OCIGenAIChatCodec, request, json!(texts.join("\n")));
+        }
+    }
+}
+
+#[test]
+fn test_exporter_annotated_multimodal_display_keeps_supported_image_paths() {
+    let path_image = json!({"type": "image", "source": {
+        "media_type": "image/png", "path": "shot.png"
+    }});
+    let request = json!({"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "inspect", "cache_control": {"type": "ephemeral"}},
+        {"type": "image", "source": {
+            "type": "base64", "media_type": "image/png", "data": "YQ=="
+        }},
+        path_image
+    ]}]});
+    // Anthropic represents these images as Image; Chat retains them as ProviderNative.
+    for codec in [&AnthropicMessagesCodec as &dyn LlmCodec, &OpenAIChatCodec] {
+        assert_annotated_user_display(
+            codec,
+            request.clone(),
+            json!([{"type": "text", "text": "inspect"}, path_image]),
+        );
+    }
+}
+
+fn assert_annotated_user_display(codec: &dyn LlmCodec, request: Json, expected: Json) {
+    for wrapped in [false, true] {
+        let annotation = codec
+            .decode(&LlmRequest {
+                headers: Default::default(),
+                content: request.clone(),
+            })
+            .unwrap();
+        let input = if wrapped {
+            json!({"content": request, "headers": {}})
+        } else {
+            request.clone()
+        };
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        exporter.state.lock().unwrap().events.push(
+            event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(input)
+                .annotated_request(annotation)
+                .build(),
+        );
+        let trajectory = exporter.export().unwrap();
+        assert_atif_v17_shape(&trajectory);
+        let user = &trajectory.steps[0];
+        assert_eq!(user.message, expected);
+        assert_eq!(user.extra.as_ref().unwrap()["llm_request"], request);
+    }
 }
 
 #[test]
