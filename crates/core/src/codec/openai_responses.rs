@@ -1020,10 +1020,9 @@ fn patch_responses_messages(
     obj: &mut serde_json::Map<String, Json>,
     annotated: &AnnotatedLlmRequest,
     baseline: &AnnotatedLlmRequest,
-    original: &LlmRequest,
 ) -> Result<()> {
     if annotated.messages != baseline.messages {
-        let input = if original.content.get("input").is_some_and(Json::is_string)
+        let input = if obj.get("input").is_some_and(Json::is_string)
             && matches!(
                 annotated.messages.as_slice(),
                 [Message::User {
@@ -1042,11 +1041,7 @@ fn patch_responses_messages(
             Json::Array(super::encode_changed_items(
                 &annotated.messages,
                 &baseline.messages,
-                original
-                    .content
-                    .get("input")
-                    .and_then(Json::as_array)
-                    .map(Vec::as_slice),
+                obj.get("input").and_then(Json::as_array).map(Vec::as_slice),
                 encode_responses_input_item,
             )?)
         };
@@ -1483,21 +1478,27 @@ impl LlmCodec for OpenAIResponsesCodec {
         original: &LlmRequest,
         baseline: &AnnotatedLlmRequest,
     ) -> Result<LlmRequest> {
-        let mut content = original.content.clone();
-        let obj = content
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        patch_responses_messages(obj, annotated, baseline, original)?;
+        patch_responses_messages(obj, annotated, baseline)?;
         patch_responses_model_and_params(obj, annotated, baseline)?;
         patch_responses_tools(obj, annotated, baseline)?;
         patch_responses_common_fields(obj, annotated, baseline);
         patch_responses_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
-        Ok(LlmRequest {
-            headers: original.headers.clone(),
-            content,
-        })
+        Ok(original)
     }
 }
 
