@@ -5325,7 +5325,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## body-parser - 2.3.0
+## body-parser - 2.4.0
 **Repository URL**: https://github.com/expressjs/body-parser
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -7399,7 +7399,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.```
 
-## fast-uri - 3.1.8
+## fast-uri - 3.1.9
 **Repository URL**: https://github.com/fastify/fast-uri
 **License Type(s)**: BSD-3-Clause
 ### License: https://spdx.org/licenses/BSD-3-Clause.html
@@ -13156,7 +13156,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
-## qs - 6.16.0
+## qs - 6.16.1
 **Repository URL**: https://github.com/ljharb/qs
 **License Type(s)**: BSD-3-Clause
 ### License: https://spdx.org/licenses/BSD-3-Clause.html
@@ -15781,7 +15781,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## undici - 8.10.2
+## undici - 8.12.2
 **Repository URL**: https://github.com/nodejs/undici
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -16470,7 +16470,7 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
 
-## zod - 4.4.3
+## zod - 4.6.6
 **Repository URL**: https://github.com/colinhacks/zod
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
