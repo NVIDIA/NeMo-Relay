@@ -314,8 +314,16 @@ These existing interfaces retain their own contracts:
 - Native legacy callbacks.
 - Worker `GetRuntimeDiagnostics`.
  Snapshot
-readers do not fall back to those reports. OTel diagnostics integration, CPU
-attribution, and durable restart history are not supported.
+readers do not fall back to those reports. With runtime diagnostics enabled and
+recorder admission successful, skipped automatic OTel exporters are recorded
+directly as activation-phase `plugin.exporter_initialization_failed` observations.
+Select a signal using component key `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, or `opentelemetry.automatic.metrics`; retained
+counters remain attributable to the signal even without event detail. Recording
+is best effort under the shared admission and retention limits, with loss reported
+in coverage. Activation warnings remain in plugin reports independently. Broader OTel
+pipeline diagnostics integration, CPU attribution, and durable restart history
+are not supported.
 
 ## Detailed Memory Inspection
 

@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Optional certificate and private key file paths for one OTLP endpoint.
 
-Use absolute paths or paths relative to the process working directory. Relay reads the PEM files when it creates the exporter. Recreate the exporter to load new certificates or keys.
+Use absolute paths or paths relative to the process working directory. Relay reads the PEM files during preflight and again when it creates the exporter. Recreate the exporter to load new certificates or keys.
 
 ## Fields
 

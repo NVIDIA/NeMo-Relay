@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct FileLogSinkConfig &#123;\n    pub path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n    pub level: <a href=\"enum-loglevel\">LogLevel</a>,\n    pub format: <a href=\"enum-logformat\">LogFormat</a>,\n    pub queue_capacity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub rotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct FileLogSinkConfig &#123;\n    pub path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n    pub level: <a href=\"enum-loglevel\">LogLevel</a>,\n    pub format: <a href=\"enum-logformat\">LogFormat</a>,\n    pub queue_capacity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub rotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>&gt;,\n    pub failure_policy: <a href=\"enum-filelogsinkfailurepolicy\">FileLogSinkFailurePolicy</a>,\n&#125;"}} /></pre>
 
 File sink settings for non-blocking operational logging.
 
@@ -38,6 +38,10 @@ Maximum pending asynchronous queue entries for this file sink. Must be greater t
 ### `rotation: Option<FileLogRotationConfig>`
 
 Optional size-based rotation and retention settings.
+
+### `failure_policy: FileLogSinkFailurePolicy`
+
+Whether a filesystem opening failure aborts startup. Defaults to required.
 
 ## Trait Implementations
 
