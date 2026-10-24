@@ -2686,7 +2686,7 @@ Copyright (c) 2019, Omer Katz
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## filelock (3.25.2)
+## filelock (4.2.4)
 
 ### Licenses
 License: `MIT`
@@ -11991,7 +11991,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## virtualenv (21.14.12)
+## virtualenv (21.14.13)
 
 ### Licenses
 License: `MIT`
