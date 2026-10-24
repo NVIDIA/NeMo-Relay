@@ -368,20 +368,25 @@ Diagnostic retention remains independent of these delivery policies. Refer to
 [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
-OpenTelemetry subscriber delivery diagnostics remain legacy-only. When runtime
-diagnostics are enabled and recorder admission succeeds, skipped automatic
-exporters record `plugin.exporter_initialization_failed` at activation with warning
-severity and a safe explanation shared with the plugin activation report. The
-bounded component keys are `opentelemetry.automatic.traces`,
-`opentelemetry.automatic.logs`, and `opentelemetry.automatic.metrics`. They carry
-the originating plugin ownership and support signal-specific queries and counters
-without parsing optional detail. Each recorder closes after its initialization
-attempt; retained evidence describes that attempt and does not assert current
-exporter health. Recording and retention are best effort under shared capacity
-limits; coverage reports admission and retention loss. This uses Plugin/Common
-ownership and leaves the execution mechanism unset. The legacy report is maintained
-independently, including when recording is disabled or admission fails; it is not
-replayed from snapshots.
+OpenTelemetry subscriber delivery diagnostics remain legacy-only. Skipped automatic
+exporters contribute initialization evidence to runtime diagnostics:
+
+- **Diagnostics enabled and recorder admitted:** Each skipped exporter records
+  `plugin.exporter_initialization_failed` with activation phase, warning severity,
+  and the activation report's safe explanation.
+- **Diagnostics disabled or admission denied:** The legacy activation report remains
+  available. It is maintained independently and is never replayed from snapshots.
+- **Capacity limits reached:** Recording and retention are best effort. Coverage
+  reports admission and retention loss.
+
+The component keys `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, and `opentelemetry.automatic.metrics` support
+signal-specific queries and counters without parsing optional detail. They retain
+the originating plugin's Plugin/Common ownership and leave the execution mechanism
+unset.
+
+Each recorder closes after its initialization attempt. Retained evidence describes
+that attempt rather than current exporter health.
 
 ## Classifiers and Producer Coverage
 
