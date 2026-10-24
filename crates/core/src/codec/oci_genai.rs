@@ -1104,34 +1104,39 @@ impl LlmCodec for OCIGenAIChatCodec {
         original: &LlmRequest,
         baseline: &AnnotatedLlmRequest,
     ) -> Result<LlmRequest> {
-        let mut content = original.content.clone();
-        let obj = content
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
-        // Split the mutable envelope from a working copy of the chat request.
-        let chat_request_key = obj
-            .get("chatRequest")
-            .is_some_and(Json::is_object)
-            .then(|| "chatRequest".to_string());
-        let mut chat_request = match &chat_request_key {
-            Some(key) => obj
-                .get(key)
-                .and_then(Json::as_object)
-                .cloned()
-                .unwrap_or_default(),
-            None => obj.clone(),
+        // Borrow the nested body in place so wrapping it does not copy payloads.
+        let is_envelope = obj.get("chatRequest").is_some_and(Json::is_object);
+        let chat_request = if is_envelope {
+            obj.get_mut("chatRequest")
+                .and_then(Json::as_object_mut)
+                .ok_or_else(|| FlowError::Internal("chatRequest is not an object".into()))?
+        } else {
+            &mut *obj
         };
-        let api_format = request_api_format(&chat_request);
+        let api_format = request_api_format(chat_request);
 
         validate_oci_supported_fields(annotated, baseline)?;
 
         if annotated.messages != baseline.messages {
             if api_format == "COHERE" {
-                encode_cohere_messages(&mut chat_request, &annotated.messages, &baseline.messages)?;
+                encode_cohere_messages(chat_request, &annotated.messages, &baseline.messages)?;
             } else {
                 patch_generic_messages(
-                    &mut chat_request,
+                    chat_request,
                     &annotated.messages,
                     &baseline.messages,
                     &api_format,
@@ -1140,7 +1145,7 @@ impl LlmCodec for OCIGenAIChatCodec {
         }
 
         patch_params(
-            &mut chat_request,
+            chat_request,
             annotated.params.as_ref(),
             baseline.params.as_ref(),
             &api_format,
@@ -1163,7 +1168,7 @@ impl LlmCodec for OCIGenAIChatCodec {
                 })
                 .transpose()?
                 .map(Json::Array);
-            set_or_remove_json(&mut chat_request, "tools", tools);
+            set_or_remove_json(chat_request, "tools", tools);
         }
         if annotated.tool_choice != baseline.tool_choice {
             let tool_choice = annotated
@@ -1171,28 +1176,17 @@ impl LlmCodec for OCIGenAIChatCodec {
                 .as_ref()
                 .map(encode_oci_tool_choice)
                 .transpose()?;
-            set_or_remove_json(&mut chat_request, "toolChoice", tool_choice);
+            set_or_remove_json(chat_request, "toolChoice", tool_choice);
         }
 
-        patch_extra_fields(&mut chat_request, &baseline.extra, &annotated.extra);
+        patch_extra_fields(chat_request, &baseline.extra, &annotated.extra);
 
-        match chat_request_key {
-            Some(key) => {
-                obj.insert(key, Json::Object(chat_request));
-                patch_oci_api_specific(Some(obj), &annotated.api_specific, &baseline.api_specific)?;
-                Ok(LlmRequest {
-                    headers: original.headers.clone(),
-                    content,
-                })
-            }
-            None => {
-                patch_oci_api_specific(None, &annotated.api_specific, &baseline.api_specific)?;
-                Ok(LlmRequest {
-                    headers: original.headers.clone(),
-                    content: Json::Object(chat_request),
-                })
-            }
-        }
+        patch_oci_api_specific(
+            if is_envelope { Some(obj) } else { None },
+            &annotated.api_specific,
+            &baseline.api_specific,
+        )?;
+        Ok(original)
     }
 }
 
