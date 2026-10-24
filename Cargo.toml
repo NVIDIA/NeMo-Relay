@@ -58,6 +58,7 @@ nemo-relay-cli = { version = "0.10.0", path = "crates/cli" }
 opentelemetry = { version = "0.32", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32.1", default-features = false, features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
+tokio = { version = "1.53.3", default-features = false }
 uuid = "=1.18.1"
 
 [workspace.lints.rust]
