@@ -13,6 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 #[non_exhaustive]pub enum CommonPluginFailureCode {
     ConfigurationInvalid,
     RegistrationFailed,
+    ExporterInitializationFailed,
     StateConflict,
     ResourceNotFound,
     SerializationFailed,
@@ -35,6 +36,12 @@ Observation identified by `plugin.configuration_invalid`. Generic configuration 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "RegistrationFailed"}} /></pre>
 
 Observation identified by `plugin.registration_failed`.
+
+### `ExporterInitializationFailed`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ExporterInitializationFailed"}} /></pre>
+
+Nonfatal exporter construction failed during plugin activation. Observation identified by `plugin.exporter_initialization_failed`.
 
 ### `StateConflict`
 
