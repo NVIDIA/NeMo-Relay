@@ -25,10 +25,13 @@ jobs:
       - ci_required
     if: >-
       ${{
-        always()
-        && !cancelled()
-        && needs.prepare.result == 'success'
-        && needs.ci_required.result == 'success'
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          always()
+          && !cancelled()
+          && needs.prepare.result == 'success'
+          && needs.ci_required.result == 'success'
+        )
       }}
     permissions:
       contents: read
@@ -37,6 +40,7 @@ jobs:
       needs: ${{ toJSON(needs) }}
 
   prepare:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     # Executes the get-pr-info action to determine if the PR has the skip-ci label, if the action fails we assume the
     # PR does not have the label
     name: Prepare
@@ -100,7 +104,7 @@ jobs:
     name: Changes
     needs: [prepare]
     uses: ./.github/workflows/ci_changes.yml
-    if: ${{ ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (! fromJSON(needs.prepare.outputs.has_skip_ci_label)) }}
     permissions:
       contents: read
     with:
@@ -114,7 +118,7 @@ jobs:
     name: Check
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_check.yml
-    if: ${{ needs.ci_changes.result == 'success' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.ci_changes.result == 'success') }}
     permissions:
       contents: read
     with:
@@ -130,8 +134,11 @@ jobs:
     uses: ./.github/workflows/ci_license_diff.yml
     if: >-
       ${{
-        needs.prepare.outputs.is_pr == 'true'
-        && needs.ci_changes.outputs.run_dependencies == 'true'
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          needs.prepare.outputs.is_pr == 'true'
+          && needs.ci_changes.outputs.run_dependencies == 'true'
+        )
       }}
     permissions:
       contents: read
@@ -144,7 +151,7 @@ jobs:
     name: Rust
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_rust.yml
-    if: ${{ needs.ci_changes.outputs.run_rust == 'true' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.ci_changes.outputs.run_rust == 'true') }}
     permissions:
       contents: read
     secrets:
@@ -156,7 +163,7 @@ jobs:
     name: Go
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_go.yml
-    if: ${{ needs.ci_changes.outputs.run_go == 'true' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.ci_changes.outputs.run_go == 'true') }}
     permissions:
       contents: read
     secrets:
@@ -166,7 +173,7 @@ jobs:
     name: Node.js
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_node.yml
-    if: ${{ needs.ci_changes.outputs.run_node == 'true' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.ci_changes.outputs.run_node == 'true') }}
     permissions:
       contents: read
     secrets:
@@ -183,9 +190,14 @@ jobs:
     needs: [prepare, ci_changes]
     uses: ./.github/workflows/ci_python.yml
     if: >-
-      ${{ needs.ci_changes.outputs.run_python == 'true'
+      ${{
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          needs.ci_changes.outputs.run_python == 'true'
           || needs.ci_changes.outputs.run_python_integration_langchain == 'true'
-          || needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
+          || needs.ci_changes.outputs.run_python_integration_google_adk == 'true'
+        )
+      }}
     permissions:
       contents: read
     secrets:
@@ -207,7 +219,7 @@ jobs:
       - ci_go
       - ci_node
       - ci_python
-    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label)) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -265,7 +277,7 @@ jobs:
   release-distribution-artifacts:
     name: Release Distribution Artifacts
     needs: [prepare, ci_required]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -360,7 +372,7 @@ jobs:
   publish-rust:
     name: Publish (crates.io)
     needs: [prepare, ci_required]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -437,7 +449,7 @@ jobs:
   publish-python:
     name: Publish (PyPI)
     needs: [prepare, ci_required]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -499,7 +511,7 @@ jobs:
   publish-npm:
     name: Publish (npm)
     needs: [prepare, ci_required]
-    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
