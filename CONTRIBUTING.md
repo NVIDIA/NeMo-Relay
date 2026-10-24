@@ -267,6 +267,11 @@ Include the following in your pull request description:
 
 ### Review Expectations
 
+The CI, NVSkills CI request, Fern docs, PR labeling, stale issue, and nightly
+alpha workflows run jobs only in `NVIDIA/NeMo-Relay`. Runs of these workflows
+in fork repositories skip all jobs. Pull requests from forks opened against `NVIDIA/NeMo-Relay`
+remain eligible for the upstream workflows.
+
 These expectations describe how review is handled before changes are merged.
 
 - All PRs require at least one approving review before merge.

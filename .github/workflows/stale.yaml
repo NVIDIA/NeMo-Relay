@@ -9,6 +9,7 @@ on:
 
 jobs:
   stale:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     runs-on: ubuntu-latest
     permissions:
       issues: write

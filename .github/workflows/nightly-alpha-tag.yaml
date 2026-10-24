@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   nightly-alpha-config:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Load nightly alpha branches
     runs-on: ubuntu-latest
     permissions:
@@ -35,6 +36,7 @@ jobs:
           printf 'branches=%s\n' "$branches_json" >> "$GITHUB_OUTPUT"
 
   tag-nightly-alpha:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Tag nightly alpha
     needs: nightly-alpha-config
     runs-on: ubuntu-latest
@@ -102,6 +104,7 @@ jobs:
           echo "Created nightly alpha tag for ${NEMO_RELAY_NIGHTLY_BRANCH}: ${tag}"
 
   delete-old-nightly-tags:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Delete nightly alpha tags older than 30 days
     runs-on: ubuntu-latest
     permissions:
