@@ -36,11 +36,11 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    has_configured_headers, validate_header_files, validate_header_http_endpoint,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint_typed,
 };
 use super::otel::{
-    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
-    normalize_shutdown_result,
+    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, ExporterInitializationError, ExporterInitializationResult,
+    OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result,
 };
 use super::otel_signal::{
     MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, SignalExporterRuntime,
@@ -248,49 +248,54 @@ impl OpenTelemetryLogConfig {
         self
     }
 
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> ExporterInitializationResult<()> {
         if self.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "endpoint must be a nonblank string".to_string(),
-            ));
+            )
+            .into());
         }
         if self.timeout.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "timeout must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.max_queue_size == 0 {
             return Err(OpenTelemetryError::ExporterBuild(
                 "max_queue_size must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.max_export_batch_size == 0 || self.max_export_batch_size > self.max_queue_size {
             return Err(OpenTelemetryError::ExporterBuild(
                 "max_export_batch_size must be greater than 0 and no greater than max_queue_size"
                     .to_string(),
-            ));
+            )
+            .into());
         }
         if self.scheduled_delay.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "scheduled_delay must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
-                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
-                    .map_err(OpenTelemetryError::ExporterBuild)?
+                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")?
                     .ok_or_else(|| {
-                        OpenTelemetryError::ExporterBuild(
+                        ExporterInitializationError::InvalidEndpoint(
                             "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_header_http_endpoint_typed(&endpoint, &self.plaintext)
+                    .map_err(ExporterInitializationError::from)?;
             }
         } else {
             validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
@@ -299,8 +304,8 @@ impl OpenTelemetryLogConfig {
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_header_http_endpoint_typed(&self.endpoint, &self.plaintext)
+                    .map_err(ExporterInitializationError::from)?;
             }
         }
         Ok(())
@@ -349,7 +354,7 @@ struct DynamicLogPipeline {
 impl OpenTelemetryLogSubscriber {
     /// Build an OTLP log subscriber with an independently owned provider.
     pub fn new(config: OpenTelemetryLogConfig) -> Result<Self> {
-        Self::new_with_runtime_diagnostics(config)
+        Self::new_with_runtime_diagnostics(config).map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_for_plugin(
@@ -359,12 +364,12 @@ impl OpenTelemetryLogSubscriber {
         config.diagnostic_field = Some(format!(
             "opentelemetry.logs.endpoints[{endpoint_index}].endpoint"
         ));
-        Self::new_with_runtime_diagnostics(config)
+        Self::new_with_runtime_diagnostics(config).map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_from_automatic_configuration_for_plugin(
         plaintext: PlaintextPolicy,
-    ) -> Result<Self> {
+    ) -> ExporterInitializationResult<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
         )?;
@@ -374,7 +379,9 @@ impl OpenTelemetryLogSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    fn new_with_runtime_diagnostics(mut config: OpenTelemetryLogConfig) -> Result<Self> {
+    fn new_with_runtime_diagnostics(
+        mut config: OpenTelemetryLogConfig,
+    ) -> ExporterInitializationResult<Self> {
         config.validate()?;
         if !config.automatic {
             validate_header_files(&config.headers, &config.header_env, &config.header_file)
@@ -600,7 +607,7 @@ fn build_log_provider(
     config: &OpenTelemetryLogConfig,
     diagnostics: Arc<LogDeliveryDiagnostics>,
     resource_attributes: Option<Vec<KeyValue>>,
-) -> Result<SdkLoggerProvider> {
+) -> ExporterInitializationResult<SdkLoggerProvider> {
     let exporter = if config.automatic {
         let builder = OtlpLogExporter::builder();
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {

@@ -253,6 +253,9 @@ pub enum CommonPluginFailureCode {
     ConfigurationInvalid,
     /// Observation identified by `plugin.registration_failed`.
     RegistrationFailed,
+    /// Nonfatal exporter construction failed during plugin activation.
+    /// Observation identified by `plugin.exporter_initialization_failed`.
+    ExporterInitializationFailed,
     /// Observation identified by `plugin.state_conflict`.
     StateConflict,
     /// Observation identified by `plugin.resource_not_found`.
@@ -270,6 +273,7 @@ impl CommonPluginFailureCode {
         match self {
             Self::ConfigurationInvalid => "plugin.configuration_invalid",
             Self::RegistrationFailed => "plugin.registration_failed",
+            Self::ExporterInitializationFailed => "plugin.exporter_initialization_failed",
             Self::StateConflict => "plugin.state_conflict",
             Self::ResourceNotFound => "plugin.resource_not_found",
             Self::SerializationFailed => "plugin.serialization_failed",
@@ -281,6 +285,12 @@ impl CommonPluginFailureCode {
     pub const fn allowed_classes(self) -> &'static [FailureClass] {
         match self {
             Self::ConfigurationInvalid => &[FailureClass::Unknown, FailureClass::InvalidInput],
+            Self::ExporterInitializationFailed => &[
+                FailureClass::InvalidInput,
+                FailureClass::PolicyRejected,
+                FailureClass::Io,
+                FailureClass::Unknown,
+            ],
             Self::RegistrationFailed => &[
                 FailureClass::Unknown,
                 FailureClass::InvalidInput,
@@ -1038,6 +1048,9 @@ impl BuiltinDiagnosticCode {
             ))),
             Self::Failure(FailureCode::Plugin(PluginFailureCode::Common(
                 CommonPluginFailureCode::RegistrationFailed,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+                CommonPluginFailureCode::ExporterInitializationFailed,
             ))),
             Self::Failure(FailureCode::Plugin(PluginFailureCode::Common(
                 CommonPluginFailureCode::StateConflict,

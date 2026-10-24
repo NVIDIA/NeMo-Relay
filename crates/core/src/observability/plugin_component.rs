@@ -2168,13 +2168,82 @@ fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) 
     });
 }
 
+/// Classify from typed evidence only; backend strings can contain credentials and
+/// flatten several causes, so they must neither be parsed nor copied into reports.
+fn automatic_exporter_failure(
+    error: &crate::observability::otel::ExporterInitializationError,
+) -> (crate::diagnostics::Classification, &'static str) {
+    use crate::diagnostics::{
+        Classification, CommonPluginFailureCode, FailureClass, FailureCode, PluginFailureCode,
+    };
+    use crate::observability::otel::{ExporterInitializationError, OpenTelemetryError};
+
+    let (class, reason) = match error {
+        ExporterInitializationError::Public(OpenTelemetryError::InvalidGrpcHeader { .. })
+        | ExporterInitializationError::Public(OpenTelemetryError::InvalidHeader { .. }) => (
+            FailureClass::InvalidInput,
+            "invalid exporter headers; check the selected OTLP header settings",
+        ),
+        ExporterInitializationError::Public(
+            OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { .. },
+        ) => (
+            FailureClass::InvalidInput,
+            "unsupported process-global header configuration",
+        ),
+        ExporterInitializationError::Public(OpenTelemetryError::InvalidAttributeMappings(_)) => (
+            FailureClass::InvalidInput,
+            "invalid attribute mapping configuration",
+        ),
+        ExporterInitializationError::Public(
+            OpenTelemetryError::InvalidMetadataPromotionPrefixes(_),
+        ) => (
+            FailureClass::InvalidInput,
+            "invalid metadata promotion prefix configuration",
+        ),
+        ExporterInitializationError::InvalidEndpoint(_) => (
+            FailureClass::InvalidInput,
+            "invalid OTLP endpoint; check the URI scheme, host, and surrounding whitespace",
+        ),
+        ExporterInitializationError::PlaintextRejected(_) => (
+            FailureClass::PolicyRejected,
+            "plaintext destination rejected by transport policy; use HTTPS or explicitly permit the intended host in insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS",
+        ),
+        ExporterInitializationError::InvalidTlsConfiguration(_) => (
+            FailureClass::InvalidInput,
+            "invalid TLS configuration or certificate/key material",
+        ),
+        ExporterInitializationError::TlsFileRead { .. } => (
+            FailureClass::Io,
+            "cannot read a configured TLS certificate or key file",
+        ),
+        ExporterInitializationError::Public(OpenTelemetryError::ExporterBuild(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::TraceProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::LogProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::MetricProvider(_))
+        | ExporterInitializationError::Public(OpenTelemetryError::Core(_)) => (
+            FailureClass::Unknown,
+            "exporter initialization failed; the underlying cause is unavailable in structured form; check endpoint, TLS, and exporter settings",
+        ),
+    };
+    (
+        Classification::failure(
+            FailureCode::Plugin(PluginFailureCode::Common(
+                CommonPluginFailureCode::ExporterInitializationFailed,
+            )),
+            class,
+        )
+        .expect("exporter initialization failure supports the producer's cause class"),
+        reason,
+    )
+}
+
 /// Build one automatic subscriber without preventing healthy signals from activating.
 fn automatic_subscriber<T>(
     enabled: bool,
     signal: &'static str,
     signal_endpoint_variable: &'static str,
     ctx: &mut PluginRegistrationContext,
-    build: impl FnOnce() -> crate::observability::otel::Result<T>,
+    build: impl FnOnce() -> crate::observability::otel::ExporterInitializationResult<T>,
 ) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
     if !enabled {
         return Vec::new();
@@ -2202,13 +2271,22 @@ fn automatic_subscriber<T>(
                 .and_then(|endpoint| redacted_origin(&endpoint))
                 .map(|origin| format!(" ({origin})"))
                 .unwrap_or_default();
-            ctx.record_activation_diagnostic(ConfigDiagnostic {
+            let (classification, reason) = automatic_exporter_failure(&error);
+            // Only the three signal constants supplied by this private dispatch
+            // become component keys. Endpoint strings remain optional detail.
+            let component_key = match signal {
+                "traces" => "opentelemetry.automatic.traces",
+                "logs" => "opentelemetry.automatic.logs",
+                "metrics" => "opentelemetry.automatic.metrics",
+                _ => unreachable!("automatic exporter dispatch uses a supported signal"),
+            };
+            ctx.record_nonfatal_activation_failure(component_key, classification, ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 code: "observability.automatic_otel_signal_skipped".to_string(),
                 component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
                 field: Some(endpoint_source.to_string()),
                 message: format!(
-                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped; check the endpoint and exporter settings. Plain HTTP requires its host in insecure_http_hosts."
+                    "Automatic OpenTelemetry {signal} exporter from {endpoint_source}{redacted_destination} was skipped: {reason}."
                 ),
             });
             Vec::new()
@@ -4511,6 +4589,7 @@ fn validate_automatic_plaintext_destinations(
         }
         let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_ENDPOINT");
         let validation = super::otel_signal::automatic_signal_endpoint(&endpoint_variable)
+            .map_err(|error| error.to_string())
             .and_then(|endpoint| match endpoint {
                 Some(endpoint) if signal == "traces" => {
                     super::header_file::validate_trace_transport(&endpoint, plaintext)
