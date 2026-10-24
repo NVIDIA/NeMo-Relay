@@ -2145,7 +2145,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## filelock (3.25.2)
+## filelock (4.2.4)
 
 ### Licenses
 License: `MIT`
@@ -8289,7 +8289,7 @@ Apache License
    limitations under the License.
 ```
 
-## virtualenv (21.14.12)
+## virtualenv (21.14.13)
 
 ### Licenses
 License: `MIT`
