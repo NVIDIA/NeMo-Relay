@@ -181,8 +181,8 @@ impl LogLevel {
             "info" => Ok(Self::Info),
             "debug" => Ok(Self::Debug),
             "trace" => Ok(Self::Trace),
-            other => Err(FlowError::InvalidArgument(format!(
-                "invalid logging level '{other}'; expected error, warn, info, debug, or trace"
+            _ => Err(FlowError::InvalidArgument(format!(
+                "invalid logging level '{raw}'; expected error, warn, info, debug, or trace"
             ))),
         }
     }

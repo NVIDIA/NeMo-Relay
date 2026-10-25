@@ -1724,7 +1724,7 @@ fn binding_level_names_follow_config_level_parsing() {
         let fields = serde_json::Map::from_iter([("event".into(), Value::String(name.into()))]);
         super::emit_str(name, TARGET, "binding", fields).unwrap();
     }
-    let error = super::emit_str("verbose", TARGET, "binding", serde_json::Map::new())
+    let error = super::emit_str(" Verbose ", TARGET, "binding", serde_json::Map::new())
         .unwrap_err()
         .to_string();
     runtime.shutdown();
@@ -1737,7 +1737,8 @@ fn binding_level_names_follow_config_level_parsing() {
         .map(|record| record["level"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(levels, ["error", "warn", "warn", "info", "debug", "trace"]);
-    assert!(error.contains("'verbose'"), "{error}");
+    // The error reports the value the caller passed, not its normalized form.
+    assert!(error.contains("' Verbose '"), "{error}");
 }
 
 #[test]
