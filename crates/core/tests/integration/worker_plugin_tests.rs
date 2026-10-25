@@ -1130,12 +1130,16 @@ fn assert_invalid_host_message_limit_rejected() {
         format!("{source}\n[load.max_message_bytes]\ndefault_bytes = 16777216\n"),
     )
     .unwrap();
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::new(),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("invalid override must fail activation");
@@ -1145,6 +1149,23 @@ fn assert_invalid_host_message_limit_rejected() {
     assert!(
         error.contains("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"),
         "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.validation_failed",
+        "unknown",
+        "validation",
+        "plugin.worker.started",
+    );
+    assert_eq!(
+        worker_diagnostic_snapshot(&diagnostics)
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        1
     );
 }
 

@@ -640,7 +640,14 @@ fn load_one_worker_plugin(
 
     let max_message_bytes = default_message_bytes
         .from_env_with_defaults()
-        .map_err(PluginError::InvalidConfig)?;
+        .map_err(PluginError::InvalidConfig)
+        .inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerValidation,
+                FailureClass::Unknown,
+                PluginPhase::Validation,
+            );
+        })?;
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));
