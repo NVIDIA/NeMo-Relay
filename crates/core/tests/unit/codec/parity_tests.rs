@@ -639,11 +639,12 @@ fn test_estimated_cost_parity_for_identical_model_and_usage() {
 
     // Each codec infers its own default provider ("openai" vs "anthropic"),
     // but pricing lookup falls back to the model-only key, so an identical
-    // model + normalized usage must estimate identically everywhere.
+    // model + request must estimate identically everywhere.
+    // Anthropic counts cache reads separately from input tokens.
     let chat = decode(&chat_response_with_usage("parity-priced-model", json!({})));
     let anthropic = decode(&anthropic_response_with_usage(
         "parity-priced-model",
-        json!({}),
+        json!({"input_tokens": 800}),
     ));
     let responses = decode(&responses_response_with_usage(
         "parity-priced-model",

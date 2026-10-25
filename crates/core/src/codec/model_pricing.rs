@@ -269,9 +269,8 @@ impl PricingResolver {
         model: &str,
         billed: &BilledUsage<'_>,
     ) -> Option<CostEstimate> {
-        self.pricing_for(provider, model).and_then(|pricing| {
-            pricing.estimate_cost_in_tier(&billed.usage, billed.rate_tier_prompt_tokens)
-        })
+        self.pricing_for(provider, model)
+            .and_then(|pricing| pricing.estimate_cost_in_tier(&billed.usage, billed.reported))
     }
 }
 
@@ -310,37 +309,44 @@ impl ModelPricing {
     /// Estimates cost for the provided token usage.
     #[must_use]
     pub fn estimate_cost(&self, usage: &Usage) -> Option<CostEstimate> {
-        self.estimate_cost_in_tier(usage, usage.prompt_tokens)
+        self.estimate_cost_in_tier(usage, usage)
+    }
+
+    fn rate_tier_input_tokens(&self, usage: &Usage) -> Option<u64> {
+        if let Some(uncached) = usage.uncached_input_tokens {
+            return input_tokens_with_cache(usage, uncached);
+        }
+        let cache_outside_prompt = match self.prompt_cache.read_accounting {
+            CacheReadAccounting::IncludedInPromptTokens => [None, usage.cache_write_tokens],
+            CacheReadAccounting::Separate => [usage.cache_read_tokens, usage.cache_write_tokens],
+        };
+        cache_outside_prompt
+            .into_iter()
+            .flatten()
+            .try_fold(usage.prompt_tokens?, u64::checked_add)
     }
 
     fn estimate_cost_in_tier(
         &self,
         usage: &Usage,
-        rate_tier_prompt_tokens: Option<u64>,
+        rate_tier_usage: &Usage,
     ) -> Option<CostEstimate> {
         if self.unit != PricingUnit::PerToken {
             return None;
         }
-        let prompt_tokens = usage.prompt_tokens.unwrap_or(0);
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         let cache_read_tokens = usage.cache_read_tokens.unwrap_or(0);
         let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0);
-        let rates = self.rates_for_prompt_tokens(rate_tier_prompt_tokens)?;
+        let rates = self.rates_for(rate_tier_usage)?;
+        let billable_prompt_tokens = self.billable_prompt_tokens(usage)?;
 
-        if prompt_tokens == 0
+        if billable_prompt_tokens == 0
             && completion_tokens == 0
             && cache_read_tokens == 0
             && cache_write_tokens == 0
         {
             return None;
         }
-
-        let billable_prompt_tokens =
-            if self.prompt_cache.read_accounting == CacheReadAccounting::IncludedInPromptTokens {
-                prompt_tokens.saturating_sub(cache_read_tokens)
-            } else {
-                prompt_tokens
-            };
 
         let input_cost = cost_component_if_nonzero(billable_prompt_tokens, rates.input_per_million);
         let output_cost = cost_component_if_nonzero(completion_tokens, rates.output_per_million);
@@ -374,11 +380,26 @@ impl ModelPricing {
         })
     }
 
-    fn rates_for_prompt_tokens(&self, prompt_tokens: Option<u64>) -> Option<TokenPricingRates> {
-        if let Some(schedule) = &self.rate_schedule {
-            return schedule.rates_for_prompt_tokens(prompt_tokens);
+    fn billable_prompt_tokens(&self, usage: &Usage) -> Option<u64> {
+        if let Some(uncached) = usage.uncached_input_tokens {
+            return input_split(usage).map(|_| uncached);
         }
-        self.rates
+        let prompt_tokens = usage.prompt_tokens.unwrap_or(0);
+        match self.prompt_cache.read_accounting {
+            CacheReadAccounting::IncludedInPromptTokens => {
+                prompt_tokens.checked_sub(usage.cache_read_tokens.unwrap_or(0))
+            }
+            CacheReadAccounting::Separate => Some(prompt_tokens),
+        }
+    }
+
+    fn rates_for(&self, rate_tier_usage: &Usage) -> Option<TokenPricingRates> {
+        match &self.rate_schedule {
+            Some(schedule) => {
+                schedule.rates_for_prompt_tokens(self.rate_tier_input_tokens(rate_tier_usage))
+            }
+            None => self.rates,
+        }
     }
 
     fn matches_model(&self, lookup: &ModelLookupKey) -> bool {
@@ -496,7 +517,7 @@ impl TokenPricingRates {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 pub enum TokenRateSchedule {
-    /// Selects one full-request rate tier based on prompt/input tokens.
+    /// Selects one rate tier for the full request from its input tokens, including cache tokens.
     PromptTokenThreshold {
         /// How selected tier rates apply to tokens.
         #[serde(default)]
@@ -549,14 +570,14 @@ pub enum RateScheduleApplication {
     FullRequest,
 }
 
-/// A model pricing tier selected by prompt/input token count.
+/// A model pricing tier for a range of input tokens, including cache tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenRateTier {
-    /// Inclusive lower bound for prompt tokens.
+    /// Inclusive lower bound for input tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_prompt_tokens: Option<u64>,
-    /// Inclusive upper bound for prompt tokens.
+    /// Inclusive upper bound for input tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_prompt_tokens: Option<u64>,
     /// Rates to apply when this tier is selected.
@@ -846,7 +867,7 @@ pub(crate) struct GeminiBilling {
 
 pub(crate) struct BilledUsage<'a> {
     pub(crate) usage: Cow<'a, Usage>,
-    pub(crate) rate_tier_prompt_tokens: Option<u64>,
+    pub(crate) reported: &'a Usage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -855,11 +876,51 @@ pub(crate) enum UnbillableUsage {
     UndeterminedToolUsePromptTokens,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputSplit {
+    Separate,
+    Inclusive,
+    Either,
+}
+
+impl InputSplit {
+    pub(crate) fn of_api(api: &ApiSpecificResponse) -> Option<Self> {
+        match api {
+            ApiSpecificResponse::AnthropicMessages { .. } => Some(Self::Separate),
+            ApiSpecificResponse::OpenAIChat { .. }
+            | ApiSpecificResponse::OpenAIResponses { .. }
+            | ApiSpecificResponse::OCIGenAI { .. }
+            | ApiSpecificResponse::GeminiGenerateContent { .. } => Some(Self::Inclusive),
+            ApiSpecificResponse::Custom { .. } => None,
+        }
+    }
+}
+
+pub(crate) fn input_split(usage: &Usage) -> Option<InputSplit> {
+    let uncached = usage.uncached_input_tokens?;
+    let with_cache = input_tokens_with_cache(usage, uncached)?;
+    let Some(prompt) = usage.prompt_tokens else {
+        return Some(InputSplit::Either);
+    };
+    match (prompt == uncached, prompt == with_cache) {
+        (true, true) => Some(InputSplit::Either),
+        (true, false) => Some(InputSplit::Separate),
+        (false, true) => Some(InputSplit::Inclusive),
+        (false, false) => None,
+    }
+}
+
+fn input_tokens_with_cache(usage: &Usage, uncached: u64) -> Option<u64> {
+    [usage.cache_read_tokens, usage.cache_write_tokens]
+        .into_iter()
+        .flatten()
+        .try_fold(uncached, u64::checked_add)
+}
+
 pub(crate) fn billed_usage<'a>(
     usage: &'a Usage,
     gemini: Option<GeminiBilling>,
 ) -> Result<BilledUsage<'a>, UnbillableUsage> {
-    let rate_tier_prompt_tokens = usage.prompt_tokens;
     let Some(GeminiBilling {
         separate,
         tool_use_billing,
@@ -867,7 +928,7 @@ pub(crate) fn billed_usage<'a>(
     else {
         return Ok(BilledUsage {
             usage: Cow::Borrowed(usage),
-            rate_tier_prompt_tokens,
+            reported: usage,
         });
     };
     let input_rate_tool_use_prompt_tokens =
@@ -878,15 +939,28 @@ pub(crate) fn billed_usage<'a>(
                 return Err(UnbillableUsage::UndeterminedToolUsePromptTokens);
             }
         };
-    let prompt_tokens = add_separate_count(usage.prompt_tokens, input_rate_tool_use_prompt_tokens)?;
+    let (prompt_tokens, uncached_input_tokens) = match usage.uncached_input_tokens {
+        Some(uncached) => (
+            usage
+                .prompt_tokens
+                .map(|prompt| add_to_count(prompt, input_rate_tool_use_prompt_tokens))
+                .transpose()?,
+            Some(add_to_count(uncached, input_rate_tool_use_prompt_tokens)?),
+        ),
+        None => (
+            add_separate_count(usage.prompt_tokens, input_rate_tool_use_prompt_tokens)?,
+            None,
+        ),
+    };
     let completion_tokens = add_separate_count(usage.completion_tokens, separate.thoughts_tokens)?;
     Ok(BilledUsage {
         usage: Cow::Owned(Usage {
             prompt_tokens,
             completion_tokens,
+            uncached_input_tokens,
             ..usage.clone()
         }),
-        rate_tier_prompt_tokens,
+        reported: usage,
     })
 }
 
@@ -894,14 +968,16 @@ fn add_separate_count(
     reported: Option<u64>,
     separate: Option<u64>,
 ) -> Result<Option<u64>, UnbillableUsage> {
-    match (reported, separate) {
-        (reported, None) => Ok(reported),
-        (None, Some(separate)) => Ok(Some(separate)),
-        (Some(reported), Some(separate)) => reported
-            .checked_add(separate)
-            .map(Some)
-            .ok_or(UnbillableUsage::TokenOverflow),
+    match reported {
+        Some(reported) => add_to_count(reported, separate).map(Some),
+        None => Ok(separate),
     }
+}
+
+fn add_to_count(reported: u64, separate: Option<u64>) -> Result<u64, UnbillableUsage> {
+    separate
+        .map_or(Some(reported), |separate| reported.checked_add(separate))
+        .ok_or(UnbillableUsage::TokenOverflow)
 }
 
 fn validate_nonempty(
