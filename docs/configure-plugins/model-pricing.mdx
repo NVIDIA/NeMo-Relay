@@ -64,6 +64,21 @@ and the matching catalog entry omits `cache_read_per_million` or
 `cache_write_per_million`, Relay keeps the priced components but omits the
 aggregate total. Set a rate to `0.0` when a category is intentionally free.
 
+Some usage reports `uncached_input_tokens`, a count of input tokens without
+cache reads or cache writes. Relay picks the input count to bill as follows:
+
+- When usage has `uncached_input_tokens`, Relay bills that count at the input
+  rate and ignores `read_accounting`. If usage also has `prompt_tokens`, that
+  count must equal `uncached_input_tokens` or `uncached_input_tokens` plus the
+  cache reads and writes. Otherwise, Relay leaves the usage unpriced.
+- For other usage, `read_accounting` tells Relay whether `prompt_tokens`
+  includes cache reads. When `prompt_tokens` includes them, Relay subtracts them
+  before billing. If cache reads are larger than `prompt_tokens`, Relay leaves
+  the usage unpriced.
+
+Relay bills cache reads and writes at their own rates. To pick a threshold
+tier, Relay counts all input tokens, including cache reads and writes.
+
 When Relay merges explicit-or-user and system configuration files, it prepends
 higher-priority `sources` instead of replacing lower-priority sources. The
 effective order is system, then explicit-or-user. This lets an
