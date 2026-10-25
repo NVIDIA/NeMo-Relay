@@ -919,6 +919,7 @@ impl WorkerEndpoints {
     }
 }
 
+/// Serves bounded execution RPCs without changing the separate diagnostic caps.
 async fn serve_host_runtime(
     endpoint: HostRuntimeServer,
     state: Arc<WorkerHostRuntimeState>,
@@ -1166,6 +1167,7 @@ struct WorkerProcessLaunch<'a> {
     max_message_bytes: usize,
 }
 
+/// Launches a worker with sanitized environment and explicit host-owned settings.
 fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<Child> {
     let manifest_dir = spec
         .manifest_path

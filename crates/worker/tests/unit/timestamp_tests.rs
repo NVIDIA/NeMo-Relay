@@ -6,6 +6,7 @@ use std::time::Duration;
 use super::*;
 
 #[tokio::test]
+/// Rejects unrepresentable scope times locally instead of attempting a host RPC.
 async fn historical_scope_rejects_timestamp_outside_wire_range_before_rpc() {
     let Some(outside_wire_range) =
         UNIX_EPOCH.checked_add(Duration::from_micros(i64::MAX as u64 + 1))

@@ -42,6 +42,7 @@ fn unknown_builtin_codec_identity_decodes_as_opaque() {
 }
 
 #[tokio::test]
+/// Allows retrying callback registration after a failed host connection.
 async fn conditional_callback_name_is_released_when_host_connection_fails() {
     let runtime = PluginRuntime {
         activation_id: "activation".into(),

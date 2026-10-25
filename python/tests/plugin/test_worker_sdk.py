@@ -3155,6 +3155,7 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
 
 
 def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retain Unix authority while configuring send/receive limits for both transports."""
     calls: list[tuple[str, tuple[tuple[str, str | int], ...]]] = []
 
     def insecure_channel(
@@ -3162,6 +3163,7 @@ def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch)
         *,
         options: tuple[tuple[str, str | int], ...] = (),
     ) -> object:
+        """Capture channel options without opening a network connection."""
         calls.append((target, options))
         return object()
 
@@ -3366,24 +3368,29 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Do not publish the bound endpoint until the gRPC server accepts requests."""
     endpoint_file = tmp_path / "endpoint.txt"
     start_entered = asyncio.Event()
     allow_start = asyncio.Event()
 
     class FakeChannel:
         async def close(self) -> None:
+            """Allow startup-cancellation cleanup without opening a real channel."""
             pass
 
     class FakeServer:
         def add_insecure_port(self, target: str) -> int:
+            """Return a resolved loopback port without publishing it yet."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Pause startup so the test can inspect endpoint publication ordering."""
             start_entered.set()
             await allow_start.wait()
 
         async def stop(self, grace: int) -> None:
+            """Check the configured grace period during cancellation cleanup."""
             assert grace == 2
 
     fake_server = FakeServer()
@@ -3415,23 +3422,29 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
 
 
 async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close both allocated resources when the gRPC server cannot start."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that startup failure closed the host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Bind successfully so this test isolates the later startup failure."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Simulate a startup failure after resource allocation."""
             raise RuntimeError("start failed")
 
         async def stop(self, grace: int) -> None:
+            """Record server cleanup while checking its grace period."""
             assert grace == 2
             self.stopped = True
 
@@ -3455,20 +3468,25 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Release the server and host channel when endpoint binding returns no port."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that bind failure closed the allocated host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Simulate gRPC reporting that no loopback port could be bound."""
             assert target == "127.0.0.1:0"
             return 0
 
         async def stop(self, grace: int) -> None:
+            """Record cleanup even though the server never started listening."""
             assert grace == 2
             self.stopped = True
 

@@ -77,6 +77,7 @@ fn worker_socket_cleanup_removes_only_socket_files() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// Builds a finite-limit runtime whose host RPCs cannot connect during local tests.
 fn disconnected_runtime() -> PluginRuntime {
     PluginRuntime {
         activation_id: "activation".into(),

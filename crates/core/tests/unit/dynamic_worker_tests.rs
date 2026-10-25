@@ -589,6 +589,7 @@ fn python_worker_launch_clears_host_python_environment() {
 
 #[cfg(unix)]
 #[test]
+/// Preserves interpreter selection and forwards endpoint and transport settings.
 fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
     let plugin_id = "acme.python.launch";
     let digest = Sha256::digest(plugin_id.as_bytes())

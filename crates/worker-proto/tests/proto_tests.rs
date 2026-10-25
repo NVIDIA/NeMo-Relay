@@ -30,6 +30,7 @@ fn worker_protocol_identifier_is_stable() {
 }
 
 #[test]
+/// Keeps Rust parsing aligned with the finite cross-language byte-limit contract.
 fn worker_message_limit_accepts_only_bounded_positive_decimal_bytes() {
     use nemo_relay_worker_proto::parse_worker_max_message_bytes;
     for (value, expected) in [

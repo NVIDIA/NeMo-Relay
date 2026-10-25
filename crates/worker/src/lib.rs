@@ -1707,6 +1707,7 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
+    /// Reuses the host connection while applying this activation's execution caps.
     async fn host_client(&self) -> Result<RelayHostRuntimeClient<Channel>> {
         self.host_channel
             .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
@@ -1896,6 +1897,7 @@ pub async fn serve_plugin_arc_with_config(
     serve_plugin_arc_with_endpoint_file(plugin, config, None).await
 }
 
+/// Validates the transport limit before constructing and serving the worker runtime.
 async fn serve_plugin_arc_with_endpoint_file(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
@@ -1923,6 +1925,7 @@ async fn serve_plugin_arc_with_endpoint_file(
 }
 
 #[cfg(unix)]
+/// Binds a bounded worker service to a Unix socket or delegates to loopback TCP.
 async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1957,6 +1960,7 @@ async fn serve_worker_service(
     serve_tcp_worker_service(service, endpoint, endpoint_file).await
 }
 
+/// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
 async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1979,6 +1983,7 @@ async fn serve_tcp_worker_service(
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
 
+/// Applies the runtime's execution limit to both sides of the worker service.
 fn worker_grpc_service(service: WorkerService) -> PluginWorkerServer<WorkerService> {
     let limit = service.runtime.max_message_bytes;
     PluginWorkerServer::new(service)

@@ -1041,6 +1041,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
 }
 
 #[tokio::test]
+/// Proves default rejection and opt-in round trips using isolated host environments.
 async fn worker_large_messages_use_the_host_limit_in_both_directions() {
     // Use a subprocess rather than mutating the process environment while other
     // async worker tests may be running. The host sanitizes the worker's env.

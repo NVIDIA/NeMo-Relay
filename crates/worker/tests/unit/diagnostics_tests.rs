@@ -777,6 +777,7 @@ async fn terminal_rejection_consumes_sequence_and_delivery_continues() {
 }
 
 #[tokio::test]
+/// Shares one diagnostic session between concurrent callers on cloned runtimes.
 async fn runtime_initializes_one_shared_diagnostic_session_under_concurrency() {
     let host = Host::default();
     let (channel, _server) = start_host(host.clone()).await;

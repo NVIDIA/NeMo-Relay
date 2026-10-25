@@ -47,6 +47,7 @@ pub fn parse_worker_max_message_bytes(value: &str) -> Result<usize, String> {
     Err(worker_message_limit_error())
 }
 
+/// Describes the supported byte range without echoing the supplied environment value.
 fn worker_message_limit_error() -> String {
     format!("{WORKER_MAX_MESSAGE_BYTES_ENV} must be a decimal integer in 1..=2147483647")
 }

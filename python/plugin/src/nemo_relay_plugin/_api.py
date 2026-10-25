@@ -357,6 +357,7 @@ _DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 
 
 def _worker_max_message_bytes() -> int:
+    """Read a finite host-owned byte limit, rejecting invalid overrides at startup."""
     value = os.environ.get(_WORKER_MAX_MESSAGE_BYTES_ENV)
     if value is None:
         return _DEFAULT_WORKER_MAX_MESSAGE_BYTES
@@ -373,6 +374,7 @@ def _worker_max_message_bytes() -> int:
 
 
 def _worker_grpc_options(limit: int) -> tuple[tuple[str, int], ...]:
+    """Apply the same finite cap to both directions of an execution RPC endpoint."""
     return (("grpc.max_receive_message_length", limit), ("grpc.max_send_message_length", limit))
 
 
@@ -3368,6 +3370,7 @@ def _grpc_target(endpoint: str) -> str:
 
 
 def _open_host_channel(endpoint: str, *, max_message_bytes: int | None = None) -> Any:
+    """Open a bounded continuation channel while retaining Unix socket authority."""
     target = _grpc_target(endpoint)
     limit = _worker_max_message_bytes() if max_message_bytes is None else max_message_bytes
     options = _worker_grpc_options(limit)
