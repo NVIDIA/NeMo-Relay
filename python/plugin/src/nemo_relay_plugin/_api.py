@@ -352,6 +352,30 @@ def _llm_execution_context(
 
 
 WORKER_PROTOCOL = "grpc-v1"
+_WORKER_MAX_MESSAGE_BYTES_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
+_DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+
+
+def _worker_max_message_bytes() -> int:
+    value = os.environ.get(_WORKER_MAX_MESSAGE_BYTES_ENV)
+    if value is None:
+        return _DEFAULT_WORKER_MAX_MESSAGE_BYTES
+    # Keep this grammar and ceiling aligned with nemo-relay-worker-proto.
+    if value.isascii() and value.isdecimal():
+        try:
+            limit = int(value)
+        except ValueError:
+            pass
+        else:
+            if 1 <= limit <= 2_147_483_647:
+                return limit
+    raise WorkerSdkError(f"{_WORKER_MAX_MESSAGE_BYTES_ENV} must be a decimal integer in 1..=2147483647")
+
+
+def _worker_grpc_options(limit: int) -> tuple[tuple[str, int], ...]:
+    return (("grpc.max_receive_message_length", limit), ("grpc.max_send_message_length", limit))
+
+
 JSON_SCHEMA = "nemo.relay.Json@1"
 DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
 METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
@@ -2443,6 +2467,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     Optional environment variables:
         ``NEMO_RELAY_WORKER_ENDPOINT_FILE``: File where the SDK writes the
         resolved worker endpoint after the gRPC server is accepting requests.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES``: Host-supplied positive decimal
+        limit for each complete sent or received gRPC message. Defaults to
+        4194304 (4 MiB); maximum 2147483647. Restart the host and workers after
+        changing the setting. This is not a model context or HTTP body limit.
 
     Callback concurrency:
         The gRPC AsyncIO server can keep multiple RPCs in flight. Asynchronous
@@ -2457,8 +2485,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         not enforce an application-level RPC admission limit.
 
     Raises:
-        WorkerSdkError: A required environment variable is empty or missing, or
-            the worker endpoint cannot be bound.
+        WorkerSdkError: A required environment variable is empty or missing,
+            the worker message limit is invalid, or the endpoint cannot be bound.
         OSError: Unix socket cleanup or endpoint-file creation fails.
         grpc.RpcError: gRPC server or host-channel startup fails.
         asyncio.CancelledError: The task running the worker is cancelled.
@@ -2473,10 +2501,11 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     activation_id = _required_env("NEMO_RELAY_WORKER_ID")
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
+    max_message_bytes = _worker_max_message_bytes()
 
     worker_target = _grpc_target(worker_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = _open_host_channel(host_endpoint)
+    host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
@@ -2485,7 +2514,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
-    server = grpc.aio.server()
+    server = grpc.aio.server(options=_worker_grpc_options(max_message_bytes))
     try:
         pb_grpc.add_PluginWorkerServicer_to_server(service, server)
         bound_port = server.add_insecure_port(worker_target)
@@ -3338,14 +3367,16 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
-def _open_host_channel(endpoint: str) -> Any:
+def _open_host_channel(endpoint: str, *, max_message_bytes: int | None = None) -> Any:
     target = _grpc_target(endpoint)
+    limit = _worker_max_message_bytes() if max_message_bytes is None else max_message_bytes
+    options = _worker_grpc_options(limit)
     if endpoint.startswith("unix://"):
         return grpc.aio.insecure_channel(
             target,
-            options=(("grpc.default_authority", "localhost"),),
+            options=(*options, ("grpc.default_authority", "localhost")),
         )
-    return grpc.aio.insecure_channel(target)
+    return grpc.aio.insecure_channel(target, options=options)
 
 
 def _announced_worker_endpoint(worker_endpoint: str, bound_port: int) -> str:

@@ -63,6 +63,13 @@ additive provenance; absent identity retains the existing attribution behavior.
 
 ## Installation
 
+The host passes `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` to the SDK to bound both
+sent and received execution RPC messages. It defaults to 4 MiB. Set, for
+example, `16777216` on the host for 16 MiB, then restart the host and workers.
+Upgrade both sides together; changing only the Python SDK leaves host limits
+in place. See [execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
+for validation, framing overhead, and memory trade-offs.
+
 Add the SDK to the Python worker project's dependencies:
 
 ```bash

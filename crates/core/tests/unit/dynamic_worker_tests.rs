@@ -603,7 +603,7 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     std::fs::write(
         &interpreter,
         format!(
-            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" > '{}'\nexit 0\n",
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" \"$NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES\" > '{}'\nexit 0\n",
             probe.display()
         ),
     )
@@ -624,6 +624,7 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
         host_endpoint: "http://127.0.0.1:1",
         worker_endpoint: "http://127.0.0.1:2",
         worker_endpoint_file: Some(&endpoint_file),
+        max_message_bytes: 16 * 1024 * 1024,
     })
     .unwrap();
     assert!(child.wait().unwrap().success());
@@ -631,6 +632,7 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     let mut lines = recorded.lines();
     assert_eq!(lines.next(), interpreter.to_str());
     assert_eq!(lines.next(), endpoint_file.to_str());
+    assert_eq!(lines.next(), Some("16777216"));
     assert_eq!(lines.next(), None);
 }
 

@@ -42,6 +42,7 @@ identifier remains `grpc-v1`.
 | Surface | Role |
 |---|---|
 | `WORKER_PROTOCOL_GRPC_V1` | Identifies the stable protocol accepted by Relay worker manifests. |
+| Worker message limit helpers | `worker_max_message_bytes_from_env` and `parse_worker_max_message_bytes` share the validated `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` setting between the host and Rust SDK. Custom workers must apply the same finite send/receive limits. |
 | `v1` module | Exposes generated `PluginWorker` and `RelayHostRuntime` Tonic clients, servers, services, and messages without regenerating protobuf in a consumer. |
 | JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
 | JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |

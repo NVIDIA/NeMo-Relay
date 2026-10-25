@@ -1041,6 +1041,92 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
 }
 
 #[tokio::test]
+async fn worker_large_messages_use_the_host_limit_in_both_directions() {
+    // Use a subprocess rather than mutating the process environment while other
+    // async worker tests may be running. The host sanitizes the worker's env.
+    const CHILD: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        for limit in ["4194304", "16777216"] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "worker_large_messages_use_the_host_limit_in_both_directions",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", limit)
+                .spawn()
+                .expect("message limit subprocess starts");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                if let Some(status) = child.try_wait().expect("poll message limit test") {
+                    assert!(
+                        status.success(),
+                        "worker transport regression with limit {limit}"
+                    );
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let processes = sysinfo::System::new_all();
+                    let parent = sysinfo::Pid::from_u32(child.id());
+                    for process in processes.processes().values() {
+                        if process.parent() == Some(parent) {
+                            let _ = process.kill();
+                        }
+                    }
+                    child.kill().expect("stop stuck test host");
+                    child.wait().expect("reap stuck test host");
+                    panic!("message limit test exceeded 30 seconds with limit {limit}");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+        return;
+    }
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    tool_request_intercepts("small-before-large", json!({"text": "ok"}))
+        .await
+        .expect("small control request must work before exercising the boundary");
+    // Tool execution traverses host Invoke -> worker ToolNext -> host response
+    // -> worker outcome. Each leg carries the complete 5 MiB value.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("large-message")
+                .args(json!({"text": "x".repeat(5 * 1024 * 1024)}))
+                .func(Arc::new(|args| {
+                    Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+                }))
+                .build(),
+        ),
+    )
+    .await
+    .expect("large message call must finish");
+    if std::env::var("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES").unwrap() == "4194304" {
+        let error = result
+            .expect_err("the default must remain bounded")
+            .to_string();
+        // Tonic can reset the HTTP/2 stream on a local encoding-limit failure;
+        // unlike Python gRPC it need not expose RESOURCE_EXHAUSTED here.
+        assert!(error.contains("worker invoke failed"), "{error}");
+    } else {
+        let result = result.expect("configured 16 MiB transport accepts 5 MiB without truncation");
+        assert_eq!(
+            result.result["text"].as_str().unwrap().len(),
+            5 * 1024 * 1024
+        );
+        assert_eq!(result.result["worker_plugin_tool_execution"], true);
+    }
+    // A rejected oversized request must not poison the worker or continuation lane.
+    tool_request_intercepts("small-after-large", json!({"text": "ok"}))
+        .await
+        .expect("subsequent small request must still work");
+    loaded.clear();
+}
+
+#[tokio::test]
 async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded = load_and_initialize_fixture(Map::from_iter([(

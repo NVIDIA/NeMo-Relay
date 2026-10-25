@@ -81,7 +81,7 @@ use nemo_relay_worker_proto::v1::{
 };
 use nemo_relay_worker_proto::{
     DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1, decode_json_envelope,
-    decode_json_value, json_envelope, json_value,
+    decode_json_value, json_envelope, json_value, worker_max_message_bytes_from_env,
 };
 use serde_json::Map;
 use tokio::net::TcpListener;
@@ -966,6 +966,7 @@ pub struct PluginRuntime {
     auth_token: String,
     host_endpoint: String,
     host_channel: Arc<OnceCell<Channel>>,
+    max_message_bytes: usize,
     conditional_middleware_callbacks: Arc<Mutex<HashMap<String, ConditionalMiddlewareFn>>>,
 }
 
@@ -1711,7 +1712,11 @@ impl PluginRuntime {
             .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
             .await
             .cloned()
-            .map(RelayHostRuntimeClient::new)
+            .map(|channel| {
+                RelayHostRuntimeClient::new(channel)
+                    .max_decoding_message_size(self.max_message_bytes)
+                    .max_encoding_message_size(self.max_message_bytes)
+            })
     }
 
     fn current_scope_context(&self) -> Option<ScopeContext> {
@@ -1850,8 +1855,8 @@ impl LlmStreamNext {
 /// Serves a worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
     serve_plugin_arc(Arc::new(plugin)).await
 }
@@ -1859,8 +1864,8 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 /// Serves a shared worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
     let config = WorkerServerConfig {
         worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
@@ -1882,8 +1887,8 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
 /// workers should normally use [`serve_plugin`] or [`serve_plugin_arc`].
 ///
 /// # Errors
-/// Returns an error when the endpoint configuration is invalid or the gRPC
-/// server fails.
+/// Returns an error when the endpoint configuration or
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
@@ -1896,12 +1901,15 @@ async fn serve_plugin_arc_with_endpoint_file(
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
+    let max_message_bytes =
+        worker_max_message_bytes_from_env().map_err(WorkerSdkError::InvalidInput)?;
     let runtime = PluginRuntime {
         diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let service = WorkerService {
@@ -1927,7 +1935,7 @@ async fn serve_worker_service(
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
         return Server::builder()
-            .add_service(PluginWorkerServer::new(service))
+            .add_service(worker_grpc_service(service))
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
@@ -1965,10 +1973,17 @@ async fn serve_tcp_worker_service(
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
     }
     Server::builder()
-        .add_service(PluginWorkerServer::new(service))
+        .add_service(worker_grpc_service(service))
         .serve_with_incoming(TcpListenerStream::new(listener))
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+}
+
+fn worker_grpc_service(service: WorkerService) -> PluginWorkerServer<WorkerService> {
+    let limit = service.runtime.max_message_bytes;
+    PluginWorkerServer::new(service)
+        .max_decoding_message_size(limit)
+        .max_encoding_message_size(limit)
 }
 
 #[derive(Clone)]

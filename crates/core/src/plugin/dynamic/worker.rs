@@ -50,7 +50,8 @@ use nemo_relay_worker_proto::v1::{
     ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+    WORKER_MAX_MESSAGE_BYTES_ENV, WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value,
+    json_envelope, json_value, worker_max_message_bytes_from_env,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -618,6 +619,8 @@ fn load_one_worker_plugin(
         );
     })?;
 
+    let max_message_bytes =
+        worker_max_message_bytes_from_env().map_err(PluginError::InvalidConfig)?;
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));
@@ -670,6 +673,7 @@ fn load_one_worker_plugin(
         host_server,
         host_state.clone(),
         shutdown_rx,
+        max_message_bytes,
     ));
 
     let manifest_path = PathBuf::from(&manifest_ref);
@@ -685,6 +689,7 @@ fn load_one_worker_plugin(
             host_endpoint: &host_advertise,
             worker_endpoint: &worker_advertise,
             worker_endpoint_file: worker_endpoint_file.as_deref(),
+            max_message_bytes,
         })
         .inspect_err(|_| {
             observer.failure(
@@ -719,7 +724,9 @@ fn load_one_worker_plugin(
             FailureClass::Unknown,
             PluginPhase::Activation,
         )
-    })?;
+    })?
+    .max_decoding_message_size(max_message_bytes)
+    .max_encoding_message_size(max_message_bytes);
 
     let health = block_on_runtime(
         runtime_handle.runtime(),
@@ -916,6 +923,7 @@ async fn serve_host_runtime(
     endpoint: HostRuntimeServer,
     state: Arc<WorkerHostRuntimeState>,
     shutdown: oneshot::Receiver<()>,
+    max_message_bytes: usize,
 ) {
     let diagnostics = diagnostic_limits::BoundedService::new(
         nemo_relay_worker_proto::v1::relay_diagnostics_server::RelayDiagnosticsServer::new(
@@ -926,7 +934,9 @@ async fn serve_host_runtime(
         .max_decoding_message_size(diagnostic_transport::REQUEST_BYTES)
         .max_encoding_message_size(diagnostic_transport::RESPONSE_BYTES),
     );
-    let service = RelayHostRuntimeServer::new(WorkerHostRuntimeService { state });
+    let service = RelayHostRuntimeServer::new(WorkerHostRuntimeService { state })
+        .max_decoding_message_size(max_message_bytes)
+        .max_encoding_message_size(max_message_bytes);
     let result = match endpoint {
         #[cfg(unix)]
         HostRuntimeServer::Unix(listener) => {
@@ -1153,6 +1163,7 @@ struct WorkerProcessLaunch<'a> {
     host_endpoint: &'a str,
     worker_endpoint: &'a str,
     worker_endpoint_file: Option<&'a Path>,
+    max_message_bytes: usize,
 }
 
 fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<Child> {
@@ -1191,6 +1202,10 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
         .env("NEMO_RELAY_WORKER_SOCKET", spec.worker_endpoint)
         .env("NEMO_RELAY_HOST_SOCKET", spec.host_endpoint)
         .env("NEMO_RELAY_WORKER_TOKEN", spec.auth_token)
+        .env(
+            WORKER_MAX_MESSAGE_BYTES_ENV,
+            spec.max_message_bytes.to_string(),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());

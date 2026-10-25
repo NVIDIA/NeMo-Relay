@@ -35,6 +35,13 @@ decode incomplete chunks. The wire protocol remains `grpc-v1`.
 
 ## Authoring Surface
 
+Set `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` on the Relay host to configure the
+finite send/receive limit for execution RPCs. The default is 4 MiB; for example,
+`16777216` allows 16 MiB, including the protobuf envelope. Restart the host and
+workers after changing it and upgrade both SDK and host together. This does not
+change model context limits or automatically compact history. See
+[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
+
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |

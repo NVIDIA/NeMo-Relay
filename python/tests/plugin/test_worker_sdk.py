@@ -3155,24 +3155,32 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
 
 
 def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    calls: list[tuple[str, tuple[tuple[str, str | int], ...]]] = []
 
     def insecure_channel(
         target: str,
         *,
-        options: tuple[tuple[str, str], ...] = (),
+        options: tuple[tuple[str, str | int], ...] = (),
     ) -> object:
         calls.append((target, options))
         return object()
 
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", insecure_channel)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", "8388608")
 
     _open_host_channel("unix:///tmp/relay-host.sock")
     _open_host_channel("http://127.0.0.1:50051")
 
     assert calls == [
-        ("unix:/tmp/relay-host.sock", (("grpc.default_authority", "localhost"),)),
-        ("127.0.0.1:50051", ()),
+        (
+            "unix:/tmp/relay-host.sock",
+            (
+                ("grpc.max_receive_message_length", 8388608),
+                ("grpc.max_send_message_length", 8388608),
+                ("grpc.default_authority", "localhost"),
+            ),
+        ),
+        ("127.0.0.1:50051", (("grpc.max_receive_message_length", 8388608), ("grpc.max_send_message_length", 8388608))),
     ]
 
 
@@ -3379,8 +3387,8 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
             assert grace == 2
 
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: FakeChannel())
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: FakeChannel())
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3429,8 +3437,8 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
 
     fake_channel = FakeChannel()
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: fake_channel)
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3466,8 +3474,8 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
 
     fake_channel = FakeChannel()
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: fake_channel)
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)

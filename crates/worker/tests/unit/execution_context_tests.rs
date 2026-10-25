@@ -83,6 +83,7 @@ fn disconnected_runtime() -> PluginRuntime {
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes: nemo_relay_worker_proto::DEFAULT_WORKER_MAX_MESSAGE_BYTES,
         diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }

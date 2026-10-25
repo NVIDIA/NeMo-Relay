@@ -30,6 +30,34 @@ fn worker_protocol_identifier_is_stable() {
 }
 
 #[test]
+fn worker_message_limit_accepts_only_bounded_positive_decimal_bytes() {
+    use nemo_relay_worker_proto::parse_worker_max_message_bytes;
+    for (value, expected) in [
+        ("1", 1),
+        ("4194304", 4_194_304),
+        ("16777216", 16_777_216),
+        ("2147483647", 2_147_483_647),
+    ] {
+        assert_eq!(parse_worker_max_message_bytes(value), Ok(expected));
+    }
+    for value in [
+        "",
+        "0",
+        "-1",
+        "+1",
+        " 10",
+        "10 ",
+        "1.0",
+        "16MiB",
+        "2147483648",
+        "999999999999999999999999",
+        "１２",
+    ] {
+        assert!(parse_worker_max_message_bytes(value).is_err(), "{value:?}");
+    }
+}
+
+#[test]
 fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::Subscriber as i32, 1);
     assert_eq!(RegistrationSurface::EventMetadataInjector as i32, 2);

@@ -470,6 +470,49 @@ workers:
 | `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
 | `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
 | `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host-owned limit for each complete execution RPC message sent or received by the host and maintained worker SDKs. Defaults to `4194304` (4 MiB). |
+
+### Configure Execution Message Size
+
+Set the limit on the Relay host before starting or activating workers. For
+example, to allow messages up to 16 MiB:
+
+```bash
+export NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES=16777216
+```
+
+Relay validates the value once per activation and explicitly passes it to the
+worker, including when it sanitizes the child environment. The Rust and Python
+worker SDKs apply it to both send and receive limits on the worker service and
+host-runtime continuation client. The host applies the same limits to its
+worker client and host-runtime service. Restart hosts and workers after changing
+the setting. Custom worker implementations must honor the same setting on both
+ends; increasing only one receiver is insufficient.
+
+Without an override, the receive limit remains 4 MiB. Execution send limits are
+now explicitly bounded to the same value instead of relying on the libraries'
+unbounded send defaults. Upgrade both host and worker SDKs together, especially
+if a custom peer previously allowed larger incoming messages.
+
+Values must be ASCII decimal integers from `1` through `2147483647`. Empty,
+negative, zero, non-decimal, and out-of-range values fail activation rather than
+silently disabling enforcement or selecting an unlimited transport. The limit
+includes the protobuf envelope, not just JSON text, and applies per message,
+including individual stream chunks. Allow headroom for framing and control RPCs.
+
+Long histories or large tool results can exceed 4 MiB while still fitting the
+model's token budget. If required middleware cannot receive the request or a
+continuation result, a turn fails before model execution can complete. Retrying
+the same history does not shrink it, and auto-compaction cannot recover when its
+own model or middleware call crosses the same limit. Automated sources can then
+amplify the failure by submitting more turns. Use an explicit, finite limit
+appropriate for the workload and bound retries at the application layer.
+
+This setting does not change model context limits, HTTP or hook body limits,
+observation capture budgets, or the separately bounded diagnostic service.
+It does not truncate, summarize, retry, or bypass policy on rejected messages.
+Higher limits increase per-RPC memory exposure and are not a process memory or
+concurrency budget. Keep a finite limit and size it together with concurrency.
 
 ## JSON Envelopes and Errors
 
