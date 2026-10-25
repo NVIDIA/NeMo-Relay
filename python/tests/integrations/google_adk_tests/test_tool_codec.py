@@ -450,7 +450,8 @@ def test_an_edit_naming_distinct_classes_of_one_name_is_rejected() -> None:
 
         return Weather
 
-    value = {"result": "Sunny.", "days": [weather()(location="Paris"), weather()(location="Rome")]}
+    days = [weather().model_validate({"location": "Paris"}), weather().model_validate({"location": "Rome"})]
+    value = {"result": "Sunny.", "days": days}
     produced = ProducedResults()
     encoded = _over_the_wire(produced.add(value))
     assert produced.restore(encoded, object) is value

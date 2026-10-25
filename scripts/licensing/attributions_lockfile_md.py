@@ -768,7 +768,7 @@ def _sdist_metadata_from_bytes(data: bytes, *, package_name: str) -> tuple[str, 
         members: list[str] = [name for name in tf.getnames() if name.endswith("/PKG-INFO")]
         if not members:
             raise ValueError(f"No PKG-INFO found in sdist for {package_name}")
-        metadata_path = cast(str, min(members, key=len))
+        metadata_path = min(members, key=len)
         root_dir = metadata_path.split("/", 1)[0]
         raw = _extract_tar_text(tf, metadata_path)
         if raw is None:

@@ -56,7 +56,7 @@ def _scope_event(events: list[Event], name: str, category: str, scope_category: 
 
 def _event_data_object(event: ScopeEvent) -> JsonObject:
     assert isinstance(event.data, dict)
-    return cast(JsonObject, event.data)
+    return event.data
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +713,7 @@ class TestScopeLocalLlmWrappers:
             scope_local.register_llm_stream_execution(handle, "sl_llm_stream_cov", 1, stream_intercept)
             assert scope_local.deregister_llm_stream_execution(handle, "sl_llm_stream_cov") is True
 
-            assert cast(str, cast(JsonObject, request.content)["model"]) == "scope-local"
+            assert cast(str, request.content["model"]) == "scope-local"
 
 
 class TestScopeLocalLlmBehavior:

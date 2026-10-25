@@ -225,7 +225,7 @@ async def test_structured_output_schema_reaches_intercepts_and_an_edit_reaches_t
         name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmNext
     ) -> nemo_relay.Json:
         content = copy.deepcopy(request.content)
-        content["config"]["response_schema"]["description"] = "A forecast for one location."
+        as_object(as_object(content["config"])["response_schema"])["description"] = "A forecast for one location."
         return await next_call(nemo_relay.LLMRequest(request.headers, content))
 
     model = responding_llm(answer_with_json, model="json-model")
@@ -295,7 +295,7 @@ async def test_adk_request_headers_reach_intercepts_and_a_removal_reaches_the_mo
 
     def record_headers(request: LlmRequest) -> LlmResponse:
         options = request.config.http_options
-        seen_by_model.append(dict((options and options.headers) or {}))
+        seen_by_model.append({} if options is None or options.headers is None else dict(options.headers))
         return model_answer("ok")
 
     def drop_secret(
@@ -332,7 +332,7 @@ async def test_relay_request_headers_reach_the_model_on_every_call(
 
     def record_headers(request: LlmRequest) -> LlmResponse:
         options = request.config.http_options
-        seen_headers.append(dict((options and options.headers) or {}))
+        seen_headers.append({} if options is None or options.headers is None else dict(options.headers))
         return model_answer("ok")
 
     def add_lineage(

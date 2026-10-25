@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import functools
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Sequence
@@ -612,6 +613,14 @@ def invocation_context(agent: BaseAgent, invocation_id: str) -> InvocationContex
         agent=agent,
         session=Session(id="direct-session", app_name=APP_NAME, user_id="user"),
     )
+
+
+def with_last_text(content: nemo_relay.JsonObject, text: str) -> nemo_relay.JsonObject:
+    """Return a copy of request `content` with `text` in the first part of its last message."""
+    edited = copy.deepcopy(content)
+    last = as_object(as_list(edited["contents"])[-1])
+    as_object(as_list(last["parts"])[0])["text"] = text
+    return edited
 
 
 def text_response(text: str) -> nemo_relay.JsonObject:

@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import shutil
-from collections.abc import Iterator
+from collections.abc import Generator
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -122,7 +122,7 @@ def _proto_source() -> Path:
 
 
 @contextlib.contextmanager
-def _staged_proto() -> Iterator[None]:
+def _staged_proto() -> Generator[None]:
     proto_source = _proto_source()
     staged_proto = proto_source != _SDIST_PROTO
     if staged_proto:
@@ -140,7 +140,7 @@ def _staged_proto() -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def _sdist_manifest() -> Iterator[None]:
+def _sdist_manifest() -> Generator[None]:
     previous = _MANIFEST.read_bytes() if _MANIFEST.exists() else None
     _MANIFEST.write_text(
         "\n".join(

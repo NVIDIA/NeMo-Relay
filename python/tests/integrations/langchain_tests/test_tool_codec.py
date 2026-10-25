@@ -293,7 +293,7 @@ def test_custom_tool_message_class_and_fields_are_preserved(command, custom_type
         source: str = "custom"
 
     class CustomKindToolMessage(CustomToolMessage):
-        type: Literal["custom_tool"] = "custom_tool"
+        type: Literal["custom_tool"] = "custom_tool"  # ty: ignore[invalid-attribute-override]
 
     cls = CustomKindToolMessage if custom_type else CustomToolMessage
     artifact = object()

@@ -138,7 +138,7 @@ class TestBuiltinCodecDecodeEncode:
             {"role": "assistant", "content": "hello"},
         ]
         encoded = codec.encode(annotated, original)
-        encoded_content = cast(JsonObject, encoded.content)
+        encoded_content = encoded.content
         assert isinstance(encoded, LLMRequest)
         assert encoded.headers == {"Authorization": "Bearer test"}
         assert cast(float, encoded_content["temperature"]) == 0.7
@@ -200,7 +200,7 @@ class TestBuiltinCodecDecodeEncode:
         instructions[0]["text"] = "Edited safely."
         annotated.instructions = instructions
         encoded = codec.encode(annotated, original)
-        expected = dict(cast(JsonObject, original.content))
+        expected = dict(original.content)
         expected["system"] = [
             {
                 "type": "text",
@@ -330,7 +330,7 @@ class TestBuiltinCodecDecodeResponse:
             {"role": "user", "content": "My SSN is [REDACTED]."},
         ]
         encoded = codec.encode(annotated, original)
-        encoded_content = cast(JsonObject, encoded.content)
+        encoded_content = encoded.content
         chat_request = cast(JsonObject, encoded_content["chatRequest"])
         messages = cast(list[JsonObject], chat_request["messages"])
         assert messages[0]["content"] == [{"type": "TEXT", "text": "My SSN is [REDACTED]."}]

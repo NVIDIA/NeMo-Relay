@@ -402,7 +402,7 @@ class Provider(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server: Provider
+    server: Provider  # ty: ignore[invalid-mutable-override]
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         del format, args
