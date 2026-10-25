@@ -86,6 +86,25 @@ pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
         );
     }
 
+    if let Some(adaptive_hints) = &config.adaptive_hints
+        && adaptive_hints
+            .inject_body_path
+            .split('.')
+            .any(str::is_empty)
+    {
+        push_policy_diag(
+            &mut report.diagnostics,
+            config.policy.unsupported_value,
+            "adaptive.unsupported_value",
+            Some("adaptive_hints".to_string()),
+            Some("inject_body_path".to_string()),
+            format!(
+                "adaptive_hints inject_body_path '{}' is unsupported; expected dot-separated non-empty keys such as nvext.agent_hints",
+                adaptive_hints.inject_body_path
+            ),
+        );
+    }
+
     if let Some(response_cache) = &config.response_cache {
         validate_response_cache(&mut report, response_cache);
     }

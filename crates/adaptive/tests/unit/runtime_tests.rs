@@ -11,8 +11,8 @@ use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_sco
 use serde_json::{Map, Value as Json};
 
 use crate::config::{
-    AcgComponentConfig, AdaptiveConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
-    ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig,
+    TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
 use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
@@ -259,6 +259,39 @@ fn validate_config_reports_version_mode_and_telemetry_gaps() {
             .iter()
             .any(|diag| diag.code == "adaptive.section_disabled_missing_state")
     );
+}
+
+#[test]
+fn validate_config_rejects_adaptive_hints_body_path_with_empty_segment() {
+    for path in ["", "nvext..agent_hints", "nvext."] {
+        let report = validate_config(&AdaptiveConfig {
+            adaptive_hints: Some(AdaptiveHintsComponentConfig {
+                inject_body_path: path.to_string(),
+                ..AdaptiveHintsComponentConfig::default()
+            }),
+            policy: ConfigPolicy {
+                unsupported_value: UnsupportedBehavior::Error,
+                ..ConfigPolicy::default()
+            },
+            ..AdaptiveConfig::default()
+        });
+
+        assert!(report.has_errors(), "{path:?}");
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diag| diag.code == "adaptive.unsupported_value"
+                    && diag.field.as_deref() == Some("inject_body_path")),
+            "{path:?}"
+        );
+    }
+
+    let report = validate_config(&AdaptiveConfig {
+        adaptive_hints: Some(AdaptiveHintsComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    });
+    assert!(report.diagnostics.is_empty());
 }
 
 #[test]
