@@ -57,7 +57,7 @@ dev = [
     "ruff~=0.11",
     # Transitive dependency of beautifulsoup4; keep it at a patched release.
     "soupsieve>=2.9.0",
-    "ty>=0.0.1a7",
+    "ty>=0.0.91",
     # Transitive dependency of optional integrations; keep it at a patched release.
     "urllib3>=2.8.0",
     "uv>=0.13.4",
@@ -185,6 +185,12 @@ include = ["python/tests/**"]
 invalid-argument-type = "ignore"
 not-subscriptable = "ignore"
 unsupported-operator = "ignore"
+
+[[tool.ty.overrides]]
+include = ["skills/**"]
+
+[tool.ty.overrides.rules]
+deprecated = "ignore"
 
 [tool.ruff]
 line-length = 120

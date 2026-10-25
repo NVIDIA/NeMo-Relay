@@ -11,7 +11,7 @@ import json
 import socket
 import threading
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 from urllib.parse import urlparse
@@ -136,7 +136,7 @@ class OtlpHandler(BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def local_server(handler: type[BaseHTTPRequestHandler], **attributes: Any) -> Iterator[str]:
+def local_server(handler: type[BaseHTTPRequestHandler], **attributes: Any) -> Generator[str]:
     server = QuietThreadingServer(("127.0.0.1", 0), handler)
     for name, value in attributes.items():
         setattr(server, name, value)

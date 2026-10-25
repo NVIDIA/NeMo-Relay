@@ -75,7 +75,7 @@ import platform
 import stat
 import tempfile
 import tomllib
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -2177,7 +2177,7 @@ class PluginRuntime:
         _ack_to_result(response)
 
     @contextlib.contextmanager
-    def bind_scope_stack(self, scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Iterator[None]:
+    def bind_scope_stack(self, scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Generator[None]:
         """Temporarily bind host calls to a worker-selected scope stack.
 
         Args:
@@ -2206,7 +2206,7 @@ class PluginRuntime:
             _SCOPE_CONTEXT.reset(token)
 
     @contextlib.contextmanager
-    def clear_scope_stack(self) -> Iterator[None]:
+    def clear_scope_stack(self) -> Generator[None]:
         """Temporarily clear worker scope-stack correlation.
 
         Yields:
@@ -3185,7 +3185,7 @@ def _require_payload(request: Any, payload: str) -> Any:
 
 
 @contextlib.contextmanager
-def _bind_invocation_scope(request: Any) -> Iterator[None]:
+def _bind_invocation_scope(request: Any) -> Generator[None]:
     scope = None
     if request.HasField("scope"):
         scope_stack_id = request.scope.scope_stack_id
