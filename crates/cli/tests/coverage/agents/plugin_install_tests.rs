@@ -1618,6 +1618,23 @@ fn generation_retirement_lock_contention_is_bounded_across_processes() {
 }
 
 #[test]
+fn default_install_dir_ignores_empty_or_relative_xdg_data_home() {
+    for value in ["", "relative/data"] {
+        assert_eq!(
+            default_install_dir_for(
+                "linux",
+                Some("/home/example".into()),
+                None,
+                None,
+                Some(value.into())
+            ),
+            PathBuf::from("/home/example/.local/share/nemo-relay/plugins"),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
 fn default_install_dir_follows_platform_conventions() {
     assert_eq!(
         default_install_dir_for("macos", Some("/Users/example".into()), None, None, None),
