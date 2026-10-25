@@ -22,10 +22,10 @@ from nemo_relay.integrations.google_adk._serialization import (
     token_counts,
     with_uncached,
 )
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from google.adk.models.google_llm import Gemini
     from google.genai.models import AsyncModels
@@ -98,7 +98,7 @@ def gemini_backend(model: Gemini) -> Backend:
     return Backend(provider, GEMINI_CODEC, client_headers=False)
 
 
-def _models_methods(cls: type[AsyncModels]) -> Mapping[str, object]:
+def _models_methods(cls: type[AsyncModels]) -> Methods[AsyncModels]:
     """Return `AsyncModels` methods that record response id and URL context on current attempt.
 
     `LlmResponse` drops `response_id` and first candidate's `url_context_metadata`.
