@@ -1219,6 +1219,75 @@ async fn assert_large_message_boundary(accepts_large: bool) {
             "opt-in cap remains finite"
         );
     }
+    assert_response_message_boundaries(accepts_large).await;
+}
+
+/// Keeps requests small while exercising worker and continuation response limits.
+async fn assert_response_message_boundaries(accepts_large: bool) {
+    for direction in ["worker", "continuation"] {
+        for mib in [5, 17] {
+            let result = response_message_tool_call(mib, direction).await;
+            if accepts_large && mib == 5 {
+                let result = result.expect("16 MiB accepts a generated 5 MiB response");
+                assert_eq!(
+                    result.result["text"].as_str().unwrap().len(),
+                    mib * 1024 * 1024
+                );
+                assert_eq!(result.result["worker_plugin_tool_execution"], true);
+            } else {
+                let error = result
+                    .expect_err("oversized response must be rejected")
+                    .to_string();
+                assert!(
+                    error.contains("message") && (error.contains("limit") || error.contains("max")),
+                    "{direction} {mib} MiB response should fail its size limit: {error}"
+                );
+            }
+            let control = response_message_tool_call(0, direction)
+                .await
+                .expect("small response must still work after the boundary call");
+            assert_eq!(control.result["text"], "");
+            assert_eq!(control.result["worker_plugin_tool_execution"], true);
+        }
+    }
+}
+
+/// Generates the large value only after a small Invoke/ToolNext request is received.
+async fn response_message_tool_call(
+    mib: usize,
+    direction: &str,
+) -> FlowResult<ToolExecutionResult> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let args = json!({"response_mib": mib});
+    assert!(serde_json::to_vec(&args).unwrap().len() < 128);
+    let called = Arc::new(AtomicBool::new(false));
+    let observed = called.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name(format!("large-{direction}-response"))
+                .args(args)
+                .func(Arc::new(move |_| {
+                    observed.store(true, Ordering::SeqCst);
+                    Box::pin(async move {
+                        Ok(ToolExecutionResult::new(json!({
+                            "text": "x".repeat(mib * 1024 * 1024)
+                        })))
+                    })
+                }))
+                .build(),
+        ),
+    )
+    .await
+    .expect("response-only message call must finish");
+    assert_eq!(
+        called.load(Ordering::SeqCst),
+        direction == "continuation",
+        "only continuation response cases must reach the host callback"
+    );
+    result
 }
 
 /// Traverses Invoke, ToolNext, and the worker response with an unchanged synthetic value.
@@ -1264,6 +1333,11 @@ class Echo(WorkerPlugin):
         ctx.register_tool_request_intercept("echo-request", lambda name, args: args)
 
         async def execute(context, next_call):
+            if context.tool_name == "large-worker-response":
+                return ToolExecutionInterceptOutcome(result={
+                    "text": "x" * (context.args["response_mib"] * 1024 * 1024),
+                    "worker_plugin_tool_execution": True,
+                })
             result = await next_call.call(context.args)
             value = dict(result.result)
             value["worker_plugin_tool_execution"] = True
