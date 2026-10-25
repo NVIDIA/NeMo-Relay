@@ -182,6 +182,10 @@ fn target_selection_and_file_loading_behave_as_expected() {
 
 #[test]
 fn config_editor_treats_explicit_config_as_the_user_target() {
+    // `user_config_dir` reads XDG_CONFIG_HOME; hold the lock so tests that set it can't race.
+    let _environment = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let inherited = PathBuf::from("/managed/config.toml");
     let (scope, path) =
         resolve_edit_target(&ConfigEditCommand::default(), Some(inherited.clone())).unwrap();
