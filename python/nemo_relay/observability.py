@@ -275,6 +275,61 @@ class OpenTelemetryEndpointConfig:
 
 
 @dataclass(slots=True)
+class OpenTelemetryFileSinkConfig:
+    """One local file destination for projected OTLP spans.
+
+    ``json_lines`` is the OpenTelemetry file-exporter specification's
+    serialization; ``proto`` writes each record length-delimited.
+    """
+
+    output_directory: str
+    type: Literal["full", "gen_ai", "openinference"] = "full"
+    filename: str | None = None
+    format: Literal["json_lines", "proto"] = "json_lines"
+    mode: Literal["append", "overwrite"] = "overwrite"
+    mark_projection: Literal["inherit", "event", "tool"] = "inherit"
+    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
+    promote_metadata_prefixes: list[str] = field(default_factory=list)
+    promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    resource_attributes: dict[str, str] = field(default_factory=dict)
+    service_name: str = "unknown_service"
+    service_namespace: str | None = None
+    service_version: str | None = None
+    instrumentation_scope: str = "opentelemetry"
+    max_queue_size: int | None = None
+    max_export_batch_size: int | None = None
+    scheduled_delay_millis: int | None = None
+    completed_span_context_ttl_millis: int | None = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this file sink to the canonical plugin shape."""
+        return _normalize_object(
+            {
+                "type": self.type,
+                "output_directory": self.output_directory,
+                "filename": self.filename,
+                "format": self.format,
+                "mode": self.mode,
+                "mark_projection": self.mark_projection,
+                "mark_exclude_names": self.mark_exclude_names,
+                "attribute_mappings": self.attribute_mappings,
+                "promote_metadata_prefixes": self.promote_metadata_prefixes,
+                "promote_resource_metadata_prefixes": self.promote_resource_metadata_prefixes,
+                "service_name": self.service_name,
+                "service_namespace": self.service_namespace,
+                "service_version": self.service_version,
+                "instrumentation_scope": self.instrumentation_scope,
+                "max_queue_size": self.max_queue_size,
+                "max_export_batch_size": self.max_export_batch_size,
+                "scheduled_delay_millis": self.scheduled_delay_millis,
+                "completed_span_context_ttl_millis": self.completed_span_context_ttl_millis,
+                "resource_attributes": self.resource_attributes,
+            }
+        )
+
+
+@dataclass(slots=True)
 class OpenTelemetrySignalEndpointConfig:
     """One signal-specific OTLP destination for logs or metrics."""
 
@@ -372,6 +427,7 @@ class OpenTelemetrySectionConfig:
     endpoints: list[OpenTelemetryEndpointConfig] = field(default_factory=list)
     logs: OpenTelemetryLogSectionConfig | None = None
     metrics: OpenTelemetryMetricSectionConfig | None = None
+    file_sinks: list[OpenTelemetryFileSinkConfig] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this section to the canonical plugin shape."""
@@ -379,6 +435,7 @@ class OpenTelemetrySectionConfig:
             {
                 "enabled": self.enabled,
                 "endpoints": self.endpoints,
+                "file_sinks": self.file_sinks or None,
                 "logs": self.logs,
                 "metrics": self.metrics,
             }
@@ -447,6 +504,7 @@ __all__ = [
     "S3StorageConfig",
     "OpenTelemetryTlsConfig",
     "OpenTelemetryEndpointConfig",
+    "OpenTelemetryFileSinkConfig",
     "OpenTelemetrySignalEndpointConfig",
     "OpenTelemetryLogSectionConfig",
     "OpenTelemetryMetricSectionConfig",

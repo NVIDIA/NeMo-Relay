@@ -41,6 +41,7 @@ from nemo_relay.observability import (
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
+    OpenTelemetryFileSinkConfig,
     OpenTelemetryLogSectionConfig,
     OpenTelemetryMetricSectionConfig,
     OpenTelemetrySectionConfig,
@@ -258,6 +259,36 @@ class TestObservabilityConfigHelpers:
         with pytest.raises(ValueError, match="insecure_http_hosts"):
             await plugin.initialize(config(None))
         activation = await plugin.initialize(config(["collector.invalid"]))
+        assert activation.is_active
+        await activation.close()
+
+    async def test_opentelemetry_file_sinks_serialize_validate_and_activate(self, tmp_path) -> None:
+        sink = OpenTelemetryFileSinkConfig(str(tmp_path), filename="spans.jsonl", service_name="relay-tests")
+        assert sink.to_dict() == {
+            "type": "full",
+            "output_directory": str(tmp_path),
+            "filename": "spans.jsonl",
+            "format": "json_lines",
+            "mode": "overwrite",
+            "mark_projection": "inherit",
+            "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
+            "promote_metadata_prefixes": [],
+            "promote_resource_metadata_prefixes": [],
+            "service_name": "relay-tests",
+            "instrumentation_scope": "opentelemetry",
+            "resource_attributes": {},
+        }
+        section = OpenTelemetrySectionConfig(enabled=True, file_sinks=[sink])
+        assert section.to_dict()["file_sinks"] == [sink.to_dict()]
+
+        config = plugin.PluginConfig(
+            components=[
+                ComponentSpec(ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error")))
+            ]
+        )
+        assert validate_plugin_config(config)["diagnostics"] == []
+        activation = await plugin.initialize(config)
         assert activation.is_active
         await activation.close()
 
