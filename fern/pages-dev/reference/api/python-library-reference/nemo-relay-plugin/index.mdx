@@ -742,7 +742,7 @@ End a host scope by its handle identifier.
 ##### `bind_scope_stack`
 
 ```python
-def bind_scope_stack(scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Iterator[None]
+def bind_scope_stack(scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Generator[None]
 ```
 
 Temporarily bind host calls to a worker-selected scope stack.
@@ -750,7 +750,7 @@ Temporarily bind host calls to a worker-selected scope stack.
 ##### `clear_scope_stack`
 
 ```python
-def clear_scope_stack() -> Iterator[None]
+def clear_scope_stack() -> Generator[None]
 ```
 
 Temporarily clear worker scope-stack correlation.
