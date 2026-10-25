@@ -260,18 +260,22 @@ fn user_config_dir_and_preview_paths_prefer_xdg_when_set() {
 #[test]
 fn user_config_dir_ignores_empty_or_relative_xdg_config_home() {
     // XDG Base Directory spec: an empty value means unset, and relative paths are ignored.
+    // HOME is left as is so tests that read it without the env lock are unaffected.
     let home = tempfile::tempdir().unwrap();
-    let expected = home.path().join(".config").join("nemo-relay");
+    let process_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".config/nemo-relay"));
     for value in ["", "relative/config"] {
-        let _env = EnvScope::set(&[
-            ("XDG_CONFIG_HOME", Some(std::ffi::OsStr::new(value))),
-            ("HOME", Some(home.path().as_os_str())),
-        ]);
+        let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(std::ffi::OsStr::new(value)))]);
 
-        assert_eq!(user_config_dir(home.path()), expected, "{value:?}");
+        assert_eq!(
+            user_config_dir(home.path()),
+            home.path().join(".config").join("nemo-relay"),
+            "{value:?}"
+        );
         assert_eq!(
             nemo_relay::plugin::user_config_dir(),
-            Some(expected.clone()),
+            process_home,
             "{value:?}"
         );
     }
