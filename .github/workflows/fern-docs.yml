@@ -27,7 +27,7 @@ concurrency:
 jobs:
   changed-files:
     name: Detect docs changes
-    if: ${{ github.ref_type != 'tag' && github.event_name != 'pull_request' }}
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (github.ref_type != 'tag' && github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -53,8 +53,11 @@ jobs:
     needs: changed-files
     if: >-
       ${{
-        needs.changed-files.outputs.docs == 'true'
-        && startsWith(github.ref_name, 'pull-request/')
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          needs.changed-files.outputs.docs == 'true'
+          && startsWith(github.ref_name, 'pull-request/')
+        )
       }}
     runs-on: ubuntu-latest
     environment: fern
@@ -183,9 +186,12 @@ jobs:
     name: Clean up docs preview
     if: >-
       ${{
-        github.event_name == 'pull_request'
-        && github.event.action == 'closed'
-        && github.event.pull_request.merged == true
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          github.event_name == 'pull_request'
+          && github.event.action == 'closed'
+          && github.event.pull_request.merged == true
+        )
       }}
     runs-on: ubuntu-latest
     environment: fern
@@ -237,10 +243,13 @@ jobs:
     needs: changed-files
     if: >-
       ${{
-        needs.changed-files.outputs.docs == 'true'
+        github.repository == 'NVIDIA/NeMo-Relay'
         && (
-          github.ref_name == 'main'
-          || (github.event_name == 'workflow_dispatch' && (inputs.tag == '' || inputs.tag == null))
+          needs.changed-files.outputs.docs == 'true'
+          && (
+            github.ref_name == 'main'
+            || (github.event_name == 'workflow_dispatch' && (inputs.tag == '' || inputs.tag == null))
+          )
         )
       }}
     runs-on: ubuntu-latest
@@ -370,8 +379,11 @@ jobs:
     name: Skip nightly alpha docs
     if: >-
       ${{
-        (github.ref_type == 'tag' && contains(github.ref_name, '-alpha.'))
-        || (github.event_name == 'workflow_dispatch' && contains(inputs.tag, '-alpha.'))
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          (github.ref_type == 'tag' && contains(github.ref_name, '-alpha.'))
+          || (github.event_name == 'workflow_dispatch' && contains(inputs.tag, '-alpha.'))
+        )
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -384,12 +396,15 @@ jobs:
     name: Release docs version
     if: >-
       ${{
-        (github.ref_type == 'tag' && !contains(github.ref_name, '-alpha.'))
-        || (
-          github.event_name == 'workflow_dispatch'
-          && inputs.tag != ''
-          && inputs.tag != null
-          && !contains(inputs.tag, '-alpha.')
+        github.repository == 'NVIDIA/NeMo-Relay'
+        && (
+          (github.ref_type == 'tag' && !contains(github.ref_name, '-alpha.'))
+          || (
+            github.event_name == 'workflow_dispatch'
+            && inputs.tag != ''
+            && inputs.tag != null
+            && !contains(inputs.tag, '-alpha.')
+          )
         )
       }}
     runs-on: ubuntu-latest

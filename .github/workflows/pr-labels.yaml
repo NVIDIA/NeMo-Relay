@@ -22,6 +22,7 @@ defaults:
 
 jobs:
   label:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Apply PR labels
     runs-on: ubuntu-latest
     permissions:
