@@ -1472,9 +1472,18 @@ impl LlmCodec for GeminiGenerateContentCodec {
         original: &LlmRequest,
         baseline: &AnnotatedLlmRequest,
     ) -> Result<LlmRequest> {
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
         validate_gemini_supported_fields(annotated, baseline)?;
-        let mut content = original.content.clone();
-        let obj = content
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
@@ -1503,10 +1512,7 @@ impl LlmCodec for GeminiGenerateContentCodec {
 
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
-        Ok(LlmRequest {
-            headers: original.headers.clone(),
-            content,
-        })
+        Ok(original)
     }
 }
 
