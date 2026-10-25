@@ -203,13 +203,11 @@ trust policy and file layout are documented in [Manage](/configure-plugins/disco
 
 ## Worker Message Limits
 
-Worker authors can declare `load.max_message_bytes` in `relay-plugin.toml` to
-choose a finite execution RPC default for their plugin. For example,
-`max_message_bytes = 16777216` permits complete messages up to 16 MiB. The host's
-`NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` environment setting overrides this value;
-if neither is set, the default is 4 MiB. Relay forwards the effective per-plugin
-value to the maintained SDK, so both ends agree before any callback runs.
-Native in-process plugins do not use this setting. See the
+Set `[load.max_message_bytes]` with an optional `default_bytes` and `by_name`
+overrides for exact gRPC method names. For example, `by_name.Invoke = 16777216`
+raises only `Invoke` to 16 MiB; other RPCs retain the 4 MiB default. Host
+environment settings override plugin settings. Native plugins do not use this
+setting. See the
 [execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
 for validation, compatibility, and memory considerations.
 

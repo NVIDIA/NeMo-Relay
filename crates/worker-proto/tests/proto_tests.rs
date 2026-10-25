@@ -29,6 +29,20 @@ fn worker_protocol_identifier_is_stable() {
     assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
 }
 
+/// A named increase does not widen unrelated RPCs, and a lower named cap wins.
+#[test]
+fn worker_rpc_limits_are_independent() {
+    let mut limits = nemo_relay_worker_proto::WorkerRpcMessageLimits::default();
+    limits.by_name.insert("Invoke".into(), 16 * 1024 * 1024);
+    assert_eq!(limits.for_rpc("Invoke"), 16 * 1024 * 1024);
+    for name in ["InvokeStream", "ToolNext", "Health", "EmitMark"] {
+        assert_eq!(limits.for_rpc(name), 4 * 1024 * 1024);
+    }
+    limits.default_bytes = 16 * 1024 * 1024;
+    limits.by_name.insert("ToolNext".into(), 4 * 1024 * 1024);
+    assert_eq!(limits.for_rpc("ToolNext"), 4 * 1024 * 1024);
+}
+
 #[test]
 /// Keeps Rust parsing aligned with the finite cross-language byte-limit contract.
 fn worker_message_limit_accepts_only_bounded_positive_decimal_bytes() {

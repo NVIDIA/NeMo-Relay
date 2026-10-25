@@ -63,15 +63,6 @@ additive provenance; absent identity retains the existing attribution behavior.
 
 ## Installation
 
-The host passes `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` to the SDK to bound both
-sent and received execution RPC messages. A plugin can declare its own default
-with `load.max_message_bytes` in `relay-plugin.toml`; a host environment override
-takes precedence over it. Without either setting the default is 4 MiB. Set, for
-example, `16777216` for 16 MiB, then restart the host and workers.
-Upgrade both sides together; changing only the Python SDK leaves host limits
-in place. See [execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
-for validation, framing overhead, and memory trade-offs.
-
 Add the SDK to the Python worker project's dependencies:
 
 ```bash
@@ -97,6 +88,14 @@ nemo-relay plugins enable <plugin_id>
 Python workers cannot be loaded directly from `plugins.toml`. They must be
 registered through `plugins add`, which provisions the required managed
 environment. `plugins remove <plugin_id>` deletes that environment.
+
+## Configuration
+
+Use `[load.max_message_bytes]` in `relay-plugin.toml` with `default_bytes` and
+`by_name` overrides for exact RPC names such as `Invoke` or `ToolNext`.
+Host environment overrides take precedence; RPCs default to 4 MiB. Restart
+the host and workers after changes and upgrade both sides together. See
+[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
 
 ## Getting Started
 

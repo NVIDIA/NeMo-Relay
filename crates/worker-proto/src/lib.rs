@@ -9,6 +9,11 @@
 //! structure. Open application payloads remain lossless JSON values, while
 //! other Relay data transfer objects are carried in JSON envelopes.
 
+mod message_limits;
+pub use message_limits::{
+    RpcMessageLimitService, WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV, WorkerRpcMessageLimits,
+};
+
 /// Stable worker protocol identifier accepted by `compat.worker_protocol`.
 pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
 

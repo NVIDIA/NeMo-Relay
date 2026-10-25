@@ -2078,15 +2078,17 @@ fn relay_version_matches_prerelease_hosts_as_their_release() {
 #[test]
 fn worker_message_size_defaults_validate_and_round_trip() {
     for limit in [1, 16 * 1024 * 1024, i32::MAX as u32] {
-        let source = valid_worker_manifest_toml().replace(
-            "[load]\n",
-            &format!("[load]\nmax_message_bytes = {limit}\n"),
+        let source = format!(
+            "{}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n[load.max_message_bytes.by_name]\nInvoke = {limit}\n",
+            valid_worker_manifest_toml()
         );
         let manifest = DynamicPluginManifest::parse_toml(&source).unwrap();
         let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
             panic!("worker load")
         };
-        assert_eq!(load.max_message_bytes.unwrap().get(), limit);
+        let limits = load.max_message_bytes.as_ref().unwrap();
+        assert_eq!(limits.default_bytes.unwrap().get(), limit);
+        assert_eq!(limits.by_name["Invoke"].get(), limit);
         assert_eq!(
             DynamicPluginManifest::parse_toml(&toml::to_string(&manifest).unwrap()).unwrap(),
             manifest,
@@ -2098,23 +2100,35 @@ fn worker_message_size_defaults_validate_and_round_trip() {
         let DynamicPluginLoadContract::Worker(load) = decoded.load else {
             panic!("worker record")
         };
-        assert_eq!(load.max_message_bytes.unwrap().get(), limit);
+        let limits = load.max_message_bytes.unwrap();
+        assert_eq!(limits.default_bytes.unwrap().get(), limit);
+        assert_eq!(limits.by_name["Invoke"].get(), limit);
     }
     for value in ["0", "-1", "1.5", "2147483648", "4294967296", "\"16777216\""] {
-        let source = valid_worker_manifest_toml().replace(
-            "[load]\n",
-            &format!("[load]\nmax_message_bytes = {value}\n"),
-        );
-        assert!(
-            DynamicPluginManifest::parse_toml(&source).is_err(),
-            "accepted {value}"
-        );
+        for field in ["default_bytes", "by_name.Invoke"] {
+            let source = format!(
+                "{}\n[load.max_message_bytes]\n{field} = {value}\n",
+                valid_worker_manifest_toml()
+            );
+            assert!(
+                DynamicPluginManifest::parse_toml(&source).is_err(),
+                "accepted {field} = {value}"
+            );
+        }
     }
     let native = format!(
-        "{}\nmax_message_bytes = 16777216\n",
+        "{}\n[load.max_message_bytes]\ndefault_bytes = 16777216\n",
         valid_rust_manifest_toml()
     );
     assert!(DynamicPluginManifest::parse_toml(&native).is_err());
+    for name in ["", " Invoke", "Invoke ", "Invoke/Other"] {
+        let source = format!(
+            "{}\n[load.max_message_bytes.by_name]\n{:#?} = 16777216\n",
+            valid_worker_manifest_toml(),
+            name
+        );
+        assert!(DynamicPluginManifest::parse_toml(&source).is_err());
+    }
 }
 
 /// Checks that valid deadlines survive conversion and invalid values are rejected.

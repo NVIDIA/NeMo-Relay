@@ -470,72 +470,34 @@ workers:
 | `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
 | `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
 | `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
-| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host override for each complete execution RPC message sent or received. Relay forwards the effective per-plugin limit to the worker. Without an override, the plugin's `load.max_message_bytes` applies, or `4194304` (4 MiB) when omitted. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host default byte-limit override. Relay forwards the resolved fallback to the worker; 4 MiB when unset. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact RPC method names to byte limits. Relay forwards resolved per-RPC overrides to the worker. |
 
 ### Configure Execution Message Size
 
-Each worker plugin can declare its own default in `relay-plugin.toml`. For
-example, add the byte limit to an existing Python worker's load block:
+Set per-RPC limits in `relay-plugin.toml`:
 
 ```toml
-[load]
-runtime = "python"
-entrypoint = "my_plugin.worker:main"
-max_message_bytes = 16777216
+[load.max_message_bytes]
+default_bytes = 4194304
+[load.max_message_bytes.by_name]
+Invoke = 16777216
+ToolNext = 16777216
 ```
 
-This host-owned load setting also applies to Rust and custom-command workers.
-It is not part of the plugin's application config and does not require its
-config schema or callbacks to handle a reserved transport key. The authored
-default is retained in the durable plugin record used by inspection.
+Precedence, highest first:
 
-An operator can override plugin defaults on the Relay host before activation:
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON RPC-to-bytes map, such as `{"Invoke":16777216}`.
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
+- Plugin `load.max_message_bytes.by_name`: exact, case-sensitive RPC method name.
+- Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
 
-```bash
-export NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES=16777216
-```
-
-Precedence is **host environment override → plugin `load.max_message_bytes`
-default → 4 MiB**. An explicit host value wins even when it is smaller than a
-plugin's default. Different plugins may use different defaults without changing
-the host's process environment; each activation resolves its own limit. An
-invalid override fails activation instead of falling back to a valid default.
-
-Relay validates and resolves the value once per activation and explicitly passes
-the effective value to that worker, including when it sanitizes the child
-environment. Plugins must not independently choose a different SDK limit. The
-Rust and Python worker SDKs apply it to both send and receive limits on the worker service and
-host-runtime continuation client. The host applies the same limits to its
-worker client and host-runtime service. Restart hosts and workers after changing
-the setting. Custom worker implementations must honor the same setting on both
-ends; increasing only one receiver is insufficient.
-
-Without either setting, the receive limit remains 4 MiB. Execution send limits are
-now explicitly bounded to the same value instead of relying on the libraries'
-unbounded send defaults. Upgrade both host and worker SDKs together, especially
-if a custom peer previously allowed larger incoming messages.
-
-The manifest setting must be a TOML integer from `1` through `2147483647`;
-it is rejected for native in-process plugins, which do not use worker gRPC.
-The environment value must be ASCII decimal digits in the same range. Empty,
-negative, zero, non-decimal, and out-of-range values fail activation rather than
-silently disabling enforcement or selecting an unlimited transport. The limit
-includes the protobuf envelope, not just JSON text, and applies per message,
-including individual stream chunks. Allow headroom for framing and control RPCs.
-
-Long histories or large tool results can exceed 4 MiB while still fitting the
-model's token budget. If required middleware cannot receive the request or a
-continuation result, a turn fails before model execution can complete. Retrying
-the same history does not shrink it, and auto-compaction cannot recover when its
-own model or middleware call crosses the same limit. Automated sources can then
-amplify the failure by submitting more turns. Use an explicit, finite limit
-appropriate for the workload and bound retries at the application layer.
-
-This setting does not change model context limits, HTTP or hook body limits,
-observation capture budgets, or the separately bounded diagnostic service.
-It does not truncate, summarize, retry, or bypass policy on rejected messages.
-Higher limits increase per-RPC memory exposure and are not a process memory or
-concurrency budget. Keep a finite limit and size it together with concurrency.
+Limits are integers in `1..=2147483647`, applied to complete sent/received
+protobuf messages and individual stream chunks. Unchanged RPCs keep their own
+fallback; diagnostic-service budgets remain separate. Restart the host and
+workers after changes and upgrade both SDK and host together. Send limits are
+now finite as well as receive limits; size them with concurrency. These limits
+do not change model context limits or provide automatic compaction.
 
 ## JSON Envelopes and Errors
 

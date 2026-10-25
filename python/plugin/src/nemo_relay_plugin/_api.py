@@ -85,6 +85,7 @@ from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics
+from ._message_limits import MessageLimitInterceptor, RpcHostChannel, named_message_limits
 
 grpc: Any = importlib.import_module("grpc")
 
@@ -2470,9 +2471,12 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         ``NEMO_RELAY_WORKER_ENDPOINT_FILE``: File where the SDK writes the
         resolved worker endpoint after the gRPC server is accepting requests.
         ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES``: Host-supplied positive decimal
-        limit for each complete sent or received gRPC message. Defaults to
-        4194304 (4 MiB); maximum 2147483647. Restart the host and workers after
-        changing the setting. This is not a model context or HTTP body limit.
+        fallback for each complete sent or received gRPC message. Defaults to
+        4194304 (4 MiB); maximum 2147483647.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME``: Host-resolved JSON map
+        from exact RPC names to byte limits, overriding the fallback per method.
+        Restart the host and workers after changing either setting. These are
+        not model context or HTTP body limits.
 
     Callback concurrency:
         The gRPC AsyncIO server can keep multiple RPCs in flight. Asynchronous
@@ -2504,10 +2508,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
     max_message_bytes = _worker_max_message_bytes()
+    try:
+        by_name = named_message_limits()
+    except ValueError as exc:
+        raise WorkerSdkError(str(exc)) from exc
 
     worker_target = _grpc_target(worker_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes)
+    host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes, by_name=by_name)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
@@ -2516,7 +2524,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
-    server = grpc.aio.server(options=_worker_grpc_options(max_message_bytes))
+    server = grpc.aio.server(
+        options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
+        interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
+    )
     try:
         pb_grpc.add_PluginWorkerServicer_to_server(service, server)
         bound_port = server.add_insecure_port(worker_target)
@@ -3369,10 +3380,17 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
-def _open_host_channel(endpoint: str, *, max_message_bytes: int | None = None) -> Any:
+def _open_host_channel(
+    endpoint: str, *, max_message_bytes: int | None = None, by_name: dict[str, int] | None = None
+) -> Any:
     """Open a bounded continuation channel while retaining Unix socket authority."""
     target = _grpc_target(endpoint)
     limit = _worker_max_message_bytes() if max_message_bytes is None else max_message_bytes
+    if by_name is None:
+        by_name = named_message_limits()
+    if by_name:
+        authority = (("grpc.default_authority", "localhost"),) if endpoint.startswith("unix://") else ()
+        return RpcHostChannel(target, limit, by_name, authority)
     options = _worker_grpc_options(limit)
     if endpoint.startswith("unix://"):
         return grpc.aio.insecure_channel(

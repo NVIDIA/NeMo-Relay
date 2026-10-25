@@ -48,6 +48,7 @@ use uuid::Uuid;
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const MESSAGE_LIMIT_CHILD_ENV: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
 const MESSAGE_LIMIT_DEFAULT_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_MESSAGE_BYTES";
+const MESSAGE_LIMIT_NAMED_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_NAMED_MESSAGE_BYTES";
 
 fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
     use nemo_relay::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
@@ -1079,11 +1080,16 @@ async fn exercise_worker_message_limits(test_name: &str, runtime: &str) {
     let default_bytes = std::env::var(MESSAGE_LIMIT_DEFAULT_ENV)
         .ok()
         .map(|value| value.parse::<u32>().unwrap());
-    if scenario == "invalid-env" {
+    if matches!(scenario.as_str(), "invalid-env" | "invalid-named-env") {
         assert_invalid_host_message_limit_rejected();
         return;
     }
     let loaded = load_message_limit_worker(runtime, default_bytes).await;
+    if scenario.starts_with("named-") {
+        assert_named_message_boundaries(&scenario).await;
+        loaded.clear();
+        return;
+    }
     tool_request_intercepts("small-before-large", json!({"text": "ok"}))
         .await
         .expect("small control works before the boundary");
@@ -1121,7 +1127,7 @@ fn assert_invalid_host_message_limit_rejected() {
     let source = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(
         &manifest,
-        format!("{source}\nmax_message_bytes = 16777216\n"),
+        format!("{source}\n[load.max_message_bytes]\ndefault_bytes = 16777216\n"),
     )
     .unwrap();
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
@@ -1144,20 +1150,68 @@ fn assert_invalid_host_message_limit_rejected() {
 
 /// Runs the same named test under each isolated host/default configuration.
 async fn run_message_limit_cases(test_name: &str, runtime: &str) {
-    for (scenario, override_bytes, default_bytes) in [
-        ("default", None, None),
-        ("env4", Some("4194304"), None),
-        ("env16", Some("16777216"), None),
-        ("manifest16", None, Some("16777216")),
-        ("override-low", Some("4194304"), Some("16777216")),
-        ("override-high", Some("16777216"), Some("4194304")),
-        ("invalid-env", Some("0"), Some("16777216")),
+    let invoke = r#"{"Invoke":16777216}"#;
+    let pair = r#"{"Invoke":16777216,"ToolNext":16777216}"#;
+    let small_next = r#"{"ToolNext":4194304}"#;
+    for (scenario, override_bytes, default_bytes, authored_names, host_names) in [
+        ("default", None, None, None, None),
+        ("env4", Some("4194304"), None, None, None),
+        ("env16", Some("16777216"), None, None, None),
+        ("manifest16", None, Some("16777216"), None, None),
+        (
+            "override-low",
+            Some("4194304"),
+            Some("16777216"),
+            None,
+            None,
+        ),
+        (
+            "override-high",
+            Some("16777216"),
+            Some("4194304"),
+            None,
+            None,
+        ),
+        ("invalid-env", Some("0"), Some("16777216"), None, None),
+        (
+            "invalid-named-env",
+            None,
+            Some("16777216"),
+            None,
+            Some(r#"{"Invoke":0}"#),
+        ),
+        ("named-invoke", None, None, Some(invoke), None),
+        ("named-pair", None, None, Some(pair), None),
+        (
+            "named-small-next",
+            None,
+            Some("16777216"),
+            Some(small_next),
+            None,
+        ),
+        (
+            "named-host-default",
+            Some("4194304"),
+            None,
+            Some(pair),
+            None,
+        ),
+        ("named-host-map", None, None, None, Some(pair)),
+        (
+            "named-host-smaller",
+            Some("16777216"),
+            None,
+            Some(pair),
+            Some(small_next),
+        ),
     ] {
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", test_name, "--nocapture"])
             .env(MESSAGE_LIMIT_CHILD_ENV, scenario)
             .env_remove("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES")
+            .env_remove("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME")
+            .env_remove(MESSAGE_LIMIT_NAMED_ENV)
             .env_remove(MESSAGE_LIMIT_DEFAULT_ENV);
         if let Some(value) = override_bytes {
             command.env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", value);
@@ -1165,8 +1219,47 @@ async fn run_message_limit_cases(test_name: &str, runtime: &str) {
         if let Some(value) = default_bytes {
             command.env(MESSAGE_LIMIT_DEFAULT_ENV, value);
         }
+        if let Some(value) = authored_names {
+            command.env(MESSAGE_LIMIT_NAMED_ENV, value);
+        }
+        if let Some(value) = host_names {
+            command.env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME", value);
+        }
         let mut child = command.spawn().expect("message limit subprocess starts");
         wait_for_message_limit_case(&mut child, runtime, scenario).await;
+    }
+}
+
+/// Proves that a larger Invoke limit does not widen a continuation RPC.
+async fn assert_named_message_boundaries(scenario: &str) {
+    let accepts_invoke = scenario != "named-host-default";
+    let accepts_next = matches!(scenario, "named-pair" | "named-host-map");
+    let request =
+        tool_request_intercepts("named-invoke", json!({"text": "x".repeat(5 * 1024 * 1024)})).await;
+    assert_eq!(request.is_ok(), accepts_invoke, "{scenario}: Invoke");
+    assert_eq!(
+        response_message_tool_call(5, "worker").await.is_ok(),
+        accepts_invoke,
+        "{scenario}: Invoke response"
+    );
+    assert_eq!(
+        large_message_tool_call(5).await.is_ok(),
+        accepts_next,
+        "{scenario}: ToolNext request"
+    );
+    assert_eq!(
+        response_message_tool_call(5, "continuation").await.is_ok(),
+        accepts_next,
+        "{scenario}: ToolNext response"
+    );
+    assert!(
+        response_message_tool_call(17, "worker").await.is_err(),
+        "named limits stay finite"
+    );
+    for direction in ["worker", "continuation"] {
+        response_message_tool_call(0, direction)
+            .await
+            .expect("small response remains healthy");
     }
 }
 
@@ -1362,9 +1455,18 @@ async def main():
         let source = std::fs::read_to_string(&manifest_ref).unwrap();
         std::fs::write(
             &manifest_ref,
-            format!("{source}\nmax_message_bytes = {limit}\n"),
+            format!("{source}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n"),
         )
         .unwrap();
+    }
+    if let Ok(value) = std::env::var(MESSAGE_LIMIT_NAMED_ENV) {
+        let names: std::collections::BTreeMap<String, u32> = serde_json::from_str(&value).unwrap();
+        let mut source = std::fs::read_to_string(&manifest_ref).unwrap();
+        source.push_str("\n[load.max_message_bytes.by_name]\n");
+        for (name, limit) in names {
+            source.push_str(&format!("{name} = {limit}\n"));
+        }
+        std::fs::write(&manifest_ref, source).unwrap();
     }
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: plugin_id.into(),

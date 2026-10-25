@@ -625,7 +625,10 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
         host_endpoint: "http://127.0.0.1:1",
         worker_endpoint: "http://127.0.0.1:2",
         worker_endpoint_file: Some(&endpoint_file),
-        max_message_bytes: 16 * 1024 * 1024,
+        max_message_bytes: &WorkerRpcMessageLimits {
+            default_bytes: 16 * 1024 * 1024,
+            ..Default::default()
+        },
     })
     .unwrap();
     assert!(child.wait().unwrap().success());

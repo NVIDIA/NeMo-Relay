@@ -542,10 +542,9 @@ pub struct DynamicPluginWorkerLoadContract {
     pub runtime: WorkerRuntime,
     /// Worker entrypoint or registration target.
     pub entrypoint: String,
-    /// Plugin-authored default execution RPC byte limit, before the host env override.
+    /// Plugin-authored per-RPC byte limits, before host environment overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
-    pub max_message_bytes: Option<std::num::NonZeroU32>,
+    pub max_message_bytes: Option<WorkerMessageLimits>,
     /// Deadlines for short callbacks in this plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_timeouts: Option<WorkerCallbackTimeouts>,

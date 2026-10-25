@@ -129,10 +129,9 @@ pub struct DynamicPluginManifestWorkerLoad {
     /// Worker entrypoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
-    /// Default execution RPC byte limit for this plugin; the host env overrides it.
+    /// Per-RPC byte limits for this plugin; host environment settings override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
-    pub max_message_bytes: Option<NonZeroU32>,
+    pub max_message_bytes: Option<WorkerMessageLimits>,
     /// Optional deadlines for short callbacks in this plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_timeouts: Option<WorkerCallbackTimeouts>,
@@ -149,6 +148,20 @@ pub struct WorkerCallbackTimeouts {
     /// Deadline overrides for exact callback registration names.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_name: BTreeMap<String, NonZeroU64>,
+}
+
+/// Finite worker message limits, in bytes, keyed by gRPC method name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkerMessageLimits {
+    /// Fallback for this plugin. If omitted, the host uses 4 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
+    pub default_bytes: Option<NonZeroU32>,
+    /// Overrides for exact, case-sensitive gRPC method names.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_name: BTreeMap<String, NonZeroU32>,
 }
 
 /// Native shared-library authored load block.
@@ -182,7 +195,7 @@ struct RawDynamicPluginManifestLoad {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    max_message_bytes: Option<NonZeroU32>,
+    max_message_bytes: Option<WorkerMessageLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     callback_timeouts: Option<WorkerCallbackTimeouts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,7 +248,7 @@ impl Serialize for DynamicPluginManifestLoad {
             Self::Worker(load) => RawDynamicPluginManifestLoad {
                 runtime: load.runtime,
                 entrypoint: load.entrypoint.clone(),
-                max_message_bytes: load.max_message_bytes,
+                max_message_bytes: load.max_message_bytes.clone(),
                 callback_timeouts: load.callback_timeouts.clone(),
                 library: None,
                 symbol: None,
@@ -657,13 +670,27 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
-            if load
-                .max_message_bytes
-                .is_some_and(|limit| limit.get() > i32::MAX as u32)
-            {
-                return Err(PluginError::InvalidConfig(
-                    "load.max_message_bytes must be an integer in 1..=2147483647".into(),
-                ));
+            if let Some(limits) = &load.max_message_bytes {
+                if limits
+                    .default_bytes
+                    .iter()
+                    .chain(limits.by_name.values())
+                    .any(|value| value.get() > i32::MAX as u32)
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "load.max_message_bytes values must be integers in 1..=2147483647".into(),
+                    ));
+                }
+                for name in limits.by_name.keys() {
+                    if name.is_empty()
+                        || !name.starts_with(|c: char| c.is_ascii_alphabetic())
+                        || !name.chars().all(|c| c.is_ascii_alphanumeric())
+                    {
+                        return Err(PluginError::InvalidConfig(
+                            "load.max_message_bytes.by_name keys must be gRPC method names".into(),
+                        ));
+                    }
+                }
             }
             if let Some(timeouts) = &load.callback_timeouts {
                 for name in timeouts.by_name.keys() {
