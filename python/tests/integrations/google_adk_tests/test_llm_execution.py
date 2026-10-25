@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -30,6 +29,7 @@ from _helpers import (
     starts,
     status_of,
     text_response,
+    with_last_text,
 )
 from pydantic import ValidationError
 from typing_extensions import override
@@ -54,8 +54,7 @@ async def test_llm_execution_intercept_rewrites_the_request_and_the_response(
     async def rewrite(
         name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmNext
     ) -> nemo_relay.Json:
-        content = copy.deepcopy(request.content)
-        content["contents"][-1]["parts"][0]["text"] = "REWRITTEN"
+        content = with_last_text(request.content, "REWRITTEN")
         response = await next_call(nemo_relay.LLMRequest(request.headers, content))
         response["content"]["parts"][0]["text"] += " [stamped]"
         return response
@@ -142,8 +141,7 @@ async def test_llm_execution_intercept_that_retries_calls_the_model_again(
         name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmNext
     ) -> nemo_relay.Json:
         await next_call(request)
-        content = copy.deepcopy(request.content)
-        content["contents"][-1]["parts"][0]["text"] = "second try"
+        content = with_last_text(request.content, "second try")
         return await next_call(nemo_relay.LLMRequest(request.headers, content))
 
     with llm_execution_intercept(retry):
@@ -262,8 +260,7 @@ async def test_a_hedge_makes_its_calls_at_the_same_time(subscribed_events: list[
     async def hedge(
         name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmNext
     ) -> nemo_relay.Json:
-        alternative = copy.deepcopy(request.content)
-        alternative["contents"][-1]["parts"][0]["text"] = "hedged"
+        alternative = with_last_text(request.content, "hedged")
         _primary, secondary = await asyncio.gather(
             next_call(request), next_call(nemo_relay.LLMRequest(request.headers, alternative))
         )

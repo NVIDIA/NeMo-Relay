@@ -23,9 +23,20 @@ pub const DEFAULT_WORKER_MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 /// # Errors
 /// Returns an error for a non-Unicode, empty, non-decimal, zero, or oversized value.
 pub fn worker_max_message_bytes_from_env() -> Result<usize, String> {
+    worker_max_message_bytes_from_env_with_default(DEFAULT_WORKER_MAX_MESSAGE_BYTES)
+}
+
+/// Reads the host override, falling back to a plugin's execution-message default.
+///
+/// The host resolves this once per activation and passes the effective value to
+/// its worker. SDKs use [`worker_max_message_bytes_from_env`] to read that value.
+///
+/// # Errors
+/// Returns an error for an invalid override or an out-of-range fallback.
+pub fn worker_max_message_bytes_from_env_with_default(default: usize) -> Result<usize, String> {
     match std::env::var(WORKER_MAX_MESSAGE_BYTES_ENV) {
         Ok(value) => parse_worker_max_message_bytes(&value),
-        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_WORKER_MAX_MESSAGE_BYTES),
+        Err(std::env::VarError::NotPresent) => parse_worker_max_message_bytes(&default.to_string()),
         Err(std::env::VarError::NotUnicode(_)) => Err(worker_message_limit_error()),
     }
 }

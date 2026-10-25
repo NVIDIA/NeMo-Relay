@@ -46,6 +46,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const MESSAGE_LIMIT_CHILD_ENV: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
+const MESSAGE_LIMIT_DEFAULT_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_MESSAGE_BYTES";
 
 fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
     use nemo_relay::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
@@ -1040,63 +1042,193 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     loaded.clear();
 }
 
+/// Proves default rejection, per-plugin defaults, and host overrides through real RPCs.
 #[tokio::test]
-/// Proves default rejection and opt-in round trips using isolated host environments.
 async fn worker_large_messages_use_the_host_limit_in_both_directions() {
-    // Use a subprocess rather than mutating the process environment while other
-    // async worker tests may be running. The host sanitizes the worker's env.
-    const CHILD: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        for limit in ["4194304", "16777216"] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "worker_large_messages_use_the_host_limit_in_both_directions",
-                    "--nocapture",
-                ])
-                .env(CHILD, "1")
-                .env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", limit)
-                .spawn()
-                .expect("message limit subprocess starts");
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            loop {
-                if let Some(status) = child.try_wait().expect("poll message limit test") {
-                    assert!(
-                        status.success(),
-                        "worker transport regression with limit {limit}"
-                    );
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    let processes = sysinfo::System::new_all();
-                    let parent = sysinfo::Pid::from_u32(child.id());
-                    for process in processes.processes().values() {
-                        if process.parent() == Some(parent) {
-                            let _ = process.kill();
-                        }
-                    }
-                    child.kill().expect("stop stuck test host");
-                    child.wait().expect("reap stuck test host");
-                    panic!("message limit test exceeded 30 seconds with limit {limit}");
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        }
+    exercise_worker_message_limits(
+        "worker_large_messages_use_the_host_limit_in_both_directions",
+        "rust",
+    )
+    .await;
+}
+
+/// Proves the same manifest/override contract reaches the maintained Python SDK.
+#[tokio::test]
+async fn python_worker_message_limits_follow_plugin_defaults() {
+    if std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT").is_none() {
+        eprintln!(
+            "skipping Python message limits; NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT is unset"
+        );
+        return;
+    }
+    exercise_worker_message_limits(
+        "python_worker_message_limits_follow_plugin_defaults",
+        "python",
+    )
+    .await;
+}
+
+/// Isolates host environment settings from concurrently running worker tests.
+async fn exercise_worker_message_limits(test_name: &str, runtime: &str) {
+    if std::env::var_os(MESSAGE_LIMIT_CHILD_ENV).is_none() {
+        run_message_limit_cases(test_name, runtime).await;
         return;
     }
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
-    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let scenario = std::env::var(MESSAGE_LIMIT_CHILD_ENV).unwrap();
+    let default_bytes = std::env::var(MESSAGE_LIMIT_DEFAULT_ENV)
+        .ok()
+        .map(|value| value.parse::<u32>().unwrap());
+    if scenario == "invalid-env" {
+        assert_invalid_host_message_limit_rejected();
+        return;
+    }
+    let loaded = load_message_limit_worker(runtime, default_bytes).await;
     tool_request_intercepts("small-before-large", json!({"text": "ok"}))
         .await
-        .expect("small control request must work before exercising the boundary");
-    // Tool execution traverses host Invoke -> worker ToolNext -> host response
-    // -> worker outcome. Each leg carries the complete 5 MiB value.
-    let result = tokio::time::timeout(
+        .expect("small control works before the boundary");
+    assert_large_message_boundary(!matches!(
+        scenario.as_str(),
+        "default" | "env4" | "override-low"
+    ))
+    .await;
+    tool_request_intercepts("small-after-large", json!({"text": "ok"}))
+        .await
+        .expect("rejection must not poison subsequent small requests");
+    loaded.clear();
+    if scenario == "manifest16" {
+        // No host override: a subsequent activation must not inherit the previous
+        // plugin's larger default, in either the host or child SDK environment.
+        let other = load_message_limit_worker(runtime, Some(4 * 1024 * 1024)).await;
+        assert_large_message_boundary(false).await;
+        tool_request_intercepts("small-other-worker", json!({"text": "ok"}))
+            .await
+            .expect("different worker remains healthy with its own smaller default");
+        other.clear();
+    }
+}
+
+/// Rejects an invalid override before launching a worker, despite a valid plugin default.
+fn assert_invalid_host_message_limit_rejected() {
+    // Invalid host settings must fail before any process is started. Keep
+    // this case independent of Rust fixtures in the Python-only E2E lane.
+    let (_dir, manifest) = write_worker_manifest(
+        "fixture_worker",
+        &supported_relay_requirement(),
+        "command",
+        "must-not-launch",
+    );
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{source}\nmax_message_bytes = 16777216\n"),
+    )
+    .unwrap();
+    let error = match load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("invalid override must fail activation");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"),
+        "{error}"
+    );
+}
+
+/// Runs the same named test under each isolated host/default configuration.
+async fn run_message_limit_cases(test_name: &str, runtime: &str) {
+    for (scenario, override_bytes, default_bytes) in [
+        ("default", None, None),
+        ("env4", Some("4194304"), None),
+        ("env16", Some("16777216"), None),
+        ("manifest16", None, Some("16777216")),
+        ("override-low", Some("4194304"), Some("16777216")),
+        ("override-high", Some("16777216"), Some("4194304")),
+        ("invalid-env", Some("0"), Some("16777216")),
+    ] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test_name, "--nocapture"])
+            .env(MESSAGE_LIMIT_CHILD_ENV, scenario)
+            .env_remove("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES")
+            .env_remove(MESSAGE_LIMIT_DEFAULT_ENV);
+        if let Some(value) = override_bytes {
+            command.env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", value);
+        }
+        if let Some(value) = default_bytes {
+            command.env(MESSAGE_LIMIT_DEFAULT_ENV, value);
+        }
+        let mut child = command.spawn().expect("message limit subprocess starts");
+        wait_for_message_limit_case(&mut child, runtime, scenario).await;
+    }
+}
+
+/// Bounds each isolated case and cleans up its worker processes if it hangs.
+async fn wait_for_message_limit_case(
+    child: &mut std::process::Child,
+    runtime: &str,
+    scenario: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll message limit test") {
+            assert!(
+                status.success(),
+                "{runtime} message limit scenario {scenario}"
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let processes = sysinfo::System::new_all();
+            let parent = sysinfo::Pid::from_u32(child.id());
+            for process in processes.processes().values() {
+                if process.parent() == Some(parent) {
+                    let _ = process.kill();
+                }
+            }
+            child.kill().expect("stop stuck test host");
+            child.wait().expect("reap stuck test host");
+            panic!("{runtime} message limit scenario {scenario} exceeded 30 seconds");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Checks full-value acceptance or rejection, and keeps raised limits finite.
+async fn assert_large_message_boundary(accepts_large: bool) {
+    let result = large_message_tool_call(5).await;
+    if !accepts_large {
+        let error = result.expect_err("4 MiB remains bounded").to_string();
+        assert!(error.contains("worker invoke failed"), "{error}");
+    } else {
+        let result = result.expect("16 MiB accepts the complete 5 MiB value");
+        assert_eq!(
+            result.result["text"].as_str().unwrap().len(),
+            5 * 1024 * 1024
+        );
+        assert_eq!(result.result["worker_plugin_tool_execution"], true);
+        assert!(
+            large_message_tool_call(17).await.is_err(),
+            "opt-in cap remains finite"
+        );
+    }
+}
+
+/// Traverses Invoke, ToolNext, and the worker response with an unchanged synthetic value.
+async fn large_message_tool_call(mib: usize) -> FlowResult<ToolExecutionResult> {
+    tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tool_call_execute(
             ToolCallExecuteParams::builder()
                 .name("large-message")
-                .args(json!({"text": "x".repeat(5 * 1024 * 1024)}))
+                .args(json!({"text": "x".repeat(mib * 1024 * 1024)}))
                 .func(Arc::new(|args| {
                     Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
                 }))
@@ -1104,27 +1236,82 @@ async fn worker_large_messages_use_the_host_limit_in_both_directions() {
         ),
     )
     .await
-    .expect("large message call must finish");
-    if std::env::var("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES").unwrap() == "4194304" {
-        let error = result
-            .expect_err("the default must remain bounded")
-            .to_string();
-        // Tonic can reset the HTTP/2 stream on a local encoding-limit failure;
-        // unlike Python gRPC it need not expose RESOURCE_EXHAUSTED here.
-        assert!(error.contains("worker invoke failed"), "{error}");
+    .expect("large message call must finish")
+}
+
+/// Starts a real Rust/Python worker with an authored per-plugin transport default.
+async fn load_message_limit_worker(runtime: &str, default_bytes: Option<u32>) -> LoadedWorker {
+    let (manifest_dir, manifest_ref, plugin_id, environment_ref) = if runtime == "rust" {
+        let fixture = build_fixture_worker();
+        let (dir, manifest) = write_manifest(fixture.binary_path());
+        (dir, manifest, "fixture_worker", None)
     } else {
-        let result = result.expect("configured 16 MiB transport accepts 5 MiB without truncation");
-        assert_eq!(
-            result.result["text"].as_str().unwrap().len(),
-            5 * 1024 * 1024
+        let (dir, manifest) = write_worker_manifest(
+            "examples.python_grpc_worker",
+            &supported_relay_requirement(),
+            "python",
+            "message_limit_worker:main",
         );
-        assert_eq!(result.result["worker_plugin_tool_execution"], true);
+        std::fs::write(
+            dir.path().join("message_limit_worker.py"),
+            r#"
+from nemo_relay_plugin import WorkerPlugin, ToolExecutionInterceptOutcome, serve_plugin
+
+class Echo(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def register(self, ctx, config):
+        ctx.register_tool_request_intercept("echo-request", lambda name, args: args)
+
+        async def execute(context, next_call):
+            result = await next_call.call(context.args)
+            value = dict(result.result)
+            value["worker_plugin_tool_execution"] = True
+            return ToolExecutionInterceptOutcome(result=value)
+
+        ctx.register_tool_execution_intercept("echo-execution", execute)
+
+async def main():
+    await serve_plugin(Echo())
+"#,
+        )
+        .unwrap();
+        let environment = std::env::var("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT").unwrap();
+        (
+            dir,
+            manifest,
+            "examples.python_grpc_worker",
+            Some(environment),
+        )
+    };
+    if let Some(limit) = default_bytes {
+        let source = std::fs::read_to_string(&manifest_ref).unwrap();
+        std::fs::write(
+            &manifest_ref,
+            format!("{source}\nmax_message_bytes = {limit}\n"),
+        )
+        .unwrap();
     }
-    // A rejected oversized request must not poison the worker or continuation lane.
-    tool_request_intercepts("small-after-large", json!({"text": "ok"}))
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: plugin_id.into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref,
+        config: Map::new(),
+    }])
+    .expect("message-limit worker starts");
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: plugin_id.into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    test_initialize_plugin_host_exact(config)
         .await
-        .expect("subsequent small request must still work");
-    loaded.clear();
+        .expect("message-limit worker initializes");
+    LoadedWorker {
+        activation: Some(activation),
+        _manifest_dir: manifest_dir,
+    }
 }
 
 #[tokio::test]

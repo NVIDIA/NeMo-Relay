@@ -226,7 +226,7 @@ class TestCodecDecodeEncode:
 
         # Encode back
         encoded = codec.encode(annotated, request)
-        encoded_content = cast(JsonObject, encoded.content)
+        encoded_content = encoded.content
         assert encoded.headers == {"Authorization": "Bearer xyz"}
         assert cast(list[JsonObject], encoded_content["messages"]) == [
             {"role": "user", "content": "hi"},

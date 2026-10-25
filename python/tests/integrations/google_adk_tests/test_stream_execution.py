@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -30,6 +29,7 @@ from _helpers import (
     stream_intercept,
     text_response,
     uppercase_chunk,
+    with_last_text,
 )
 from pydantic import ValidationError
 from typing_extensions import override
@@ -195,8 +195,7 @@ async def test_stream_execution_intercept_that_retries_gets_a_second_stream(
         async def gen() -> AsyncIterator[nemo_relay.Json]:
             async for _ in await next_call(request):
                 pass
-            content = copy.deepcopy(request.content)
-            content["contents"][-1]["parts"][0]["text"] = "second try"
+            content = with_last_text(request.content, "second try")
             async for chunk in await next_call(nemo_relay.LLMRequest(request.headers, content)):
                 yield chunk
 

@@ -201,6 +201,18 @@ validation to fail, the runtime report identifies the dynamic component, and tea
 removes its registrations before the library unloads or worker exits. The operator-side
 trust policy and file layout are documented in [Manage](/configure-plugins/discoverable-plugins).
 
+## Worker Message Limits
+
+Worker authors can declare `load.max_message_bytes` in `relay-plugin.toml` to
+choose a finite execution RPC default for their plugin. For example,
+`max_message_bytes = 16777216` permits complete messages up to 16 MiB. The host's
+`NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` environment setting overrides this value;
+if neither is set, the default is 4 MiB. Relay forwards the effective per-plugin
+value to the maintained SDK, so both ends agree before any callback runs.
+Native in-process plugins do not use this setting. See the
+[execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
+for validation, compatibility, and memory considerations.
+
 ## Callback Deadlines
 
 A deadline limits how long Relay waits for a callback to finish. Set deadlines

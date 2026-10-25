@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
@@ -40,7 +40,7 @@ class _ToolNodeResultCodec(Codec[object]):
 
 _DEFAULT_HANDLE_TOOL_ERRORS = object()
 _TOOL_CALL_ERROR_TEMPLATE = "Error: {error}\n Please fix your mistakes."
-_GRAPH_BUBBLE_RESULT = {"__nemo_relay_langgraph_graph_bubble_up__": True}
+_GRAPH_BUBBLE_RESULT: Final[nemo_relay.JsonObject] = {"__nemo_relay_langgraph_graph_bubble_up__": True}
 
 
 def _handle_tool_error(error: Exception, policy: object) -> str:
@@ -93,10 +93,12 @@ def wrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec(tool_call_id))
+    result_codec = cast(Codec[ToolMessage | Command[Any] | nemo_relay.JsonObject], _ToolNodeResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
-    def _call(args: dict[str, Any]) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+    def _call(
+        args: dict[str, Any],
+    ) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | nemo_relay.JsonObject]:
         nonlocal graph_bubble
         try:
             result = execute(request.override(tool_call={**request.tool_call, "args": args}))
@@ -138,12 +140,12 @@ async def awrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec(tool_call_id))
+    result_codec = cast(Codec[ToolMessage | Command[Any] | nemo_relay.JsonObject], _ToolNodeResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
     async def _call(
         args: dict[str, Any],
-    ) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+    ) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | nemo_relay.JsonObject]:
         nonlocal graph_bubble
         try:
             result = await execute(request.override(tool_call={**request.tool_call, "args": args}))

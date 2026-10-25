@@ -1047,7 +1047,7 @@ async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() ->
     class CallablePluginId(WorkerPlugin):
         allows_multiple_components = True
 
-        def plugin_id(self) -> str:
+        def plugin_id(self) -> str:  # ty: ignore[invalid-attribute-override]
             return "tests.callable_id"
 
         def register(self, ctx: PluginContext, config: Json) -> None:

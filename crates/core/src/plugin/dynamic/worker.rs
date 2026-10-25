@@ -50,8 +50,9 @@ use nemo_relay_worker_proto::v1::{
     ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_MAX_MESSAGE_BYTES_ENV, WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value,
-    json_envelope, json_value, worker_max_message_bytes_from_env,
+    DEFAULT_WORKER_MAX_MESSAGE_BYTES, WORKER_MAX_MESSAGE_BYTES_ENV, WORKER_PROTOCOL_GRPC_V1,
+    decode_json_envelope, decode_json_value, json_envelope, json_value,
+    worker_max_message_bytes_from_env_with_default,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -577,7 +578,7 @@ fn load_one_worker_plugin(
             );
         })?,
     };
-    let (relay_compat, runtime, entrypoint, callback_timeouts) = (|| {
+    let (relay_compat, runtime, entrypoint, callback_timeouts, default_message_bytes) = (|| {
         if manifest.plugin.id.trim() != spec.plugin_id {
             return Err(PluginError::InvalidConfig(format!(
                 "dynamic plugin manifest id '{}' does not match expected id '{}'",
@@ -609,7 +610,18 @@ fn load_one_worker_plugin(
             .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?
             .to_string();
         let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
-        Ok((relay_compat, runtime, entrypoint, callback_timeouts))
+        let default_message_bytes = load
+            .max_message_bytes
+            .map_or(DEFAULT_WORKER_MAX_MESSAGE_BYTES, |limit| {
+                limit.get() as usize
+            });
+        Ok((
+            relay_compat,
+            runtime,
+            entrypoint,
+            callback_timeouts,
+            default_message_bytes,
+        ))
     })()
     .inspect_err(|_| {
         observer.failure(
@@ -619,8 +631,8 @@ fn load_one_worker_plugin(
         );
     })?;
 
-    let max_message_bytes =
-        worker_max_message_bytes_from_env().map_err(PluginError::InvalidConfig)?;
+    let max_message_bytes = worker_max_message_bytes_from_env_with_default(default_message_bytes)
+        .map_err(PluginError::InvalidConfig)?;
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));

@@ -83,8 +83,9 @@ import atexit
 import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import AsyncIterator, Awaitable, Callable, Iterator, Literal, Optional, TypeAlias, TypedDict
+from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
 # Native LLM request and normalized codec view types.
@@ -684,7 +685,7 @@ def fork_asyncio_context() -> contextvars.Context:
 
 
 @contextmanager
-def use_scope_stack(stack: ScopeStack) -> Iterator[ScopeStack]:
+def use_scope_stack(stack: ScopeStack) -> Generator[ScopeStack]:
     """Temporarily install ``stack`` in the current Python context.
 
     Args:

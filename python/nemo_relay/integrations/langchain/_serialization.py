@@ -29,7 +29,12 @@ from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, LLMRequest
 from nemo_relay.codecs import LlmCodec
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from langchain.agents.middleware import ModelRequest
+    from typing_extensions import TypeIs
+
+    from nemo_relay import Json, JsonObject
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
 _LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
@@ -248,7 +253,9 @@ class LangChainCodec(LlmCodec):
         if not isinstance(raw_messages, list):
             return []
 
-        return [(cls._langchain_message_to_annotated(message), message) for message in messages_from_dict(raw_messages)]
+        return [
+            (cls._langchain_message_to_annotated(message), message) for message in _langchain_messages(raw_messages)
+        ]
 
     @staticmethod
     def _message_content_matches(message: dict[str, Any], original_message: dict[str, Any]) -> bool:
@@ -305,7 +312,7 @@ class LangChainCodec(LlmCodec):
             return []
 
         provider_tool_calls: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-        for message in messages_from_dict(raw_messages):
+        for message in _langchain_messages(raw_messages):
             raw_tool_calls = None
             if isinstance(message, AIMessage):
                 candidate = message.additional_kwargs.get("tool_calls")
@@ -346,11 +353,13 @@ class LangChainCodec(LlmCodec):
         raw_messages = payload.get("messages", [])
         messages: list[dict[str, Any]] = []
         if isinstance(raw_messages, list):
-            for message in messages_from_dict(raw_messages):
+            for message in _langchain_messages(raw_messages):
                 messages.append(self._langchain_message_to_annotated(message))
 
         model = payload.get("model")
         tools = payload.get("tools")
+        if isinstance(tools, list) and not _are_objects(tools):
+            raise ValueError("LangChain request tools must be objects")
         tool_choice = payload.get("tool_choice")
         extra = {key: value for key, value in payload.items() if key not in _LANGCHAIN_MODELED_REQUEST_KEYS}
 
@@ -382,11 +391,11 @@ class LangChainCodec(LlmCodec):
             encoded_messages.append(
                 self._annotated_message_to_langchain(message, provider_tool_calls, original_message)
             )
-        payload["messages"] = messages_to_dict(encoded_messages)
+        payload["messages"] = [*messages_to_dict(encoded_messages)]
         if annotated.model is not None:
             payload["model"] = annotated.model
         if annotated.tools is not None:
-            payload["tools"] = annotated.tools
+            payload["tools"] = [*annotated.tools]
         if annotated.tool_choice is not None:
             payload["tool_choice"] = annotated.tool_choice
         return LLMRequest(dict(original.headers), payload)
@@ -411,6 +420,18 @@ def _native_tool_schema(definition: dict[str, Any]) -> dict[str, Any]:
         "kind": "tool",
         "value": copy.deepcopy(definition),
     }
+
+
+def _are_objects(values: Sequence[Json]) -> TypeIs[Sequence[JsonObject]]:
+    """Return whether every entry in `values` is a JSON object."""
+    return all(isinstance(value, dict) for value in values)
+
+
+def _langchain_messages(raw_messages: Sequence[Json]) -> list[BaseMessage]:
+    """Return LangChain messages from their dict form. Raise `TypeError` when an entry is not an object."""
+    if not _are_objects(raw_messages):
+        raise TypeError("LangChain messages must be objects")
+    return messages_from_dict(raw_messages)
 
 
 def _model_tool_schemas(tools: list[BaseTool | dict[str, Any]]) -> list[dict[str, Any]]:
@@ -455,7 +476,7 @@ def _model_tool_schemas(tools: list[BaseTool | dict[str, Any]]) -> list[dict[str
 
 def _restore_model_tools(
     original_tools: list[BaseTool | dict[str, Any]],
-    edited_schemas: list[dict[str, Any]],
+    edited_schemas: Sequence[dict[str, Any]],
 ) -> list[BaseTool | dict[str, Any]]:
     original_schemas = _model_tool_schemas(original_tools)
     if len(edited_schemas) != len(original_tools):
@@ -611,7 +632,7 @@ def payload_to_model_request(
     raw_messages = llm_request.content.get("messages")
     if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
-            system_message, messages = split_system_message(messages_from_dict(raw_messages))
+            system_message, messages = split_system_message(_langchain_messages(raw_messages))
             overrides["system_message"] = system_message
             overrides["messages"] = messages
         except Exception:
@@ -643,7 +664,7 @@ def payload_to_model_request(
 
     if "tools" in llm_request.content:
         tool_schemas = llm_request.content["tools"]
-        if not isinstance(tool_schemas, list) or not all(isinstance(tool_schema, dict) for tool_schema in tool_schemas):
+        if not isinstance(tool_schemas, list) or not _are_objects(tool_schemas):
             raise ValueError("LangChain model request tools must be a list of tool schema objects")
         if tool_schemas != _model_tool_schemas(original.tools):
             overrides["tools"] = _restore_model_tools(original.tools, tool_schemas)

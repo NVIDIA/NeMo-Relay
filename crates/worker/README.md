@@ -35,8 +35,10 @@ decode incomplete chunks. The wire protocol remains `grpc-v1`.
 
 ## Authoring Surface
 
-Set `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` on the Relay host to configure the
-finite send/receive limit for execution RPCs. The default is 4 MiB; for example,
+Set `load.max_message_bytes` in a worker's `relay-plugin.toml` to declare its own
+finite execution RPC default. `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` on the Relay
+host overrides plugin defaults, including when lowering the limit. Without
+either setting the default is 4 MiB; for example,
 `16777216` allows 16 MiB, including the protobuf envelope. Restart the host and
 workers after changing it and upgrade both SDK and host together. This does not
 change model context limits or automatically compact history. See

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import copy
 from uuid import uuid4
 
 import pytest
@@ -26,6 +25,7 @@ from _helpers import (
     status_of,
     tool_conditional_execution_guardrail,
     weather_call,
+    with_last_text,
 )
 
 import nemo_relay
@@ -113,8 +113,7 @@ async def test_sanitize_request_guardrail_rewrites_the_recorded_annotation(
     def redact_user_text(
         request: nemo_relay.LLMRequest, context: nemo_relay.LlmSanitizeRequestContext
     ) -> nemo_relay.LLMRequest:
-        content = copy.deepcopy(request.content)
-        content["contents"][-1]["parts"][0]["text"] = "[REDACTED]"
+        content = with_last_text(request.content, "[REDACTED]")
         return nemo_relay.LLMRequest(request.headers, content)
 
     with llm_sanitize_request_guardrail(

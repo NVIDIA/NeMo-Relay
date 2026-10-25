@@ -11,7 +11,7 @@ per component by the runtime, so end users do not provide instance ids.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, Self, TypedDict, cast
@@ -480,7 +480,7 @@ async def initialize(
 async def activate(
     config: PluginConfig | JsonObject,
     additional_plugins_toml: str | os.PathLike[str] | None = None,
-) -> AsyncIterator[PluginHostActivation]:
+) -> AsyncGenerator[PluginHostActivation]:
     """Initialize and close the plugin host around an async context.
 
     Use :func:`initialize` instead when the activation lifetime must extend
