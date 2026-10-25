@@ -12,7 +12,7 @@ import os
 import secrets
 import stat
 import sys
-from collections.abc import Generator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,7 +254,7 @@ def open_root_fd(root: Path) -> int:
 
 
 @contextmanager
-def open_relative_directory(root_fd: int, relative_path: Path) -> Generator[int]:
+def open_relative_directory(root_fd: int, relative_path: Path) -> Iterator[int]:
     """Open a directory below root_fd without resolving path components."""
     directory_fd = os.dup(root_fd)
     try:

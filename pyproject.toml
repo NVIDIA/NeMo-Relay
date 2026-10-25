@@ -186,6 +186,12 @@ invalid-argument-type = "ignore"
 not-subscriptable = "ignore"
 unsupported-operator = "ignore"
 
+[[tool.ty.overrides]]
+include = ["skills/**"]
+
+[tool.ty.overrides.rules]
+deprecated = "ignore"
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
