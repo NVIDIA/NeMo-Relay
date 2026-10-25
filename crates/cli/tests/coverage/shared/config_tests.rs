@@ -4247,6 +4247,27 @@ fn malformed_shared_config_reports_context() {
 }
 
 #[test]
+fn unknown_gateway_config_key_reports_context() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
+    let temp = tempfile::tempdir().unwrap();
+    let invalid_gateway_key = temp.path().join("invalid-gateway-key.toml");
+    std::fs::write(
+        &invalid_gateway_key,
+        "[gateway]\nmax_hook_payload_byte = 1048576\n",
+    )
+    .unwrap();
+    let args = GatewayOverrides {
+        config: Some(invalid_gateway_key),
+        ..GatewayOverrides::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid gateway configuration shape"));
+    assert!(error.contains("max_hook_payload_byte"));
+}
+
+#[test]
 fn recursive_toml_merge_replaces_scalars_and_preserves_tables() {
     let mut left: toml::Value = r#"
 [upstream]

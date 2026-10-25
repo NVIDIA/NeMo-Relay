@@ -71,6 +71,7 @@ struct FileConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
     max_passthrough_body_bytes: Option<usize>,
