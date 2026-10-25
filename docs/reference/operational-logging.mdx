@@ -192,7 +192,10 @@ teardown. Go applications that configure file sinks must call
 
 Python and Node.js can emit application records into Relay's configured
 operational sinks. Pass a level (`error`, `warn`, `info`, `debug`, or `trace`),
-a message, optional JSON-object fields, and an optional subsystem target.
+a message, optional JSON-object fields, and an optional subsystem target. Level
+names follow logging configuration: they are case-insensitive, surrounding
+whitespace is ignored, and `warning` is accepted for `warn`. Go's `Log` uses the
+same rules.
 
 The target is not a full Relay target: use a subsystem such as
 `payments.client`. Relay prefixes it with the binding namespace. Omitting it

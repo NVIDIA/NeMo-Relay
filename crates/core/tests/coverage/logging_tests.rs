@@ -1692,6 +1692,55 @@ fn structured_emit_respects_facade_filter_independently_of_backend() {
 }
 
 #[test]
+fn binding_level_names_follow_config_level_parsing() {
+    let _lock = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("binding-levels.log.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    })
+    .unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    const TARGET: &str = "nemo_relay.binding_level_names_test";
+    // Spellings the logging config accepts, as Python's logging module names levels.
+    let spellings = ["ERROR", "WARNING", "Warn", " INFO ", "Debug", "TRACE"];
+    for name in spellings {
+        let fields = serde_json::Map::from_iter([("event".into(), Value::String(name.into()))]);
+        super::emit_str(name, TARGET, "binding", fields).unwrap();
+    }
+    let error = super::emit_str("verbose", TARGET, "binding", serde_json::Map::new())
+        .unwrap_err()
+        .to_string();
+    runtime.shutdown();
+
+    let levels = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["target"] == TARGET)
+        .map(|record| record["level"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(levels, ["error", "warn", "warn", "info", "debug", "trace"]);
+    assert!(error.contains("'verbose'"), "{error}");
+}
+
+#[test]
 fn relative_sink_path_resolves_against_process_cwd() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
