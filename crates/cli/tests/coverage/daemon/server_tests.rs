@@ -5112,6 +5112,42 @@ async fn http_model_hosts_daemon_pass_through_is_credential_free_and_does_not_fo
 }
 
 #[tokio::test]
+async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error() {
+    let mut state = test_daemon_state(false, "route-token", GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().diagnostics_http = Some(
+        crate::diagnostics_http::DiagnosticsHttp::new(
+            nemo_relay::diagnostics::Diagnostics::default().reader(),
+            crate::configuration::BootstrapChallengeKey::from_bytes(b"transport-error"),
+            vec![],
+        )
+        .unwrap(),
+    );
+    let app = router_with_diagnostics(state, false);
+    for path in [
+        "/_nemo_relay/v1/diagnostics",
+        "/_nemo_relay/v1/diagnostics/components",
+        "/_nemo_relay/v1/diagnostics/events",
+        "/_nemo_relay/v1/diagnostics/memory",
+        "/_nemo_relay/v1/diagnostics/capabilities",
+        "/_nemo_relay/v1/workers/00000000-0000-4000-8000-000000000000/diagnostics",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED, "{path}");
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({"error":{"reason":"authenticated_transport_required"}}),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_mutate_state() {
     use nemo_relay::diagnostics::*;
     let context = Diagnostics::from_settings(

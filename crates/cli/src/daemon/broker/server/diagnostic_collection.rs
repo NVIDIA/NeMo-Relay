@@ -6,6 +6,9 @@ use super::super::collection::{self, Buffer, CacheKey, PollOutcome, Ticket};
 use super::*;
 use crate::diagnostics_http::{AUTH_HEADER, error};
 use http_body_util::BodyExt;
+use nemo_relay_types::diagnostics::{
+    DiagnosticHttpError, DiagnosticHttpReason as HttpReason, MAX_DIAGNOSTIC_HTTP_ERROR_BYTES,
+};
 use std::io::Write;
 use tokio::time::Instant;
 
@@ -180,7 +183,9 @@ async fn poll(
                 PollOutcome::Oversized
                 | PollOutcome::InvalidPage
                 | PollOutcome::EnvelopeTooSmall => Some(FailureClass::InvalidInput),
-                PollOutcome::Disabled | PollOutcome::Unreachable => Some(FailureClass::Unavailable),
+                PollOutcome::Disabled | PollOutcome::ShuttingDown | PollOutcome::Unreachable => {
+                    Some(FailureClass::Unavailable)
+                }
                 PollOutcome::Unauthorized => Some(FailureClass::Authentication),
                 PollOutcome::Unsupported => Some(FailureClass::Unsupported),
                 PollOutcome::Busy => None,
@@ -234,15 +239,12 @@ async fn fetch(
     if header_bytes.is_none_or(|n| n > 16 * 1024) {
         return Err(PollOutcome::Oversized);
     }
-    match response.status() {
-        StatusCode::OK => {}
-        StatusCode::NOT_FOUND | StatusCode::NOT_ACCEPTABLE => return Err(PollOutcome::Unsupported),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(PollOutcome::Unauthorized),
-        StatusCode::SERVICE_UNAVAILABLE => return Err(PollOutcome::Disabled),
-        StatusCode::TOO_MANY_REQUESTS => return Err(PollOutcome::Busy),
-        StatusCode::UNPROCESSABLE_ENTITY => return Err(PollOutcome::EnvelopeTooSmall),
-        _ => return Err(PollOutcome::Unreachable),
-    }
+    let status = response.status();
+    let max_bytes = if status == StatusCode::OK {
+        grant.max_page_bytes
+    } else {
+        MAX_DIAGNOSTIC_HTTP_ERROR_BYTES
+    };
     if response
         .headers()
         .get_all(http::header::CONTENT_ENCODING)
@@ -251,10 +253,11 @@ async fn fetch(
     {
         return Err(PollOutcome::InvalidPage);
     }
-    if response
-        .headers()
-        .get(http::header::CONTENT_TYPE)
-        .is_none_or(|v| v != "application/json")
+    if status == StatusCode::OK
+        && response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .is_none_or(|v| v != "application/json")
     {
         return Err(PollOutcome::InvalidPage);
     }
@@ -265,7 +268,7 @@ async fn fetch(
             v.to_str()
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
-                .is_none_or(|n| n > grant.max_page_bytes)
+                .is_none_or(|n| n > max_bytes)
         })
     {
         return Err(PollOutcome::Oversized);
@@ -274,7 +277,7 @@ async fn fetch(
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| PollOutcome::Unreachable)?;
         if let Ok(bytes) = frame.into_data() {
-            if bytes.len() > grant.max_page_bytes.saturating_sub(buffer.bytes.len()) {
+            if bytes.len() > max_bytes.saturating_sub(buffer.bytes.len()) {
                 return Err(PollOutcome::Oversized);
             }
             buffer
@@ -284,8 +287,37 @@ async fn fetch(
             return Err(PollOutcome::InvalidPage);
         }
     }
+    if status != StatusCode::OK {
+        return Err(poll_error(status.as_u16(), &buffer.bytes));
+    }
     collection::validate_page(&buffer.bytes, grant.source).map_err(|_| PollOutcome::InvalidPage)?;
     Ok(buffer)
+}
+
+// A known reason determines semantics. Only old endpoints with no error body use
+// status-only compatibility fallbacks; an unknown 503 must remain retryable.
+fn poll_error(status: u16, body: &[u8]) -> PollOutcome {
+    if let Some(error) = DiagnosticHttpError::from_response(status, body) {
+        return match error.error.reason {
+            HttpReason::Unsupported | HttpReason::UnsupportedSchema => PollOutcome::Unsupported,
+            HttpReason::Disabled
+            | HttpReason::QueryDisabled
+            | HttpReason::HttpReadDisabled
+            | HttpReason::CollectionDisabled => PollOutcome::Disabled,
+            HttpReason::ShuttingDown => PollOutcome::ShuttingDown,
+            HttpReason::Unauthorized | HttpReason::Forbidden => PollOutcome::Unauthorized,
+            HttpReason::Busy => PollOutcome::Busy,
+            HttpReason::SnapshotCapacity => PollOutcome::EnvelopeTooSmall,
+            _ => PollOutcome::Unreachable,
+        };
+    }
+    match (status, body.is_empty()) {
+        (404 | 406 | 501, true) => PollOutcome::Unsupported,
+        (401 | 403, _) => PollOutcome::Unauthorized,
+        (429, true) => PollOutcome::Busy,
+        (422, true) => PollOutcome::EnvelopeTooSmall,
+        _ => PollOutcome::Unreachable,
+    }
 }
 
 pub(super) async fn read(
@@ -296,51 +328,48 @@ pub(super) async fn read(
 ) -> Response<Body> {
     // Authenticate the full selected context before revealing assignment/cache metadata.
     let Some(adapter) = &state.diagnostics_http else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "http_read_disabled");
+        return error(HttpReason::HttpReadDisabled);
     };
     if let Err(e) = adapter.authorize(&headers) {
         return e.into_response();
     }
     if uri.query().is_some() {
-        return error(StatusCode::BAD_REQUEST, "invalid_query");
+        return error(HttpReason::InvalidQuery);
     }
     let Some(collector) = &state.collector else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "collection_disabled");
+        return error(HttpReason::CollectionDisabled);
     };
     if collector.is_closed() {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "shutting_down");
+        return error(HttpReason::ShuttingDown);
     }
     let Some(mut output) = collector.responses.reserve() else {
-        return error(StatusCode::TOO_MANY_REQUESTS, "busy");
+        return error(HttpReason::Busy);
     };
     {
         let sessions = lock(&state.worker_sessions);
         let Some(session) = sessions.get(&worker_id) else {
-            return error(StatusCode::NOT_FOUND, "missing");
+            return error(HttpReason::Missing);
         };
         let Some(offer) = &session.diagnostic_offer else {
-            return error(StatusCode::NOT_IMPLEMENTED, "unsupported");
+            return error(HttpReason::Unsupported);
         };
         if !offer.enabled || !offer.whole_context_read {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "disabled");
+            return error(HttpReason::Disabled);
         }
         if !offer.query_available {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "query_disabled");
+            return error(HttpReason::QueryDisabled);
         }
         if offer.schema_version != nemo_relay::diagnostics::DIAGNOSTIC_SCHEMA_VERSION {
-            return error(StatusCode::NOT_ACCEPTABLE, "unsupported_schema");
+            return error(HttpReason::UnsupportedSchema);
         }
         let Some(key) = key(session) else {
-            return error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "read_authority_unavailable",
-            );
+            return error(HttpReason::ReadAuthorityUnavailable);
         };
         if lock(&collector.cache)
             .write_page(&key, Instant::now(), &mut output)
             .is_err()
         {
-            return error(StatusCode::UNPROCESSABLE_ENTITY, "snapshot_capacity");
+            return error(HttpReason::SnapshotCapacity);
         }
     }
     // No state lock, source lease, or grant survives into the response body.

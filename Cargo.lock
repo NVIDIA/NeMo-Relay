@@ -2020,6 +2020,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
+ "nemo-relay-types",
  "opentelemetry",
  "opentelemetry_sdk",
  "percent-encoding",
