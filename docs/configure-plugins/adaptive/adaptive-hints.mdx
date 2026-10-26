@@ -257,7 +257,7 @@ The following table describes Adaptive Hints settings:
 | `priority` | `100` | Request intercept priority. Lower values run earlier. |
 | `break_chain` | `false` | Whether this intercept stops later request intercepts. |
 | `inject_header` | `true` | Whether to add adaptive hints as request header metadata. |
-| `inject_body_path` | `nvext.agent_hints` | Dot-separated JSON body path for request-body hint injection. Missing objects along the path are created; if a parent value is not an object, the body is left unchanged. |
+| `inject_body_path` | `nvext.agent_hints` | Dot-separated JSON body path for request-body hint injection. Missing objects along the path are created. The body is left unchanged if a parent value is not an object. |
 
 Disable `break_chain` unless the adaptive hint should be the final request
 transform. Adjust `priority` only when adaptive hints need to run before or
