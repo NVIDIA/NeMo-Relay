@@ -1,0 +1,314 @@
+---
+title: "Deploy Relay to Govern Coding Agents Across an Organization"
+sidebar-title: "Govern Coding Agents"
+description: "Operate supported coding harnesses through managed Relay workers and verify enterprise audit, privacy, and cost coverage."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use a Relay daemon when developers should keep their coding harnesses while
+your platform team owns their connection to providers and telemetry policy.
+The daemon gives supported harnesses a managed entry point and starts a Relay
+worker for each user-machine identity. The worker applies the approved plugins
+to activity it observes; the developer continues in Claude Code, Codex, or pi.
+A successful rollout produces an attributable, privacy-checked audit record for
+representative model and tool activity from each supported path.
+
+## Example: two users with a shared deployment
+
+The companion uses one Linux host with two independent operating-system
+accounts. **Alice runs Claude Code; Bob runs Codex CLI.** An administrator
+installs the Relay CLI as a system daemon, provisions the managed harness
+bundle, and owns the worker plugin configuration. Each user has a separate
+home, Relay routing token, provider authentication, task repository, and worker.
+
+| Example participant | What runs there | Responsibility |
+| --- | --- | --- |
+| Administrator | Relay system service and immutable harness bundle | Distribute approved settings and plugin policy. |
+| Alice | Claude Code, MCP lifecycle client, and Alice's worker | Complete a coding task using her provider credentials. |
+| Bob | Codex CLI, MCP lifecycle client, and Bob's worker | Complete an independent task while Alice's session is active. |
+| Tracing backend | Phoenix, or your chosen OTLP destination | Inspect supported model/tool activity and redacted synthetic data. |
+
+<Card title="Run the two-user example on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-coding-agents/docs/user-guides/_examples/coding-agents">
+Inspect the provisioning script, system service, shared policy, and session
+launcher. Use a fresh systemd VM and supply each user's provider authentication.
+</Card>
+
+<Note title="Example scope and alternatives">
+This demonstrates a shared-host deployment with real separate Linux users.
+Other supported coding harnesses and separate workstation deployments are
+possible. Brev only supplies the host; use the same artifacts on a comparable
+enterprise Linux host. Hermes uses a native in-process Relay integration and
+is a different setup from these managed daemon clients.
+</Note>
+
+## Prerequisites
+
+- A **fresh Ubuntu systemd VM** with sudo, Git, curl, and Python 3.11+. The
+  provisioning script refuses to replace existing accounts or Relay files.
+- [Relay CLI 0.11.0-rc.1](/getting-started/installation),
+  [Claude Code >=2.1.121](https://code.claude.com/docs/en/setup), and
+  [Codex CLI >=0.143.0](https://developers.openai.com/codex/cli). Install harnesses
+  where the new users' login shells can find them.
+- Separate Anthropic and OpenAI **API access** for Alice and Bob. A harness
+  subscription alone does not establish API access through the configured route.
+- Phoenix on loopback port 6006, or an approved OTLP destination. A disposable
+  Phoenix can run in a separate terminal with `uvx --from arize-phoenix phoenix serve`.
+
+```text
+Claude / Codex ─ model URL + token ─→ daemon :47632 ─→ user's worker ─→ provider
+              └ hook forwarder ────→ daemon ─────────→ user's worker
+MCP lifecycle client ← control connection → daemon (coordinates worker lifetime)
+User's worker reads administrator-owned /etc/nemo-relay/plugins.toml
+```
+
+The **daemon** is the shared broker. A **worker** is a Relay process running as
+the developer, so their requests and plugins run with that user's permissions.
+Managed settings select the daemon model URL and `x-nemo-relay-client-token`
+header. Hook commands send supported tool/session events directly to the daemon;
+the MCP connection coordinates worker startup and lifetime.
+
+<Note title="Pinned release candidate">
+The available 0.11 package is **0.11.0-rc.1**, a prerelease. The stable
+`0.11.0` download does not exist yet. Install the explicit tag for this preview:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0-rc.1 sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Use your organization's approved release before a production rollout.
+</Note>
+
+## Run the optional two-user example
+
+On Brev, use `brev shell YOUR_INSTANCE` and confirm PID 1 is systemd.
+If that connection opens a container, use `--host` only when its host route is reachable.
+The same files run on an ordinary enterprise Linux VM. As administrator:
+
+```bash
+git clone --branch codex/user-guide-coding-agents --single-branch https://github.com/exactlyallan/NeMo-Relay-ae.git relay-coding-agents
+cd relay-coding-agents/docs/user-guides/_examples/coding-agents
+sudo bash deploy.sh "$(command -v nemo-relay)" "$(command -v python3.12)"
+```
+
+The example command selects Python 3.12 explicitly because Ubuntu images can
+still default to Python 3.10, including under sudo. Install Python 3.12 through
+your approved method; with uv, use `uv python install 3.12` and pass the absolute
+path printed by `uv python find 3.12` as the second deployment argument.
+
+The branch URL is the review copy until this guide lands upstream. Follow the
+[companion's Codex plugin setup](https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-coding-agents/docs/user-guides/_examples/coding-agents#prepare-bobs-managed-codex-integration)
+before starting Bob. In two independent terminals:
+
+<Tabs>
+<Tab title="Alice: Claude Code">
+```bash
+sudo -iu alice
+IFS= read -r -s -p 'Anthropic API key: ' ANTHROPIC_API_KEY; printf '\n'
+export ANTHROPIC_API_KEY
+/opt/nvidia/share/relay-user-guide/session.sh
+```
+</Tab>
+<Tab title="Bob: Codex">
+```bash
+sudo -iu bob
+codex plugin marketplace add /opt/nvidia/share/nemo-relay-codex-marketplace-v1
+codex plugin add nemo-relay-managed-v1@nemo-relay-managed
+IFS= read -r -s -p 'OpenAI API key: ' OPENAI_API_KEY; printf '\n'
+export OPENAI_API_KEY
+printenv OPENAI_API_KEY | codex login --with-api-key
+/opt/nvidia/share/relay-user-guide/session.sh
+```
+</Tab>
+</Tabs>
+
+Use your secret manager for managed deployments. The Bash examples hide key
+input and keep key values out of shell history. Review Codex's plugin hook trust
+request for the generated `/opt/nvidia/bin/nemo-relay` handlers; prompt wording
+varies by version. Check `/plugins` and the generated bundle if the handler differs.
+Do not disable trust checks.
+
+Ask each agent to read `/opt/nvidia/share/relay-user-guide/task.txt` and complete
+it in its current repository. Keep both sessions open for verification. On your
+local computer, forward Phoenix with
+`brev port-forward YOUR_INSTANCE --port 6006:6006` if using Brev.
+Add `--host` only when Phoenix is running through that same reachable host route.
+
+## Decide what the deployment must cover
+
+The harness's provider request must pass through its Relay worker for model
+telemetry or policy. Supported lifecycle hooks can add tool and session events,
+but their coverage differs by harness. Inventory the harness and version, the
+provider route it uses, the hooks you need, and the workstation operating system
+before claiming organization-wide coverage. The
+[coding-agent support matrix](/reference/support-matrix) gives the current
+limits for Claude Code, Codex, and pi.
+
+| Deployment | Where the daemon runs | Where the managed worker runs | Choose it when |
+| --- | --- | --- | --- |
+| Local | On each workstation | On that workstation under the user's identity | Local lifecycle and provider routing are acceptable. |
+| Remote | On a trusted Linux server | On each client workstation under the user's identity | You need a centrally operated entry point and can provide a trusted server connection plus a return route to the client worker. |
+
+In either topology, a worker uses administrator-owned system configuration and
+managed harness settings. Users keep their normal provider login; a Relay routing
+token identifies the user-machine session and must be unique to that
+identity. The daemon does not turn an unsupported provider or hook path into a
+captured one. See [daemon architecture](/daemon/architecture) for the trust and
+network boundaries.
+
+<Warning>
+A provider response can succeed through pass-through while the managed worker
+is absent. Decide whether pass-through is allowed for the cohort before rollout.
+For a required audit boundary, accept a session only after the worker and its
+plugin output are both visible.
+</Warning>
+
+## Apply one managed worker policy
+
+Place the approved `plugins.toml` in the client's system configuration so each
+managed worker receives the same policy. The following example redacts email
+addresses and API keys from supported emitted telemetry surfaces, then sends
+OpenInference traces to a local Phoenix intake. Replace that endpoint with your
+organization-operated OTLP collector or tracing backend and choose a service name that
+identifies your deployment.
+
+<Code src="_examples/coding-agents/plugins.toml" language="toml" title="Shared worker plugins.toml" />
+
+<Warning title="Synthetic example payloads">
+This companion enables payload export to inspect redaction of a synthetic email
+address. Use only the supplied synthetic task. Select permitted fields and
+payload settings before adapting the policy to production data.
+</Warning>
+
+<Accordion title="Example system service">
+The system service runs under a dedicated account; workers run as Alice and
+Bob. `--require-worker` makes missing worker coverage visible as a failed
+request instead of silently accepting pass-through during the demonstration.
+
+<Code src="_examples/coding-agents/nemo-relay.service" language="ini" title="nemo-relay.service" />
+</Accordion>
+
+Redaction applies to emitted observability data; it does not change the real
+provider conversation. Test it with representative prompts and tool results
+before sending production telemetry. If your audit pipeline collects ATOF
+records instead of OTLP spans, configure that output under the same managed
+policy. Keep collector credentials in the worker's secret-backed environment,
+and avoid one writable log file shared by every worker.
+
+## Verify the example deployment
+
+From an administrator terminal:
+
+```bash
+curl -fsS http://127.0.0.1:47632/_nemo_relay/v1/workers/status
+ps -eo user,pid,args | grep -E '[n]emo-relay daemon (mcp|worker)'
+sudo journalctl -u nemo-relay.service -n 50 --no-pager
+```
+
+Require two distinct ready worker IDs and worker processes owned separately by
+Alice and Bob. Status fields include `worker_id`, `state`, `reference_count`,
+`control_available`, and `in_flight`; match assignments to process owners and
+lifecycle timestamps. The status endpoint has no username mapping and does not
+probe provider traffic.
+
+<Accordion title="Captured Brev worker status and ownership">
+The following excerpts were captured on the example VM with two real MCP
+clients. They verify worker startup and ownership; they are not completed
+Claude/Codex task results.
+
+```json
+{
+  "status": "ok",
+  "workers": [
+    {"worker_id": "01a16aa4-8626-78c1-a7fa-72453bee161d", "state": "ready", "reference_count": 1, "control_available": true, "in_flight": 0},
+    {"worker_id": "01a16aa4-8627-7b43-ab1c-ea1adc78a2d8", "state": "ready", "reference_count": 1, "control_available": true, "in_flight": 0}
+  ]
+}
+```
+
+```text
+alice  841482 /opt/nvidia/bin/nemo-relay daemon worker --daemon-address http://127.0.0.1:47632 --bind 127.0.0.1
+bob    841484 /opt/nvidia/bin/nemo-relay daemon worker --daemon-address http://127.0.0.1:47632 --bind 127.0.0.1
+```
+
+Worker IDs and PIDs change each time. Compare your status assignments with
+process ownership and lifecycle timestamps, rather than copying these values.
+</Accordion>
+
+In Phoenix, find service `relay-managed-coding-agents` and inspect the supported
+tool-result payload from reading `task.txt`. The synthetic
+`sample.employee@example.com` should appear as **`[REDACTED]`** in exported
+payload data. The source file and provider conversation retain the original.
+Then review the code and tests from each user.
+
+A synthetic hook sequence on the Brev example produced a `Read` span with kind
+`TOOL` and `output.value = "[REDACTED]"` in Phoenix. Its parent was
+`claude-code-turn` (`CHAIN`). This verifies hook export and redaction; a complete
+harness task must also exercise authenticated model traffic.
+
+Close Alice's harness and watch for `worker_drain_started` and `worker_stopped`.
+Allow up to **two minutes** for accepted requests to drain; abrupt control
+connection loss also has a 30-second reconnect grace. Recheck status/processes
+and confirm Bob can continue. Sessions of one user can share a worker; these
+two users must have distinct workers.
+
+## Accept a workstation cohort
+
+<Steps>
+<Step title="Provision the managed identity and harness settings">
+Distribute the administrator-owned configuration and harness artifacts. Give
+each user-machine identity its own Relay routing token, and confirm that the
+harness actually targets its daemon entry point. For a remote deployment, also
+confirm server trust and reachability back to the client worker.
+</Step>
+
+<Step title="Confirm worker-backed execution">
+Start a non-sensitive session in each supported harness. Confirm the worker is
+ready and bound to that session, then exercise one provider call and a harmless
+supported tool hook. A ready MCP connection alone is insufficient: the worker
+must receive the request, and an expected plugin result must appear.
+</Step>
+
+<Step title="Inspect the audit and privacy result">
+Find the same session in the approved collector. Check the attributed identity
+and service, agent/model/tool parentage where supported, model and token fields,
+and redacted payloads. Record unsupported paths and any requests that bypassed
+the worker before reporting fleet coverage or spend.
+</Step>
+</Steps>
+
+| If the evidence is missing | Check first |
+| --- | --- |
+| No worker or plugin result | Managed bundle, Relay routing token, worker readiness, and pass-through policy. |
+| Model spans but no tool activity | Harness hook support and whether the tested action crosses a supported hook. |
+| Trace present but cost absent | Model identity, usage fields, and the pricing catalog. |
+| Unredacted sensitive field | The emitted surface and whether the configured detector covers it. |
+
+The [managed-client configuration](/daemon/configuration) and
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation)
+provide the platform-specific provisioning and operational checks. Repeat the
+acceptance run after a policy, harness, or Relay upgrade.
+
+<Note title="Limits and enforcement">
+`--require-worker` rejects model requests without a worker. The example applies
+telemetry redaction and routing policy to supported paths; it does not configure
+SSO, enterprise offboarding, or prevent every bypass. Use organization-managed
+harness settings and network controls for that enforcement. A remote daemon
+still uses a worker on each client and needs a trusted return route to that
+worker. Full payload export here is for the synthetic task only.
+</Note>
+
+## Cleanup and next steps
+
+Close both harnesses and wait for workers to stop. Follow
+[Remove a Deployment](/daemon/operations#remove-a-deployment) and your
+[Linux runbook](/daemon/linux) to remove the example service and managed files,
+or delete the disposable VM after retaining needed results. Stop only a Phoenix
+process you started for this example.
+
+Repeat cohort verification after upgrades. For an additional tracing backend,
+use [Observability configuration](/configure-plugins/observability/configuration).
+For cost attribution, add a validated [model-pricing catalog](/configure-plugins/model-pricing)
+and check model identity and usage coverage. Missing cost remains unknown.

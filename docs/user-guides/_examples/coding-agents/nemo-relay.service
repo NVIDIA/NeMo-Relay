@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=NeMo Relay two-user guide example
+After=network.target
+
+[Service]
+Type=simple
+User=nemo-relay
+Group=nemo-relay
+WorkingDirectory=/var/lib/nemo-relay
+Environment=XDG_CONFIG_HOME=/var/lib/nemo-relay/.config
+ExecStart=/opt/nvidia/bin/nemo-relay daemon --bind 127.0.0.1 --port 47632 --require-worker
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target

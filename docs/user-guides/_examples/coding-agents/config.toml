@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+anthropic_base_url = "https://api.anthropic.com"
+
+[daemon.logging]
+level = "info"
+stderr_enabled = true
+stderr_format = "jsonl"

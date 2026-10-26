@@ -1,0 +1,12 @@
+{
+  "name": "nemo-relay-managed",
+  "interface": { "displayName": "NeMo Relay Managed" },
+  "plugins": [
+    {
+      "name": "nemo-relay-managed-v1",
+      "source": { "source": "local", "path": "./plugins/nemo-relay-managed-v1" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Coding"
+    }
+  ]
+}
