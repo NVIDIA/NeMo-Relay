@@ -2559,7 +2559,10 @@ fn platform_system_config_dir() -> PathBuf {
 /// `HOME`/`USERPROFILE`. `pub` only for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn user_config_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+    // The XDG Base Directory spec treats an empty value as unset and a relative path as invalid.
+    if let Some(base) =
+        std::env::var_os("XDG_CONFIG_HOME").filter(|base| Path::new(base).is_absolute())
+    {
         return Some(PathBuf::from(base).join("nemo-relay"));
     }
     std::env::var_os("HOME")

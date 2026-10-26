@@ -311,8 +311,11 @@ pub(super) fn default_install_dir_for(
             .unwrap_or_else(|| home.join("AppData").join("Local"))
             .join("nemo-relay")
             .join("plugins"),
+        // The XDG Base Directory spec treats an empty value as unset and a relative path as
+        // invalid. `has_root` keeps a Unix-style path valid when this runs on a Windows host.
         _ => xdg_data_home
             .map(PathBuf::from)
+            .filter(|base| base.has_root())
             .unwrap_or_else(|| home.join(".local").join("share"))
             .join("nemo-relay")
             .join("plugins"),
