@@ -864,17 +864,35 @@ pub(crate) fn merge_usage(
     match (primary, secondary) {
         (None, None) => None,
         (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
-        (Some(primary), Some(secondary)) => Some(crate::codec::response::Usage {
-            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
-            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
-            total_tokens: primary.total_tokens.or(secondary.total_tokens),
-            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
-            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
-            uncached_input_tokens: primary
-                .uncached_input_tokens
-                .or(secondary.uncached_input_tokens),
-            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
-        }),
+        (Some(primary), Some(secondary)) => {
+            let (prompt_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens) =
+                match [primary, secondary]
+                    .into_iter()
+                    .find(|usage| usage.uncached_input_tokens.is_some())
+                {
+                    Some(split) => (
+                        split.prompt_tokens,
+                        split.cache_read_tokens,
+                        split.cache_write_tokens,
+                        split.uncached_input_tokens,
+                    ),
+                    None => (
+                        primary.prompt_tokens.or(secondary.prompt_tokens),
+                        primary.cache_read_tokens.or(secondary.cache_read_tokens),
+                        primary.cache_write_tokens.or(secondary.cache_write_tokens),
+                        None,
+                    ),
+                };
+            Some(crate::codec::response::Usage {
+                prompt_tokens,
+                completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
+                total_tokens: primary.total_tokens.or(secondary.total_tokens),
+                cache_read_tokens,
+                cache_write_tokens,
+                uncached_input_tokens,
+                cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
+            })
+        }
     }
 }
 

@@ -1570,7 +1570,9 @@ impl StreamingBlock {
             self.skeleton
                 .insert("text".to_string(), Json::String(self.text));
         }
-        if self.has_partial_json {
+        // A tool called without arguments streams only an empty fragment; keep the `{}` input
+        // from content_block_start.
+        if self.has_partial_json && !self.partial_json.is_empty() {
             // Concatenated `partial_json` fragments are expected to parse as a JSON object — that's
             // the assembled tool input. If parsing fails (Anthropic emits malformed deltas, stream
             // truncated mid-block), surface the raw concatenation so observability still captures
