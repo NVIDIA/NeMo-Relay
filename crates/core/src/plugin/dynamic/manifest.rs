@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 
 use serde::de::{self, Deserializer};
@@ -129,6 +129,9 @@ pub struct DynamicPluginManifestWorkerLoad {
     /// Worker entrypoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Per-RPC byte limits for this plugin; host environment settings override them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_message_bytes: Option<WorkerMessageLimits>,
     /// Optional deadlines for short callbacks in this plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_timeouts: Option<WorkerCallbackTimeouts>,
@@ -145,6 +148,20 @@ pub struct WorkerCallbackTimeouts {
     /// Deadline overrides for exact callback registration names.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_name: BTreeMap<String, NonZeroU64>,
+}
+
+/// Finite worker message limits, in bytes, keyed by callback registration name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkerMessageLimits {
+    /// Fallback for this plugin. If omitted, the host uses 4 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
+    pub default_bytes: Option<NonZeroU32>,
+    /// Overrides for exact callback registration names, like callback timeouts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_name: BTreeMap<String, NonZeroU32>,
 }
 
 /// Native shared-library authored load block.
@@ -178,6 +195,8 @@ struct RawDynamicPluginManifestLoad {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_message_bytes: Option<WorkerMessageLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     callback_timeouts: Option<WorkerCallbackTimeouts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     library: Option<String>,
@@ -192,14 +211,17 @@ impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
         D: Deserializer<'de>,
     {
         let raw = RawDynamicPluginManifestLoad::deserialize(deserializer)?;
-        let has_worker_fields =
-            raw.runtime.is_some() || raw.entrypoint.is_some() || raw.callback_timeouts.is_some();
+        let has_worker_fields = raw.runtime.is_some()
+            || raw.entrypoint.is_some()
+            || raw.max_message_bytes.is_some()
+            || raw.callback_timeouts.is_some();
         let has_native_fields = raw.library.is_some() || raw.symbol.is_some();
 
         match (has_worker_fields, has_native_fields) {
             (true, false) => Ok(Self::Worker(DynamicPluginManifestWorkerLoad {
                 runtime: raw.runtime,
                 entrypoint: raw.entrypoint,
+                max_message_bytes: raw.max_message_bytes,
                 callback_timeouts: raw.callback_timeouts,
             })),
             (false, true) => Ok(Self::RustDynamic(DynamicPluginManifestRustDynamicLoad {
@@ -226,6 +248,7 @@ impl Serialize for DynamicPluginManifestLoad {
             Self::Worker(load) => RawDynamicPluginManifestLoad {
                 runtime: load.runtime,
                 entrypoint: load.entrypoint.clone(),
+                max_message_bytes: load.max_message_bytes.clone(),
                 callback_timeouts: load.callback_timeouts.clone(),
                 library: None,
                 symbol: None,
@@ -233,6 +256,7 @@ impl Serialize for DynamicPluginManifestLoad {
             Self::RustDynamic(load) => RawDynamicPluginManifestLoad {
                 runtime: None,
                 entrypoint: None,
+                max_message_bytes: None,
                 callback_timeouts: None,
                 library: load.library.clone(),
                 symbol: load.symbol.clone(),
@@ -646,6 +670,25 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
+            if let Some(limits) = &load.max_message_bytes {
+                if limits
+                    .default_bytes
+                    .iter()
+                    .chain(limits.by_name.values())
+                    .any(|value| value.get() > i32::MAX as u32)
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "load.max_message_bytes values must be integers in 1..=2147483647".into(),
+                    ));
+                }
+                for name in limits.by_name.keys() {
+                    if name.trim().is_empty() || name != name.trim() {
+                        return Err(PluginError::InvalidConfig(
+                            "load.max_message_bytes.by_name keys must be non-empty callback names without surrounding whitespace".into(),
+                        ));
+                    }
+                }
+            }
             if let Some(timeouts) = &load.callback_timeouts {
                 for name in timeouts.by_name.keys() {
                     if name.trim().is_empty() || name != name.trim() {
@@ -674,6 +717,7 @@ impl DynamicPluginManifestLoad {
         match self {
             Self::Worker(load) => {
                 DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                    max_message_bytes: load.max_message_bytes,
                     callback_timeouts: load.callback_timeouts,
                     runtime: load
                         .runtime

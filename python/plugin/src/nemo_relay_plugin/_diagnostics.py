@@ -47,6 +47,18 @@ _MAX_COUNT = (1 << 64) - 1
 _NOT_CONSUMED_METADATA = ("nemo-relay-diagnostic-not-consumed", "1")
 
 
+def _open_diagnostic_channel(target: str, authority: tuple[tuple[str, str], ...]) -> Any:
+    """Keep diagnostic transport budgets independent of execution callbacks."""
+    return grpc.aio.insecure_channel(
+        target,
+        options=(
+            ("grpc.max_send_message_length", _MAX_REQUEST_BYTES),
+            ("grpc.max_receive_message_length", _MAX_RESPONSE_BYTES),
+            *authority,
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _DeliveryPolicy:
     max_request_bytes: int

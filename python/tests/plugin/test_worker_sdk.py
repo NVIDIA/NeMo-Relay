@@ -3155,24 +3155,34 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
 
 
 def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    """Retain Unix authority while configuring send/receive limits for both transports."""
+    calls: list[tuple[str, tuple[tuple[str, str | int], ...]]] = []
 
     def insecure_channel(
         target: str,
         *,
-        options: tuple[tuple[str, str], ...] = (),
+        options: tuple[tuple[str, str | int], ...] = (),
     ) -> object:
+        """Capture channel options without opening a network connection."""
         calls.append((target, options))
         return object()
 
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", insecure_channel)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", "8388608")
 
     _open_host_channel("unix:///tmp/relay-host.sock")
     _open_host_channel("http://127.0.0.1:50051")
 
     assert calls == [
-        ("unix:/tmp/relay-host.sock", (("grpc.default_authority", "localhost"),)),
-        ("127.0.0.1:50051", ()),
+        (
+            "unix:/tmp/relay-host.sock",
+            (
+                ("grpc.max_receive_message_length", 8388608),
+                ("grpc.max_send_message_length", 8388608),
+                ("grpc.default_authority", "localhost"),
+            ),
+        ),
+        ("127.0.0.1:50051", (("grpc.max_receive_message_length", 8388608), ("grpc.max_send_message_length", 8388608))),
     ]
 
 
@@ -3358,29 +3368,34 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Do not publish the bound endpoint until the gRPC server accepts requests."""
     endpoint_file = tmp_path / "endpoint.txt"
     start_entered = asyncio.Event()
     allow_start = asyncio.Event()
 
     class FakeChannel:
         async def close(self) -> None:
+            """Allow startup-cancellation cleanup without opening a real channel."""
             pass
 
     class FakeServer:
         def add_insecure_port(self, target: str) -> int:
+            """Return a resolved loopback port without publishing it yet."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Pause startup so the test can inspect endpoint publication ordering."""
             start_entered.set()
             await allow_start.wait()
 
         async def stop(self, grace: int) -> None:
+            """Check the configured grace period during cancellation cleanup."""
             assert grace == 2
 
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: FakeChannel())
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: FakeChannel())
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3407,30 +3422,37 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
 
 
 async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close both channels and the server when the gRPC server cannot start."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that startup failure closed the host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Bind successfully so this test isolates the later startup failure."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Simulate a startup failure after resource allocation."""
             raise RuntimeError("start failed")
 
         async def stop(self, grace: int) -> None:
+            """Record server cleanup while checking its grace period."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3443,31 +3465,37 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     with pytest.raises(RuntimeError, match="start failed"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Release both channels and the server when endpoint binding returns no port."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that bind failure closed the allocated host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Simulate gRPC reporting that no loopback port could be bound."""
             assert target == "127.0.0.1:0"
             return 0
 
         async def stop(self, grace: int) -> None:
+            """Record cleanup even though the server never started listening."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3480,7 +3508,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     with pytest.raises(WorkerSdkError, match="failed to bind worker endpoint"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(

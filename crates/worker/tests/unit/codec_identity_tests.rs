@@ -42,12 +42,15 @@ fn unknown_builtin_codec_identity_decodes_as_opaque() {
 }
 
 #[tokio::test]
+/// Allows retrying callback registration after a failed host connection.
 async fn conditional_callback_name_is_released_when_host_connection_fails() {
     let runtime = PluginRuntime {
         activation_id: "activation".into(),
         auth_token: "token".into(),
         host_endpoint: "unsupported://host".into(),
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
         diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };

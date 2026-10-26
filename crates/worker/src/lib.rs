@@ -80,8 +80,9 @@ use nemo_relay_worker_proto::v1::{
     WorkerError,
 };
 use nemo_relay_worker_proto::{
-    DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1, decode_json_envelope,
-    decode_json_value, json_envelope, json_value,
+    CallbackMessageLimitService, DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1,
+    WorkerCallbackMessageLimits, decode_json_envelope, decode_json_value, json_envelope,
+    json_value,
 };
 use serde_json::Map;
 use tokio::net::TcpListener;
@@ -149,10 +150,12 @@ const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
+    static TASK_CALLBACK_NAME: Option<String>;
 }
 
 thread_local! {
     static THREAD_SCOPE_CONTEXT: RefCell<Option<ScopeContext>> = const { RefCell::new(None) };
+    static THREAD_CALLBACK_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Error returned by worker SDK callbacks and runtime helpers.
@@ -966,6 +969,8 @@ pub struct PluginRuntime {
     auth_token: String,
     host_endpoint: String,
     host_channel: Arc<OnceCell<Channel>>,
+    max_message_bytes: WorkerCallbackMessageLimits,
+    callback_name: Option<String>,
     conditional_middleware_callbacks: Arc<Mutex<HashMap<String, ConditionalMiddlewareFn>>>,
 }
 
@@ -1706,12 +1711,33 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
-    async fn host_client(&self) -> Result<RelayHostRuntimeClient<Channel>> {
+    /// Reuses the host connection while applying this activation's execution caps.
+    async fn host_client(
+        &self,
+    ) -> Result<
+        RelayHostRuntimeClient<
+            tonic::service::interceptor::InterceptedService<
+                Channel,
+                nemo_relay_worker_proto::WorkerCallbackMetadata,
+            >,
+        >,
+    > {
+        let callback = self.callback_name.clone().or_else(current_callback_name);
+        let limit = self
+            .max_message_bytes
+            .for_callback(callback.as_deref().unwrap_or_default());
         self.host_channel
             .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
             .await
             .cloned()
-            .map(RelayHostRuntimeClient::new)
+            .map(|channel| {
+                RelayHostRuntimeClient::with_interceptor(
+                    channel,
+                    nemo_relay_worker_proto::WorkerCallbackMetadata(callback),
+                )
+                .max_decoding_message_size(limit)
+                .max_encoding_message_size(limit)
+            })
     }
 
     fn current_scope_context(&self) -> Option<ScopeContext> {
@@ -1850,8 +1876,8 @@ impl LlmStreamNext {
 /// Serves a worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
     serve_plugin_arc(Arc::new(plugin)).await
 }
@@ -1859,8 +1885,8 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 /// Serves a shared worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
     let config = WorkerServerConfig {
         worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
@@ -1882,8 +1908,8 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
 /// workers should normally use [`serve_plugin`] or [`serve_plugin_arc`].
 ///
 /// # Errors
-/// Returns an error when the endpoint configuration is invalid or the gRPC
-/// server fails.
+/// Returns an error when the endpoint configuration or
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
@@ -1891,17 +1917,23 @@ pub async fn serve_plugin_arc_with_config(
     serve_plugin_arc_with_endpoint_file(plugin, config, None).await
 }
 
+/// Validates the transport limit before constructing and serving the worker runtime.
 async fn serve_plugin_arc_with_endpoint_file(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
+    let max_message_bytes = WorkerCallbackMessageLimits::default()
+        .from_env_with_defaults()
+        .map_err(WorkerSdkError::InvalidInput)?;
     let runtime = PluginRuntime {
+        callback_name: None,
         diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let service = WorkerService {
@@ -1915,6 +1947,7 @@ async fn serve_plugin_arc_with_endpoint_file(
 }
 
 #[cfg(unix)]
+/// Binds a bounded worker service to a Unix socket or delegates to loopback TCP.
 async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1927,7 +1960,7 @@ async fn serve_worker_service(
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
         return Server::builder()
-            .add_service(PluginWorkerServer::new(service))
+            .add_service(worker_grpc_service(service))
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
@@ -1949,6 +1982,7 @@ async fn serve_worker_service(
     serve_tcp_worker_service(service, endpoint, endpoint_file).await
 }
 
+/// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
 async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1965,10 +1999,22 @@ async fn serve_tcp_worker_service(
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
     }
     Server::builder()
-        .add_service(PluginWorkerServer::new(service))
+        .add_service(worker_grpc_service(service))
         .serve_with_incoming(TcpListenerStream::new(listener))
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+}
+
+/// Applies the runtime's execution limit to both sides of the worker service.
+fn worker_grpc_service(
+    service: WorkerService,
+) -> CallbackMessageLimitService<PluginWorkerServer<WorkerService>> {
+    let limits = service.runtime.max_message_bytes.clone();
+    CallbackMessageLimitService::new(PluginWorkerServer::new(service), limits, |server, limit| {
+        server
+            .max_decoding_message_size(limit)
+            .max_encoding_message_size(limit)
+    })
 }
 
 #[derive(Clone)]
@@ -2237,10 +2283,16 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<InvokeResponse>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
-        let service = self.clone();
+        let mut service = self.clone();
+        service.runtime.callback_name = Some(request.registration_name.clone());
         let (completion_tx, completion_rx) = watch::channel(false);
         let completion = InvocationCompletion::new(completion_tx);
         let task = tokio::spawn(InvocationFuture {
@@ -2287,7 +2339,15 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
+        let callback_name = request.registration_name.clone();
+        let mut runtime = self.runtime.clone();
+        runtime.callback_name = Some(callback_name.clone());
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
         let scope = invocation_scope_context(request.scope.as_ref());
@@ -2308,12 +2368,12 @@ impl PluginWorker for WorkerService {
             .ok_or_else(|| Status::not_found("stream execution handler not registered"))?;
         let payload = llm_payload(request.payload).map_err(status_from_sdk)?;
         let execution_context = payload
-            .execution_context(&self.runtime, &invocation_id, false)
+            .execution_context(&runtime, &invocation_id, false)
             .map_err(status_from_sdk)?;
         let request_value =
             required_json::<LlmRequest>(payload.request, "llm request").map_err(status_from_sdk)?;
         let next = LlmStreamNext {
-            runtime: self.runtime.clone(),
+            runtime,
             continuation_id: request.continuation_id,
         };
         let model_name = payload.model_name;
@@ -2323,15 +2383,19 @@ impl PluginWorker for WorkerService {
         let completion = InvocationCompletion::new(completion_tx);
         let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
+        let open_callback = callback_name.clone();
         let open_task = tokio::spawn(InvocationFuture {
             future: Box::pin(async move {
-                TASK_SCOPE_CONTEXT
-                    .scope(open_scope.clone(), async {
-                        let future = with_thread_scope(&open_scope, || {
-                            handler(&model_name, request_value, execution_context, next)
-                        });
-                        future.await
-                    })
+                TASK_CALLBACK_NAME
+                    .scope(
+                        Some(open_callback),
+                        TASK_SCOPE_CONTEXT.scope(open_scope.clone(), async {
+                            let future = with_thread_scope(&open_scope, || {
+                                handler(&model_name, request_value, execution_context, next)
+                            });
+                            future.await
+                        }),
+                    )
                     .await
             }),
             _completion: open_completion,
@@ -2377,7 +2441,8 @@ impl PluginWorker for WorkerService {
         };
         abort_on_drop.disarm();
         let task_tx = tx;
-        let stream = ScopedJsonStream::new(stream, scope);
+        let mut stream = ScopedJsonStream::new(stream, scope);
+        stream.callback_name = Some(callback_name);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(InvocationFuture {
             future: Box::pin(async move {
@@ -2654,8 +2719,11 @@ impl WorkerService {
 
     async fn invoke_result(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         let scope = invocation_scope_context(request.scope.as_ref());
-        TASK_SCOPE_CONTEXT
-            .scope(scope.clone(), self.invoke_result_scoped(request, scope))
+        TASK_CALLBACK_NAME
+            .scope(
+                Some(request.registration_name.clone()),
+                TASK_SCOPE_CONTEXT.scope(scope.clone(), self.invoke_result_scoped(request, scope)),
+            )
             .await
     }
 
@@ -3682,11 +3750,16 @@ fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
 struct ScopedJsonStream {
     inner: JsonStream,
     scope: Option<ScopeContext>,
+    callback_name: Option<String>,
 }
 
 impl ScopedJsonStream {
     fn new(inner: JsonStream, scope: Option<ScopeContext>) -> Self {
-        Self { inner, scope }
+        Self {
+            inner,
+            scope,
+            callback_name: current_callback_name(),
+        }
     }
 }
 
@@ -3696,8 +3769,10 @@ impl Stream for ScopedJsonStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let scope = this.scope.clone();
-        TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
-            with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+        TASK_CALLBACK_NAME.sync_scope(this.callback_name.clone(), || {
+            TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
+                with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+            })
         })
     }
 }
@@ -3718,7 +3793,25 @@ fn current_scope_context() -> Option<ScopeContext> {
 
 fn with_thread_scope<T>(scope: &Option<ScopeContext>, f: impl FnOnce() -> T) -> T {
     let _guard = ThreadScopeBinding::new(scope.clone());
+    let previous = THREAD_CALLBACK_NAME.with(|current| current.replace(current_callback_name()));
+    let _callback = ThreadCallbackBinding(previous);
     f()
+}
+
+fn current_callback_name() -> Option<String> {
+    TASK_CALLBACK_NAME
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(|| THREAD_CALLBACK_NAME.with(|name| name.borrow().clone()))
+}
+
+struct ThreadCallbackBinding(Option<String>);
+
+impl Drop for ThreadCallbackBinding {
+    fn drop(&mut self) {
+        THREAD_CALLBACK_NAME.with(|name| name.replace(self.0.take()));
+    }
 }
 
 struct ThreadScopeBinding {
