@@ -79,6 +79,10 @@ navigation:
                 icon: fa-brands fa-rust
                 path: ./getting-started/quick-start/rust.mdx
                 slug: rust
+  - folder: ./user-guides
+    title: "User Guides"
+    slug: user-guides
+    title-source: frontmatter
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli

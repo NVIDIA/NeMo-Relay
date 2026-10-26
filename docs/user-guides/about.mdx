@@ -1,0 +1,56 @@
+---
+title: "User Guides"
+sidebar-title: "About"
+description: "Apply NeMo Relay to enterprise observability, coding-agent governance, and model-spend goals."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+These guides connect NeMo Relay capabilities to outcomes that an enterprise
+platform team needs to deliver. Start with the goal that matches your deployment:
+
+<CardGroup cols={3}>
+<Card title="Connect observability platforms" icon="fa-solid fa-chart-line" href="https://github.com/exactlyallan/NeMo-Relay-ae/blob/codex/user-guide-observability/docs/user-guides/connecting-to-observability-platforms/index.mdx">
+Export a representative agent run and verify arrival in your team's tracing platform.
+</Card>
+<Card title="Govern coding agents" icon="fa-solid fa-shield" href="https://github.com/exactlyallan/NeMo-Relay-ae/blob/codex/user-guide-coding-agents/docs/user-guides/govern-coding-agents.mdx">
+Deploy a shared daemon with separate developer workers, attribution, and telemetry redaction.
+</Card>
+<Card title="Evaluate model routing" icon="fa-solid fa-code-branch" href="https://github.com/exactlyallan/NeMo-Relay-ae/blob/codex/user-guide-model-cost/docs/user-guides/reduce-agent-model-spend.mdx">
+Compare fixed-model and routed tasks with Switchyard before changing a model policy.
+</Card>
+</CardGroup>
+
+<Note title="Feedback branches">
+Each guide is currently reviewed on its own branch. The cards open those review
+copies; use this preview's sidebar for the guides included in its build. Replace
+these card destinations with internal guide links when the guide set lands.
+</Note>
+
+Each guide identifies the decisions and evidence that matter to its goal and
+links to the setup and configuration pages that own the detailed instructions.
+Use [Getting Started](/getting-started/about) if you need to choose your first
+Relay integration. Keep the [Daemon](/daemon/about) and
+[Configure Plugins](/configure-plugins/about) sections available when planning a
+managed deployment.
+
+## Runnable companion examples
+
+Each guide names a concrete example environment, the result to inspect, and the
+choices you can replace. The example files live beside the guide in this
+repository and can run on an ordinary Brev VM or a comparable Linux host.
+A premade Brev Launchable is not required. The same workload and configuration
+files serve both environments; credentials and host provisioning come from your
+own deployment.
+
+Use the examples to inspect a realistic slice of the workflow, then adapt the
+harness, model provider, tracing backend, and topology to your organization.
+The selected products are example choices, rather than prerequisites for every
+Relay deployment. A successful example run verifies its stated scope; it does
+not establish coverage for every workstation, harness, or provider path.
+
+Use a separate disposable host for each companion, or clean up one deployment
+before starting another. The coding-agent example installs system-wide plugin
+policy; that policy can also affect Hermes or a routing comparison on the same
+host. An isolated user configuration does not override administrator policy.
