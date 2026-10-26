@@ -2,7 +2,7 @@
 title: "Enum Diagnostic Read Reason"
 sidebar-title: "DiagnosticReadReason"
 description: "Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons."
-position: 55
+position: 58
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -157,6 +157,14 @@ Stable wire spelling, also used by language error helpers.
 #### `provide`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+
+### `impl From<DiagnosticReadReason> for DiagnosticHttpReason`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-diagnosticreadreason\">DiagnosticReadReason</a>&gt; for <a href=\"enum-diagnostichttpreason\">DiagnosticHttpReason</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(reason: <a href=\"enum-diagnosticreadreason\">DiagnosticReadReason</a>) -&gt; Self"}} /></pre>
 
 ### `impl PartialEq for DiagnosticReadReason`
 

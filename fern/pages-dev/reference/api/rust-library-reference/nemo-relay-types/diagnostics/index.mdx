@@ -1,7 +1,7 @@
 ---
 title: "Module diagnostics"
 sidebar-title: "diagnostics"
-description: "Versioned, transport-neutral runtime diagnostic contracts. Portable diagnostic evidence shared by Relay runtimes, tools, and adapters."
+description: "Versioned runtime diagnostic models and inspection wire contracts. Portable diagnostic evidence shared by Relay runtimes, tools, and adapters."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Versioned, transport-neutral runtime diagnostic contracts. Portable diagnostic evidence shared by Relay runtimes, tools, and adapters.
+Versioned runtime diagnostic models and inspection wire contracts. Portable diagnostic evidence shared by Relay runtimes, tools, and adapters.
 
 These types describe observations rather than readiness or deployment health. They contain no runtime state. Producers enforce resource limits before recording; consumers inspect coverage before interpreting absent evidence.
 
@@ -33,6 +33,8 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [DiagnosticDetail](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticdetail): Restricted optional recent evidence, independent of the accepted numeric summary.
 - [DiagnosticDiscovery](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticdiscovery): Side-effect-free discovery, available even when snapshot queries are disabled.
 - [DiagnosticEvent](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticevent): One recent observation with its actual class and original configuration attribution.
+- [DiagnosticHttpError](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnostichttperror): Error envelope returned by diagnostic HTTP routes.
+- [DiagnosticHttpErrorDetails](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnostichttperrordetails): Error details without query values, credentials, or retained evidence.
 - [DiagnosticLifetimeSummary](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticlifetimesummary): Fixed lifetime totals and monotonic timing for a context or component instance.
 - [DiagnosticLoss](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticloss): Source loss state reserved independently of optional evidence capacity.
 - [DiagnosticMemoryPage](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticmemorypage): Bounded independent memory view; inspection neither records nor freezes history.
@@ -73,6 +75,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [DaemonFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-daemonfailurecode): Failures observed by daemon operation owners, independent of health policy.
 - [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticavailability): Availability of evidence, without applying deployment or application health.
 - [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticdomain): Top-level owning subsystem, derived from its catalogue code.
+- [DiagnosticHttpReason](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnostichttpreason): Stable reasons for HTTP inspection, including snapshot, access, and lifecycle failures. This is separate from the transport-neutral [`DiagnosticReadReason`](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticreadreason). Unknown future reasons must not be inferred from HTTP status alone.
 - [DiagnosticOutcome](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticoutcome): Observed operation outcome; severity does not imply this value.
 - [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticreadreason): Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons.
 - [DiagnosticSeverity](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticseverity): Severity of evidence, independent of an operation's outcome.
@@ -102,6 +105,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [DIAGNOSTIC_DISCOVERY_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-discovery-version): Version of the side-effect-free discovery contract.
 - [DIAGNOSTIC_MEMORY_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-memory-version): Initial version of the separate memory inspection envelope.
 - [DIAGNOSTIC_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-schema-version): Initial version of the canonical diagnostic snapshot envelope.
+- [MAX_DIAGNOSTIC_HTTP_ERROR_BYTES](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-max-diagnostic-http-error-bytes): Maximum error envelope accepted by diagnostic HTTP consumers, in bytes. Error responses never contain retained diagnostic evidence or raw source errors.
 
 ## Traits
 
