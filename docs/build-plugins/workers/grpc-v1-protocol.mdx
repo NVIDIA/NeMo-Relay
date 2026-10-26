@@ -471,33 +471,37 @@ workers:
 | `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
 | `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
 | `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host fallback override, replacing plugin `default_bytes` and `by_name` limits. When unset: plugin `default_bytes`, then 4 MiB. Relay forwards the resolved fallback to the worker. |
-| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact RPC method names to byte limits. Relay forwards resolved per-RPC overrides to the worker. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact callback registration names to byte limits. Relay forwards resolved per-callback overrides to the worker. |
 
 ### Configure Execution Message Size
 
-Set per-RPC limits in `relay-plugin.toml`:
+Use exact callback registration names, as with `callback_timeouts`:
 
 ```toml
 [load.max_message_bytes]
 default_bytes = 4194304
 [load.max_message_bytes.by_name]
-Invoke = 16777216
-ToolNext = 16777216
+input_guardrail = 16777216
+output_guardrail = 8388608
 ```
 
 Precedence, highest first:
 
-- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON RPC-to-bytes map, such as `{"Invoke":16777216}`.
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON callback-to-bytes map, such as `{"input_guardrail":16777216}`.
 - Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
-- Plugin `load.max_message_bytes.by_name`: exact, case-sensitive RPC method name.
+- Plugin `load.max_message_bytes.by_name`: exact callback registration name.
 - Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
 
-Limits are integers in `1..=2147483647`, applied to complete sent/received
-protobuf messages and individual stream chunks. Unchanged RPCs keep their own
-fallback; diagnostic-service budgets remain separate. Restart the host and
-workers after changes and upgrade both SDK and host together. Send limits are
-now finite as well as receive limits; size them with concurrency. These limits
-do not change model context limits or provide automatic compaction.
+Limits are integers in `1..=2147483647`, covering complete sent/received
+messages, stream chunks, and continuations belonging to that callback. Other
+callbacks and control RPCs use the fallback; diagnostic budgets stay separate.
+The host and SDK carry the exact UTF-8 name in binary metadata
+`nemo-relay-worker-callback-bin` before decoding. In named-limit mode,
+`Invoke`/`InvokeStream` reject a mismatched name or missing metadata for a
+configured callback. Upgrade host
+and worker SDKs together, then restart. Scalar-only legacy callers may omit
+metadata. Send caps are now finite too; size limits with concurrency. These
+limits do not change model context limits or provide automatic compaction.
 
 ## JSON Envelopes and Errors
 

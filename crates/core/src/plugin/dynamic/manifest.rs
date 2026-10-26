@@ -150,7 +150,7 @@ pub struct WorkerCallbackTimeouts {
     pub by_name: BTreeMap<String, NonZeroU64>,
 }
 
-/// Finite worker message limits, in bytes, keyed by gRPC method name.
+/// Finite worker message limits, in bytes, keyed by callback registration name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -159,7 +159,7 @@ pub struct WorkerMessageLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
     pub default_bytes: Option<NonZeroU32>,
-    /// Overrides for exact, case-sensitive gRPC method names.
+    /// Overrides for exact callback registration names, like callback timeouts.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_name: BTreeMap<String, NonZeroU32>,
 }
@@ -682,12 +682,9 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
                     ));
                 }
                 for name in limits.by_name.keys() {
-                    if name.is_empty()
-                        || !name.starts_with(|c: char| c.is_ascii_alphabetic())
-                        || !name.chars().all(|c| c.is_ascii_alphanumeric())
-                    {
+                    if name.trim().is_empty() || name != name.trim() {
                         return Err(PluginError::InvalidConfig(
-                            "load.max_message_bytes.by_name keys must be gRPC method names".into(),
+                            "load.max_message_bytes.by_name keys must be non-empty callback names without surrounding whitespace".into(),
                         ));
                     }
                 }

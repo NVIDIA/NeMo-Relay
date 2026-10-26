@@ -80,8 +80,9 @@ use nemo_relay_worker_proto::v1::{
     WorkerError,
 };
 use nemo_relay_worker_proto::{
-    DOWNSTREAM_CONTINUATION_METADATA, RpcMessageLimitService, WORKER_PROTOCOL_GRPC_V1,
-    WorkerRpcMessageLimits, decode_json_envelope, decode_json_value, json_envelope, json_value,
+    CallbackMessageLimitService, DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1,
+    WorkerCallbackMessageLimits, decode_json_envelope, decode_json_value, json_envelope,
+    json_value,
 };
 use serde_json::Map;
 use tokio::net::TcpListener;
@@ -149,10 +150,12 @@ const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
+    static TASK_CALLBACK_NAME: Option<String>;
 }
 
 thread_local! {
     static THREAD_SCOPE_CONTEXT: RefCell<Option<ScopeContext>> = const { RefCell::new(None) };
+    static THREAD_CALLBACK_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Error returned by worker SDK callbacks and runtime helpers.
@@ -966,7 +969,8 @@ pub struct PluginRuntime {
     auth_token: String,
     host_endpoint: String,
     host_channel: Arc<OnceCell<Channel>>,
-    max_message_bytes: WorkerRpcMessageLimits,
+    max_message_bytes: WorkerCallbackMessageLimits,
+    callback_name: Option<String>,
     conditional_middleware_callbacks: Arc<Mutex<HashMap<String, ConditionalMiddlewareFn>>>,
 }
 
@@ -1002,7 +1006,7 @@ impl PluginRuntime {
         message: &str,
         fields: Option<&Map<String, Json>>,
     ) -> Result<()> {
-        let mut client = self.host_client("Log").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .log(Request::new(LogRequest {
                 activation_id: self.activation_id.clone(),
@@ -1076,7 +1080,7 @@ impl PluginRuntime {
         &self,
         kinds: Option<BTreeSet<RuntimeRegistrationKind>>,
     ) -> Result<Vec<RuntimeRegistrationIdentity>> {
-        let mut client = self.host_client("ListRuntimeRegistrations").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .list_runtime_registrations(Request::new(ListRuntimeRegistrationsRequest {
                 activation_id: self.activation_id.clone(),
@@ -1151,10 +1155,7 @@ impl PluginRuntime {
         Fut: Future<Output = Result<Option<String>>> + Send + 'static,
     {
         self.try_insert_conditional_middleware_callback(name, callback)?;
-        let mut client = match self
-            .host_client("RegisterConditionalMiddlewareGuardrail")
-            .await
-        {
+        let mut client = match self.host_client().await {
             Ok(client) => client,
             Err(error) => {
                 self.remove_conditional_middleware_callback(name);
@@ -1199,9 +1200,7 @@ impl PluginRuntime {
         &self,
         handle: &ConditionalMiddlewareGuardrailHandle,
     ) -> Result<bool> {
-        let mut client = self
-            .host_client("DeregisterConditionalMiddlewareGuardrail")
-            .await?;
+        let mut client = self.host_client().await?;
         let response = client
             .deregister_conditional_middleware_guardrail(Request::new(
                 DeregisterConditionalMiddlewareGuardrailRequest {
@@ -1260,7 +1259,7 @@ impl PluginRuntime {
         invocation_id: &str,
         request: &LlmRequest,
     ) -> Result<AnnotatedLlmRequest> {
-        let mut client = self.host_client("DecodeLlmCodecRequest").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
                 activation_id: self.activation_id.clone(),
@@ -1282,7 +1281,7 @@ impl PluginRuntime {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
-        let mut client = self.host_client("EncodeLlmCodecRequest").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
                 activation_id: self.activation_id.clone(),
@@ -1304,7 +1303,7 @@ impl PluginRuntime {
         invocation_id: &str,
         response: &Json,
     ) -> Result<AnnotatedLlmResponse> {
-        let mut client = self.host_client("DecodeLlmCodecResponse").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
                 activation_id: self.activation_id.clone(),
@@ -1363,7 +1362,7 @@ impl PluginRuntime {
         category: Option<EventCategory>,
     ) -> Result<()> {
         let scope = self.current_scope_context();
-        let mut client = self.host_client("EmitMark").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .emit_mark(Request::new(EmitMarkRequest {
                 activation_id: self.activation_id.clone(),
@@ -1399,7 +1398,7 @@ impl PluginRuntime {
     /// invalid/expired bindings. Never caches an invocation-entry snapshot.
     pub async fn current_scope_stack_snapshot(&self) -> Result<Option<ScopeStackSnapshot>> {
         let scope = self.current_scope_context();
-        let mut client = self.host_client("GetCurrentScopeStackSnapshot").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .get_current_scope_stack_snapshot(Request::new(
                 nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
@@ -1449,7 +1448,7 @@ impl PluginRuntime {
 
     /// Return a bounded snapshot of active host runtime diagnostics.
     pub async fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
-        let mut client = self.host_client("GetRuntimeDiagnostics").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
                 activation_id: self.activation_id.clone(),
@@ -1534,7 +1533,7 @@ impl PluginRuntime {
 
     /// Creates an isolated host-owned scope stack.
     pub async fn create_scope_stack(&self) -> Result<String> {
-        let mut client = self.host_client("CreateScopeStack").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .create_scope_stack(Request::new(CreateScopeStackRequest {
                 activation_id: self.activation_id.clone(),
@@ -1551,7 +1550,7 @@ impl PluginRuntime {
 
     /// Drops an isolated host-owned scope stack.
     pub async fn drop_scope_stack(&self, scope_stack_id: &str) -> Result<()> {
-        let mut client = self.host_client("DropScopeStack").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .drop_scope_stack(Request::new(DropScopeStackRequest {
                 activation_id: self.activation_id.clone(),
@@ -1643,7 +1642,7 @@ impl PluginRuntime {
         let scope = scope_stack_id
             .map(scope_context)
             .or_else(|| self.current_scope_context());
-        let mut client = self.host_client("PushScope").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .push_scope(Request::new(PushScopeRequest {
                 activation_id: self.activation_id.clone(),
@@ -1696,7 +1695,7 @@ impl PluginRuntime {
         metadata: Option<Json>,
         timestamp_unix_micros: Option<i64>,
     ) -> Result<()> {
-        let mut client = self.host_client("PopScope").await?;
+        let mut client = self.host_client().await?;
         let response = client
             .pop_scope(Request::new(PopScopeRequest {
                 activation_id: self.activation_id.clone(),
@@ -1713,15 +1712,31 @@ impl PluginRuntime {
     }
 
     /// Reuses the host connection while applying this activation's execution caps.
-    async fn host_client(&self, rpc: &str) -> Result<RelayHostRuntimeClient<Channel>> {
+    async fn host_client(
+        &self,
+    ) -> Result<
+        RelayHostRuntimeClient<
+            tonic::service::interceptor::InterceptedService<
+                Channel,
+                nemo_relay_worker_proto::WorkerCallbackMetadata,
+            >,
+        >,
+    > {
+        let callback = self.callback_name.clone().or_else(current_callback_name);
+        let limit = self
+            .max_message_bytes
+            .for_callback(callback.as_deref().unwrap_or_default());
         self.host_channel
             .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
             .await
             .cloned()
             .map(|channel| {
-                RelayHostRuntimeClient::new(channel)
-                    .max_decoding_message_size(self.max_message_bytes.for_rpc(rpc))
-                    .max_encoding_message_size(self.max_message_bytes.for_rpc(rpc))
+                RelayHostRuntimeClient::with_interceptor(
+                    channel,
+                    nemo_relay_worker_proto::WorkerCallbackMetadata(callback),
+                )
+                .max_decoding_message_size(limit)
+                .max_encoding_message_size(limit)
             })
     }
 
@@ -1777,7 +1792,7 @@ impl ToolNext {
     /// active. Each call receives an isolated snapshot of the scope stack
     /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, value: Json) -> Result<ToolExecutionResult> {
-        let mut client = self.runtime.host_client("ToolNext").await?;
+        let mut client = self.runtime.host_client().await?;
         let response = client
             .tool_next(Request::new(ToolNextRequest {
                 activation_id: self.runtime.activation_id.clone(),
@@ -1807,7 +1822,7 @@ impl LlmNext {
     /// active. Each call receives an isolated snapshot of the scope stack
     /// visible here. Calls still unfinished when the interceptor settles fail.
     pub async fn call(&self, request: LlmRequest) -> Result<Json> {
-        let mut client = self.runtime.host_client("LlmNext").await?;
+        let mut client = self.runtime.host_client().await?;
         let response = client
             .llm_next(Request::new(LlmNextRequest {
                 activation_id: self.runtime.activation_id.clone(),
@@ -1839,7 +1854,7 @@ impl LlmStreamNext {
     /// but unfinished calls are cancelled when the interceptor stream closes.
     pub async fn call(&self, request: LlmRequest) -> Result<JsonStream> {
         let scope = self.runtime.current_scope_context();
-        let mut client = self.runtime.host_client("LlmStreamNext").await?;
+        let mut client = self.runtime.host_client().await?;
         let response = client
             .llm_stream_next(Request::new(LlmStreamNextRequest {
                 activation_id: self.runtime.activation_id.clone(),
@@ -1908,10 +1923,11 @@ async fn serve_plugin_arc_with_endpoint_file(
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
-    let max_message_bytes = WorkerRpcMessageLimits::default()
+    let max_message_bytes = WorkerCallbackMessageLimits::default()
         .from_env_with_defaults()
         .map_err(WorkerSdkError::InvalidInput)?;
     let runtime = PluginRuntime {
+        callback_name: None,
         diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
@@ -1992,9 +2008,9 @@ async fn serve_tcp_worker_service(
 /// Applies the runtime's execution limit to both sides of the worker service.
 fn worker_grpc_service(
     service: WorkerService,
-) -> RpcMessageLimitService<PluginWorkerServer<WorkerService>> {
+) -> CallbackMessageLimitService<PluginWorkerServer<WorkerService>> {
     let limits = service.runtime.max_message_bytes.clone();
-    RpcMessageLimitService::new(PluginWorkerServer::new(service), limits, |server, limit| {
+    CallbackMessageLimitService::new(PluginWorkerServer::new(service), limits, |server, limit| {
         server
             .max_decoding_message_size(limit)
             .max_encoding_message_size(limit)
@@ -2267,10 +2283,16 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<InvokeResponse>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
-        let service = self.clone();
+        let mut service = self.clone();
+        service.runtime.callback_name = Some(request.registration_name.clone());
         let (completion_tx, completion_rx) = watch::channel(false);
         let completion = InvocationCompletion::new(completion_tx);
         let task = tokio::spawn(InvocationFuture {
@@ -2317,7 +2339,15 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
+        let callback_name = request.registration_name.clone();
+        let mut runtime = self.runtime.clone();
+        runtime.callback_name = Some(callback_name.clone());
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
         let scope = invocation_scope_context(request.scope.as_ref());
@@ -2338,12 +2368,12 @@ impl PluginWorker for WorkerService {
             .ok_or_else(|| Status::not_found("stream execution handler not registered"))?;
         let payload = llm_payload(request.payload).map_err(status_from_sdk)?;
         let execution_context = payload
-            .execution_context(&self.runtime, &invocation_id, false)
+            .execution_context(&runtime, &invocation_id, false)
             .map_err(status_from_sdk)?;
         let request_value =
             required_json::<LlmRequest>(payload.request, "llm request").map_err(status_from_sdk)?;
         let next = LlmStreamNext {
-            runtime: self.runtime.clone(),
+            runtime,
             continuation_id: request.continuation_id,
         };
         let model_name = payload.model_name;
@@ -2353,15 +2383,19 @@ impl PluginWorker for WorkerService {
         let completion = InvocationCompletion::new(completion_tx);
         let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
+        let open_callback = callback_name.clone();
         let open_task = tokio::spawn(InvocationFuture {
             future: Box::pin(async move {
-                TASK_SCOPE_CONTEXT
-                    .scope(open_scope.clone(), async {
-                        let future = with_thread_scope(&open_scope, || {
-                            handler(&model_name, request_value, execution_context, next)
-                        });
-                        future.await
-                    })
+                TASK_CALLBACK_NAME
+                    .scope(
+                        Some(open_callback),
+                        TASK_SCOPE_CONTEXT.scope(open_scope.clone(), async {
+                            let future = with_thread_scope(&open_scope, || {
+                                handler(&model_name, request_value, execution_context, next)
+                            });
+                            future.await
+                        }),
+                    )
                     .await
             }),
             _completion: open_completion,
@@ -2407,7 +2441,8 @@ impl PluginWorker for WorkerService {
         };
         abort_on_drop.disarm();
         let task_tx = tx;
-        let stream = ScopedJsonStream::new(stream, scope);
+        let mut stream = ScopedJsonStream::new(stream, scope);
+        stream.callback_name = Some(callback_name);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(InvocationFuture {
             future: Box::pin(async move {
@@ -2684,8 +2719,11 @@ impl WorkerService {
 
     async fn invoke_result(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         let scope = invocation_scope_context(request.scope.as_ref());
-        TASK_SCOPE_CONTEXT
-            .scope(scope.clone(), self.invoke_result_scoped(request, scope))
+        TASK_CALLBACK_NAME
+            .scope(
+                Some(request.registration_name.clone()),
+                TASK_SCOPE_CONTEXT.scope(scope.clone(), self.invoke_result_scoped(request, scope)),
+            )
             .await
     }
 
@@ -3712,11 +3750,16 @@ fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
 struct ScopedJsonStream {
     inner: JsonStream,
     scope: Option<ScopeContext>,
+    callback_name: Option<String>,
 }
 
 impl ScopedJsonStream {
     fn new(inner: JsonStream, scope: Option<ScopeContext>) -> Self {
-        Self { inner, scope }
+        Self {
+            inner,
+            scope,
+            callback_name: current_callback_name(),
+        }
     }
 }
 
@@ -3726,8 +3769,10 @@ impl Stream for ScopedJsonStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let scope = this.scope.clone();
-        TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
-            with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+        TASK_CALLBACK_NAME.sync_scope(this.callback_name.clone(), || {
+            TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
+                with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+            })
         })
     }
 }
@@ -3748,7 +3793,25 @@ fn current_scope_context() -> Option<ScopeContext> {
 
 fn with_thread_scope<T>(scope: &Option<ScopeContext>, f: impl FnOnce() -> T) -> T {
     let _guard = ThreadScopeBinding::new(scope.clone());
+    let previous = THREAD_CALLBACK_NAME.with(|current| current.replace(current_callback_name()));
+    let _callback = ThreadCallbackBinding(previous);
     f()
+}
+
+fn current_callback_name() -> Option<String> {
+    TASK_CALLBACK_NAME
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(|| THREAD_CALLBACK_NAME.with(|name| name.borrow().clone()))
+}
+
+struct ThreadCallbackBinding(Option<String>);
+
+impl Drop for ThreadCallbackBinding {
+    fn drop(&mut self) {
+        THREAD_CALLBACK_NAME.with(|name| name.replace(self.0.take()));
+    }
 }
 
 struct ThreadScopeBinding {

@@ -11,7 +11,9 @@
 
 mod message_limits;
 pub use message_limits::{
-    RpcMessageLimitService, WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV, WorkerRpcMessageLimits,
+    CallbackMessageLimitService, WORKER_CALLBACK_METADATA, WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV,
+    WorkerCallbackMessageLimits, WorkerCallbackMetadata, callback_name, callback_request,
+    validate_callback_request,
 };
 
 /// Stable worker protocol identifier accepted by `compat.worker_protocol`.

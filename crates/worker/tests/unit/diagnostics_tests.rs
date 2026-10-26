@@ -787,7 +787,8 @@ async fn runtime_initializes_one_shared_diagnostic_session_under_concurrency() {
         auth_token: "token".into(),
         host_endpoint: "unused".into(),
         host_channel: Arc::new(tokio::sync::OnceCell::new_with(Some(channel))),
-        max_message_bytes: nemo_relay_worker_proto::WorkerRpcMessageLimits::default(),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
         conditional_middleware_callbacks: Default::default(),
     };
     let cloned = runtime.clone();

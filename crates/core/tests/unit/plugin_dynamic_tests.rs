@@ -2079,7 +2079,7 @@ fn relay_version_matches_prerelease_hosts_as_their_release() {
 fn worker_message_size_defaults_validate_and_round_trip() {
     for limit in [1, 16 * 1024 * 1024, i32::MAX as u32] {
         let source = format!(
-            "{}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n[load.max_message_bytes.by_name]\nInvoke = {limit}\n",
+            "{}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n[load.max_message_bytes.by_name]\ninput_guardrail = {limit}\n",
             valid_worker_manifest_toml()
         );
         let manifest = DynamicPluginManifest::parse_toml(&source).unwrap();
@@ -2088,7 +2088,7 @@ fn worker_message_size_defaults_validate_and_round_trip() {
         };
         let limits = load.max_message_bytes.as_ref().unwrap();
         assert_eq!(limits.default_bytes.unwrap().get(), limit);
-        assert_eq!(limits.by_name["Invoke"].get(), limit);
+        assert_eq!(limits.by_name["input_guardrail"].get(), limit);
         assert_eq!(
             DynamicPluginManifest::parse_toml(&toml::to_string(&manifest).unwrap()).unwrap(),
             manifest,
@@ -2102,10 +2102,10 @@ fn worker_message_size_defaults_validate_and_round_trip() {
         };
         let limits = load.max_message_bytes.unwrap();
         assert_eq!(limits.default_bytes.unwrap().get(), limit);
-        assert_eq!(limits.by_name["Invoke"].get(), limit);
+        assert_eq!(limits.by_name["input_guardrail"].get(), limit);
     }
     for value in ["0", "-1", "1.5", "2147483648", "4294967296", "\"16777216\""] {
-        for field in ["default_bytes", "by_name.Invoke"] {
+        for field in ["default_bytes", "by_name.input_guardrail"] {
             let source = format!(
                 "{}\n[load.max_message_bytes]\n{field} = {value}\n",
                 valid_worker_manifest_toml()
@@ -2121,7 +2121,7 @@ fn worker_message_size_defaults_validate_and_round_trip() {
         valid_rust_manifest_toml()
     );
     assert!(DynamicPluginManifest::parse_toml(&native).is_err());
-    for name in ["", " Invoke", "Invoke ", "Invoke/Other"] {
+    for name in ["", " guardrail", "guardrail ", "   "] {
         let source = format!(
             "{}\n[load.max_message_bytes.by_name]\n{:#?} = 16777216\n",
             valid_worker_manifest_toml(),

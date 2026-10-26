@@ -29,18 +29,47 @@ fn worker_protocol_identifier_is_stable() {
     assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
 }
 
-/// A named increase does not widen unrelated RPCs, and a lower named cap wins.
+/// A named increase does not widen unrelated callbacks, and a lower named cap wins.
 #[test]
-fn worker_rpc_limits_are_independent() {
-    let mut limits = nemo_relay_worker_proto::WorkerRpcMessageLimits::default();
-    limits.by_name.insert("Invoke".into(), 16 * 1024 * 1024);
-    assert_eq!(limits.for_rpc("Invoke"), 16 * 1024 * 1024);
-    for name in ["InvokeStream", "ToolNext", "Health", "EmitMark"] {
-        assert_eq!(limits.for_rpc(name), 4 * 1024 * 1024);
+fn worker_callback_limits_are_independent() {
+    let mut limits = nemo_relay_worker_proto::WorkerCallbackMessageLimits::default();
+    limits
+        .by_name
+        .insert("large.guardrail-α".into(), 16 * 1024 * 1024);
+    assert_eq!(limits.for_callback("large.guardrail-α"), 16 * 1024 * 1024);
+    for name in [
+        "LARGE.guardrail-α",
+        "other_guardrail",
+        "Invoke",
+        "ToolNext",
+        "",
+    ] {
+        assert_eq!(limits.for_callback(name), 4 * 1024 * 1024);
     }
     limits.default_bytes = 16 * 1024 * 1024;
-    limits.by_name.insert("ToolNext".into(), 4 * 1024 * 1024);
-    assert_eq!(limits.for_rpc("ToolNext"), 4 * 1024 * 1024);
+    limits
+        .by_name
+        .insert("small_guardrail".into(), 4 * 1024 * 1024);
+    assert_eq!(limits.for_callback("small_guardrail"), 4 * 1024 * 1024);
+}
+
+#[test]
+fn callback_metadata_preserves_exact_names_and_rejects_mismatches() {
+    use nemo_relay_worker_proto::{
+        WorkerCallbackMessageLimits, callback_name, callback_request, validate_callback_request,
+    };
+    let name = "large.guardrail-α";
+    let mut limits = WorkerCallbackMessageLimits::default();
+    limits.by_name.insert(name.into(), 16 * 1024 * 1024);
+    let request = callback_request((), name);
+    assert_eq!(callback_name(request.metadata()).as_deref(), Some(name));
+    assert!(validate_callback_request(&request, name, &limits).is_ok());
+    assert!(validate_callback_request(&request, "other_guardrail", &limits).is_err());
+    let legacy = tonic::Request::new(());
+    assert!(validate_callback_request(&legacy, name, &limits).is_err());
+    assert!(
+        validate_callback_request(&legacy, name, &WorkerCallbackMessageLimits::default()).is_ok()
+    );
 }
 
 #[test]

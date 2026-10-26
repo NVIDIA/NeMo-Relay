@@ -42,7 +42,7 @@ identifier remains `grpc-v1`.
 | Surface | Role |
 |---|---|
 | `WORKER_PROTOCOL_GRPC_V1` | Identifies the stable protocol accepted by Relay worker manifests. |
-| Worker message limits | `WorkerRpcMessageLimits` resolves host overrides and plugin defaults. `RpcMessageLimitService` selects finite send/receive caps per RPC before decoding; custom workers must enforce the same settings. |
+| Worker message limits | `WorkerCallbackMessageLimits` resolves host overrides and plugin defaults. `CallbackMessageLimitService` selects finite send/receive caps by exact callback registration name before decoding; custom workers must enforce the same settings and callback metadata contract. |
 | `v1` module | Exposes generated `PluginWorker` and `RelayHostRuntime` Tonic clients, servers, services, and messages without regenerating protobuf in a consumer. |
 | JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
 | JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |

@@ -20,7 +20,8 @@ async fn historical_scope_rejects_timestamp_outside_wire_range_before_rpc() {
         auth_token: "token".into(),
         host_endpoint: "unsupported://host".into(),
         host_channel: Arc::new(OnceCell::new()),
-        max_message_bytes: nemo_relay_worker_proto::WorkerRpcMessageLimits::default(),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
         diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };

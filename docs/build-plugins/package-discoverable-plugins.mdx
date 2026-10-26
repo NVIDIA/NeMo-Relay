@@ -204,8 +204,10 @@ trust policy and file layout are documented in [Manage](/configure-plugins/disco
 ## Worker Message Limits
 
 Set `[load.max_message_bytes]` with an optional `default_bytes` and `by_name`
-overrides for exact gRPC method names. For example, `by_name.Invoke = 16777216`
-raises only `Invoke` to 16 MiB; other RPCs retain the 4 MiB default. Host
+overrides for exact callback registration names, like callback timeouts. For
+example, `by_name.input_guardrail = 16777216` raises the registered
+`input_guardrail` callback and its continuations to 16 MiB; unrelated callbacks
+and control RPCs retain the fallback (4 MiB by default). Host
 environment settings override plugin settings. Native plugins do not use this
 setting. See the
 [execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)

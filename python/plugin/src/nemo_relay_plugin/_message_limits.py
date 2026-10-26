@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-method gRPC message limits without changing worker protocol messages."""
+"""Callback registration limits carried across worker RPCs and continuations."""
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import importlib
 import json
 import os
@@ -14,10 +15,12 @@ from typing import Any
 
 grpc: Any = importlib.import_module("grpc")
 LIMITS_BY_NAME_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME"
+CALLBACK_METADATA = "nemo-relay-worker-callback-bin"
+CALLBACK_NAME: contextvars.ContextVar[str | None] = contextvars.ContextVar("worker_callback_name", default=None)
 
 
 def named_message_limits() -> dict[str, int]:
-    """Read exact RPC overrides forwarded by the host after manifest resolution."""
+    """Read exact callback-name overrides resolved by the host, like timeouts."""
     raw = os.environ.get(LIMITS_BY_NAME_ENV)
     if raw is None:
         return {}
@@ -25,9 +28,8 @@ def named_message_limits() -> dict[str, int]:
         values = json.loads(raw)
         if isinstance(values, dict) and all(
             isinstance(name, str)
-            and name.isascii()
-            and name.isalnum()
-            and name[0].isalpha()
+            and bool(name.strip())
+            and name == name.strip()
             and type(limit) is int
             and 1 <= limit <= 2_147_483_647
             for name, limit in values.items()
@@ -35,11 +37,14 @@ def named_message_limits() -> dict[str, int]:
             return values
     except (ValueError, UnicodeError):
         pass
-    raise ValueError(f"{LIMITS_BY_NAME_ENV} must map gRPC method names to integers in 1..=2147483647")
+    raise ValueError(
+        f"{LIMITS_BY_NAME_ENV} must map non-empty callback registration names "
+        "without surrounding whitespace to integers in 1..=2147483647"
+    )
 
 
 class RpcHostChannel:
-    """Share channels by byte limit while binding each stub method to its own cap."""
+    """Select a bounded channel at call time from the task's callback context."""
 
     def __init__(self, target: str, default: int, by_name: dict[str, int], authority: tuple[tuple[str, str], ...]):
         self._target = target
@@ -48,8 +53,8 @@ class RpcHostChannel:
         self._authority = authority
         self._channels: dict[int, Any] = {}
 
-    def _channel(self, method: str) -> Any:
-        limit = self._by_name.get(method.rsplit("/", 1)[-1], self._default)
+    def _channel(self, callback: str | None) -> Any:
+        limit = self._by_name.get(callback or "", self._default)
         if limit not in self._channels:
             self._channels[limit] = grpc.aio.insecure_channel(
                 self._target,
@@ -62,10 +67,35 @@ class RpcHostChannel:
         return self._channels[limit]
 
     def unary_unary(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        return self._channel(method).unary_unary(method, *args, **kwargs)
+        return self._callable("unary_unary", method, args, kwargs)
 
     def unary_stream(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        return self._channel(method).unary_stream(method, *args, **kwargs)
+        return self._callable("unary_stream", method, args, kwargs)
+
+    def _callable(self, kind: str, method: str, args: Any, kwargs: Any) -> Any:
+        def call(
+            request: Any,
+            timeout: Any = None,
+            metadata: Any = None,
+            credentials: Any = None,
+            wait_for_ready: Any = None,
+            compression: Any = None,
+        ) -> Any:
+            callback = CALLBACK_NAME.get()
+            forwarded = tuple((key, value) for key, value in (metadata or ()) if key != CALLBACK_METADATA)
+            if callback is not None:
+                forwarded += ((CALLBACK_METADATA, callback.encode("utf-8")),)
+            rpc = getattr(self._channel(callback), kind)(method, *args, **kwargs)
+            return rpc(
+                request,
+                timeout=timeout,
+                metadata=forwarded,
+                credentials=credentials,
+                wait_for_ready=wait_for_ready,
+                compression=compression,
+            )
+
+        return call
 
     async def close(self) -> None:
         await asyncio.gather(*(channel.close() for channel in self._channels.values()))
@@ -87,7 +117,15 @@ class MessageLimitInterceptor(grpc.aio.ServerInterceptor):
         handler = await continuation(details)
         if handler is None:
             return None
-        limit = self._by_name.get(details.method.rsplit("/", 1)[-1], self._default)
+        method = details.method.rsplit("/", 1)[-1]
+        worker = "/PluginWorker/" in details.method or ".PluginWorker/" in details.method
+        invocation = worker and method in ("Invoke", "InvokeStream")
+        raw_name = next((value for key, value in details.invocation_metadata if key == CALLBACK_METADATA), None)
+        try:
+            callback = raw_name.decode("utf-8") if raw_name is not None else None
+        except (UnicodeError, AttributeError):
+            callback = None
+        limit = self._by_name.get(callback or "", self._default) if not worker or invocation else self._default
 
         def deserialize(raw: bytes) -> Any:
             return _OversizedRequest(len(raw)) if len(raw) > limit else handler.request_deserializer(raw)
@@ -95,17 +133,26 @@ class MessageLimitInterceptor(grpc.aio.ServerInterceptor):
         async def reject(context: Any, size: int) -> None:
             await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, f"message larger than max ({size} vs. {limit})")
 
-        async def unary(request: Any, context: Any) -> Any:
+        async def validate(request: Any, context: Any) -> None:
             if isinstance(request, _OversizedRequest):
                 await reject(context, request.size)
+            if invocation and (
+                (callback is not None and callback != request.registration_name)
+                or (callback is None and request.registration_name in self._by_name)
+            ):
+                await context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT, "callback metadata does not match registration_name"
+                )
+
+        async def unary(request: Any, context: Any) -> Any:
+            await validate(request, context)
             response = await handler.unary_unary(request, context)
             if response.ByteSize() > limit:
                 await reject(context, response.ByteSize())
             return response
 
         async def stream(request: Any, context: Any) -> Any:
-            if isinstance(request, _OversizedRequest):
-                await reject(context, request.size)
+            await validate(request, context)
             async for response in handler.unary_stream(request, context):
                 if response.ByteSize() > limit:
                     await reject(context, response.ByteSize())

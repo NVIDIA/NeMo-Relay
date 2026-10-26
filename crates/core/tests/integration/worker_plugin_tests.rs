@@ -1171,9 +1171,14 @@ fn assert_invalid_host_message_limit_rejected() {
 
 /// Runs the same named test under each isolated host/default configuration.
 async fn run_message_limit_cases(test_name: &str, runtime: &str) {
-    let invoke = r#"{"Invoke":16777216}"#;
-    let pair = r#"{"Invoke":16777216,"ToolNext":16777216}"#;
-    let small_next = r#"{"ToolNext":4194304}"#;
+    let (request_name, execution_name) = if runtime == "rust" {
+        ("fixture_rewrite_args", "fixture_tool_execution")
+    } else {
+        ("echo-request", "echo-execution")
+    };
+    let invoke = json!({request_name: 16777216}).to_string();
+    let pair = json!({request_name: 16777216, execution_name: 16777216}).to_string();
+    let small_next = json!({execution_name: 4194304}).to_string();
     for (scenario, override_bytes, default_bytes, authored_names, host_names) in [
         ("default", None, None, None, None),
         ("env4", Some("4194304"), None, None, None),
@@ -1201,29 +1206,43 @@ async fn run_message_limit_cases(test_name: &str, runtime: &str) {
             None,
             Some(r#"{"Invoke":0}"#),
         ),
-        ("named-invoke", None, None, Some(invoke), None),
-        ("named-pair", None, None, Some(pair), None),
+        ("named-invoke", None, None, Some(invoke.as_str()), None),
+        ("named-pair", None, None, Some(pair.as_str()), None),
         (
             "named-small-next",
             None,
             Some("16777216"),
-            Some(small_next),
+            Some(small_next.as_str()),
             None,
         ),
         (
             "named-host-default",
             Some("4194304"),
             None,
-            Some(pair),
+            Some(pair.as_str()),
             None,
         ),
-        ("named-host-map", None, None, None, Some(pair)),
+        ("named-host-map", None, None, None, Some(pair.as_str())),
         (
             "named-host-smaller",
             Some("16777216"),
             None,
-            Some(pair),
-            Some(small_next),
+            Some(pair.as_str()),
+            Some(small_next.as_str()),
+        ),
+        (
+            "named-method-is-not-callback",
+            None,
+            None,
+            Some(r#"{"Invoke":16777216,"ToolNext":16777216}"#),
+            None,
+        ),
+        (
+            "named-case-sensitive",
+            None,
+            None,
+            Some(r#"{"FIXTURE_REWRITE_ARGS":16777216,"ECHO-REQUEST":16777216}"#),
+            None,
         ),
     ] {
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
@@ -1251,20 +1270,25 @@ async fn run_message_limit_cases(test_name: &str, runtime: &str) {
     }
 }
 
-/// Proves that a larger Invoke limit does not widen a continuation RPC.
+/// Proves that callbacks sharing Invoke retain independent limits, including next().
 async fn assert_named_message_boundaries(scenario: &str) {
-    let accepts_invoke = scenario != "named-host-default";
+    let accepts_invoke = !matches!(
+        scenario,
+        "named-host-default" | "named-method-is-not-callback" | "named-case-sensitive"
+    );
     let accepts_next = matches!(scenario, "named-pair" | "named-host-map");
     let request =
         tool_request_intercepts("named-invoke", json!({"text": "x".repeat(5 * 1024 * 1024)})).await;
     assert_eq!(request.is_ok(), accepts_invoke, "{scenario}: Invoke");
     assert_eq!(
         response_message_tool_call(5, "worker").await.is_ok(),
-        accepts_invoke,
+        accepts_next,
         "{scenario}: Invoke response"
     );
     assert_eq!(
-        large_message_tool_call(5).await.is_ok(),
+        response_message_tool_call(5, "continuation-request")
+            .await
+            .is_ok(),
         accepts_next,
         "{scenario}: ToolNext request"
     );
@@ -1290,7 +1314,7 @@ async fn wait_for_message_limit_case(
     runtime: &str,
     scenario: &str,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait().expect("poll message limit test") {
             assert!(
@@ -1300,7 +1324,14 @@ async fn wait_for_message_limit_case(
             break;
         }
         if std::time::Instant::now() >= deadline {
-            let processes = sysinfo::System::new_all();
+            // Only parent IDs are needed. Reading every process's environment,
+            // executable and thread data can stall cleanup on busy shared hosts.
+            let mut processes = sysinfo::System::new();
+            processes.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+            );
             let parent = sysinfo::Pid::from_u32(child.id());
             for process in processes.processes().values() {
                 if process.parent() == Some(parent) {
@@ -1309,7 +1340,7 @@ async fn wait_for_message_limit_case(
             }
             child.kill().expect("stop stuck test host");
             child.wait().expect("reap stuck test host");
-            panic!("{runtime} message limit scenario {scenario} exceeded 30 seconds");
+            panic!("{runtime} message limit scenario {scenario} exceeded 90 seconds");
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
@@ -1381,7 +1412,11 @@ async fn response_message_tool_call(
         std::time::Duration::from_secs(15),
         tool_call_execute(
             ToolCallExecuteParams::builder()
-                .name(format!("large-{direction}-response"))
+                .name(if direction == "continuation-request" {
+                    "large-continuation-request".into()
+                } else {
+                    format!("large-{direction}-response")
+                })
                 .args(args)
                 .func(Arc::new(move |_| {
                     observed.store(true, Ordering::SeqCst);
@@ -1396,11 +1431,13 @@ async fn response_message_tool_call(
     )
     .await
     .expect("response-only message call must finish");
-    assert_eq!(
-        called.load(Ordering::SeqCst),
-        direction == "continuation",
-        "only continuation response cases must reach the host callback"
-    );
+    if direction != "continuation-request" {
+        assert_eq!(
+            called.load(Ordering::SeqCst),
+            direction == "continuation",
+            "only continuation response cases must reach the host callback"
+        );
+    }
     result
 }
 
@@ -1452,7 +1489,10 @@ class Echo(WorkerPlugin):
                     "text": "x" * (context.args["response_mib"] * 1024 * 1024),
                     "worker_plugin_tool_execution": True,
                 })
-            result = await next_call.call(context.args)
+            args = dict(context.args)
+            if context.tool_name == "large-continuation-request":
+                args["text"] = "x" * (args["response_mib"] * 1024 * 1024)
+            result = await next_call.call(args)
             value = dict(result.result)
             value["worker_plugin_tool_execution"] = True
             return ToolExecutionInterceptOutcome(result=value)

@@ -50,9 +50,10 @@ use nemo_relay_worker_proto::v1::{
     ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{
-    DEFAULT_WORKER_MAX_MESSAGE_BYTES, RpcMessageLimitService, WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV,
-    WORKER_MAX_MESSAGE_BYTES_ENV, WORKER_PROTOCOL_GRPC_V1, WorkerRpcMessageLimits,
-    decode_json_envelope, decode_json_value, json_envelope, json_value,
+    CallbackMessageLimitService, DEFAULT_WORKER_MAX_MESSAGE_BYTES,
+    WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV, WORKER_MAX_MESSAGE_BYTES_ENV, WORKER_PROTOCOL_GRPC_V1,
+    WorkerCallbackMessageLimits, decode_json_envelope, decode_json_value, json_envelope,
+    json_value,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -366,7 +367,7 @@ impl WorkerPluginInstance {
         self.host_state.cleanup_conditional_middleware_guardrails();
 
         let mut client =
-            message_limited_client(&self.client, &self.host_state.message_limits, "Shutdown");
+            message_limited_client(&self.client, &self.host_state.message_limits, None);
         let request = ShutdownRequest {
             activation_id: self.host_state.activation_id.clone(),
             auth_token: self.host_state.auth_token.clone(),
@@ -612,7 +613,7 @@ fn load_one_worker_plugin(
             .to_string();
         let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
         let authored = load.max_message_bytes.clone().unwrap_or_default();
-        let default_message_bytes = WorkerRpcMessageLimits {
+        let default_message_bytes = WorkerCallbackMessageLimits {
             default_bytes: authored
                 .default_bytes
                 .map_or(DEFAULT_WORKER_MAX_MESSAGE_BYTES, |v| v.get() as usize),
@@ -757,12 +758,12 @@ fn load_one_worker_plugin(
     let health = block_on_runtime(
         runtime_handle.runtime(),
         worker_rpc(
-            message_limited_client(&client, &max_message_bytes, "Health").health(
-                worker_rpc_request(HealthRequest {
+            message_limited_client(&client, &max_message_bytes, None).health(worker_rpc_request(
+                HealthRequest {
                     activation_id: activation_id.clone(),
                     auth_token: auth_token.clone(),
-                }),
-            ),
+                },
+            )),
         ),
     )
     .map_err(|err| {
@@ -783,7 +784,7 @@ fn load_one_worker_plugin(
     let handshake = block_on_runtime(
         runtime_handle.runtime(),
         worker_rpc(
-            message_limited_client(&client, &max_message_bytes, "Handshake").handshake(
+            message_limited_client(&client, &max_message_bytes, None).handshake(
                 worker_rpc_request(HandshakeRequest {
                     activation_id: activation_id.clone(),
                     plugin_id: spec.plugin_id.clone(),
@@ -823,14 +824,14 @@ fn load_one_worker_plugin(
     let validate = block_on_runtime(
         runtime_handle.runtime(),
         worker_rpc(
-            message_limited_client(&client, &max_message_bytes, "Validate").validate(
-                worker_rpc_request(ValidateRequest {
+            message_limited_client(&client, &max_message_bytes, None).validate(worker_rpc_request(
+                ValidateRequest {
                     activation_id: activation_id.clone(),
                     plugin_id: spec.plugin_id.clone(),
                     auth_token: auth_token.clone(),
                     config: Some(json_envelope(JSON_SCHEMA, &config)?),
-                }),
-            ),
+                },
+            )),
         ),
     )
     .map_err(|err| {
@@ -962,7 +963,7 @@ async fn serve_host_runtime(
     endpoint: HostRuntimeServer,
     state: Arc<WorkerHostRuntimeState>,
     shutdown: oneshot::Receiver<()>,
-    max_message_bytes: WorkerRpcMessageLimits,
+    max_message_bytes: WorkerCallbackMessageLimits,
 ) {
     let diagnostics = diagnostic_limits::BoundedService::new(
         nemo_relay_worker_proto::v1::relay_diagnostics_server::RelayDiagnosticsServer::new(
@@ -973,7 +974,7 @@ async fn serve_host_runtime(
         .max_decoding_message_size(diagnostic_transport::REQUEST_BYTES)
         .max_encoding_message_size(diagnostic_transport::RESPONSE_BYTES),
     );
-    let service = RpcMessageLimitService::new(
+    let service = CallbackMessageLimitService::new(
         RelayHostRuntimeServer::new(WorkerHostRuntimeService { state }),
         max_message_bytes,
         |server, limit| {
@@ -1208,7 +1209,7 @@ struct WorkerProcessLaunch<'a> {
     host_endpoint: &'a str,
     worker_endpoint: &'a str,
     worker_endpoint_file: Option<&'a Path>,
-    max_message_bytes: &'a WorkerRpcMessageLimits,
+    max_message_bytes: &'a WorkerCallbackMessageLimits,
 }
 
 /// Launches a worker with sanitized environment and explicit host-owned settings.
@@ -1366,7 +1367,7 @@ impl WorkerPluginInstance {
 
     async fn request_registration_plan(&self) -> crate::plugin::Result<Vec<Registration>> {
         let mut client =
-            message_limited_client(&self.client, &self.host_state.message_limits, "Register");
+            message_limited_client(&self.client, &self.host_state.message_limits, None);
         let register = worker_rpc(client.register(worker_rpc_request(RegisterRequest {
             activation_id: self.host_state.activation_id.clone(),
             plugin_id: self.plugin_kind.clone(),
@@ -1937,11 +1938,7 @@ impl WorkerInvocationGuard {
         self.host_state
             .cancel_scope_stack_snapshot(&self.scope_stack_id);
         Some((
-            message_limited_client(
-                &self.client,
-                &self.host_state.message_limits,
-                "CancelInvocation",
-            ),
+            message_limited_client(&self.client, &self.host_state.message_limits, None),
             CancelInvocationRequest {
                 activation_id: self.activation_id.clone(),
                 invocation_id: self.invocation_id.clone(),
@@ -2454,7 +2451,7 @@ impl WorkerPluginCallback {
         let mut client = message_limited_client(
             &self.client,
             &self.host_state.message_limits,
-            "InvokeStream",
+            Some(registration_name),
         );
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
@@ -2467,7 +2464,7 @@ impl WorkerPluginCallback {
             let outcome = async move {
                 let _codec_capabilities = codec_capabilities;
                 let result = tokio::select! {
-                    result = client.invoke_stream(worker_rpc_request(invoke)) => result,
+                    result = client.invoke_stream(worker_callback_rpc_request(invoke)) => result,
                     _ = tx.closed() => {
                         guard.cancel_and_wait("host stopped consuming the worker stream").await?;
                         guard.finish();
@@ -2717,9 +2714,12 @@ impl WorkerPluginCallback {
         let surface_name = RegistrationSurface::try_from(request.surface)
             .map(|surface| surface.as_str_name())
             .unwrap_or("UNKNOWN");
-        let mut client =
-            message_limited_client(&self.client, &self.host_state.message_limits, "Invoke");
-        let response = client.invoke(worker_rpc_request(request));
+        let mut client = message_limited_client(
+            &self.client,
+            &self.host_state.message_limits,
+            Some(&callback_name),
+        );
+        let response = client.invoke(worker_callback_rpc_request(request));
         let result = match timeout {
             Some(timeout) => worker_rpc_with_timeout(timeout, response).await,
             None => response.await,
@@ -2846,6 +2846,11 @@ fn worker_rpc_request<T>(message: T) -> Request<T> {
     Request::new(message)
 }
 
+fn worker_callback_rpc_request(message: InvokeRequest) -> Request<InvokeRequest> {
+    let name = message.registration_name.clone();
+    nemo_relay_worker_proto::callback_request(message, &name)
+}
+
 async fn worker_rpc<T, F>(future: F) -> Result<Response<T>, Status>
 where
     F: Future<Output = Result<Response<T>, Status>>,
@@ -2908,10 +2913,10 @@ mod diagnostic_transport;
 
 fn message_limited_client(
     client: &PluginWorkerClient<Channel>,
-    limits: &WorkerRpcMessageLimits,
-    rpc: &str,
+    limits: &WorkerCallbackMessageLimits,
+    callback: Option<&str>,
 ) -> PluginWorkerClient<Channel> {
-    let limit = limits.for_rpc(rpc);
+    let limit = limits.for_callback(callback.unwrap_or_default());
     client
         .clone()
         .max_decoding_message_size(limit)
@@ -2919,7 +2924,7 @@ fn message_limited_client(
 }
 
 struct WorkerHostRuntimeState {
-    message_limits: WorkerRpcMessageLimits,
+    message_limits: WorkerCallbackMessageLimits,
     observer: super::diagnostics::PluginDiagnostics,
     diagnostics: Option<Arc<diagnostic_transport::WorkerDiagnostics>>,
     activation_id: String,
@@ -3023,7 +3028,7 @@ impl Drop for ScopeStackCleanupGuard<'_> {
 impl WorkerHostRuntimeState {
     fn new(activation_id: String, auth_token: String) -> Self {
         Self {
-            message_limits: WorkerRpcMessageLimits::default(),
+            message_limits: WorkerCallbackMessageLimits::default(),
             diagnostics: None,
             observer: super::diagnostics::PluginDiagnostics::default(),
             activation_id,

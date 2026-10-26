@@ -85,7 +85,7 @@ from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics
-from ._message_limits import MessageLimitInterceptor, RpcHostChannel, named_message_limits
+from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
 
 grpc: Any = importlib.import_module("grpc")
 
@@ -1698,6 +1698,13 @@ class PluginRuntime:
         self._diagnostics_task: asyncio.Future[WorkerDiagnostics] | None = None
         self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
 
+    def _callback_rpc(self, method: str, callback_name: str | None, request: Any) -> Any:
+        token = CALLBACK_NAME.set(callback_name)
+        try:
+            return getattr(self._host_stub, method)(request)
+        finally:
+            CALLBACK_NAME.reset(token)
+
     async def diagnostics(self) -> WorkerDiagnostics:
         """Negotiate once; disabled/unsupported facades skip diagnostic factories."""
         if self._diagnostics_task is None:
@@ -2300,9 +2307,10 @@ class ToolNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, value: Json) -> ToolExecutionResult:
         """Call the remaining tool execution chain with replacement arguments.
@@ -2325,14 +2333,16 @@ class ToolNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.ToolNext(
+        response = await self._runtime._callback_rpc(
+            "ToolNext",
+            self._callback_name,
             pb.ToolNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 value=_json_envelope(JSON_SCHEMA, value),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
@@ -2352,9 +2362,10 @@ class LlmNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, request: LlmRequest) -> Json:
         """Call the remaining LLM execution chain with a replacement request.
@@ -2376,14 +2387,16 @@ class LlmNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.LlmNext(
+        response = await self._runtime._callback_rpc(
+            "LlmNext",
+            self._callback_name,
             pb.LlmNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         return _json_result_to_value(response)
 
@@ -2399,9 +2412,10 @@ class LlmStreamNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     def call(self, request: LlmRequest) -> AsyncIterator[Json]:
         """Call the remaining LLM stream chain with a replacement request.
@@ -2428,14 +2442,16 @@ class LlmStreamNext:
             this method keeps its normal streaming lifetime.
         """
         scope_context = _SCOPE_CONTEXT.get()
-        stream = self._runtime._host_stub.LlmStreamNext(
+        stream = self._runtime._callback_rpc(
+            "LlmStreamNext",
+            self._callback_name,
             pb.LlmStreamNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
 
         async def values() -> AsyncIterator[Json]:
@@ -2474,7 +2490,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         fallback for each complete sent or received gRPC message. Defaults to
         4194304 (4 MiB); maximum 2147483647.
         ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME``: Host-resolved JSON map
-        from exact RPC names to byte limits, overriding the fallback per method.
+        from exact callback registration names to byte limits, overriding the
+        fallback for each callback and its continuations.
         Restart the host and workers after changing either setting. These are
         not model context or HTTP body limits.
 
@@ -2719,7 +2736,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 request.invocation_id,
                 response_required=False,
             )
-            next_call = LlmStreamNext(self._runtime, request.continuation_id)
+            next_call = LlmStreamNext(self._runtime, request.continuation_id, callback_name=request.registration_name)
             with _bind_invocation_scope(request):
                 stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
                 iterator = _as_async_iter(stream)
@@ -2840,7 +2857,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
                         context,
-                        ToolNext(self._runtime, request.continuation_id),
+                        ToolNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                     )
                 )
                 if not isinstance(result, ToolExecutionInterceptOutcome):
@@ -2909,7 +2926,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         request.invocation_id,
                         response_required=True,
                     ),
-                    LlmNext(self._runtime, request.continuation_id),
+                    LlmNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                 )
             )
             return _json_response(result)
@@ -3241,9 +3258,11 @@ def _bind_invocation_scope(request: Any) -> Generator[None]:
             parent_scope_id=parent_scope_id,
         )
     token = _SCOPE_CONTEXT.set(scope)
+    callback_token = CALLBACK_NAME.set(request.registration_name)
     try:
         yield
     finally:
+        CALLBACK_NAME.reset(callback_token)
         _SCOPE_CONTEXT.reset(token)
 
 

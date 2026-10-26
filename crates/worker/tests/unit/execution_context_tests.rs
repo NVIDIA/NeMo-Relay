@@ -84,10 +84,41 @@ fn disconnected_runtime() -> PluginRuntime {
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
-        max_message_bytes: nemo_relay_worker_proto::WorkerRpcMessageLimits::default(),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
         diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }
+}
+
+#[tokio::test]
+async fn callback_context_follows_stream_polling_without_widening_sibling_tasks() {
+    use futures_util::StreamExt;
+    use serde_json::json;
+
+    async fn exercise(name: &str) {
+        let mut stream = TASK_CALLBACK_NAME
+            .scope(Some(name.to_owned()), async {
+                ScopedJsonStream::new(
+                    Box::pin(futures_util::stream::once(async {
+                        tokio::task::yield_now().await;
+                        with_thread_scope(&None, || Ok(json!(current_callback_name())))
+                    })),
+                    None,
+                )
+            })
+            .await;
+        TASK_CALLBACK_NAME
+            .scope(Some("other_callback".into()), async {
+                assert_eq!(stream.next().await.unwrap().unwrap(), json!(name));
+                assert_eq!(current_callback_name().as_deref(), Some("other_callback"));
+            })
+            .await;
+        assert!(current_callback_name().is_none());
+    }
+
+    tokio::join!(exercise("large.guardrail-α"), exercise("small_guardrail"));
+    assert!(THREAD_CALLBACK_NAME.with(|name| name.borrow().is_none()));
 }
 
 fn llm_payload(

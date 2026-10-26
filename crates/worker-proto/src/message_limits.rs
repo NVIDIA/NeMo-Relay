@@ -12,20 +12,20 @@ use crate::{
     worker_max_message_bytes_from_env_with_default,
 };
 
-/// Host overrides keyed by exact gRPC method name, as a JSON object of byte limits.
+/// Host overrides keyed by exact callback registration name, as a JSON byte-limit map.
 pub const WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV: &str =
     "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME";
 
 /// Resolved worker transport limits shared by the host and maintained SDKs.
 #[derive(Debug, Clone)]
-pub struct WorkerRpcMessageLimits {
-    /// Fallback for RPCs without a named override.
+pub struct WorkerCallbackMessageLimits {
+    /// Fallback for callbacks without an override and for control RPCs.
     pub default_bytes: usize,
-    /// Overrides keyed by exact, case-sensitive gRPC method name.
+    /// Overrides keyed by exact callback registration name, like callback timeouts.
     pub by_name: BTreeMap<String, usize>,
 }
 
-impl Default for WorkerRpcMessageLimits {
+impl Default for WorkerCallbackMessageLimits {
     fn default() -> Self {
         Self {
             default_bytes: DEFAULT_WORKER_MAX_MESSAGE_BYTES,
@@ -34,11 +34,11 @@ impl Default for WorkerRpcMessageLimits {
     }
 }
 
-impl WorkerRpcMessageLimits {
+impl WorkerCallbackMessageLimits {
     /// Resolve host named/default overrides ahead of plugin named/default settings.
     ///
     /// # Errors
-    /// Rejects invalid finite byte limits or malformed RPC names/override JSON.
+    /// Rejects invalid finite byte limits or malformed callback names/override JSON.
     pub fn from_env_with_defaults(mut self) -> Result<Self, String> {
         self.validate()?;
         let host_default_present = std::env::var_os(WORKER_MAX_MESSAGE_BYTES_ENV).is_some();
@@ -59,9 +59,9 @@ impl WorkerRpcMessageLimits {
         Ok(self)
     }
 
-    /// Return the finite send/receive limit for one RPC.
+    /// Return the finite send/receive limit for one callback (empty for control RPCs).
     #[must_use]
-    pub fn for_rpc(&self, name: &str) -> usize {
+    pub fn for_callback(&self, name: &str) -> usize {
         self.by_name
             .get(name)
             .copied()
@@ -71,9 +71,8 @@ impl WorkerRpcMessageLimits {
     fn validate(&self) -> Result<(), String> {
         parse_worker_max_message_bytes(&self.default_bytes.to_string())?;
         for (name, value) in &self.by_name {
-            if name.is_empty()
-                || !name.starts_with(|c: char| c.is_ascii_alphabetic())
-                || !name.chars().all(|c| c.is_ascii_alphanumeric())
+            if name.trim().is_empty()
+                || name != name.trim()
                 || parse_worker_max_message_bytes(&value.to_string()).is_err()
             {
                 return Err(named_limit_error());
@@ -85,21 +84,25 @@ impl WorkerRpcMessageLimits {
 
 fn named_limit_error() -> String {
     format!(
-        "{WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV} must map gRPC method names to integers in 1..=2147483647"
+        "{WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV} must map non-empty callback registration names without surrounding whitespace to integers in 1..=2147483647"
     )
 }
 
 /// Select a generated tonic server's codec limits before decoding each RPC body.
 #[derive(Clone)]
-pub struct RpcMessageLimitService<S> {
+pub struct CallbackMessageLimitService<S> {
     inner: S,
-    limits: Arc<WorkerRpcMessageLimits>,
+    limits: Arc<WorkerCallbackMessageLimits>,
     configure: fn(S, usize) -> S,
 }
 
-impl<S> RpcMessageLimitService<S> {
+impl<S> CallbackMessageLimitService<S> {
     /// Wrap a generated tonic server with its send/receive configuration function.
-    pub fn new(inner: S, limits: WorkerRpcMessageLimits, configure: fn(S, usize) -> S) -> Self {
+    pub fn new(
+        inner: S,
+        limits: WorkerCallbackMessageLimits,
+        configure: fn(S, usize) -> S,
+    ) -> Self {
         Self {
             inner,
             limits: Arc::new(limits),
@@ -108,13 +111,15 @@ impl<S> RpcMessageLimitService<S> {
     }
 }
 
-impl<S: tonic::server::NamedService> tonic::server::NamedService for RpcMessageLimitService<S> {
+impl<S: tonic::server::NamedService> tonic::server::NamedService
+    for CallbackMessageLimitService<S>
+{
     const NAME: &'static str = S::NAME;
 }
 
-impl<S, B> Service<http::Request<B>> for RpcMessageLimitService<S>
+impl<S, B> Service<http::Request<B>> for CallbackMessageLimitService<S>
 where
-    S: Service<http::Request<B>> + Clone,
+    S: Service<http::Request<B>> + Clone + tonic::server::NamedService,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -126,8 +131,82 @@ where
 
     fn call(&mut self, request: http::Request<B>) -> Self::Future {
         let method = request.uri().path().rsplit('/').next().unwrap_or_default();
+        let metadata = tonic::metadata::MetadataMap::from_headers(request.headers().clone());
+        let callback = if S::NAME == "nemo.relay.worker.v1.PluginWorker"
+            && !matches!(method, "Invoke" | "InvokeStream")
+        {
+            None
+        } else {
+            callback_name(&metadata)
+        };
         // Generated tonic servers are always ready; their clones share the handler.
-        let mut service = (self.configure)(self.inner.clone(), self.limits.for_rpc(method));
+        let mut service = (self.configure)(
+            self.inner.clone(),
+            self.limits
+                .for_callback(callback.as_deref().unwrap_or_default()),
+        );
         service.call(request)
+    }
+}
+
+/// Binary metadata preserves exact UTF-8 registration names before body decoding.
+pub const WORKER_CALLBACK_METADATA: &str = "nemo-relay-worker-callback-bin";
+
+/// Read callback identity independently of an RPC method name.
+#[must_use]
+pub fn callback_name(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+    let value = metadata
+        .get_bin(WORKER_CALLBACK_METADATA)?
+        .to_bytes()
+        .ok()?;
+    String::from_utf8(value.to_vec()).ok()
+}
+
+/// Attach an invocation's registered callback name to a request.
+pub fn callback_request<T>(message: T, name: &str) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(message);
+    request.metadata_mut().insert_bin(
+        WORKER_CALLBACK_METADATA,
+        tonic::metadata::MetadataValue::from_bytes(name.as_bytes()),
+    );
+    request
+}
+
+/// Metadata interceptor for callback-scoped worker-to-host runtime calls.
+#[derive(Clone)]
+pub struct WorkerCallbackMetadata(pub Option<String>);
+
+impl tonic::service::Interceptor for WorkerCallbackMetadata {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Some(name) = &self.0 {
+            request.metadata_mut().insert_bin(
+                WORKER_CALLBACK_METADATA,
+                tonic::metadata::MetadataValue::from_bytes(name.as_bytes()),
+            );
+        }
+        Ok(request)
+    }
+}
+
+/// Reject mismatched callback metadata; named limits require the updated host.
+///
+/// # Errors
+/// Returns InvalidArgument for a missing required or mismatched callback identity.
+pub fn validate_callback_request<T>(
+    request: &tonic::Request<T>,
+    name: &str,
+    limits: &WorkerCallbackMessageLimits,
+) -> Result<(), tonic::Status> {
+    match callback_name(request.metadata()) {
+        Some(actual) if actual != name => Err(tonic::Status::invalid_argument(
+            "callback metadata does not match registration_name",
+        )),
+        None if limits.by_name.contains_key(name) => Err(tonic::Status::invalid_argument(
+            "named message limits require callback metadata",
+        )),
+        _ => Ok(()),
     }
 }
