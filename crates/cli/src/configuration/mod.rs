@@ -73,24 +73,29 @@ struct FileConfig {
 impl FileConfig {
     /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
     fn unknown_keys(&self) -> Vec<String> {
-        [
-            (
-                "gateway",
-                self.gateway.as_ref().map(|section| &section.unknown),
-            ),
-            (
-                "upstream",
-                self.upstream.as_ref().map(|section| &section.unknown),
-            ),
-            (
-                "agents",
-                self.agents.as_ref().map(|section| &section.unknown),
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(section, unknown)| Some((section, unknown?)))
-        .flat_map(|(section, unknown)| unknown.keys().map(move |key| format!("{section}.{key}")))
-        .collect()
+        let mut keys = Vec::new();
+        let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
+            keys.extend(unknown.keys().map(|key| format!("{section}.{key}")));
+        };
+        if let Some(gateway) = &self.gateway {
+            collect("gateway", &gateway.unknown);
+        }
+        if let Some(upstream) = &self.upstream {
+            collect("upstream", &upstream.unknown);
+        }
+        if let Some(agents) = &self.agents {
+            collect("agents", &agents.unknown);
+            for (name, agent) in [
+                ("claude", &agents.claude),
+                ("codex", &agents.codex),
+                ("pi", &agents.pi),
+            ] {
+                if let Some(agent) = agent {
+                    collect(&format!("agents.{name}"), &agent.unknown);
+                }
+            }
+        }
+        keys
     }
 }
 
@@ -136,6 +141,8 @@ struct FileAgentsConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentCommandConfig {
     command: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 /// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
