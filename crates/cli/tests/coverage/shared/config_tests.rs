@@ -1072,7 +1072,8 @@ command = "codex --approval-mode never"
 }
 
 #[test]
-fn stale_hermes_agent_config_is_rejected() {
+fn stale_hermes_agent_config_is_reported_as_unknown() {
+    // Configuration is fail-open (#1510): the stale table is reported, not rejected.
     let value = toml::from_str::<toml::Value>(
         r#"
 [agents.hermes]
@@ -1081,9 +1082,9 @@ command = "hermes"
     )
     .unwrap();
 
-    let error = validate_shared_config_shape(value).unwrap_err().to_string();
+    let unknown = validate_shared_config_shape(value).unwrap();
 
-    assert!(error.contains("unknown field `hermes`"));
+    assert_eq!(unknown, ["agents.hermes"]);
 }
 
 #[test]
@@ -4201,37 +4202,27 @@ fn malformed_shared_config_reports_context() {
 
     assert!(error.contains("invalid gateway configuration shape"));
 
-    let invalid_upstream_key = temp.path().join("invalid-upstream-key.toml");
+    // Configuration is fail-open (#1510): a misspelled key or an unknown nested table is ignored
+    // with a warning, and the rest of the section still applies.
+    let unknown_upstream_keys = temp.path().join("unknown-upstream-keys.toml");
     std::fs::write(
-        &invalid_upstream_key,
-        "[upstream]\nopenai_baseurl = \"https://example.test/v1\"\n",
+        &unknown_upstream_keys,
+        "[upstream]\nopenai_baseurl = \"https://example.test/v1\"\nopenai_base_url = \"https://example.test/v2\"\n\n[upstream.openai]\nbase_url = \"https://example.test/v3\"\n",
     )
     .unwrap();
     let args = GatewayOverrides {
-        config: Some(invalid_upstream_key),
+        config: Some(unknown_upstream_keys.clone()),
         ..GatewayOverrides::default()
     };
 
-    let error = resolve_server_config(&args).unwrap_err().to_string();
+    let resolved = resolve_server_config(&args).unwrap();
 
-    assert!(error.contains("invalid gateway configuration shape"));
-    assert!(error.contains("openai_baseurl"));
-
-    let invalid_nested_upstream = temp.path().join("invalid-nested-upstream.toml");
-    std::fs::write(
-        &invalid_nested_upstream,
-        "[upstream.openai]\nbase_url = \"https://example.test/v1\"\n",
+    assert_eq!(resolved.gateway.openai_base_url, "https://example.test/v2");
+    let unknown = validate_shared_config_shape(
+        toml::from_str(&std::fs::read_to_string(&unknown_upstream_keys).unwrap()).unwrap(),
     )
     .unwrap();
-    let args = GatewayOverrides {
-        config: Some(invalid_nested_upstream),
-        ..GatewayOverrides::default()
-    };
-
-    let error = resolve_server_config(&args).unwrap_err().to_string();
-
-    assert!(error.contains("invalid gateway configuration shape"));
-    assert!(error.contains("openai"));
+    assert_eq!(unknown, ["upstream.openai", "upstream.openai_baseurl"]);
 
     let plugin_config = temp.path().join("config-with-invalid-plugins.toml");
     std::fs::write(&plugin_config, "").unwrap();
@@ -4247,24 +4238,26 @@ fn malformed_shared_config_reports_context() {
 }
 
 #[test]
-fn unknown_gateway_config_key_reports_context() {
+fn unknown_gateway_config_key_is_reported_and_the_rest_applies() {
     let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir().unwrap();
-    let invalid_gateway_key = temp.path().join("invalid-gateway-key.toml");
-    std::fs::write(
-        &invalid_gateway_key,
-        "[gateway]\nmax_hook_payload_byte = 1048576\n",
-    )
-    .unwrap();
+    let unknown_gateway_key = temp.path().join("unknown-gateway-key.toml");
+    let text = "[gateway]\nmax_hook_payload_byte = 1048576\nmax_passthrough_body_bytes = 4096\n";
+    std::fs::write(&unknown_gateway_key, text).unwrap();
     let args = GatewayOverrides {
-        config: Some(invalid_gateway_key),
+        config: Some(unknown_gateway_key),
         ..GatewayOverrides::default()
     };
 
-    let error = resolve_server_config(&args).unwrap_err().to_string();
+    let resolved = resolve_server_config(&args).unwrap();
 
-    assert!(error.contains("invalid gateway configuration shape"));
-    assert!(error.contains("max_hook_payload_byte"));
+    assert_eq!(resolved.gateway.max_passthrough_body_bytes, 4096);
+    assert_eq!(
+        resolved.gateway.max_hook_payload_bytes,
+        GatewayConfig::default().max_hook_payload_bytes
+    );
+    let unknown = validate_shared_config_shape(toml::from_str(text).unwrap()).unwrap();
+    assert_eq!(unknown, ["gateway.max_hook_payload_byte"]);
 }
 
 #[test]
