@@ -1088,6 +1088,22 @@ command = "hermes"
 }
 
 #[test]
+fn unknown_key_inside_an_agent_table_is_reported_with_its_full_path() {
+    let value = toml::from_str::<toml::Value>(
+        r#"
+[agents.claude]
+commnad = "claude --typo"
+command = "claude"
+"#,
+    )
+    .unwrap();
+
+    let unknown = validate_shared_config_shape(value).unwrap();
+
+    assert_eq!(unknown, ["agents.claude.commnad"]);
+}
+
+#[test]
 fn provider_auth_environment_overrides_file_values() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
