@@ -233,4 +233,5 @@ func (s *LlmStream) closeNative(ptr *C.FfiStream) {
 	s.mu.Unlock()
 	s.cleanup.Stop()
 	C.nemo_relay_stream_free(ptr)
+	runtime.KeepAlive(s)
 }
