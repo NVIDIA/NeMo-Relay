@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, TypeVar
 from google.adk.agents import BaseAgent
 
 from nemo_relay.integrations.google_adk._context import current_invocation
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Mapping
+    from collections.abc import AsyncGenerator
 
     from google.adk.agents.context import Context
     from google.adk.agents.invocation_context import InvocationContext
@@ -29,10 +29,13 @@ _T = TypeVar("_T")
 
 def observe_root(node: BaseNode) -> None:
     """Swap the class of the invocation's root node for a subclass whose root run reports when ADK interrupts it."""
-    swap_class(node, _root_methods)
+    if isinstance(node, BaseAgent):
+        swap_class(node, _agent_root_methods)
+    else:
+        swap_class(node, _root_methods)
 
 
-def _root_methods(cls: type[BaseNode]) -> Mapping[str, object]:
+def _root_methods(cls: type[BaseNode]) -> Methods[BaseNode]:
     original = cls._run_impl
 
     async def _run_impl(self: BaseNode, *, ctx: Context, node_input: object) -> AsyncGenerator[object, None]:
@@ -41,8 +44,10 @@ def _root_methods(cls: type[BaseNode]) -> Mapping[str, object]:
             async for item in items:
                 yield item
 
-    if not issubclass(cls, BaseAgent):
-        return {"_run_impl": _run_impl}
+    return {"_run_impl": _run_impl}
+
+
+def _agent_root_methods(cls: type[BaseAgent]) -> Methods[BaseAgent]:
     run_async = cls.run_async
 
     async def run(self: BaseAgent, parent_context: InvocationContext) -> AsyncGenerator[Event, None]:
@@ -52,7 +57,7 @@ def _root_methods(cls: type[BaseNode]) -> Mapping[str, object]:
             async for event in events:
                 yield event
 
-    return {"_run_impl": _run_impl, "run_async": run}
+    return {**_root_methods(cls), "run_async": run}
 
 
 async def _observed(invocation_id: str, run: AsyncGenerator[_T, None]) -> AsyncGenerator[_T, None]:

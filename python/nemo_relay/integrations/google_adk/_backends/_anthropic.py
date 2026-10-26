@@ -32,7 +32,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     reported_cost,
     token_counts,
 )
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Iterable, Mapping
@@ -121,7 +121,7 @@ class _Create(Protocol):
     def __call__(self, resource: AsyncMessages, /, **kwargs: object) -> Awaitable[Message | _Stream]: ...
 
 
-def _messages_methods(cls: type[AsyncMessages]) -> Mapping[str, object]:
+def _messages_methods(cls: type[AsyncMessages]) -> Methods[AsyncMessages]:
     """Return `AsyncMessages` methods that apply attempt's tool choice edit and request headers.
 
     ADK builds Anthropic request without function calling config. Methods also record message id and usage on attempt.

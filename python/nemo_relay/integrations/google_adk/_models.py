@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 from google.adk.models import FallbackModel, LLMRegistry
@@ -26,7 +26,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     write_back_request,
     write_headers,
 )
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
     from google.adk.agents import LlmAgent
@@ -51,7 +51,7 @@ def wrap_agent_models(agent: LlmAgent) -> None:
     swap_class(agent, _agent_methods)
 
 
-def _agent_methods(cls: type[LlmAgent]) -> Mapping[str, object]:
+def _agent_methods(cls: type[LlmAgent]) -> Methods[LlmAgent]:
     original = cls.canonical_model_async
 
     async def canonical_model_async(self: LlmAgent, ctx: ReadonlyContext) -> BaseLlm:
@@ -79,7 +79,7 @@ def wrap_model(model: BaseLlm) -> None:
     swap_class(model, _methods)
 
 
-def _methods(cls: type[BaseLlm]) -> Mapping[str, object]:
+def _methods(cls: type[BaseLlm]) -> Methods[BaseLlm]:
     original = cls.generate_content_async
 
     async def generate_content_async(self: BaseLlm, llm_request: LlmRequest, stream: bool = False) -> _Responses:

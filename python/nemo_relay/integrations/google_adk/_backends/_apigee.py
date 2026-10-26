@@ -13,7 +13,7 @@ from nemo_relay.integrations.google_adk._backends._attempt import CURRENT_ATTEMP
 from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
 from nemo_relay.integrations.google_adk._backends._gemini import gemini_backend
 from nemo_relay.integrations.google_adk._serialization import RECORDED_ID_KEY, RECORDED_USAGE_KEY
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Mapping
@@ -37,7 +37,7 @@ def apigee_backend(model: ApigeeLlm) -> Backend:
     return Backend("openai", CHAT_CODEC, client_headers=True)
 
 
-def _completions_methods(cls: type[CompletionsHTTPClient]) -> Mapping[str, object]:
+def _completions_methods(cls: type[CompletionsHTTPClient]) -> Methods[CompletionsHTTPClient]:
     """Return `CompletionsHTTPClient` methods that send attempt's request headers and record each parsed body.
 
     Attempt header replaces proxy header of same name, ignoring case. Parsed body carries completion id and usage.
