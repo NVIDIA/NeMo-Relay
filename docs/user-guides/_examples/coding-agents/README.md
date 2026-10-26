@@ -124,7 +124,8 @@ sudo journalctl -u nemo-relay.service -n 50 --no-pager
 Require two distinct ready worker IDs and worker processes owned by Alice and
 Bob. The status endpoint reports assignments, not a live worker probe or a
 user directory. Correlate the sessions with their run times and lifecycle logs.
-In Phoenix, inspect `relay-managed-coding-agents`: require the model/tool activity
+In Phoenix project `default`, inspect service `relay-managed-coding-agents`:
+require the model/tool activity
 supported by each harness and check that `sample.employee@example.com` is
 replaced with `[REDACTED]` in the supported tool-result payload from reading
 `task.txt`. Inspect that tool result before relying on the model's final message. The provider conversation and source
@@ -144,6 +145,17 @@ check produced real Relay model spans but could not execute the task's commands;
 it still exited zero. Check the produced files, tests, and exported tool results
 before accepting the deployment. Do not bypass approval or hook trust checks to
 make the example pass.
+
+### Measured interactive Codex result
+
+Bob completed this task on Brev with ChatGPT sign-in, Codex 0.164.0, and Relay
+0.11.0-rc.1. His three test methods and 21 independent acceptance cases passed.
+One completed Phoenix trace contained one agent, one turn, six model calls, and
+eight tool calls, with all parent spans present. The `task.txt` tool result and
+final handoff were redacted; no original synthetic email appeared in the task's
+exported attributes. Bob's worker remained ready while his session stayed open.
+This result covers Codex; it does not establish Claude task completion or the
+two-user shutdown acceptance check.
 
 ## Apply the files elsewhere
 

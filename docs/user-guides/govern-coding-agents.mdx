@@ -274,7 +274,8 @@ Worker IDs and PIDs change each time. Compare your status assignments with
 process ownership and lifecycle timestamps, rather than copying these values.
 </Accordion>
 
-In Phoenix, find service `relay-managed-coding-agents` and inspect the supported
+In Phoenix, open project `default`, find service `relay-managed-coding-agents`,
+and inspect the supported
 tool-result payload from reading `task.txt`. The synthetic
 `sample.employee@example.com` should appear as **`[REDACTED]`** in exported
 payload data. The source file and provider conversation retain the original.
@@ -284,6 +285,28 @@ A synthetic hook sequence on the Brev example produced a `Read` span with kind
 `TOOL` and `output.value = "[REDACTED]"` in Phoenix. Its parent was
 `claude-code-turn` (`CHAIN`). This verifies hook export and redaction; a complete
 harness task must also exercise authenticated model traffic.
+
+<Accordion title="Verified interactive Codex task with ChatGPT sign-in">
+On the Brev VM, Bob completed the ticket task using ChatGPT sign-in, Codex
+0.164.0, and Relay 0.11.0-rc.1. The generated implementation passed its three
+test methods and 21 independent acceptance cases, including Unicode digits
+and non-string inputs.
+
+Phoenix received the following completed spans in one task trace:
+
+| Span | Count | Parent |
+| --- | --- | --- |
+| `codex-task` (`AGENT`) | 1 | Root |
+| `codex-turn` (`CHAIN`) | 1 | Agent |
+| `openai.responses` (`LLM`) | 6 | Turn |
+| `Bash` / `apply_patch` (`TOOL`) | 8 | Turn |
+
+The captured `task.txt` tool result and final handoff contained `[REDACTED]`;
+the original synthetic email was absent from the exported task attributes.
+All parent spans were present. Bob's worker remained ready with the session
+open. This verifies the interactive Codex path; Claude's authenticated task
+and the two-user shutdown check still need their own acceptance results.
+</Accordion>
 
 Close Alice's harness and watch for `worker_drain_started` and `worker_stopped`.
 Allow up to **two minutes** for accepted requests to drain; abrupt control
