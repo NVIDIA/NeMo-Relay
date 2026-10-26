@@ -70,6 +70,17 @@ fn diagnostic_http_consumers_reject_ambiguous_responses_and_accept_additive_fiel
         (404, b"".as_slice()),
         (503, b"not JSON"),
         (503, br#"{"error":{"reason":"future_reason"}}"#),
+        (503, br#"{"error":{"reason":{"disabled":null}}}"#),
+        (503, br#"{"error":["disabled"]}"#),
+        (503, br#"[["disabled"]]"#),
+        (503, br#"[{"reason":"disabled"}]"#),
+        (503, br#"{"error":{"reason":null}}"#),
+        (503, br#"{"error":{"reason":503}}"#),
+        (503, br#"{"error":{"reason":"disabled"}} {}"#),
+        (
+            503,
+            br#"{"error":{"reason":"disabled"},"error":{"reason":"shutting_down"}}"#,
+        ),
         (
             503,
             br#"{"error":{"reason":"disabled","reason":"shutting_down"}}"#,
@@ -77,7 +88,11 @@ fn diagnostic_http_consumers_reject_ambiguous_responses_and_accept_additive_fiel
         (404, br#"{"error":{"reason":"disabled"}}"#),
         (200, br#"{"error":{"reason":"missing"}}"#),
     ] {
-        assert!(DiagnosticHttpError::from_response(status, body).is_none());
+        assert!(
+            DiagnosticHttpError::from_response(status, body).is_none(),
+            "accepted {}",
+            String::from_utf8_lossy(body)
+        );
     }
     let mut body = br#"{"error":{"reason":"missing","future_field":true},"version":2}"#.to_vec();
     assert_eq!(
@@ -89,4 +104,15 @@ fn diagnostic_http_consumers_reject_ambiguous_responses_and_accept_additive_fiel
     );
     body.resize(MAX_DIAGNOSTIC_HTTP_ERROR_BYTES + 1, b' ');
     assert!(DiagnosticHttpError::from_response(404, &body).is_none());
+}
+
+#[test]
+fn diagnostic_http_consumers_accept_escaped_strings_and_bounded_whitespace() {
+    let mut body =
+        br#" {"error":{"reason":"dis\u0061bled","future":{"nested":[1,true]}}} "#.to_vec();
+    body.resize(MAX_DIAGNOSTIC_HTTP_ERROR_BYTES, b' ');
+    assert_eq!(
+        DiagnosticHttpError::from_response(503, &body),
+        Some(DiagnosticHttpError::new(DiagnosticHttpReason::Disabled))
+    );
 }

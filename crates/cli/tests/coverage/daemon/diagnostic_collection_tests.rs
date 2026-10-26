@@ -637,6 +637,24 @@ async fn diagnostic_polling_uses_error_reasons_before_stopping_a_session() {
         ),
         (
             503,
+            r#"{"error":{"reason":"http_read_disabled"}}"#,
+            "disabled",
+            true,
+        ),
+        (
+            503,
+            r#"{"error":{"reason":"collection_disabled"}}"#,
+            "disabled",
+            true,
+        ),
+        (
+            406,
+            r#"{"error":{"reason":"unsupported_schema","supported_schema_version":1}}"#,
+            "unsupported",
+            true,
+        ),
+        (
+            503,
             r#"{"error":{"reason":"read_authority_unavailable"}}"#,
             "unreachable",
             false,
@@ -651,6 +669,14 @@ async fn diagnostic_polling_uses_error_reasons_before_stopping_a_session() {
         (503, "malformed", "unreachable", false),
         (
             503,
+            r#"{"error":{"reason":{"disabled":null}}}"#,
+            "unreachable",
+            false,
+        ),
+        (503, r#"{"error":["disabled"]}"#, "unreachable", false),
+        (503, r#"[["disabled"]]"#, "unreachable", false),
+        (
+            503,
             r#"{"error":{"reason":"unsupported"}}"#,
             "unreachable",
             false,
@@ -662,6 +688,8 @@ async fn diagnostic_polling_uses_error_reasons_before_stopping_a_session() {
             false,
         ),
         (404, "", "unsupported", true),
+        (406, "", "unsupported", true),
+        (501, "", "unsupported", true),
         (
             501,
             r#"{"error":{"reason":"unsupported"}}"#,
@@ -691,6 +719,83 @@ async fn diagnostic_polling_uses_error_reasons_before_stopping_a_session() {
                 .unwrap();
         assert_eq!(value["collection"]["latest_poll"], outcome, "{body}");
         assert!(value["snapshot"].is_null());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn diagnostic_collection_recovers_after_retryable_errors() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for (body, expected) in [
+        (r#"{"error":{"reason":"shutting_down"}}"#, "shutting_down"),
+        (r#"[["disabled"]]"#, "unreachable"),
+    ] {
+        let source = context();
+        let payload = source
+            .snapshot(&Default::default())
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            crate::diagnostics_http::PREFIX,
+            get({
+                let requests = requests.clone();
+                move || {
+                    let first = requests.fetch_add(1, Ordering::SeqCst) == 0;
+                    let payload = payload.clone();
+                    async move {
+                        if first {
+                            (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+                        } else {
+                            ([(CONTENT_TYPE, "application/json")], payload).into_response()
+                        }
+                    }
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (state, token) = broker();
+        lock(&state.worker_sessions).insert("worker".into(), session(&source, &endpoint));
+        // First publish the error, then let the real scheduler honor the backoff
+        // and recover using the same session, grant, and cache entry.
+        poll_session(&state).await;
+        assert!(!lock(&state.worker_sessions)["worker"].diagnostic_poll_stopped);
+        let response = wrapper(&state, &token).await;
+        let value: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(value["collection"]["latest_poll"], expected);
+        assert!(value["snapshot"].is_null());
+
+        let task = tokio::spawn(run(Arc::downgrade(&state)));
+        let lifetime = Lifetime::new(&state, Some(&task));
+        let recovered = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let response = wrapper(&state, &token).await;
+                let value: serde_json::Value = serde_json::from_slice(
+                    &response.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                if value["collection"]["latest_poll"] == "succeeded" {
+                    break value;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("retryable error must allow the scheduler to recover");
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        let page: DiagnosticSnapshot =
+            serde_json::from_value(recovered["snapshot"].clone()).unwrap();
+        assert_eq!(page.source, *source.source());
+        assert_eq!(recovered["collection"]["availability"], "fresh");
+        assert!(!lock(&state.worker_sessions)["worker"].diagnostic_poll_stopped);
+        drop(lifetime);
+        let _ = task.await;
         server.abort();
     }
 }
