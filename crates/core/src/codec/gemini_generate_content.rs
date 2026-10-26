@@ -1335,7 +1335,7 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw = RawGeminiGenerateContentResponse::deserialize(response)
-            .map_err(|e| FlowError::Internal(format!("Gemini response decode: {e}")))?;
+            .map_err(|e| FlowError::InvalidArgument(format!("Gemini response decode: {e}")))?;
 
         let candidate = raw.candidates.and_then(|c| c.into_iter().next());
 
