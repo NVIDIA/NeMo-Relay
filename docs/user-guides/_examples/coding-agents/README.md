@@ -16,9 +16,11 @@ systemd, sudo, Git, and Python 3.11+. Install a verified Relay CLI binary that
 includes `daemon managed-bundle`; use the version matching the docs. Install
 supported Claude Code and Codex CLI executables so each account can run its
 harness. Use the support matrix's minimum versions. Provider access must permit
-gateway routing; use an Anthropic API key for Alice and an OpenAI API key for
-Bob in the first example. A paid harness subscription alone does not establish
-that API access. Do not put either key in the shared configuration.
+gateway routing. Alice needs an Anthropic API key or an approved
+Anthropic-compatible gateway credential for this example. Bob can use ChatGPT
+sign-in or an OpenAI API key. Do not put provider credentials in the shared
+configuration. A login on another machine or under another Linux user is not
+automatically available to these accounts.
 
 Start Phoenix on loopback port 6006 on this host, or change the template's OTLP
 endpoint to an approved receiving tier. The template enables full payloads only
@@ -76,11 +78,31 @@ export ANTHROPIC_API_KEY
 ```bash
 # Terminal B
 sudo -iu bob
+codex login --device-auth
+codex login status
+/opt/nvidia/share/relay-user-guide/session.sh
+```
+
+Complete the device-login URL and code in your own browser; the account or
+workspace must permit device login. If Bob is already signed in, reuse that
+login. With the default OpenAI upstream and no replacement provider credential,
+Relay recognizes ChatGPT OAuth and selects the native ChatGPT Codex backend.
+Use `exit` to return from Bob's shell to the original administrator account
+before running `sudo -iu alice`; Bob is a separate, non-administrator account.
+
+For API-key authentication instead, run the following as Bob before starting
+the launcher. This selects API billing rather than his ChatGPT subscription:
+
+```bash
 IFS= read -r -s -p 'OpenAI API key: ' OPENAI_API_KEY; printf '\n'
 export OPENAI_API_KEY
 printenv OPENAI_API_KEY | codex login --with-api-key
-/opt/nvidia/share/relay-user-guide/session.sh
 ```
+
+Claude.ai subscription OAuth is not supported through this example's managed
+`ANTHROPIC_BASE_URL`. Alice's native Claude login can be used for a separate
+hooks-only evaluation without redirecting her provider endpoint; that does not
+verify the example's model gateway path. Keep the two coverage claims separate.
 
 In both sessions, ask the agent to read
 `/opt/nvidia/share/relay-user-guide/task.txt` and complete it in its current
@@ -115,6 +137,13 @@ in lifecycle logs and recheck the worker status/process list,
 and confirm Bob can continue with his existing worker. Workers for two sessions
 of the same user may be reused; workers for these two users must be distinct.
 Telemetry labels are not enterprise identity-provider enrollment or offboarding.
+
+Preserve organization approval requirements and use interactive sessions when
+commands or plugin hooks need approval. An authenticated noninteractive Codex
+check produced real Relay model spans but could not execute the task's commands;
+it still exited zero. Check the produced files, tests, and exported tool results
+before accepting the deployment. Do not bypass approval or hook trust checks to
+make the example pass.
 
 ## Apply the files elsewhere
 

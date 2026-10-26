@@ -30,7 +30,7 @@ home, Relay routing token, provider authentication, task repository, and worker.
 | Bob | Codex CLI, MCP lifecycle client, and Bob's worker | Complete an independent task while Alice's session is active. |
 | Tracing backend | Phoenix, or your chosen OTLP destination | Inspect supported model/tool activity and redacted synthetic data. |
 
-<Card title="Run the two-user example on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-coding-agents/docs/user-guides/_examples/coding-agents">
+<Card title="Run the two-user example on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-coding-agents/docs/user-guides/_examples/coding-agents">
 Inspect the provisioning script, system service, shared policy, and session
 launcher. Use a fresh systemd VM and supply each user's provider authentication.
 </Card>
@@ -51,8 +51,10 @@ is a different setup from these managed daemon clients.
   [Claude Code >=2.1.121](https://code.claude.com/docs/en/setup), and
   [Codex CLI >=0.143.0](https://developers.openai.com/codex/cli). Install harnesses
   where the new users' login shells can find them.
-- Separate Anthropic and OpenAI **API access** for Alice and Bob. A harness
-  subscription alone does not establish API access through the configured route.
+- An Anthropic API key or approved Anthropic-compatible gateway credential for
+  Alice. Bob can use **ChatGPT sign-in or an OpenAI API key**. Authenticate in
+  each user's account on the example host; a login on your laptop does not
+  automatically sign in a different user on the VM.
 - Phoenix on loopback port 6006, or an approved OTLP destination. A disposable
   Phoenix can run in a separate terminal with `uvx --from arize-phoenix phoenix serve`.
 
@@ -88,7 +90,7 @@ If that connection opens a container, use `--host` only when its host route is r
 The same files run on an ordinary enterprise Linux VM. As administrator:
 
 ```bash
-git clone --branch codex/user-guide-coding-agents --single-branch https://github.com/exactlyallan/NeMo-Relay-ae.git relay-coding-agents
+git clone --branch topic/codex/user-guides-coding-agents --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-coding-agents
 cd relay-coding-agents/docs/user-guides/_examples/coding-agents
 sudo bash deploy.sh "$(command -v nemo-relay)" "$(command -v python3.12)"
 ```
@@ -99,8 +101,10 @@ your approved method; with uv, use `uv python install 3.12` and pass the absolut
 path printed by `uv python find 3.12` as the second deployment argument.
 
 The branch URL is the review copy until this guide lands upstream. Follow the
-[companion's Codex plugin setup](https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-coding-agents/docs/user-guides/_examples/coding-agents#prepare-bobs-managed-codex-integration)
-before starting Bob. In two independent terminals:
+[companion's Codex plugin setup](https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-coding-agents/docs/user-guides/_examples/coding-agents#prepare-bobs-managed-codex-integration)
+before starting Bob. In two independent terminals, begin at the original
+administrator shell. If you are already inside Alice's or Bob's shell, use
+`exit` first; these example users do not have administrator privileges.
 
 <Tabs>
 <Tab title="Alice: Claude Code">
@@ -116,19 +120,52 @@ export ANTHROPIC_API_KEY
 sudo -iu bob
 codex plugin marketplace add /opt/nvidia/share/nemo-relay-codex-marketplace-v1
 codex plugin add nemo-relay-managed-v1@nemo-relay-managed
-IFS= read -r -s -p 'OpenAI API key: ' OPENAI_API_KEY; printf '\n'
-export OPENAI_API_KEY
-printenv OPENAI_API_KEY | codex login --with-api-key
+codex login --device-auth
+codex login status
 /opt/nvidia/share/relay-user-guide/session.sh
 ```
 </Tab>
 </Tabs>
+
+Complete the device-login URL and code in your own browser. Workspace policy
+must permit device login. If Bob is already signed in, check his status and
+reuse that login. With the default OpenAI upstream and no replacement provider
+credential, Relay recognizes Codex's ChatGPT OAuth and forwards to the native
+ChatGPT Codex backend. A custom upstream or administrator-supplied credential
+changes that routing; see [Codex Responses compatibility](/daemon/configuration#codex-responses-compatibility).
+
+<Accordion title="Use an OpenAI API key for Bob instead">
+As Bob, supply the key through your secret manager or an interactive Bash shell:
+
+```bash
+IFS= read -r -s -p 'OpenAI API key: ' OPENAI_API_KEY; printf '\n'
+export OPENAI_API_KEY
+printenv OPENAI_API_KEY | codex login --with-api-key
+```
+</Accordion>
+
+<Note title="Claude subscription sign-in has a different boundary">
+Alice can sign in to Claude Code with a Claude.ai subscription, but that login
+is not supported by this example's managed `ANTHROPIC_BASE_URL` route. Keep
+native provider routing for an OAuth-only Claude deployment. Supported Relay
+hooks can be evaluated separately, with narrower coverage; they do not establish
+model-call capture through the gateway. See [managed Claude authentication](/daemon/configuration#claude-code).
+</Note>
 
 Use your secret manager for managed deployments. The Bash examples hide key
 input and keep key values out of shell history. Review Codex's plugin hook trust
 request for the generated `/opt/nvidia/bin/nemo-relay` handlers; prompt wording
 varies by version. Check `/plugins` and the generated bundle if the handler differs.
 Do not disable trust checks.
+
+<Note title="Keep organization approval requirements in force">
+Use the interactive harness sessions shown here for command and hook approvals.
+In an authenticated Codex check, model requests reached Relay and Phoenix, but
+the coding task could not execute commands because the enterprise policy required
+approvals unavailable in that noninteractive mode. The process still exited zero.
+Require the expected files, passing task tests, and supported model/tool spans;
+a successful process exit or model response is insufficient.
+</Note>
 
 Ask each agent to read `/opt/nvidia/share/relay-user-guide/task.txt` and complete
 it in its current repository. Keep both sessions open for verification. On your
