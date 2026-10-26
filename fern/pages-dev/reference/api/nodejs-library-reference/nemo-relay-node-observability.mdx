@@ -92,6 +92,10 @@ export interface AtifConfig {
   output_directory?: string;
   filename_template?: string;
   storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
+  /** Keep raw events in `extra.observed_events`. Defaults to `true`. */
+  include_observed_events?: boolean;
+  /** Keep full provider requests in trajectory steps. Defaults to `true`. */
+  include_llm_requests?: boolean;
 }
 ```
 
