@@ -94,85 +94,7 @@ pub(super) fn record_observation(
     };
     let origin = requested_origin.unwrap_or_else(|| component.origin());
     let context = StoredPluginContext::try_from(&observation.context)?;
-    let (code, class) = match &observation.code {
-        ObservationCode::Builtin(classification) => {
-            let code = BuiltinDiagnosticCode::from_canonical_name(classification.code())
-                .ok_or(DiagnosticError::InvalidCode)?;
-            let class = classification
-                .failure_class()
-                .map(|name| {
-                    FailureClass::from_canonical_name(name)
-                        .ok_or(DiagnosticError::InvalidClassification)
-                })
-                .transpose()?;
-            if !code.allows_class(class) {
-                return Err(DiagnosticError::InvalidClassification);
-            }
-            (
-                Some(StoredCode::Builtin(code)),
-                class.map(StoredFailureClass::Builtin),
-            )
-        }
-        ObservationCode::Extension(extension, class) => {
-            let (extension, class) = (*extension, *class);
-            if extension.context_id != inner.context_id || extension.component != handle {
-                return Err(DiagnosticError::InvalidCode);
-            }
-            let descriptor = state
-                .extensions
-                .get(extension.slot)
-                .and_then(Option::as_ref)
-                .filter(|v| v.generation == extension.generation && v.component == handle)
-                .ok_or(DiagnosticError::InvalidCode)?;
-            if descriptor.outcome == DiagnosticOutcome::Failure {
-                if class.is_none_or(|class| !descriptor.allowed_classes.contains(class)) {
-                    return Err(DiagnosticError::InvalidClassification);
-                }
-            } else if class.is_some() {
-                return Err(DiagnosticError::InvalidClassification);
-            }
-            (
-                Some(StoredCode::Extension {
-                    slot: extension.slot,
-                    generation: extension.generation,
-                }),
-                class.map(StoredFailureClass::Builtin),
-            )
-        }
-        ObservationCode::OpaqueExtension(extension, class) => {
-            let (extension, class) = (*extension, *class);
-            if extension.context_id != inner.context_id
-                || extension.component != handle
-                || class.extension != extension
-            {
-                return Err(DiagnosticError::InvalidClassification);
-            }
-            let descriptor = state
-                .extensions
-                .get(extension.slot)
-                .and_then(Option::as_ref)
-                .filter(|v| v.generation == extension.generation && v.component == handle)
-                .ok_or(DiagnosticError::InvalidCode)?;
-            let cause = StoredFailureClass::Extension {
-                slot: extension.slot,
-                generation: extension.generation,
-                index: u8::try_from(class.index)
-                    .map_err(|_| DiagnosticError::InvalidClassification)?,
-            };
-            if descriptor.outcome != DiagnosticOutcome::Failure || state.class_name(cause).is_none()
-            {
-                return Err(DiagnosticError::InvalidClassification);
-            }
-            (
-                Some(StoredCode::Extension {
-                    slot: extension.slot,
-                    generation: extension.generation,
-                }),
-                Some(cause),
-            )
-        }
-        ObservationCode::Overflow => (None, None),
-    };
+    let (code, class) = resolve_observation_code(state, inner, handle, observation)?;
     let counter_index = if let Some(code) = code {
         Some(
             state
@@ -319,4 +241,92 @@ pub(super) fn record_observation(
         code_total,
         evidence,
     })
+}
+
+fn resolve_observation_code(
+    state: &State,
+    inner: &Inner,
+    handle: ComponentHandle,
+    observation: &Observation<'_>,
+) -> Result<(Option<StoredCode>, Option<StoredFailureClass>), DiagnosticError> {
+    let (code, class) = match &observation.code {
+        ObservationCode::Builtin(classification) => {
+            let code = BuiltinDiagnosticCode::from_canonical_name(classification.code())
+                .ok_or(DiagnosticError::InvalidCode)?;
+            let class = classification
+                .failure_class()
+                .map(|name| {
+                    FailureClass::from_canonical_name(name)
+                        .ok_or(DiagnosticError::InvalidClassification)
+                })
+                .transpose()?;
+            if !code.allows_class(class) {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Builtin(code)),
+                class.map(StoredFailureClass::Builtin),
+            )
+        }
+        ObservationCode::Extension(extension, class) => {
+            let (extension, class) = (*extension, *class);
+            if extension.context_id != inner.context_id || extension.component != handle {
+                return Err(DiagnosticError::InvalidCode);
+            }
+            let descriptor = state
+                .extensions
+                .get(extension.slot)
+                .and_then(Option::as_ref)
+                .filter(|v| v.generation == extension.generation && v.component == handle)
+                .ok_or(DiagnosticError::InvalidCode)?;
+            if descriptor.outcome == DiagnosticOutcome::Failure {
+                if class.is_none_or(|class| !descriptor.allowed_classes.contains(class)) {
+                    return Err(DiagnosticError::InvalidClassification);
+                }
+            } else if class.is_some() {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Extension {
+                    slot: extension.slot,
+                    generation: extension.generation,
+                }),
+                class.map(StoredFailureClass::Builtin),
+            )
+        }
+        ObservationCode::OpaqueExtension(extension, class) => {
+            let (extension, class) = (*extension, *class);
+            if extension.context_id != inner.context_id
+                || extension.component != handle
+                || class.extension != extension
+            {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            let descriptor = state
+                .extensions
+                .get(extension.slot)
+                .and_then(Option::as_ref)
+                .filter(|v| v.generation == extension.generation && v.component == handle)
+                .ok_or(DiagnosticError::InvalidCode)?;
+            let cause = StoredFailureClass::Extension {
+                slot: extension.slot,
+                generation: extension.generation,
+                index: u8::try_from(class.index)
+                    .map_err(|_| DiagnosticError::InvalidClassification)?,
+            };
+            if descriptor.outcome != DiagnosticOutcome::Failure || state.class_name(cause).is_none()
+            {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Extension {
+                    slot: extension.slot,
+                    generation: extension.generation,
+                }),
+                Some(cause),
+            )
+        }
+        ObservationCode::Overflow => (None, None),
+    };
+    Ok((code, class))
 }

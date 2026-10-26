@@ -196,6 +196,24 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
         )
         return [unrelated, command] if result_kind == "list" else command
 
+    def projected_message(result, call_id):
+        if result_kind == "list":
+            assert isinstance(result, list)
+            assert result[0] == unrelated
+            result = result[1]
+        if result_kind != "message":
+            assert isinstance(result, Command)
+            assert isinstance(result.update, dict)
+            assert isinstance(result.goto, Send)
+            assert result.update["messages"][0] == unrelated
+            assert result.update["state"] == (1, 2)
+            sent = result.goto.arg["messages"][0]
+            assert (sent["tool_call_id"] if isinstance(sent, dict) else sent.tool_call_id) == call_id
+            result = result.update["messages"][1]
+            if isinstance(result, dict):
+                result = ToolMessage.model_validate(result)
+        return result
+
     async def run():
         """Exercise repeated calls through the integration and verify results and graph history."""
         runtime = AdaptiveRuntime(
@@ -224,21 +242,7 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
                         if integration == "langchain"
                         else awrap_tool_call(request, handler)
                     )
-                    if result_kind == "list":
-                        assert isinstance(result, list)
-                        assert result[0] == unrelated
-                        result = result[1]
-                    if result_kind != "message":
-                        assert isinstance(result, Command)
-                        assert isinstance(result.update, dict)
-                        assert isinstance(result.goto, Send)
-                        assert result.update["messages"][0] == unrelated
-                        assert result.update["state"] == (1, 2)
-                        sent = result.goto.arg["messages"][0]
-                        assert (sent["tool_call_id"] if isinstance(sent, dict) else sent.tool_call_id) == call_id
-                        result = result.update["messages"][1]
-                        if isinstance(result, dict):
-                            result = ToolMessage.model_validate(result)
+                    result = projected_message(result, call_id)
                     assert isinstance(result, ToolMessage)
                     assert result.content == "answer"
                     assert result.status == status

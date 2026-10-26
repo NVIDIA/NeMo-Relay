@@ -3967,65 +3967,74 @@ def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: st
     assert not plugin_api._sdk_error_to_worker(WorkerSdkError(str(first))).HasField("downstream_continuation_id")
 
 
+class ProvenanceHost(RecordingHostStub):
+    def __init__(self, surface: str) -> None:
+        super().__init__()
+        self.surface = surface
+
+    def failure(self, request: Any) -> Any:
+        return pb.WorkerError(
+            code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
+        )
+
+    async def ToolNext(self, request: Any) -> Any:
+        return pb.ToolExecutionResultResponse(error=self.failure(request))
+
+    async def LlmNext(self, request: Any) -> Any:
+        return pb.JsonResult(error=self.failure(request))
+
+    async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
+        if self.surface == "stream_setup":
+            raise grpc.aio.AioRpcError(
+                grpc.StatusCode.INTERNAL,
+                grpc.aio.Metadata(),
+                grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
+                "provider failed",
+            )
+        yield pb.StreamChunk(error=self.failure(request))
+
+
+class ProvenancePlugin(WorkerPlugin):
+    def __init__(self, replace_error: bool) -> None:
+        self.replace_error = replace_error
+
+    plugin_id = "provenance"
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        async def tool(context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(context.args)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(request)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                async for value in next_call.call(request):
+                    yield value
+            except (WorkerSdkError, grpc.RpcError):
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        ctx.register_tool_execution_intercept("tool", tool)
+        ctx.register_llm_execution_intercept("llm", llm)
+        ctx.register_llm_stream_execution_intercept("stream", stream)
+
+
 @pytest.mark.parametrize("surface", ["tool", "llm", "stream", "stream_setup"])
 @pytest.mark.parametrize("replace_error", [False, True])
 async def test_continuation_provenance_survives_worker_callbacks(surface: str, replace_error: bool) -> None:
-    class Host(RecordingHostStub):
-        def failure(self, request: Any) -> Any:
-            return pb.WorkerError(
-                code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
-            )
-
-        async def ToolNext(self, request: Any) -> Any:
-            return pb.ToolExecutionResultResponse(error=self.failure(request))
-
-        async def LlmNext(self, request: Any) -> Any:
-            return pb.JsonResult(error=self.failure(request))
-
-        async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
-            if surface == "stream_setup":
-                raise grpc.aio.AioRpcError(
-                    grpc.StatusCode.INTERNAL,
-                    grpc.aio.Metadata(),
-                    grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
-                    "provider failed",
-                )
-            yield pb.StreamChunk(error=self.failure(request))
-
-    class Plugin(WorkerPlugin):
-        plugin_id = "provenance"
-
-        def register(self, ctx: PluginContext, config: Json) -> None:
-            async def tool(context: Any, next_call: Any) -> Any:
-                try:
-                    return await next_call.call(context.args)
-                except WorkerSdkError:
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
-                try:
-                    return await next_call.call(request)
-                except WorkerSdkError:
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
-                try:
-                    async for value in next_call.call(request):
-                        yield value
-                except (WorkerSdkError, grpc.RpcError):
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            ctx.register_tool_execution_intercept("tool", tool)
-            ctx.register_llm_execution_intercept("llm", llm)
-            ctx.register_llm_stream_execution_intercept("stream", stream)
-
-    service = _service(Plugin(), Host())
+    service = _service(ProvenancePlugin(replace_error), ProvenanceHost(surface))
     await _register(service)
 
     async def invoke(index: int) -> Any:

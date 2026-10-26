@@ -283,75 +283,13 @@ unsafe extern "C" fn register(
             {
                 return Err(Error::Invalid);
             }
-            let definitions = unsafe { array(input.codes, input.code_count, abi::MAX_CODES)? };
-            if definitions.is_empty() {
-                return Err(Error::Invalid);
-            }
-            let mut parsed = [Parsed::Empty; abi::MAX_CODES];
-            let mut builtin = [BuiltinDiagnosticCode::all()[0]; abi::MAX_CODES];
-            let mut builtin_count = 0;
-            let mut extension_count = 0;
-            for (index, def) in definitions.iter().enumerate() {
-                let name = unsafe { text(def.name, &mut budget)? };
-                match def.kind {
-                    0 => {
-                        if def.description.len != 0 || def.class_count != 0 || def.outcome != 0 {
-                            return Err(Error::Invalid);
-                        }
-                        let code = BuiltinDiagnosticCode::from_canonical_name(name)
-                            .ok_or(Error::Invalid)?;
-                        if !matches!(
-                            code,
-                            BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
-                                PluginFailureCode::Common(_)
-                            ))
-                        ) || builtin[..builtin_count].contains(&code)
-                        {
-                            return Err(Error::Invalid);
-                        }
-                        builtin[builtin_count] = code;
-                        builtin_count += 1;
-                        parsed[index] = Parsed::Builtin(code);
-                    }
-                    1 => {
-                        let description = unsafe { text(def.description, &mut budget)? };
-                        if name.is_empty()
-                            || name.len() > 32
-                            || description.len() > 256
-                            || parsed[..index].iter().any(
-                                |v| matches!(v, Parsed::Extension { name: n, .. } if *n == name),
-                            )
-                        {
-                            return Err(Error::Invalid);
-                        }
-                        let raw_classes =
-                            unsafe { array(def.classes, def.class_count, abi::MAX_CLASSES)? };
-                        let mut classes = [FailureClass::Unknown; abi::MAX_CLASSES];
-                        for (i, value) in raw_classes.iter().enumerate() {
-                            classes[i] = FailureClass::from_canonical_name(unsafe {
-                                text(*value, &mut budget)?
-                            })
-                            .ok_or(Error::Invalid)?;
-                            if classes[..i].contains(&classes[i]) {
-                                return Err(Error::Invalid);
-                            }
-                        }
-                        let outcome = outcome(def.outcome)?;
-                        if (outcome == DiagnosticOutcome::Failure) == raw_classes.is_empty() {
-                            return Err(Error::Invalid);
-                        }
-                        parsed[index] = Parsed::Extension {
-                            name,
-                            description,
-                            outcome,
-                            classes,
-                            class_count: raw_classes.len(),
-                        };
-                        extension_count += 1;
-                    }
-                    _ => return Err(Error::Invalid),
-                }
-            }
+            let ParsedDefinitions {
+                codes: parsed,
+                builtin,
+                builtin_count,
+                extension_count,
+                count: definition_count,
+            } = unsafe { parse_definitions(input, &mut budget)? };
             let metadata = abi::MAX_REQUEST_BYTES - budget;
             let context = a.context.clone();
             let instance = a.instance;
@@ -402,39 +340,7 @@ unsafe extern "C" fn register(
             namespace[..7].copy_from_slice(b"native_");
             instance.simple().encode_lower(&mut namespace[7..]);
             let namespace = std::str::from_utf8(&namespace).expect("UUID namespace");
-            for (i, definition) in parsed[..definitions.len()].iter().enumerate() {
-                let result = match definition {
-                    Parsed::Builtin(code) => Ok(Code::Builtin(*code)),
-                    Parsed::Extension {
-                        name,
-                        description,
-                        outcome,
-                        classes,
-                        class_count,
-                    } => registered
-                        .recorder
-                        .register_extension(ExtensionRegistration {
-                            namespace,
-                            name,
-                            description,
-                            outcome: *outcome,
-                            allowed_classes: &classes[..*class_count],
-                        })
-                        .map_err(core_error)
-                        .and_then(|v| {
-                            v.map(|h| Code::Extension(h, *outcome))
-                                .ok_or(Error::Unavailable)
-                        }),
-                    Parsed::Empty => Err(Error::Internal),
-                };
-                match result {
-                    Ok(code) => registered.codes[i] = Some(code),
-                    Err(error) => {
-                        registered.owner.discard_unpublished();
-                        return Err(error);
-                    }
-                }
-            }
+            register_codes(&mut registered, &parsed[..definition_count], namespace)?;
             session.extensions += extension_count;
             session.metadata += metadata;
             session.components[slot] = Some(registered);
@@ -491,24 +397,7 @@ unsafe extern "C" fn record(
                 .and_then(|n| component.codes.get(n as usize))
                 .and_then(|v| *v)
                 .ok_or(Error::Invalid)?;
-            let mut observation = match code {
-                Code::Builtin(code) => {
-                    if outcome != DiagnosticOutcome::Failure {
-                        return Err(Error::Invalid);
-                    }
-                    Observation::new(
-                        Classification::new(code, class).map_err(|_| Error::Invalid)?,
-                        detail,
-                        count,
-                    )
-                }
-                Code::Extension(handle, expected) => {
-                    if outcome != expected {
-                        return Err(Error::Invalid);
-                    }
-                    Observation::extension(handle, class, outcome, detail, count)
-                }
-            };
+            let mut observation = code_observation(code, class, outcome, detail, count)?;
             observation.severity = match input.severity {
                 0 => DiagnosticSeverity::Trace,
                 1 => DiagnosticSeverity::Debug,
@@ -667,6 +556,171 @@ pub(super) static API: abi::NativeDiagnosticsApiV1 = abi::NativeDiagnosticsApiV1
     close,
     read,
 };
+
+fn code_observation<'a>(
+    code: Code,
+    class: Option<FailureClass>,
+    outcome: DiagnosticOutcome,
+    detail: &'a str,
+    count: NonZeroU64,
+) -> Result<Observation<'a>> {
+    let observation = match code {
+        Code::Builtin(code) => {
+            if outcome != DiagnosticOutcome::Failure {
+                return Err(Error::Invalid);
+            }
+            Observation::new(
+                Classification::new(code, class).map_err(|_| Error::Invalid)?,
+                detail,
+                count,
+            )
+        }
+        Code::Extension(handle, expected) => {
+            if outcome != expected {
+                return Err(Error::Invalid);
+            }
+            Observation::extension(handle, class, outcome, detail, count)
+        }
+    };
+    Ok(observation)
+}
+
+fn register_codes(
+    registered: &mut Registered,
+    parsed: &[Parsed<'_>],
+    namespace: &str,
+) -> Result<()> {
+    for (i, definition) in parsed.iter().enumerate() {
+        let result = match definition {
+            Parsed::Builtin(code) => Ok(Code::Builtin(*code)),
+            Parsed::Extension {
+                name,
+                description,
+                outcome,
+                classes,
+                class_count,
+            } => registered
+                .recorder
+                .register_extension(ExtensionRegistration {
+                    namespace,
+                    name,
+                    description,
+                    outcome: *outcome,
+                    allowed_classes: &classes[..*class_count],
+                })
+                .map_err(core_error)
+                .and_then(|v| {
+                    v.map(|h| Code::Extension(h, *outcome))
+                        .ok_or(Error::Unavailable)
+                }),
+            Parsed::Empty => Err(Error::Internal),
+        };
+        match result {
+            Ok(code) => registered.codes[i] = Some(code),
+            Err(error) => {
+                registered.owner.discard_unpublished();
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ParsedDefinitions<'a> {
+    codes: [Parsed<'a>; abi::MAX_CODES],
+    builtin: [BuiltinDiagnosticCode; abi::MAX_CODES],
+    builtin_count: usize,
+    extension_count: usize,
+    count: usize,
+}
+
+unsafe fn parse_definitions<'a>(
+    input: &'a abi::Registration,
+    budget: &mut usize,
+) -> Result<ParsedDefinitions<'a>> {
+    let definitions = unsafe { array(input.codes, input.code_count, abi::MAX_CODES)? };
+    if definitions.is_empty() {
+        return Err(Error::Invalid);
+    }
+    let mut parsed = [Parsed::Empty; abi::MAX_CODES];
+    let mut builtin = [BuiltinDiagnosticCode::all()[0]; abi::MAX_CODES];
+    let mut builtin_count = 0;
+    let mut extension_count = 0;
+    for (index, def) in definitions.iter().enumerate() {
+        let name = unsafe { text(def.name, budget)? };
+        match def.kind {
+            0 => {
+                if def.description.len != 0 || def.class_count != 0 || def.outcome != 0 {
+                    return Err(Error::Invalid);
+                }
+                let code =
+                    BuiltinDiagnosticCode::from_canonical_name(name).ok_or(Error::Invalid)?;
+                if !matches!(
+                    code,
+                    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+                        _
+                    )))
+                ) || builtin[..builtin_count].contains(&code)
+                {
+                    return Err(Error::Invalid);
+                }
+                builtin[builtin_count] = code;
+                builtin_count += 1;
+                parsed[index] = Parsed::Builtin(code);
+            }
+            1 => {
+                let description = unsafe { text(def.description, budget)? };
+                if name.is_empty()
+                    || name.len() > 32
+                    || description.len() > 256
+                    || parsed[..index]
+                        .iter()
+                        .any(|v| matches!(v, Parsed::Extension { name: n, .. } if *n == name))
+                {
+                    return Err(Error::Invalid);
+                }
+                parsed[index] = unsafe { parse_extension(def, name, description, budget)? };
+                extension_count += 1;
+            }
+            _ => return Err(Error::Invalid),
+        }
+    }
+    Ok(ParsedDefinitions {
+        codes: parsed,
+        builtin,
+        builtin_count,
+        extension_count,
+        count: definitions.len(),
+    })
+}
+
+unsafe fn parse_extension<'a>(
+    def: &abi::Code,
+    name: &'a str,
+    description: &'a str,
+    budget: &mut usize,
+) -> Result<Parsed<'a>> {
+    let raw_classes = unsafe { array(def.classes, def.class_count, abi::MAX_CLASSES)? };
+    let mut classes = [FailureClass::Unknown; abi::MAX_CLASSES];
+    for (i, value) in raw_classes.iter().enumerate() {
+        classes[i] = FailureClass::from_canonical_name(unsafe { text(*value, budget)? })
+            .ok_or(Error::Invalid)?;
+        if classes[..i].contains(&classes[i]) {
+            return Err(Error::Invalid);
+        }
+    }
+    let outcome = outcome(def.outcome)?;
+    if (outcome == DiagnosticOutcome::Failure) == raw_classes.is_empty() {
+        return Err(Error::Invalid);
+    }
+    Ok(Parsed::Extension {
+        name,
+        description,
+        outcome,
+        classes,
+        class_count: raw_classes.len(),
+    })
+}
 
 #[cfg(test)]
 #[path = "../../../tests/unit/native_diagnostics_tests.rs"]

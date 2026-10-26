@@ -215,22 +215,10 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         if not isinstance(data, dict) or data.get("schema") != TOOL_RESULT_SCHEMA:
             raise ValueError("Expected a versioned Relay tool result")
         content, is_error = data.get("content"), data.get("is_error")
-        if (
-            "content" not in data
-            or not (content is None or isinstance(content, str | list))
-            or not isinstance(is_error, bool)
-            or (isinstance(content, list) and not all(isinstance(part, str | dict) for part in content))
-        ):
-            raise ValueError("Invalid tool result content or error status")
+        self._validate_projection(data, content, is_error)
         result = _decode(data.get("result"), self._opaque)
         self._validate(result)
-        source_id = self._tool_call_id
-        cache = data.get("cache")
-        if isinstance(cache, dict) and "tool_call_id" in cache:
-            cached_id = cache["tool_call_id"]
-            if cached_id is not None and not isinstance(cached_id, str):
-                raise ValueError("Invalid cached tool call ID")
-            source_id = cached_id
+        source_id = self._cached_tool_call_id(data)
         replayed = self._tool_call_id is not None and source_id != self._tool_call_id
         message = self._message(result, source_id)
         if message is None:
@@ -256,6 +244,26 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         if replayed and self._tool_call_id is not None:
             return _rebind_tool_messages(result, source_id, self._tool_call_id)
         return result
+
+    @staticmethod
+    def _validate_projection(data: dict[str, Any], content: Any, is_error: Any) -> None:
+        if (
+            "content" not in data
+            or not (content is None or isinstance(content, str | list))
+            or not isinstance(is_error, bool)
+            or (isinstance(content, list) and not all(isinstance(part, str | dict) for part in content))
+        ):
+            raise ValueError("Invalid tool result content or error status")
+
+    def _cached_tool_call_id(self, data: dict[str, Any]) -> str | None:
+        source_id = self._tool_call_id
+        cache = data.get("cache")
+        if isinstance(cache, dict) and "tool_call_id" in cache:
+            cached_id = cache["tool_call_id"]
+            if cached_id is not None and not isinstance(cached_id, str):
+                raise ValueError("Invalid cached tool call ID")
+            source_id = cached_id
+        return source_id
 
     def _replace_message(self, result: ToolResultValue, message: ToolMessage, updated: ToolMessage) -> ToolResultValue:
         """Replace the matching tool message while preserving unrelated command updates."""

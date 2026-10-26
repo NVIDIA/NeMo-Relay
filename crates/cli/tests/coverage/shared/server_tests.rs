@@ -7407,51 +7407,52 @@ async fn gateway_reuses_unchanged_wire_bodies_and_reencodes_execution_edits() {
     let mut config = test_config();
     config.openai_base_url = upstream.url();
     let app = router(config);
-    for streaming in [false, true] {
-        for compressed in [false, true] {
-            for edit_body in [false, true] {
-                let raw = format!(
-                    r#"{{ "model" : "gpt-test", "input" : "original", "stream" : {streaming} }}"#
-                );
-                let wire = if compressed {
-                    zstd::stream::encode_all(raw.as_bytes(), 1).unwrap()
-                } else {
-                    raw.into_bytes()
-                };
-                let mut builder = Request::builder()
-                    .method("POST")
-                    .uri("/v1/responses")
-                    .header("content-type", "application/json")
-                    .header("x-wire-body-reuse", "yes");
-                if compressed {
-                    builder = builder.header(header::CONTENT_ENCODING, "zstd");
-                }
-                if edit_body {
-                    builder = builder.header("x-wire-body-edit", "yes");
-                }
-                let response = app
-                    .clone()
-                    .oneshot(builder.body(Body::from(wire.clone())).unwrap())
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::OK);
-                response.into_body().collect().await.unwrap();
-                let (sent, headers) = captured.lock().unwrap().last().unwrap().clone();
-                assert_eq!(headers["x-body-header-edit"], "applied");
-                if edit_body {
-                    assert!(!headers.contains_key(header::CONTENT_ENCODING));
-                    let payload: Value = serde_json::from_slice(&sent).unwrap();
-                    assert_eq!(payload["input"], "edited during execution");
-                } else {
-                    assert_eq!(sent.as_ref(), wire);
-                    assert_eq!(
-                        headers
-                            .get(header::CONTENT_ENCODING)
-                            .map(|value| value.to_str().unwrap()),
-                        compressed.then_some("zstd")
-                    );
-                }
-            }
+    for (streaming, compressed, edit_body) in [false, true]
+        .into_iter()
+        .flat_map(|streaming| [false, true].map(|compressed| (streaming, compressed)))
+        .flat_map(|(streaming, compressed)| {
+            [false, true].map(|edit_body| (streaming, compressed, edit_body))
+        })
+    {
+        let raw =
+            format!(r#"{{ "model" : "gpt-test", "input" : "original", "stream" : {streaming} }}"#);
+        let wire = if compressed {
+            zstd::stream::encode_all(raw.as_bytes(), 1).unwrap()
+        } else {
+            raw.into_bytes()
+        };
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("content-type", "application/json")
+            .header("x-wire-body-reuse", "yes");
+        if compressed {
+            builder = builder.header(header::CONTENT_ENCODING, "zstd");
+        }
+        if edit_body {
+            builder = builder.header("x-wire-body-edit", "yes");
+        }
+        let response = app
+            .clone()
+            .oneshot(builder.body(Body::from(wire.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await.unwrap();
+        let (sent, headers) = captured.lock().unwrap().last().unwrap().clone();
+        assert_eq!(headers["x-body-header-edit"], "applied");
+        if edit_body {
+            assert!(!headers.contains_key(header::CONTENT_ENCODING));
+            let payload: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(payload["input"], "edited during execution");
+        } else {
+            assert_eq!(sent.as_ref(), wire);
+            assert_eq!(
+                headers
+                    .get(header::CONTENT_ENCODING)
+                    .map(|value| value.to_str().unwrap()),
+                compressed.then_some("zstd")
+            );
         }
     }
     assert_eq!(captured.lock().unwrap().len(), 8);
