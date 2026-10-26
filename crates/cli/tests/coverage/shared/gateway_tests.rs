@@ -2797,6 +2797,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
+        None,
     );
 
     drop(body);
@@ -3090,6 +3091,7 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
+        None,
     );
 
     drop(body);
@@ -3170,6 +3172,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
+        None,
     );
     let _ = body.collect().await.unwrap();
 
@@ -4099,4 +4102,157 @@ async fn http_model_hosts_final_dispatch_blocks_rewrites_and_strips_custom_auth(
             );
         }
     }
+}
+
+async fn stream_error_test_guard(session_name: &str) -> (SessionManager, GatewayCallGuard) {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let preparation = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some(session_name.into()),
+                provider: "openai.chat_completions".into(),
+                model_name: Some("test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"messages": []}),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let guard = GatewayCallGuard::new(
+        manager.clone(),
+        preparation.session_id,
+        preparation.owner_subagent_id,
+        None,
+        preparation.session_finish,
+        crate::operational::OperationalContext::new(),
+    );
+    (manager, guard)
+}
+
+#[tokio::test]
+async fn streaming_response_preserves_the_first_error_before_headers() {
+    let (_manager, guard) = stream_error_test_guard("first-stream-error").await;
+    let response_stream = LlmJsonStream::new(futures_util::stream::iter([Err(
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(403),
+            body: "Reported by plugin 'test': stream denied before start".into(),
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        }),
+    )]));
+    let error = prepare_streaming_response_body(
+        response_stream,
+        ProviderRoute::OpenAiChatCompletions,
+        guard,
+    )
+    .await
+    .unwrap_err();
+    let response = translate_runtime_error(error).into_response();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        String::from_utf8_lossy(&bytes)
+            .contains("Reported by plugin 'test': stream denied before start")
+    );
+}
+
+#[tokio::test]
+async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
+    let (_manager, guard) = stream_error_test_guard("first-stream-chunk").await;
+    let response_stream = LlmJsonStream::new(futures_util::stream::iter([
+        Ok(json!({"sequence": 1})),
+        Ok(json!({"sequence": 2})),
+    ]));
+    let body = prepare_streaming_response_body(
+        response_stream,
+        ProviderRoute::OpenAiChatCompletions,
+        guard,
+    )
+    .await
+    .unwrap();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    assert_eq!(
+        bytes,
+        "data: {\"sequence\":1}\n\ndata: {\"sequence\":2}\n\ndata: [DONE]\n\n"
+    );
+}
+
+#[tokio::test]
+async fn streaming_response_handles_empty_streams_without_inventing_events() {
+    for route in [
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiResponses,
+        ProviderRoute::AnthropicMessages,
+    ] {
+        let (_manager, guard) = stream_error_test_guard("empty-stream").await;
+        let body = prepare_streaming_response_body(
+            LlmJsonStream::new(futures_util::stream::empty()),
+            route,
+            guard,
+        )
+        .await
+        .unwrap();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        if matches!(route, ProviderRoute::OpenAiChatCompletions) {
+            assert_eq!(bytes, "data: [DONE]\n\n");
+        } else {
+            assert!(bytes.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn streaming_response_cancellation_during_first_read_releases_stream_and_session() {
+    let (manager, guard) = stream_error_test_guard("cancel-first-stream-read").await;
+    let started = Arc::new(tokio::sync::Notify::new());
+    let stream_started = started.clone();
+    let (stream_lifetime, stream_dropped) = oneshot::channel::<()>();
+    let response_stream = LlmJsonStream::new(futures_util::stream::once(async move {
+        let _stream_lifetime = stream_lifetime;
+        stream_started.notify_one();
+        std::future::pending::<Result<Value, FlowError>>().await
+    }));
+    let preparation = tokio::spawn(prepare_streaming_response_body(
+        response_stream,
+        ProviderRoute::OpenAiChatCompletions,
+        guard,
+    ));
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    preparation.abort();
+    assert!(preparation.await.unwrap_err().is_cancelled());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), stream_dropped)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let closed = manager
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "cancelled_first_stream_read",
+                )
+                .await
+                .unwrap();
+            if closed == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }

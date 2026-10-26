@@ -5224,3 +5224,169 @@ async fn diagnostic_activation_deadline_revokes_expired_route_and_is_idempotent(
     expire_activation_routes(&state, 102);
     assert!(lock(&state.activations).is_empty());
 }
+
+#[tokio::test]
+async fn worker_stream_application_errors_preserve_the_route_and_next_request() {
+    use nemo_relay::api::registry::{
+        deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
+        register_llm_execution_intercept, register_llm_stream_execution_intercept,
+    };
+    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+    use serde_json::json;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "broker-stream-application-error";
+    struct Registration;
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            let _ = deregister_llm_execution_intercept(INTERCEPT);
+            let _ = deregister_llm_stream_execution_intercept(INTERCEPT);
+        }
+    }
+    let _registration = Registration;
+    fn denied() -> FlowError {
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(403),
+            body: "denied by worker middleware".into(),
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })
+    }
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, _, _, _| Box::pin(async { Err(denied()) })),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(INTERCEPT, 1,
+        Arc::new(|_, request, _, _| Box::pin(async move {
+            let after_first = request.content["error_after_first"].as_bool().unwrap_or(false);
+            Ok(LlmJsonStream::new(async_stream::stream! {
+                if after_first {
+                    yield Ok(json!({"id":"broker-stream-denial","object":"chat.completion.chunk","model":"test","choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]}));
+                }
+                yield Err(denied());
+            }))
+        })),
+    ).unwrap();
+
+    for require_worker in [false, true] {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x79_u8; 32]);
+        let credential = RouteCredential::parse(token.clone()).unwrap();
+        let mut state = test_daemon_state(false, &token, GatewayConfig::default());
+        Arc::get_mut(&mut state).unwrap().registry =
+            Registry::new(false).with_require_worker(require_worker);
+        let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+        let launch = fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap();
+        let activation_id = launch.activation_id.clone();
+        state
+            .registry
+            .register_mcp(
+                McpRegistration {
+                    fingerprint,
+                    token_digest: credential.digest(),
+                    session_id: McpSessionId::new("stream-error-mcp").unwrap(),
+                    lease_expires_at_unix_ms: u64::MAX,
+                },
+                launch,
+            )
+            .unwrap();
+        let gateway = crate::server::AppState::new(GatewayConfig {
+            openai_base_url: "http://127.0.0.1:1".into(),
+            ..GatewayConfig::default()
+        });
+        let gateway_for_worker = gateway.clone();
+        let worker = Router::new().fallback(move |request: Request<Body>| {
+            let gateway = gateway_for_worker.clone();
+            async move {
+                match crate::gateway::daemon_execute(
+                    gateway,
+                    request,
+                    crate::operational::OperationalContext::new(),
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => error.into_response(),
+                }
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker_task = tokio::spawn(async move { axum::serve(listener, worker).await.unwrap() });
+        state
+            .registry
+            .mark_worker_ready(
+                fingerprint,
+                &activation_id,
+                Arc::new(
+                    WorkerTarget::new(
+                        "stream-error-worker",
+                        endpoint,
+                        SensitiveString::new("worker-token").unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let app = router(state.clone());
+        let request = |streaming, after_first| {
+            Request::post("/v1/chat/completions")
+                .header(CLIENT_TOKEN_HEADER, &token).header("content-type", "application/json")
+                .body(Body::from(json!({"model":"test","messages":[],"stream":streaming,"error_after_first":after_first}).to_string())).unwrap()
+        };
+        for after_first in [false, true] {
+            let response = app
+                .clone()
+                .oneshot(request(true, after_first))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if after_first {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("request failure must not break worker framing")
+                .to_bytes();
+            let body = String::from_utf8_lossy(&bytes);
+            if after_first {
+                assert!(body.contains("broker-stream-denial"));
+                assert!(!body.contains("[DONE]"));
+            } else {
+                assert!(body.contains("denied by worker middleware"));
+            }
+            let assigned = state.registry.resolve_target(&credential.digest()).unwrap();
+            let ResolvedTarget::Worker(assigned) = assigned else {
+                panic!("application failure changed the worker route")
+            };
+            assert_eq!(
+                assigned.target().shared_worker_id().as_ref(),
+                "stream-error-worker"
+            );
+            drop(assigned);
+            let next_response = app.clone().oneshot(request(false, false)).await.unwrap();
+            assert_eq!(next_response.status(), StatusCode::FORBIDDEN);
+            let next_bytes = next_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes();
+            assert!(String::from_utf8_lossy(&next_bytes).contains("denied by worker middleware"));
+        }
+        worker_task.abort();
+        gateway
+            .sessions
+            .close_all("stream_error_route_test")
+            .await
+            .unwrap();
+    }
+}

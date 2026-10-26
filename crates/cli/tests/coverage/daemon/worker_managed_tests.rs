@@ -2115,7 +2115,18 @@ async fn managed_runtime_execution_cancellation_releases_session() {
         INTERCEPT,
         1,
         Arc::new(|_, _, _, _| {
-            Box::pin(async { Ok(LlmJsonStream::new(futures_util::stream::pending())) })
+            Box::pin(async {
+                Ok(LlmJsonStream::new(async_stream::stream! {
+                    yield Ok(json!({
+                        "id": "cancellation-test",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": "test",
+                        "choices": [{"index": 0, "delta": {"content": "first"}, "finish_reason": null}]
+                    }));
+                    std::future::pending::<()>().await;
+                }))
+            })
         }),
     )
     .unwrap();
@@ -2160,14 +2171,17 @@ async fn managed_runtime_execution_cancellation_releases_session() {
     .await
     .unwrap();
 
-    let response = runtime
-        .proxy_provider(
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        runtime.proxy_provider(
             pooled_client().unwrap(),
             request(true),
             ProviderRoute::OpenAi,
-        )
-        .await
-        .unwrap();
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(runtime.sessions.has_open_sessions().await);
     drop(response);
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -3167,4 +3181,217 @@ async fn http_model_hosts_managed_middleware_cannot_escape_the_configured_origin
             "{destination}: {error}"
         );
     }
+}
+
+#[tokio::test]
+async fn managed_runtime_stream_errors_preserve_status_and_incomplete_streams() {
+    use nemo_relay::api::runtime::LlmJsonStream;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-stream-denial";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: "http://127.0.0.1:1".into(),
+            anthropic_base_url: "http://127.0.0.1:1".into(),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+
+    for (path, mut request_content, first_chunk) in [
+        (
+            "/v1/chat/completions",
+            json!({"model":"test", "messages":[], "stream":true}),
+            json!({
+                "id":"stream-denial-chat", "object":"chat.completion.chunk", "model":"test",
+                "choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]
+            }),
+        ),
+        (
+            "/v1/responses",
+            json!({"model":"test", "input":"hello", "stream":true}),
+            json!({
+                "type":"response.created", "response":{"id":"stream-denial-response", "object":"response", "status":"in_progress", "model":"test", "output":[]}
+            }),
+        ),
+        (
+            "/v1/messages",
+            json!({"model":"test", "messages":[], "max_tokens":8, "stream":true}),
+            json!({
+                "type":"message_start", "message":{"id":"stream-denial-message", "type":"message", "role":"assistant", "model":"test", "content":[], "stop_reason":null, "stop_sequence":null, "usage":{"input_tokens":1,"output_tokens":0}}
+            }),
+        ),
+    ] {
+        register_llm_stream_execution_intercept(
+            INTERCEPT,
+            1,
+            Arc::new(move |_, request, _, _| {
+                let first_chunk = first_chunk.clone();
+                let after_first = request.content["error_after_first"]
+                    .as_bool()
+                    .unwrap_or(false);
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(async_stream::stream! {
+                        if after_first { yield Ok(first_chunk); }
+                        yield Err(FlowError::Upstream(UpstreamFailure {
+                            status: Some(403), body: "stream denied by middleware".into(),
+                            headers: Default::default(), class: UpstreamFailureClass::Other,
+                        }));
+                    }))
+                })
+            }),
+        )
+        .unwrap();
+        for after_first in [false, true] {
+            request_content["error_after_first"] = json!(after_first);
+            let result = runtime
+                .proxy_provider(
+                    pooled_client().unwrap(),
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(request_content.to_string()))
+                        .unwrap(),
+                    if path == "/v1/messages" {
+                        ProviderRoute::Anthropic
+                    } else {
+                        ProviderRoute::OpenAi
+                    },
+                )
+                .await;
+            if after_first {
+                let response = result.unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "path={path}");
+                let bytes = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("application error keeps HTTP framing valid")
+                    .to_bytes();
+                let text = String::from_utf8(bytes.to_vec()).unwrap();
+                assert_eq!(text.matches("data: ").count(), 1, "path={path}: {text}");
+                assert!(text.contains("stream-denial-"), "path={path}: {text}");
+                assert!(
+                    !text.contains("[DONE]"),
+                    "failed stream must not report successful completion"
+                );
+            } else {
+                let response = result.unwrap_err().into_response();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "path={path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert!(String::from_utf8_lossy(&bytes).contains("stream denied by middleware"));
+            }
+        }
+        deregister_llm_stream_execution_intercept(INTERCEPT).unwrap();
+    }
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn managed_runtime_cancelled_first_read_preserves_another_active_call() {
+    use nemo_relay::api::runtime::LlmJsonStream;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-cancel-first-stream-read";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    let first_started = Arc::new(Notify::new());
+    let second_started = Arc::new(Notify::new());
+    register_llm_stream_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new({
+            let first_started = first_started.clone();
+            let second_started = second_started.clone();
+            move |_, request, _, _| {
+                let started = if request.content["call"] == "first" {
+                    first_started.clone()
+                } else {
+                    second_started.clone()
+                };
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                        started.notify_one();
+                        std::future::pending::<Result<Value, FlowError>>().await
+                    })))
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let runtime = Arc::new(
+        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
+            .await
+            .unwrap(),
+    );
+    let spawn_request = |call: &'static str| {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            runtime
+                .proxy_provider(
+                    pooled_client().unwrap(),
+                    Request::post("/v1/chat/completions")
+                        .header("x-nemo-relay-session-id", "shared-stream-cancellation")
+                        .body(Body::from(
+                            json!({"model":"test","messages":[],"stream":true,"call":call})
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                    ProviderRoute::OpenAi,
+                )
+                .await
+        })
+    };
+    let first_request = spawn_request("first");
+    tokio::time::timeout(Duration::from_secs(5), first_started.notified())
+        .await
+        .unwrap();
+    let second_request = spawn_request("second");
+    tokio::time::timeout(Duration::from_secs(5), second_started.notified())
+        .await
+        .unwrap();
+    first_request.abort();
+    assert!(first_request.await.unwrap_err().is_cancelled());
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        runtime
+            .sessions
+            .close_idle_sessions_at(
+                std::time::Instant::now() + Duration::from_secs(1),
+                Duration::from_millis(1),
+                "first_read_cancelled",
+            )
+            .await
+            .unwrap(),
+        0,
+        "the second request still owns an in-flight call in this session"
+    );
+    assert!(!second_request.is_finished());
+    second_request.abort();
+    assert!(second_request.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if runtime
+                .sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "all_first_reads_cancelled",
+                )
+                .await
+                .unwrap()
+                == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime.close().await.unwrap();
 }
