@@ -84,7 +84,8 @@ from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
-from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics
+from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics, _open_diagnostic_channel
+from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
 
 grpc: Any = importlib.import_module("grpc")
 
@@ -352,6 +353,32 @@ def _llm_execution_context(
 
 
 WORKER_PROTOCOL = "grpc-v1"
+_WORKER_MAX_MESSAGE_BYTES_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
+_DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+
+
+def _worker_max_message_bytes() -> int:
+    """Read a finite host-owned byte limit, rejecting invalid overrides at startup."""
+    value = os.environ.get(_WORKER_MAX_MESSAGE_BYTES_ENV)
+    if value is None:
+        return _DEFAULT_WORKER_MAX_MESSAGE_BYTES
+    # Keep this grammar and ceiling aligned with nemo-relay-worker-proto.
+    if value.isascii() and value.isdecimal():
+        try:
+            limit = int(value)
+        except ValueError:
+            pass
+        else:
+            if 1 <= limit <= 2_147_483_647:
+                return limit
+    raise WorkerSdkError(f"{_WORKER_MAX_MESSAGE_BYTES_ENV} must be a decimal integer in 1..=2147483647")
+
+
+def _worker_grpc_options(limit: int) -> tuple[tuple[str, int], ...]:
+    """Apply the same finite cap to both directions of an execution RPC endpoint."""
+    return (("grpc.max_receive_message_length", limit), ("grpc.max_send_message_length", limit))
+
+
 JSON_SCHEMA = "nemo.relay.Json@1"
 DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
 METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
@@ -1671,6 +1698,13 @@ class PluginRuntime:
         self._diagnostics_task: asyncio.Future[WorkerDiagnostics] | None = None
         self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
 
+    def _callback_rpc(self, method: str, callback_name: str | None, request: Any) -> Any:
+        token = CALLBACK_NAME.set(callback_name)
+        try:
+            return getattr(self._host_stub, method)(request)
+        finally:
+            CALLBACK_NAME.reset(token)
+
     async def diagnostics(self) -> WorkerDiagnostics:
         """Negotiate once; disabled/unsupported facades skip diagnostic factories."""
         if self._diagnostics_task is None:
@@ -2273,9 +2307,10 @@ class ToolNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, value: Json) -> ToolExecutionResult:
         """Call the remaining tool execution chain with replacement arguments.
@@ -2298,14 +2333,16 @@ class ToolNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.ToolNext(
+        response = await self._runtime._callback_rpc(
+            "ToolNext",
+            self._callback_name,
             pb.ToolNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 value=_json_envelope(JSON_SCHEMA, value),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
@@ -2325,9 +2362,10 @@ class LlmNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, request: LlmRequest) -> Json:
         """Call the remaining LLM execution chain with a replacement request.
@@ -2349,14 +2387,16 @@ class LlmNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.LlmNext(
+        response = await self._runtime._callback_rpc(
+            "LlmNext",
+            self._callback_name,
             pb.LlmNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         return _json_result_to_value(response)
 
@@ -2372,9 +2412,10 @@ class LlmStreamNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     def call(self, request: LlmRequest) -> AsyncIterator[Json]:
         """Call the remaining LLM stream chain with a replacement request.
@@ -2401,14 +2442,16 @@ class LlmStreamNext:
             this method keeps its normal streaming lifetime.
         """
         scope_context = _SCOPE_CONTEXT.get()
-        stream = self._runtime._host_stub.LlmStreamNext(
+        stream = self._runtime._callback_rpc(
+            "LlmStreamNext",
+            self._callback_name,
             pb.LlmStreamNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
 
         async def values() -> AsyncIterator[Json]:
@@ -2443,6 +2486,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     Optional environment variables:
         ``NEMO_RELAY_WORKER_ENDPOINT_FILE``: File where the SDK writes the
         resolved worker endpoint after the gRPC server is accepting requests.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES``: Host-supplied positive decimal
+        fallback for each complete sent or received gRPC message. Defaults to
+        4194304 (4 MiB); maximum 2147483647.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME``: Host-resolved JSON map
+        from exact callback registration names to byte limits, overriding the
+        fallback for each callback and its continuations.
+        Restart the host and workers after changing either setting. These are
+        not model context or HTTP body limits.
 
     Callback concurrency:
         The gRPC AsyncIO server can keep multiple RPCs in flight. Asynchronous
@@ -2457,14 +2508,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         not enforce an application-level RPC admission limit.
 
     Raises:
-        WorkerSdkError: A required environment variable is empty or missing, or
-            the worker endpoint cannot be bound.
+        WorkerSdkError: A required environment variable is empty or missing,
+            the worker message limit is invalid, or the endpoint cannot be bound.
         OSError: Unix socket cleanup or endpoint-file creation fails.
         grpc.RpcError: gRPC server or host-channel startup fails.
         asyncio.CancelledError: The task running the worker is cancelled.
 
     Note:
-        The function closes the gRPC server and host channel during shutdown or
+        The function closes the gRPC server and both host channels during shutdown or
         cancellation. It returns only after the host accepts a shutdown request.
     """
     _plugin_id(plugin)
@@ -2473,19 +2524,29 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     activation_id = _required_env("NEMO_RELAY_WORKER_ID")
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
+    max_message_bytes = _worker_max_message_bytes()
+    try:
+        by_name = named_message_limits()
+    except ValueError as exc:
+        raise WorkerSdkError(str(exc)) from exc
 
     worker_target = _grpc_target(worker_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = _open_host_channel(host_endpoint)
+    host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes, by_name=by_name)
+    authority = (("grpc.default_authority", "localhost"),) if host_endpoint.startswith("unix://") else ()
+    diagnostic_channel = _open_diagnostic_channel(_grpc_target(host_endpoint), authority)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
         host_stub=pb_grpc.RelayHostRuntimeStub(host_channel),
-        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(host_channel),
+        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
-    server = grpc.aio.server()
+    server = grpc.aio.server(
+        options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
+        interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
+    )
     try:
         pb_grpc.add_PluginWorkerServicer_to_server(service, server)
         bound_port = server.add_insecure_port(worker_target)
@@ -2498,8 +2559,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         await shutdown_event.wait()
     finally:
         await server.stop(grace=2)
-        await runtime._close_diagnostics()
-        await host_channel.close()
+        try:
+            await runtime._close_diagnostics()
+        finally:
+            await asyncio.gather(host_channel.close(), diagnostic_channel.close())
 
 
 @dataclass(slots=True)
@@ -2677,7 +2740,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 request.invocation_id,
                 response_required=False,
             )
-            next_call = LlmStreamNext(self._runtime, request.continuation_id)
+            next_call = LlmStreamNext(self._runtime, request.continuation_id, callback_name=request.registration_name)
             with _bind_invocation_scope(request):
                 stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
                 iterator = _as_async_iter(stream)
@@ -2798,7 +2861,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
                         context,
-                        ToolNext(self._runtime, request.continuation_id),
+                        ToolNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                     )
                 )
                 if not isinstance(result, ToolExecutionInterceptOutcome):
@@ -2867,7 +2930,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         request.invocation_id,
                         response_required=True,
                     ),
-                    LlmNext(self._runtime, request.continuation_id),
+                    LlmNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                 )
             )
             return _json_response(result)
@@ -3199,9 +3262,11 @@ def _bind_invocation_scope(request: Any) -> Generator[None]:
             parent_scope_id=parent_scope_id,
         )
     token = _SCOPE_CONTEXT.set(scope)
+    callback_token = CALLBACK_NAME.set(request.registration_name)
     try:
         yield
     finally:
+        CALLBACK_NAME.reset(callback_token)
         _SCOPE_CONTEXT.reset(token)
 
 
@@ -3338,14 +3403,24 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
-def _open_host_channel(endpoint: str) -> Any:
+def _open_host_channel(
+    endpoint: str, *, max_message_bytes: int | None = None, by_name: dict[str, int] | None = None
+) -> Any:
+    """Open a bounded continuation channel while retaining Unix socket authority."""
     target = _grpc_target(endpoint)
+    limit = _worker_max_message_bytes() if max_message_bytes is None else max_message_bytes
+    if by_name is None:
+        by_name = named_message_limits()
+    if by_name:
+        authority = (("grpc.default_authority", "localhost"),) if endpoint.startswith("unix://") else ()
+        return RpcHostChannel(target, limit, by_name, authority)
+    options = _worker_grpc_options(limit)
     if endpoint.startswith("unix://"):
         return grpc.aio.insecure_channel(
             target,
-            options=(("grpc.default_authority", "localhost"),),
+            options=(*options, ("grpc.default_authority", "localhost")),
         )
-    return grpc.aio.insecure_channel(target)
+    return grpc.aio.insecure_channel(target, options=options)
 
 
 def _announced_worker_endpoint(worker_endpoint: str, bound_port: int) -> str:

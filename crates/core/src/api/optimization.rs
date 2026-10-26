@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::codec::model_pricing::{InputSplit, input_split};
 use crate::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationModel, LlmOptimizationSummary,
     LlmOptimizationSummaryStatus, LlmOptimizationTokens,
@@ -578,9 +579,14 @@ fn derive_optimization_usage(
     {
         response_usage.total_tokens = Some(inferred);
     }
+    let api_split = response
+        .as_ref()
+        .and_then(|response| response.api_specific.as_ref())
+        .and_then(InputSplit::of_api);
     let baseline = effective.as_ref().map(|usage| {
         derive_baseline_usage(
             usage,
+            api_split,
             tokens_saved,
             token_totals,
             limitations,
@@ -623,6 +629,7 @@ fn note_missing_core_usage(
 
 fn derive_baseline_usage(
     usage: &Usage,
+    api_split: Option<InputSplit>,
     tokens_saved: &LlmOptimizationTokens,
     token_totals: &CheckedTokenTotals,
     limitations: &mut Vec<String>,
@@ -673,7 +680,71 @@ fn derive_baseline_usage(
             baseline_derivation_incomplete,
         );
     }
+    baseline.uncached_input_tokens =
+        match baseline_uncached_input_tokens(usage, api_split, token_totals) {
+            Ok(uncached) => uncached,
+            Err(BaselineInputError::Overflow) => {
+                *token_count_overflow = true;
+                None
+            }
+            Err(BaselineInputError::Incomplete(limitation)) => {
+                limitations.push(limitation.to_string());
+                *baseline_derivation_incomplete = true;
+                None
+            }
+        };
     baseline
+}
+
+enum BaselineInputError {
+    Overflow,
+    Incomplete(&'static str),
+}
+
+fn baseline_uncached_input_tokens(
+    usage: &Usage,
+    api_split: Option<InputSplit>,
+    saved: &CheckedTokenTotals,
+) -> Result<Option<u64>, BaselineInputError> {
+    const INCONSISTENT: BaselineInputError =
+        BaselineInputError::Incomplete("inconsistent_baseline_input_split");
+    let Some(uncached) = usage.uncached_input_tokens else {
+        return Ok(None);
+    };
+    let split = input_split(usage).ok_or(INCONSISTENT)?;
+    let overflow = saved.overflow;
+    if overflow.prompt || overflow.cache_read || overflow.cache_write {
+        return Err(BaselineInputError::Overflow);
+    }
+    let saved = &saved.values;
+    let with_saved_prompt = uncached
+        .checked_add(saved.prompt_tokens.unwrap_or(0))
+        .ok_or(BaselineInputError::Overflow)?;
+    let saved_cache = [saved.cache_read_tokens, saved.cache_write_tokens]
+        .into_iter()
+        .flatten()
+        .try_fold(0, u64::checked_add)
+        .ok_or(BaselineInputError::Overflow)?;
+    if saved_cache == 0 {
+        return Ok(Some(with_saved_prompt));
+    }
+    let inclusive = match split {
+        InputSplit::Inclusive => true,
+        InputSplit::Separate => false,
+        InputSplit::Either => {
+            api_split.ok_or(BaselineInputError::Incomplete(
+                "undetermined_baseline_input_split",
+            ))? == InputSplit::Inclusive
+        }
+    };
+    if inclusive {
+        with_saved_prompt
+            .checked_sub(saved_cache)
+            .map(Some)
+            .ok_or(INCONSISTENT)
+    } else {
+        Ok(Some(with_saved_prompt))
+    }
 }
 
 struct PricingAnalysis {

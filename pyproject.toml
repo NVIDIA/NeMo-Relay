@@ -187,6 +187,17 @@ not-subscriptable = "ignore"
 unsupported-operator = "ignore"
 
 [[tool.ty.overrides]]
+include = [
+    "python/tests/integrations/google_adk_tests/test_scopes.py",
+    "python/tests/integrations/langchain_tests/test_tool_codec.py",
+]
+
+[tool.ty.overrides.rules]
+# These tests intentionally suppress diagnostics from optional framework types.
+# The suppressions are unused when those frameworks are not installed.
+unused-ignore-comment = "ignore"
+
+[[tool.ty.overrides]]
 include = ["skills/**"]
 
 [tool.ty.overrides.rules]

@@ -1952,6 +1952,43 @@ fn anthropic_streaming_codec_attaches_citations_to_text_blocks() {
 }
 
 #[test]
+fn anthropic_streaming_codec_keeps_empty_object_input_for_tool_without_arguments() {
+    // A tool called with no arguments streams a single empty `partial_json` fragment. The
+    // assembled input stays the `{}` from content_block_start instead of becoming "".
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_e", "type": "message", "role": "assistant",
+            "model": "claude-haiku-4-5-20251001", "usage": {}
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "tool_use", "id": "toolu_e", "name": "get_time", "input": {}}
+    }))
+    .unwrap();
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": ""}
+    }))
+    .unwrap();
+    collector(json!({"type": "content_block_stop", "index": 0})).unwrap();
+
+    let assembled = finalizer();
+    let block = &assembled["content"][0];
+    assert_eq!(block["type"], json!("tool_use"));
+    assert_eq!(block["id"], json!("toolu_e"));
+    assert_eq!(block["input"], json!({}));
+}
+
+#[test]
 fn anthropic_streaming_codec_keeps_partial_json_when_unparseable() {
     // Truncated stream: input_json_delta fragments don't form valid JSON. Codec must not drop
     // the tool_use block; surface the raw concatenation as a string fallback so observability

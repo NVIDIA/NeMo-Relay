@@ -377,16 +377,15 @@ fn test_exporters_agree_on_cost_total_for_anthropic_payload() {
         anthropic_response_output(
             "parity-priced-model",
             json!({
-                "input_tokens": 1000,
+                "input_tokens": 800,
                 "output_tokens": 500,
                 "cache_read_input_tokens": 200
             }),
         ),
     );
 
-    // Identical normalized usage as the OpenAI Chat scenario, so the cost
-    // must match the chat-shaped run exactly: codec differences must not
-    // leak into exporter cost facts.
+    // Same request as the Chat scenario. Anthropic counts cache reads
+    // separately from input tokens.
     assert_eq!(
         exports.agent_step().metrics.as_ref().unwrap().cost_usd,
         Some(0.000_435)

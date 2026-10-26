@@ -46,6 +46,9 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const MESSAGE_LIMIT_CHILD_ENV: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
+const MESSAGE_LIMIT_DEFAULT_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_MESSAGE_BYTES";
+const MESSAGE_LIMIT_NAMED_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_NAMED_MESSAGE_BYTES";
 
 fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
     use nemo_relay::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
@@ -1038,6 +1041,514 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     deregister_subscriber("worker_plugin_fixture_events")
         .expect("worker fixture subscriber should deregister");
     loaded.clear();
+}
+
+/// Proves default rejection, per-plugin defaults, and host overrides through real RPCs.
+#[tokio::test]
+async fn worker_large_messages_use_the_host_limit_in_both_directions() {
+    exercise_worker_message_limits(
+        "worker_large_messages_use_the_host_limit_in_both_directions",
+        "rust",
+    )
+    .await;
+}
+
+/// Proves the same manifest/override contract reaches the maintained Python SDK.
+#[tokio::test]
+async fn python_worker_message_limits_follow_plugin_defaults() {
+    if std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT").is_none() {
+        eprintln!(
+            "skipping Python message limits; NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT is unset"
+        );
+        return;
+    }
+    exercise_worker_message_limits(
+        "python_worker_message_limits_follow_plugin_defaults",
+        "python",
+    )
+    .await;
+}
+
+/// Isolates host environment settings from concurrently running worker tests.
+async fn exercise_worker_message_limits(test_name: &str, runtime: &str) {
+    if std::env::var_os(MESSAGE_LIMIT_CHILD_ENV).is_none() {
+        run_message_limit_cases(test_name, runtime).await;
+        return;
+    }
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let scenario = std::env::var(MESSAGE_LIMIT_CHILD_ENV).unwrap();
+    let default_bytes = std::env::var(MESSAGE_LIMIT_DEFAULT_ENV)
+        .ok()
+        .map(|value| value.parse::<u32>().unwrap());
+    if matches!(scenario.as_str(), "invalid-env" | "invalid-named-env") {
+        assert_invalid_host_message_limit_rejected();
+        return;
+    }
+    let loaded = load_message_limit_worker(runtime, default_bytes).await;
+    if scenario.starts_with("named-") {
+        assert_named_message_boundaries(&scenario).await;
+        loaded.clear();
+        return;
+    }
+    tool_request_intercepts("small-before-large", json!({"text": "ok"}))
+        .await
+        .expect("small control works before the boundary");
+    assert_large_message_boundary(!matches!(
+        scenario.as_str(),
+        "default" | "env4" | "override-low"
+    ))
+    .await;
+    tool_request_intercepts("small-after-large", json!({"text": "ok"}))
+        .await
+        .expect("rejection must not poison subsequent small requests");
+    loaded.clear();
+    if scenario == "manifest16" {
+        // No host override: a subsequent activation must not inherit the previous
+        // plugin's larger default, in either the host or child SDK environment.
+        let other = load_message_limit_worker(runtime, Some(4 * 1024 * 1024)).await;
+        assert_large_message_boundary(false).await;
+        tool_request_intercepts("small-other-worker", json!({"text": "ok"}))
+            .await
+            .expect("different worker remains healthy with its own smaller default");
+        other.clear();
+    }
+}
+
+/// Rejects an invalid override before launching a worker, despite a valid plugin default.
+fn assert_invalid_host_message_limit_rejected() {
+    // Invalid host settings must fail before any process is started. Keep
+    // this case independent of Rust fixtures in the Python-only E2E lane.
+    let (_dir, manifest) = write_worker_manifest(
+        "fixture_worker",
+        &supported_relay_requirement(),
+        "command",
+        "must-not-launch",
+    );
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{source}\n[load.max_message_bytes]\ndefault_bytes = 16777216\n"),
+    )
+    .unwrap();
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+        &diagnostics,
+    ) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("invalid override must fail activation");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"),
+        "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.validation_failed",
+        "unknown",
+        "validation",
+        "plugin.worker.started",
+    );
+    assert_eq!(
+        worker_diagnostic_snapshot(&diagnostics)
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        1
+    );
+}
+
+/// Runs the same named test under each isolated host/default configuration.
+async fn run_message_limit_cases(test_name: &str, runtime: &str) {
+    let (request_name, execution_name) = if runtime == "rust" {
+        ("fixture_rewrite_args", "fixture_tool_execution")
+    } else {
+        ("echo-request", "echo-execution")
+    };
+    let invoke = json!({request_name: 16777216}).to_string();
+    let pair = json!({request_name: 16777216, execution_name: 16777216}).to_string();
+    let small_next = json!({execution_name: 4194304}).to_string();
+    for (scenario, override_bytes, default_bytes, authored_names, host_names) in [
+        ("default", None, None, None, None),
+        ("env4", Some("4194304"), None, None, None),
+        ("env16", Some("16777216"), None, None, None),
+        ("manifest16", None, Some("16777216"), None, None),
+        (
+            "override-low",
+            Some("4194304"),
+            Some("16777216"),
+            None,
+            None,
+        ),
+        (
+            "override-high",
+            Some("16777216"),
+            Some("4194304"),
+            None,
+            None,
+        ),
+        ("invalid-env", Some("0"), Some("16777216"), None, None),
+        (
+            "invalid-named-env",
+            None,
+            Some("16777216"),
+            None,
+            Some(r#"{"Invoke":0}"#),
+        ),
+        ("named-invoke", None, None, Some(invoke.as_str()), None),
+        ("named-pair", None, None, Some(pair.as_str()), None),
+        (
+            "named-small-next",
+            None,
+            Some("16777216"),
+            Some(small_next.as_str()),
+            None,
+        ),
+        (
+            "named-host-default",
+            Some("4194304"),
+            None,
+            Some(pair.as_str()),
+            None,
+        ),
+        ("named-host-map", None, None, None, Some(pair.as_str())),
+        (
+            "named-host-smaller",
+            Some("16777216"),
+            None,
+            Some(pair.as_str()),
+            Some(small_next.as_str()),
+        ),
+        (
+            "named-method-is-not-callback",
+            None,
+            None,
+            Some(r#"{"Invoke":16777216,"ToolNext":16777216}"#),
+            None,
+        ),
+        (
+            "named-case-sensitive",
+            None,
+            None,
+            Some(r#"{"FIXTURE_REWRITE_ARGS":16777216,"ECHO-REQUEST":16777216}"#),
+            None,
+        ),
+    ] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test_name, "--nocapture"])
+            .env(MESSAGE_LIMIT_CHILD_ENV, scenario)
+            .env_remove("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES")
+            .env_remove("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME")
+            .env_remove(MESSAGE_LIMIT_NAMED_ENV)
+            .env_remove(MESSAGE_LIMIT_DEFAULT_ENV);
+        if let Some(value) = override_bytes {
+            command.env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", value);
+        }
+        if let Some(value) = default_bytes {
+            command.env(MESSAGE_LIMIT_DEFAULT_ENV, value);
+        }
+        if let Some(value) = authored_names {
+            command.env(MESSAGE_LIMIT_NAMED_ENV, value);
+        }
+        if let Some(value) = host_names {
+            command.env("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME", value);
+        }
+        let mut child = command.spawn().expect("message limit subprocess starts");
+        wait_for_message_limit_case(&mut child, runtime, scenario).await;
+    }
+}
+
+/// Proves that callbacks sharing Invoke retain independent limits, including next().
+async fn assert_named_message_boundaries(scenario: &str) {
+    let accepts_invoke = !matches!(
+        scenario,
+        "named-host-default" | "named-method-is-not-callback" | "named-case-sensitive"
+    );
+    let accepts_next = matches!(scenario, "named-pair" | "named-host-map");
+    let request =
+        tool_request_intercepts("named-invoke", json!({"text": "x".repeat(5 * 1024 * 1024)})).await;
+    assert_eq!(request.is_ok(), accepts_invoke, "{scenario}: Invoke");
+    assert_eq!(
+        response_message_tool_call(5, "worker").await.is_ok(),
+        accepts_next,
+        "{scenario}: Invoke response"
+    );
+    assert_eq!(
+        response_message_tool_call(5, "continuation-request")
+            .await
+            .is_ok(),
+        accepts_next,
+        "{scenario}: ToolNext request"
+    );
+    assert_eq!(
+        response_message_tool_call(5, "continuation").await.is_ok(),
+        accepts_next,
+        "{scenario}: ToolNext response"
+    );
+    assert!(
+        response_message_tool_call(17, "worker").await.is_err(),
+        "named limits stay finite"
+    );
+    for direction in ["worker", "continuation"] {
+        response_message_tool_call(0, direction)
+            .await
+            .expect("small response remains healthy");
+    }
+}
+
+/// Bounds each isolated case and cleans up its worker processes if it hangs.
+async fn wait_for_message_limit_case(
+    child: &mut std::process::Child,
+    runtime: &str,
+    scenario: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll message limit test") {
+            assert!(
+                status.success(),
+                "{runtime} message limit scenario {scenario}"
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            // Only parent IDs are needed. Reading every process's environment,
+            // executable and thread data can stall cleanup on busy shared hosts.
+            let mut processes = sysinfo::System::new();
+            processes.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+            );
+            let parent = sysinfo::Pid::from_u32(child.id());
+            for process in processes.processes().values() {
+                if process.parent() == Some(parent) {
+                    let _ = process.kill();
+                }
+            }
+            child.kill().expect("stop stuck test host");
+            child.wait().expect("reap stuck test host");
+            panic!("{runtime} message limit scenario {scenario} exceeded 90 seconds");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Checks full-value acceptance or rejection, and keeps raised limits finite.
+async fn assert_large_message_boundary(accepts_large: bool) {
+    let result = large_message_tool_call(5).await;
+    if !accepts_large {
+        let error = result.expect_err("4 MiB remains bounded").to_string();
+        assert!(error.contains("worker invoke failed"), "{error}");
+    } else {
+        let result = result.expect("16 MiB accepts the complete 5 MiB value");
+        assert_eq!(
+            result.result["text"].as_str().unwrap().len(),
+            5 * 1024 * 1024
+        );
+        assert_eq!(result.result["worker_plugin_tool_execution"], true);
+        assert!(
+            large_message_tool_call(17).await.is_err(),
+            "opt-in cap remains finite"
+        );
+    }
+    assert_response_message_boundaries(accepts_large).await;
+}
+
+/// Keeps requests small while exercising worker and continuation response limits.
+async fn assert_response_message_boundaries(accepts_large: bool) {
+    for direction in ["worker", "continuation"] {
+        for mib in [5, 17] {
+            let result = response_message_tool_call(mib, direction).await;
+            if accepts_large && mib == 5 {
+                let result = result.expect("16 MiB accepts a generated 5 MiB response");
+                assert_eq!(
+                    result.result["text"].as_str().unwrap().len(),
+                    mib * 1024 * 1024
+                );
+                assert_eq!(result.result["worker_plugin_tool_execution"], true);
+            } else {
+                let error = result
+                    .expect_err("oversized response must be rejected")
+                    .to_string();
+                assert!(
+                    error.contains("message") && (error.contains("limit") || error.contains("max")),
+                    "{direction} {mib} MiB response should fail its size limit: {error}"
+                );
+            }
+            let control = response_message_tool_call(0, direction)
+                .await
+                .expect("small response must still work after the boundary call");
+            assert_eq!(control.result["text"], "");
+            assert_eq!(control.result["worker_plugin_tool_execution"], true);
+        }
+    }
+}
+
+/// Generates the large value only after a small Invoke/ToolNext request is received.
+async fn response_message_tool_call(
+    mib: usize,
+    direction: &str,
+) -> FlowResult<ToolExecutionResult> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let args = json!({"response_mib": mib});
+    assert!(serde_json::to_vec(&args).unwrap().len() < 128);
+    let called = Arc::new(AtomicBool::new(false));
+    let observed = called.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name(if direction == "continuation-request" {
+                    "large-continuation-request".into()
+                } else {
+                    format!("large-{direction}-response")
+                })
+                .args(args)
+                .func(Arc::new(move |_| {
+                    observed.store(true, Ordering::SeqCst);
+                    Box::pin(async move {
+                        Ok(ToolExecutionResult::new(json!({
+                            "text": "x".repeat(mib * 1024 * 1024)
+                        })))
+                    })
+                }))
+                .build(),
+        ),
+    )
+    .await
+    .expect("response-only message call must finish");
+    if direction != "continuation-request" {
+        assert_eq!(
+            called.load(Ordering::SeqCst),
+            direction == "continuation",
+            "only continuation response cases must reach the host callback"
+        );
+    }
+    result
+}
+
+/// Traverses Invoke, ToolNext, and the worker response with an unchanged synthetic value.
+async fn large_message_tool_call(mib: usize) -> FlowResult<ToolExecutionResult> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("large-message")
+                .args(json!({"text": "x".repeat(mib * 1024 * 1024)}))
+                .func(Arc::new(|args| {
+                    Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+                }))
+                .build(),
+        ),
+    )
+    .await
+    .expect("large message call must finish")
+}
+
+/// Starts a real Rust/Python worker with an authored per-plugin transport default.
+async fn load_message_limit_worker(runtime: &str, default_bytes: Option<u32>) -> LoadedWorker {
+    let (manifest_dir, manifest_ref, plugin_id, environment_ref) = if runtime == "rust" {
+        let fixture = build_fixture_worker();
+        let (dir, manifest) = write_manifest(fixture.binary_path());
+        (dir, manifest, "fixture_worker", None)
+    } else {
+        let (dir, manifest) = write_worker_manifest(
+            "examples.python_grpc_worker",
+            &supported_relay_requirement(),
+            "python",
+            "message_limit_worker:main",
+        );
+        std::fs::write(
+            dir.path().join("message_limit_worker.py"),
+            r#"
+from nemo_relay_plugin import WorkerPlugin, ToolExecutionInterceptOutcome, serve_plugin
+
+class Echo(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def register(self, ctx, config):
+        ctx.register_tool_request_intercept("echo-request", lambda name, args: args)
+
+        async def execute(context, next_call):
+            if context.tool_name == "large-worker-response":
+                return ToolExecutionInterceptOutcome(result={
+                    "text": "x" * (context.args["response_mib"] * 1024 * 1024),
+                    "worker_plugin_tool_execution": True,
+                })
+            args = dict(context.args)
+            if context.tool_name == "large-continuation-request":
+                args["text"] = "x" * (args["response_mib"] * 1024 * 1024)
+            result = await next_call.call(args)
+            value = dict(result.result)
+            value["worker_plugin_tool_execution"] = True
+            return ToolExecutionInterceptOutcome(result=value)
+
+        ctx.register_tool_execution_intercept("echo-execution", execute)
+
+async def main():
+    await serve_plugin(Echo())
+"#,
+        )
+        .unwrap();
+        let environment = std::env::var("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT").unwrap();
+        (
+            dir,
+            manifest,
+            "examples.python_grpc_worker",
+            Some(environment),
+        )
+    };
+    if let Some(limit) = default_bytes {
+        let source = std::fs::read_to_string(&manifest_ref).unwrap();
+        std::fs::write(
+            &manifest_ref,
+            format!("{source}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n"),
+        )
+        .unwrap();
+    }
+    if let Ok(value) = std::env::var(MESSAGE_LIMIT_NAMED_ENV) {
+        let names: std::collections::BTreeMap<String, u32> = serde_json::from_str(&value).unwrap();
+        let mut source = std::fs::read_to_string(&manifest_ref).unwrap();
+        source.push_str("\n[load.max_message_bytes.by_name]\n");
+        for (name, limit) in names {
+            source.push_str(&format!("{name} = {limit}\n"));
+        }
+        std::fs::write(&manifest_ref, source).unwrap();
+    }
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: plugin_id.into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref,
+        config: Map::new(),
+    }])
+    .expect("message-limit worker starts");
+    let mut config = PluginConfig::default();
+    config.components.push(PluginComponentSpec {
+        kind: plugin_id.into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    test_initialize_plugin_host_exact(config)
+        .await
+        .expect("message-limit worker initializes");
+    LoadedWorker {
+        activation: Some(activation),
+        _manifest_dir: manifest_dir,
+    }
 }
 
 #[tokio::test]

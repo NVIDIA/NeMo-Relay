@@ -29,6 +29,78 @@ fn worker_protocol_identifier_is_stable() {
     assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
 }
 
+/// A named increase does not widen unrelated callbacks, and a lower named cap wins.
+#[test]
+fn worker_callback_limits_are_independent() {
+    let mut limits = nemo_relay_worker_proto::WorkerCallbackMessageLimits::default();
+    limits
+        .by_name
+        .insert("large.guardrail-α".into(), 16 * 1024 * 1024);
+    assert_eq!(limits.for_callback("large.guardrail-α"), 16 * 1024 * 1024);
+    for name in [
+        "LARGE.guardrail-α",
+        "other_guardrail",
+        "Invoke",
+        "ToolNext",
+        "",
+    ] {
+        assert_eq!(limits.for_callback(name), 4 * 1024 * 1024);
+    }
+    limits.default_bytes = 16 * 1024 * 1024;
+    limits
+        .by_name
+        .insert("small_guardrail".into(), 4 * 1024 * 1024);
+    assert_eq!(limits.for_callback("small_guardrail"), 4 * 1024 * 1024);
+}
+
+#[test]
+fn callback_metadata_preserves_exact_names_and_rejects_mismatches() {
+    use nemo_relay_worker_proto::{
+        WorkerCallbackMessageLimits, callback_name, callback_request, validate_callback_request,
+    };
+    let name = "large.guardrail-α";
+    let mut limits = WorkerCallbackMessageLimits::default();
+    limits.by_name.insert(name.into(), 16 * 1024 * 1024);
+    let request = callback_request((), name);
+    assert_eq!(callback_name(request.metadata()).as_deref(), Some(name));
+    assert!(validate_callback_request(&request, name, &limits).is_ok());
+    assert!(validate_callback_request(&request, "other_guardrail", &limits).is_err());
+    let legacy = tonic::Request::new(());
+    assert!(validate_callback_request(&legacy, name, &limits).is_err());
+    assert!(
+        validate_callback_request(&legacy, name, &WorkerCallbackMessageLimits::default()).is_ok()
+    );
+}
+
+#[test]
+/// Keeps Rust parsing aligned with the finite cross-language byte-limit contract.
+fn worker_message_limit_accepts_only_bounded_positive_decimal_bytes() {
+    use nemo_relay_worker_proto::parse_worker_max_message_bytes;
+    for (value, expected) in [
+        ("1", 1),
+        ("4194304", 4_194_304),
+        ("16777216", 16_777_216),
+        ("2147483647", 2_147_483_647),
+    ] {
+        assert_eq!(parse_worker_max_message_bytes(value), Ok(expected));
+    }
+    for value in [
+        "",
+        "0",
+        "-1",
+        "+1",
+        " 10",
+        "10 ",
+        "1.0",
+        "16MiB",
+        "2147483648",
+        "999999999999999999999999",
+        "１２",
+    ] {
+        assert!(parse_worker_max_message_bytes(value).is_err(), "{value:?}");
+    }
+}
+
 #[test]
 fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::Subscriber as i32, 1);

@@ -116,7 +116,10 @@ pub(crate) fn save_config(
 // `config::user_config_dir`), falling back to `<home>/.config/nemo-relay`. Tests that pass a
 // tempdir for `home` get hermetic paths unless they set XDG_CONFIG_HOME explicitly.
 pub(crate) fn user_config_dir(home: &Path) -> PathBuf {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+    // Empty or relative XDG_CONFIG_HOME is ignored, as in `config::user_config_dir`.
+    if let Some(base) =
+        std::env::var_os("XDG_CONFIG_HOME").filter(|base| Path::new(base).is_absolute())
+    {
         return PathBuf::from(base).join("nemo-relay");
     }
     home.join(".config").join("nemo-relay")
