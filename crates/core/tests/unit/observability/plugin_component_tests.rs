@@ -5710,6 +5710,7 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
             session_instance_id: Some("instance-id".to_string()),
             user_id: Some("alice".to_string()),
         },
+        AtifOutputOptions::from(&AtifSectionConfig::default()),
     )
     .unwrap();
     let value: Json = serde_json::from_slice(&write.payload).unwrap();
@@ -5728,6 +5729,178 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
     );
     assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
     assert_eq!(value["extra"]["observed_events"], json!([]));
+}
+
+#[test]
+fn atif_retention_defaults_preserve_existing_payloads() {
+    let deserialized: AtifSectionConfig = serde_json::from_value(json!({})).unwrap();
+    for config in [AtifSectionConfig::default(), deserialized] {
+        assert!(config.include_observed_events);
+        assert!(config.include_llm_requests);
+    }
+}
+
+#[test]
+fn atif_compact_payload_preserves_json_and_reduced_history_grows_linearly() {
+    let payload = |calls: usize, compact: bool, include_llm_requests: bool| {
+        let mut history = Vec::new();
+        let mut steps = Vec::new();
+        for index in 0..calls {
+            history.push(json!({"role": "user", "content": "x".repeat(2048)}));
+            steps.push(json!({
+                "step_id": index + 1,
+                "source": "user",
+                "message": "x".repeat(2048),
+                "extra": {
+                    "llm_request": {"messages": history},
+                    "ancestry": {"function_id": index.to_string(), "function_name": "llm"}
+                }
+            }));
+        }
+        let trajectory = serde_json::from_value(json!({
+            "schema_version": "ATIF-v1.7",
+            "session_id": "size-test",
+            "agent": {"name": "size-test", "version": "1"},
+            "steps": steps
+        }))
+        .unwrap();
+        let write = prepare_atif_payload(
+            Uuid::nil(),
+            "trajectory.json".into(),
+            None,
+            None,
+            trajectory,
+            Vec::new(),
+            AtifCorrelation {
+                session_id: None,
+                session_instance_id: None,
+                user_id: None,
+            },
+            AtifOutputOptions {
+                include_observed_events: false,
+                include_llm_requests,
+                compact,
+            },
+        )
+        .unwrap();
+        write.payload
+    };
+    let compact = payload(8, true, true);
+    let pretty = payload(8, false, true);
+    assert!(compact.len() < pretty.len());
+    assert_eq!(
+        serde_json::from_slice::<Json>(&compact).unwrap(),
+        serde_json::from_slice::<Json>(&pretty).unwrap()
+    );
+    let full_large = payload(32, true, true);
+    let reduced_small = payload(8, true, false);
+    let reduced_large = payload(32, true, false);
+    assert!(
+        full_large.len() > compact.len() * 10,
+        "full histories accumulate quadratically"
+    );
+    assert!(
+        reduced_large.len() < reduced_small.len() * 5,
+        "omitting histories keeps this fixture linear"
+    );
+    assert!(reduced_large.len() * 10 < full_large.len());
+}
+
+#[test]
+fn atif_retention_options_cover_nested_steps_and_open_agent_teardown() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for include_observed_events in [false, true] {
+        for include_llm_requests in [false, true] {
+            for close_agent in [false, true] {
+                reset_runtime();
+                let dir = temp_dir("observability-atif-retention");
+                let config = plugin_config(json!({
+                    "policy": {"unknown_field": "error"},
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": dir,
+                        "include_observed_events": include_observed_events,
+                        "include_llm_requests": include_llm_requests
+                    }
+                }));
+                futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+                let agent = push_agent("retention-agent");
+                // Test a fresh user request and a continuation of the same turn.
+                // They store requests on user and agent steps, respectively.
+                for nested in [false, true] {
+                    let child = nested.then(|| push_agent("nested-retention-agent"));
+                    for continuation in [false, true] {
+                        let messages = if continuation {
+                            json!([{"role": "tool", "tool_call_id": "call-1", "content": "result"}])
+                        } else {
+                            json!([{"role": "user", "content": "hello"}])
+                        };
+                        let llm = crate::api::scope::push_scope(
+                            PushScopeParams::builder()
+                                .name("retention-llm")
+                                .scope_type(ScopeType::Llm)
+                                .input(
+                                    json!({"messages": messages, "request_marker": "full-request"}),
+                                )
+                                .build(),
+                        )
+                        .unwrap();
+                        crate::api::scope::pop_scope(
+                            PopScopeParams::builder()
+                                .handle_uuid(&llm.uuid)
+                                .output(json!({"content": "answer", "usage": {"prompt_tokens": 3, "completion_tokens": 1}}))
+                                .build(),
+                        ).unwrap();
+                    }
+                    if let Some(child) = child {
+                        pop(&child);
+                    }
+                }
+                if close_agent {
+                    pop(&agent);
+                }
+                test_close_plugin_host().unwrap();
+                let payload =
+                    fs::read(dir.join(format!("nemo-relay-atif-{}.json", agent.uuid))).unwrap();
+                let value: Json = serde_json::from_slice(&payload).unwrap();
+                assert!(payload.contains(&b'\n'), "local-only output stays pretty");
+                assert_eq!(
+                    value["extra"].get("observed_events").is_some(),
+                    include_observed_events
+                );
+                let child = &value["subagent_trajectories"][0];
+                assert!(child.is_object());
+                for trajectory in [&value, child] {
+                    assert_atif_retention_projection(trajectory, include_llm_requests);
+                }
+                if !close_agent {
+                    pop(&agent);
+                }
+            }
+        }
+    }
+}
+
+fn assert_atif_retention_projection(trajectory: &Json, include_llm_requests: bool) {
+    let steps = trajectory["steps"].as_array().unwrap();
+    for source in ["user", "agent"] {
+        assert!(steps.iter().any(|step| step["source"] == source));
+    }
+    assert!(steps.iter().any(|step| step["message"] == "answer"));
+    assert_eq!(trajectory["final_metrics"]["total_prompt_tokens"], 6);
+    for step in steps.iter().filter(|step| step["message"] == "answer") {
+        assert!(step["extra"].get("ancestry").is_some());
+    }
+    let requests = steps
+        .iter()
+        .filter(|step| step["extra"].get("llm_request").is_some())
+        .count();
+    assert_eq!(requests, if include_llm_requests { 2 } else { 0 });
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["extra"].get("llm_response").is_some())
+    );
 }
 
 #[test]

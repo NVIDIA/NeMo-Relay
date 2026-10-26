@@ -31,7 +31,12 @@ describe('observability plugin helpers', () => {
       agent_name: 'NeMo Relay',
       model_name: 'unknown',
       filename_template: 'nemo-relay-atif-{session_id}.json',
+      include_observed_events: true,
+      include_llm_requests: true,
     });
+    const reduced = observability.atifConfig({ include_observed_events: false, include_llm_requests: false });
+    assert.equal(reduced.include_observed_events, false);
+    assert.equal(reduced.include_llm_requests, false);
     assert.deepEqual(observability.openTelemetryConfig(), {
       enabled: false,
       endpoints: [],

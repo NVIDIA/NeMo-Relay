@@ -80,9 +80,11 @@ Marks are point-in-time ATOF events, not ATIF trajectory steps, so ATIF `steps`
 are not a lossless event log. ATIF is designed primarily for evaluation and
 visualization. Its steps do not represent the complete parent-child graph needed
 for perfect session replay. This limitation comes from the ATIF data model, not
-from converting ATOF events. Plugin-managed ATIF files preserve nested scope
-lineage and the raw events associated with the trajectory under
-`extra.observed_events`, including observed marks, for analysis and debugging.
+from converting ATOF events. ATIF files managed by the plugin keep nested scope
+lineage. By default, they also keep raw events in `extra.observed_events`.
+These events include marks and support analysis and debugging. Set
+`include_observed_events = false` in the ATIF plugin settings to omit the raw
+events.
 Those fields do not change the ATIF step model or make `steps` a complete replay
 log. Refer to
 [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif)
