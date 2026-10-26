@@ -458,3 +458,35 @@ fn test_inject_agent_hints_merges_into_modeled_metadata_through_a_codec() {
         })
     );
 }
+
+#[test]
+fn test_inject_agent_hints_creates_modeled_metadata_through_a_codec() {
+    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+    use nemo_relay::codec::traits::LlmCodec;
+
+    let hints = manual_agent_hints(4, "agent", 1);
+    let original = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+    };
+    let mut request = original.clone();
+    let mut annotated = Some(OpenAIChatCodec.decode(&original).unwrap());
+
+    inject_agent_hints(
+        &mut request,
+        &mut annotated,
+        &hints,
+        &HintInjection::new(false, "metadata.relay_hints"),
+    );
+    let encoded = OpenAIChatCodec
+        .encode(annotated.as_ref().unwrap(), &original)
+        .unwrap();
+
+    assert_eq!(
+        encoded.content["metadata"],
+        serde_json::json!({"relay_hints": serde_json::to_value(&hints).unwrap()})
+    );
+}
