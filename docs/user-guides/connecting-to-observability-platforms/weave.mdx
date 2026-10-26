@@ -63,6 +63,15 @@ Find the test turn in the selected project's Agents view. Verify that the
 actions. Check the model and token fields that your capture path provides and
 inspect payloads for approved redaction.
 
+<Note title="Check conversation grouping separately">
+The measured Hermes export contained `invoke_agent`, `chat`, and `execute_tool`,
+with `gen_ai.agent.name = "hermes.session"`, but no `gen_ai.conversation.id`.
+This verifies the operation fields for a turn; it does not establish grouping
+across multiple turns in the Agents view. For that workflow, use a capture path
+that supplies a stable conversation ID on its spans and verify grouping in
+Weave. A project resource attribute is not a replacement for that span field.
+</Note>
+
 If traces arrive in Weave but do not appear as expected in Agents, inspect
 `gen_ai.operation.name` on the spans before changing project routing. If no
 spans arrive, check the API key, entity and project values, and

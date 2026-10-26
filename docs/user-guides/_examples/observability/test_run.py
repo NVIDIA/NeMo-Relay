@@ -8,10 +8,29 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from run import check_events, validate_endpoint
+from run import check_events, langsmith_headers, validate_endpoint
 
 
 class CaptureChecks(unittest.TestCase):
+    def test_langsmith_addressing_rejects_partial_or_mixed_modes(self):
+        for environment in (
+            {"LANGSMITH_AGENT_ID": "support-triage"},
+            {"LANGSMITH_AGENT_ENVIRONMENT": "development"},
+            {
+                "LANGSMITH_AGENT_ID": "support-triage",
+                "LANGSMITH_AGENT_ENVIRONMENT": "development",
+                "LANGSMITH_PROJECT": "legacy",
+            },
+            {"LANGSMITH_AGENT_ID": "Invalid_ID", "LANGSMITH_AGENT_ENVIRONMENT": "development"},
+            {"LANGSMITH_AGENT_ID": "support-triage", "LANGSMITH_AGENT_ENVIRONMENT": "unknown"},
+        ):
+            with self.subTest(environment=environment), self.assertRaises(ValueError):
+                langsmith_headers(environment)
+        self.assertEqual(
+            langsmith_headers({"LANGSMITH_AGENT_ID": "support-triage", "LANGSMITH_AGENT_ENVIRONMENT": "development"}),
+            {"Langsmith-Agent-Id": "support-triage", "Langsmith-Agent-Environment": "development"},
+        )
+
     def test_endpoint_policy(self):
         for endpoint in ("http://localhost:6006/v1/traces", "https://collector.example/v1/traces"):
             validate_endpoint(endpoint)

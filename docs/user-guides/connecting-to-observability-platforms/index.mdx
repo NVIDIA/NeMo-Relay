@@ -60,12 +60,12 @@ ensure its executable is on your PATH. The runner uses only the standard library
 
 ## Run the optional companion
 
-The [example directory](https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-observability/docs/user-guides/_examples/observability)
+The [example directory](https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-observability/docs/user-guides/_examples/observability)
 contains the runner and destination environment table. These review files live
 on the feedback branch until the guide lands upstream. On your Linux host:
 
 ```bash
-git clone --branch codex/user-guide-observability --single-branch https://github.com/exactlyallan/NeMo-Relay-ae.git relay-observability
+git clone --branch topic/codex/user-guides-observability --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-observability
 cd relay-observability/docs/user-guides/_examples/observability
 hermes doctor
 # Start Phoenix in another terminal using its subsection, then:
@@ -116,6 +116,26 @@ compare its trace tree with the local log. For Phoenix and LangSmith inspect
 uses GenAI operations described in its subsection. In Datadog APM, compare
 operation names and parent spans after your Collector's mapping. Model IDs and
 usage are present only when the source supplies them.
+
+<Accordion title="Measured destination export checks">
+The actual Hermes companion also ran against a loopback OTLP receiver on Brev.
+It used synthetic destination credentials and the same authenticated NVIDIA
+model as the Phoenix example. Each run passed the handoff and local scope
+checks; the receiver decoded the emitted protobuf requests:
+
+| Destination recipe | Spans | What the receiver verified |
+| --- | --- | --- |
+| LangSmith project | 15 | `/otel/v1/traces`, API-key and project headers, OpenInference roles |
+| LangSmith agent/environment | 15 | Both agent headers, no project header, OpenInference roles |
+| Weave Agents | 15 | `/agents/otel/v1/traces`, API-key header, entity/project resources, GenAI operations |
+| Datadog Collector | 21 | `/v1/traces`, OpenInference roles, service name |
+
+Every run contained one trace with all exported parents present and service
+`relay-support-triage`. Span counts vary with the agent's tool use and retries.
+These checks establish the exporter request contract. They do not establish
+authenticated delivery to LangSmith, Weave, or Datadog; verify those accounts
+and their UI separately. The Phoenix result below is an actual backend run.
+</Accordion>
 
 ## A measured Phoenix run
 

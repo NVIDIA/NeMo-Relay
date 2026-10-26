@@ -69,6 +69,12 @@ Find a recent trace under the service `relay-support-triage`. Confirm that
 its agent span has the observed model and tool work beneath it, then inspect
 model identity and sanitized payload fields.
 
+Before Collector processing, the measured companion emitted `hermes.session`
+(`AGENT`), `hermes.turn` (`CHAIN`), `openai.chat_completions` (`LLM`), and file
+tools such as `read_file` and `write_file` (`TOOL`). Those are captured OTLP
+names, not verified Datadog UI names. Match them through your Collector's
+mapping when checking the resulting APM trace.
+
 | Missing evidence | First place to check |
 | --- | --- |
 | No trace | Relay exporter delivery, Collector or Agent ingestion, and the Datadog site. |

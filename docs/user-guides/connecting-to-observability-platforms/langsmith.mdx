@@ -12,15 +12,31 @@ trace projection carries agent, model, and tool span attributes that LangSmith
 can map into its run view.
 
 <Tip title="Use the same companion workload">
-Select `--destination langsmith` in the parent guide's Hermes example. Supply the regional trace URL, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` in the runner environment.
+Select `--destination langsmith` in the parent guide's Hermes example. Supply the regional trace URL and `LANGSMITH_API_KEY`, then choose project or agent/environment addressing below.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 
-## Select the LangSmith project
+## Select the destination in your workspace
+
+Choose the addressing mode your LangSmith workspace uses before changing Relay:
+
+| Workspace | Destination | Companion environment |
+| --- | --- | --- |
+| Project-based, including self-hosted LangSmith | An existing tracing project | `LANGSMITH_PROJECT` |
+| Agent-based | A registered agent and one of its environments | `LANGSMITH_AGENT_ID` and `LANGSMITH_AGENT_ENVIRONMENT` |
+
+For an agent-based workspace, create the agent first and copy its identifier.
+Choose `local`, `development`, `staging`, or `production` for the environment.
+The identifier starts with a lowercase letter, contains lowercase letters,
+digits, or hyphens, and ends with a letter or digit (1–63 characters total).
+These HTTP headers determine the destination; an agent-name span attribute
+does not register or select a LangSmith agent.
+
+## Configure the exporter
 
 Choose the LangSmith region, API key, and project before changing Relay. This
-example sends OTLP/HTTP traces to the US SaaS intake and names the destination
-project. Use the regional or self-hosted URL for your deployment.
+example sends OTLP/HTTP traces to the US SaaS intake and selects a project-based
+workspace. Use the regional or self-hosted URL for your deployment.
 
 ```toml
 version = 1
@@ -55,12 +71,42 @@ preserves an explicit URL path, so the endpoint includes LangSmith's full
 [OpenTelemetry guide](https://docs.langchain.com/langsmith/trace-with-opentelemetry)
 lists current regional endpoints and header options.
 
+<Accordion title="Use an agent-based workspace">
+Replace the `Langsmith-Project` headers table above with this table:
+
+```toml
+[components.config.opentelemetry.endpoints.headers]
+"Langsmith-Agent-Id" = "support-triage"
+"Langsmith-Agent-Environment" = "development"
+```
+
+Keep the API-key `header_env` table. Supply your registered identifier and
+environment. Send both agent headers together and remove `Langsmith-Project`:
+LangSmith rejects partial or mixed addressing with `400`. An archived agent
+can return `409`; self-hosted workspaces reject agent addressing with `403`.
+
+For the companion, set the corresponding non-secret environment values:
+
+```bash
+export LANGSMITH_AGENT_ID=support-triage
+export LANGSMITH_AGENT_ENVIRONMENT=development
+# Use these instead of LANGSMITH_PROJECT.
+```
+
+The runner rejects conflicting or incomplete addressing before starting Hermes.
+</Accordion>
+
 ## Check the LangSmith run
 
-Open the selected project and find the run by time and service. Verify that the
+Open the selected project or agent environment and find the run by time and service. Verify that the
 agent run and observed model and tool calls share the intended parentage.
 Inspect one span for model identity, token usage where the source provides it,
 and the approved redaction result.
+
+The measured companion's OpenInference export included `hermes.session`
+(`AGENT`), `hermes.turn` (`CHAIN`), `openai.chat_completions` (`LLM`), and
+`read_file`, `execute_code`, and `write_file` (`TOOL`). Use these as starting
+points when matching the local run to LangSmith; the number of calls can vary.
 
 <Note>
 An accepted OTLP request does not by itself prove that the complete tree is

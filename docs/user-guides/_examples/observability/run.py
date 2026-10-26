@@ -6,12 +6,31 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
+
+
+def langsmith_headers(environment):
+    """Choose one addressing mode; LangSmith rejects mixed or partial modes."""
+    agent = environment.get("LANGSMITH_AGENT_ID")
+    stage = environment.get("LANGSMITH_AGENT_ENVIRONMENT")
+    project = environment.get("LANGSMITH_PROJECT")
+    if agent or stage:
+        if not agent or not stage:
+            raise ValueError("Set both LANGSMITH_AGENT_ID and LANGSMITH_AGENT_ENVIRONMENT")
+        if project:
+            raise ValueError("Choose LangSmith agent/environment or LANGSMITH_PROJECT, not both")
+        if not re.fullmatch(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", agent):
+            raise ValueError("LANGSMITH_AGENT_ID must be a 1–63 character lowercase agent identifier")
+        if stage not in {"local", "development", "staging", "production"}:
+            raise ValueError("LANGSMITH_AGENT_ENVIRONMENT must be local, development, staging, or production")
+        return {"Langsmith-Agent-Id": agent, "Langsmith-Agent-Environment": stage}
+    return {"Langsmith-Project": project or "relay-support-triage"}
 
 
 def validate_endpoint(endpoint, allow_insecure=False):
@@ -112,10 +131,15 @@ def main():
     if args.destination == "phoenix" and os.environ.get("PHOENIX_AUTHORIZATION"):
         config += '\n[components.config.opentelemetry.endpoints.header_env]\nauthorization = "PHOENIX_AUTHORIZATION"\n'
     elif args.destination == "langsmith":
-        required = ["LANGSMITH_API_KEY", "LANGSMITH_PROJECT"]
+        required = ["LANGSMITH_API_KEY"]
+        if not args.prepare_only and not any(
+            os.environ.get(name) for name in ("LANGSMITH_PROJECT", "LANGSMITH_AGENT_ID", "LANGSMITH_AGENT_ENVIRONMENT")
+        ):
+            parser.error("Set LANGSMITH_PROJECT, or LANGSMITH_AGENT_ID and LANGSMITH_AGENT_ENVIRONMENT")
         config += '\n[components.config.opentelemetry.endpoints.header_env]\n"x-api-key" = "LANGSMITH_API_KEY"\n'
-        config += '\n[components.config.opentelemetry.endpoints.headers]\n"Langsmith-Project" = '
-        config += json.dumps(os.environ.get("LANGSMITH_PROJECT", "relay-support-triage")) + "\n"
+        config += "\n[components.config.opentelemetry.endpoints.headers]\n"
+        for key, value in langsmith_headers(os.environ).items():
+            config += json.dumps(key) + " = " + json.dumps(value) + "\n"
     elif args.destination == "weave":
         required = ["WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT"]
         config += '\n[components.config.opentelemetry.endpoints.header_env]\n"wandb-api-key" = "WANDB_API_KEY"\n'

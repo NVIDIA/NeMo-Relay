@@ -29,7 +29,7 @@ destination keys in the process environment, outside the repository.
 | Selection | `RELAY_OTLP_ENDPOINT` | Additional environment |
 | --- | --- | --- |
 | `phoenix` | Defaults to `http://127.0.0.1:6006/v1/traces` for an existing local Phoenix | `PHOENIX_AUTHORIZATION` containing `Bearer <api-key>` only if the intake requires it |
-| `langsmith` | Your regional intake, e.g. `https://api.smith.langchain.com/otel/v1/traces` | `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` |
+| `langsmith` | Your regional intake, e.g. `https://api.smith.langchain.com/otel/v1/traces` | `LANGSMITH_API_KEY`; choose `LANGSMITH_PROJECT` or the `LANGSMITH_AGENT_ID` + `LANGSMITH_AGENT_ENVIRONMENT` pair |
 | `weave` | `https://trace.wandb.ai/agents/otel/v1/traces` | `WANDB_API_KEY`, `WANDB_ENTITY`, `WANDB_PROJECT` |
 | `datadog` | Your running Collector's complete `/v1/traces` URL | Configure the Collector's Datadog exporter and credentials separately |
 
@@ -49,6 +49,16 @@ python3.12 run.py --destination phoenix --output /tmp/relay-triage-phoenix
 
 Select another destination with the same script and a new output directory.
 The template renders secrets as environment references, never literal keys.
+
+### LangSmith workspace addressing
+
+Project-based workspaces, including self-hosted LangSmith, use
+`LANGSMITH_PROJECT`. Agent-based workspaces use a registered agent identifier
+in `LANGSMITH_AGENT_ID` and `local`, `development`, `staging`, or `production`
+in `LANGSMITH_AGENT_ENVIRONMENT`. Create that agent in LangSmith before sending
+traces. Choose one mode: the runner rejects partial agent settings or an agent
+pair combined with `LANGSMITH_PROJECT`. LangSmith itself rejects mixed headers
+with `400`; an agent-name span attribute does not select a destination.
 
 ## Inspect the result
 
@@ -103,3 +113,19 @@ tool calls; Phoenix received all 12 exported spans in project `relay-support-tri
 This is an account-specific endpoint/model choice; credentials are environment
 values and are not part of the example files. Hosted backends require their own
 independent delivery verification.
+
+## Measured destination request contracts
+
+The actual Hermes workload was also exported to a loopback OTLP receiver on
+Brev using synthetic destination keys. Both LangSmith addressing modes and
+Weave produced 15 spans each; the Datadog Collector recipe produced 21.
+Every run passed the handoff and local scope checks. Decoded protobuf requests
+confirmed the exact URL path, content type, required headers, service name,
+agent/model/tool roles, and complete exported parentage. Weave additionally
+carried the configured entity/project resource attributes.
+
+This is exporter-contract validation, not hosted-account delivery. The Weave
+export had the required operations and an agent name, but no conversation ID;
+multi-turn conversation grouping remains unverified. Actual LangSmith, Weave,
+and Datadog delivery still requires separate account/project credentials and
+UI checks. Phoenix backend delivery is verified above.
