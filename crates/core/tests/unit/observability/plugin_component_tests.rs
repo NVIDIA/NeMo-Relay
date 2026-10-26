@@ -16,6 +16,7 @@ use crate::api::runtime::{
 use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::{EditorConfig, EditorFieldKind, EditorSchema};
+use crate::observability::otel::ExporterInitializationError;
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
@@ -510,47 +511,82 @@ fn automatic_otel_subscribers_accept_global_otlp_headers() {
 }
 
 #[test]
-fn automatic_otel_headers_require_protected_log_and_metric_endpoints() {
+fn automatic_otel_requires_protected_log_and_metric_endpoints_with_or_without_headers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
-    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
-    let _environment = EnvironmentGuard::capture([endpoint, headers]);
-
-    // SAFETY: the observability mutex serializes test-only environment changes.
-    unsafe {
-        std::env::set_var(endpoint, "http://collector.example:4318");
-        std::env::set_var(headers, "authorization=Bearer%20environment-token");
+    let _environment = plaintext_preflight_environment();
+    for headers in [None, Some("authorization=Bearer%20environment-token")] {
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::set_var(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://collector.example:4318",
+            );
+            match headers {
+                Some(value) => std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", value),
+                None => std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS"),
+            }
+        }
+        let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+            PlaintextPolicy::default(),
+        );
+        assert!(matches!(
+            logs,
+            Err(ExporterInitializationError::PlaintextRejected(message))
+                if message.contains("OTLP log endpoints require HTTPS")
+        ));
+        let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+            PlaintextPolicy::default(),
+        );
+        assert!(matches!(
+            metrics,
+            Err(ExporterInitializationError::PlaintextRejected(message))
+                if message.contains("OTLP metric endpoints require HTTPS")
+        ));
     }
-
-    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
-        PlaintextPolicy::default(),
-    );
-    assert!(logs.is_err());
-    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
-        PlaintextPolicy::default(),
-    );
-    assert!(metrics.is_err());
 }
 
 #[test]
-fn automatic_otel_skips_an_invalid_trace_endpoint_without_blocking_other_signals() {
+fn automatic_otel_skips_all_disallowed_plaintext_signals_without_headers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
-    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
-    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
-    let _environment = EnvironmentGuard::capture([endpoint, headers]);
-
+    let _environment = plaintext_preflight_environment();
     // SAFETY: the observability mutex serializes test-only environment changes.
     unsafe {
-        std::env::set_var(endpoint, "http://collector.example:4318");
-        std::env::remove_var(headers);
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://collector.example:4318",
+        );
     }
 
     let config = plugin_config(json!({"version": 4}));
-    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
-
-    let state = global_context();
-    assert_eq!(state.read().unwrap().event_subscribers.len(), 1);
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    let skipped = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 3, "diagnostics: {:?}", report.diagnostics);
+    for signal in ["traces", "logs", "metrics"] {
+        assert!(
+            skipped.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains(&format!("OpenTelemetry {signal} exporter"))
+                    && diagnostic.field.as_deref() == Some("OTEL_EXPORTER_OTLP_ENDPOINT")
+                    && diagnostic
+                        .message
+                        .contains("plaintext destination rejected by transport policy")
+            }),
+            "{signal}: {skipped:?}"
+        );
+    }
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .is_empty()
+    );
     crate::plugin::test_close_plugin_host().unwrap();
 }
 
@@ -655,8 +691,6 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
             "OTEL_EXPORTER_OTLP_ENDPOINT",
             "http://collector.example:4318/private?token=relay-query-secret",
         );
-        std::env::set_var("OTEL_LOGS_EXPORTER", "none");
-        std::env::set_var("OTEL_METRICS_EXPORTER", "none");
     }
     let config = plugin_config(json!({"version": 4, "opentelemetry": {"enabled": true}}));
     let report =
@@ -666,9 +700,8 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
         .iter()
         .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
         .collect::<Vec<_>>();
-    assert_eq!(skipped.len(), 1, "diagnostics: {:?}", report.diagnostics);
+    assert_eq!(skipped.len(), 3, "diagnostics: {:?}", report.diagnostics);
     for diagnostic in skipped {
-        assert!(diagnostic.message.contains("traces"));
         assert_eq!(
             diagnostic.field.as_deref(),
             Some("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -2467,7 +2500,7 @@ fn plaintext_preflight_checks_automatic_destinations_and_honors_exporter_disabli
             std::env::remove_var(&endpoint_variable);
         }
     }
-    // A generic endpoint selects all three signals; headerless logs and metrics remain permitted.
+    // A generic endpoint applies the same transport policy to all three signals without headers.
     // SAFETY: the observability mutex serializes test-only environment changes.
     unsafe {
         std::env::set_var(
@@ -2477,11 +2510,13 @@ fn plaintext_preflight_checks_automatic_destinations_and_honors_exporter_disabli
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
     }
     let diagnostics = plaintext_preflight_diagnostics(&configuration);
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!(
-        diagnostics[0].component.as_deref(),
-        Some("opentelemetry.automatic.traces")
-    );
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+    for signal in ["traces", "logs", "metrics"] {
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.component.as_deref()
+                == Some(format!("opentelemetry.automatic.{signal}").as_str())
+        }));
+    }
 }
 
 #[test]

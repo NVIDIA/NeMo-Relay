@@ -200,22 +200,24 @@ fn plaintext_rejection(
     )))
 }
 
-/// Require HTTPS, or plain HTTP to a destination the policy allows, for OTLP trace export.
-pub(crate) fn validate_trace_transport(
+/// Require HTTPS, or plain HTTP to a destination the policy allows, for OTLP export.
+pub(crate) fn validate_otlp_transport(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
+    signal: &str,
 ) -> Result<(), String> {
-    validate_trace_transport_typed(endpoint, plaintext).map_err(|error| error.to_string())
+    validate_otlp_transport_typed(endpoint, plaintext, signal).map_err(|error| error.to_string())
 }
 
 /// Preserve the distinction between invalid endpoints and denied plaintext destinations.
-pub(crate) fn validate_trace_transport_typed(
+pub(crate) fn validate_otlp_transport_typed(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
+    signal: &str,
 ) -> Result<(), EndpointTransportError> {
     match plaintext_rejection(endpoint, "https", "http", plaintext) {
         None => Ok(()),
-        Some(reason) => Err(reason.with_context("OTLP trace endpoints require HTTPS")),
+        Some(reason) => Err(reason.with_context(&format!("OTLP {signal} endpoints require HTTPS"))),
     }
 }
 
