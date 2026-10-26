@@ -1,0 +1,74 @@
+---
+title: "Struct Callback Message Limit Service"
+sidebar-title: "CallbackMessageLimitService"
+description: "Select a generated tonic server's codec limits before decoding each RPC body."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct CallbackMessageLimitService<S> { /* private fields */ }
+```
+
+Select a generated tonic server's codec limits before decoding each RPC body.
+
+## Implementations
+
+### `impl<S> CallbackMessageLimitService<S>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;S&gt; <a href=\"struct-callbackmessagelimitservice\">CallbackMessageLimitService</a>&lt;S&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    inner: S,\n    limits: <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>,\n    configure: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(S, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; S,\n) -&gt; Self"}} /></pre>
+
+Wrap a generated tonic server with its send/receive configuration function.
+
+## Trait Implementations
+
+### `impl<S: Clone> Clone for CallbackMessageLimitService<S>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;S: <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a>&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-callbackmessagelimitservice\">CallbackMessageLimitService</a>&lt;S&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-callbackmessagelimitservice\">CallbackMessageLimitService</a>&lt;S&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<S: NamedService> NamedService for CallbackMessageLimitService<S>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;S: NamedService&gt; NamedService for <a href=\"struct-callbackmessagelimitservice\">CallbackMessageLimitService</a>&lt;S&gt;"}} /></pre>
+
+#### `NAME`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const NAME: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = S::NAME"}} /></pre>
+
+### `impl<S, B> Service<Request<B>> for CallbackMessageLimitService<S>where S: Service<Request<B>> + Clone + NamedService,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;S, B&gt; Service&lt;Request&lt;B&gt;&gt; for <a href=\"struct-callbackmessagelimitservice\">CallbackMessageLimitService</a>&lt;S&gt;where\n    S: Service&lt;Request&lt;B&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> + NamedService,"}} /></pre>
+
+#### `Response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Response = &lt;S as Service&lt;Request&lt;B&gt;&gt;&gt;::Response"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Error = &lt;S as Service&lt;Request&lt;B&gt;&gt;&gt;::Error"}} /></pre>
+
+#### `Future`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Future = &lt;S as Service&lt;Request&lt;B&gt;&gt;&gt;::Future"}} /></pre>
+
+#### `poll_ready`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_ready(&amp;mut self, cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, Self::Error&gt;&gt;"}} /></pre>
+
+#### `call`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn call(&amp;mut self, request: Request&lt;B&gt;) -&gt; Self::Future"}} /></pre>

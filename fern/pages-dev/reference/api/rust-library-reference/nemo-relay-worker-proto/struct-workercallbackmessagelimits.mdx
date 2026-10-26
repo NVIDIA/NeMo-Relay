@@ -1,0 +1,76 @@
+---
+title: "Struct Worker Callback Message Limits"
+sidebar-title: "WorkerCallbackMessageLimits"
+description: "Resolved worker transport limits shared by the host and maintained SDKs."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct WorkerCallbackMessageLimits &#123;\n    pub default_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub by_name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>&gt;,\n&#125;"}} /></pre>
+
+Resolved worker transport limits shared by the host and maintained SDKs.
+
+## Fields
+
+### `default_bytes: usize`
+
+Fallback for callbacks without an override and for control RPCs.
+
+### `by_name: BTreeMap<String, usize>`
+
+Overrides keyed by exact callback registration name, like callback timeouts.
+
+## Implementations
+
+### `impl WorkerCallbackMessageLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>"}} /></pre>
+
+#### `from_env_with_defaults`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_env_with_defaults(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Resolve host named/default overrides ahead of plugin named/default settings.
+
+##### Errors
+
+Rejects invalid finite byte limits or malformed callback names/override JSON.
+
+#### `for_callback`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn for_callback(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+Return the finite send/receive limit for one callback (empty for control RPCs).
+
+## Trait Implementations
+
+### `impl Clone for WorkerCallbackMessageLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for WorkerCallbackMessageLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for WorkerCallbackMessageLimits`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-workercallbackmessagelimits\">WorkerCallbackMessageLimits</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

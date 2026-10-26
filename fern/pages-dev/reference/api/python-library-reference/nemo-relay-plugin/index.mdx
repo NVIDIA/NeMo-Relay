@@ -780,7 +780,7 @@ Continue the remaining tool execution chain.
 ##### `ToolNext`
 
 ```python
-def ToolNext(runtime: PluginRuntime, continuation_id: str) -> None
+def ToolNext(runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None
 ```
 
 Create an instance.
@@ -802,7 +802,7 @@ Continue the remaining unary LLM execution chain.
 ##### `LlmNext`
 
 ```python
-def LlmNext(runtime: PluginRuntime, continuation_id: str) -> None
+def LlmNext(runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None
 ```
 
 Create an instance.
@@ -824,7 +824,7 @@ Continue the remaining streaming LLM execution chain.
 ##### `LlmStreamNext`
 
 ```python
-def LlmStreamNext(runtime: PluginRuntime, continuation_id: str) -> None
+def LlmStreamNext(runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None
 ```
 
 Create an instance.
@@ -893,6 +893,10 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 
 ## Re-exports
 
+- `CALLBACK_NAME`
 - `DiagnosticDeliveryError`
+- `MessageLimitInterceptor`
+- `RpcHostChannel`
 - `WorkerDiagnostics`
+- `named_message_limits`
 

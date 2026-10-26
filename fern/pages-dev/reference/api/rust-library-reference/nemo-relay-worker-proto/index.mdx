@@ -17,15 +17,31 @@ The protobuf schema owns transport control flow and the tool-result wrapper stru
 
 - [v1](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1): Generated protobuf and gRPC service definitions.
 
+## Structs
+
+- [CallbackMessageLimitService](/reference/api/rust-library-reference/nemo-relay-worker-proto/struct-callbackmessagelimitservice): Select a generated tonic server's codec limits before decoding each RPC body.
+- [WorkerCallbackMessageLimits](/reference/api/rust-library-reference/nemo-relay-worker-proto/struct-workercallbackmessagelimits): Resolved worker transport limits shared by the host and maintained SDKs.
+- [WorkerCallbackMetadata](/reference/api/rust-library-reference/nemo-relay-worker-proto/struct-workercallbackmetadata): Metadata interceptor for callback-scoped worker-to-host runtime calls.
+
 ## Constants
 
+- [DEFAULT_WORKER_MAX_MESSAGE_BYTES](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-default-worker-max-message-bytes): Preserve the gRPC libraries' default receive limit unless explicitly configured.
 - [DIAGNOSTIC_NOT_CONSUMED_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-diagnostic-not-consumed-metadata): Metadata set to `1` on a diagnostic admission rejection before execution. This certifies only that attempt; an earlier lost reply can still be uncertain.
 - [DOWNSTREAM_CONTINUATION_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-downstream-continuation-metadata): Continuation provenance for an error returned as gRPC status metadata. Used for stream-opening failures, where no `WorkerError` envelope is returned.
+- [WORKER_CALLBACK_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-callback-metadata): Binary metadata preserves exact UTF-8 registration names before body decoding.
+- [WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-max-message-bytes-by-name-env): Host overrides keyed by exact callback registration name, as a JSON byte-limit map.
+- [WORKER_MAX_MESSAGE_BYTES_ENV](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-max-message-bytes-env): Host-owned limit for a complete worker execution gRPC message, in bytes.
 - [WORKER_PROTOCOL_GRPC_V1](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-protocol-grpc-v1): Stable worker protocol identifier accepted by `compat.worker_protocol`.
 
 ## Functions
 
+- [callback_name](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-callback-name): Read callback identity independently of an RPC method name.
+- [callback_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-callback-request): Attach an invocation's registered callback name to a request.
 - [decode_json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-decode-json-envelope): Decodes a JSON envelope into the requested DTO type.
 - [decode_json_value](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-decode-json-value): Decodes a lossless protocol JSON value into the requested type.
 - [json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-json-envelope): Creates a JSON envelope from a serializable DTO.
 - [json_value](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-json-value): Creates a lossless protocol JSON value from a serializable value.
+- [parse_worker_max_message_bytes](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-parse-worker-max-message-bytes): Parses the positive decimal byte limit shared by Rust and Python workers.
+- [validate_callback_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-validate-callback-request): Reject mismatched callback metadata; named limits require the updated host.
+- [worker_max_message_bytes_from_env](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-worker-max-message-bytes-from-env): Reads the worker message limit once when creating a host activation or worker.
+- [worker_max_message_bytes_from_env_with_default](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-worker-max-message-bytes-from-env-with-default): Reads the host override, falling back to a plugin's execution-message default.
