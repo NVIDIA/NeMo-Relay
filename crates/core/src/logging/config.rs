@@ -188,6 +188,18 @@ impl LogLevel {
     }
 }
 
+impl From<LogLevel> for log::Level {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Error => Self::Error,
+            LogLevel::Warn => Self::Warn,
+            LogLevel::Info => Self::Info,
+            LogLevel::Debug => Self::Debug,
+            LogLevel::Trace => Self::Trace,
+        }
+    }
+}
+
 /// Output encoding for an operational log sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogFormat {

@@ -449,14 +449,8 @@ pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, 
 /// Emits a structured record using a binding-facing level name.
 pub fn emit_str(level: &str, target: &str, message: &str, fields: Map<String, Json>) -> Result<()> {
     // Accept the same level names as logging configuration.
-    let level = match LogLevel::parse(level)? {
-        LogLevel::Error => log::Level::Error,
-        LogLevel::Warn => log::Level::Warn,
-        LogLevel::Info => log::Level::Info,
-        LogLevel::Debug => log::Level::Debug,
-        LogLevel::Trace => log::Level::Trace,
-    };
-    emit(level, target, message, fields);
+    let level = LogLevel::parse(level)?;
+    emit(level.into(), target, message, fields);
     Ok(())
 }
 
