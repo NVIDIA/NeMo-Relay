@@ -358,9 +358,66 @@ fn test_apply_manual_latency_override_and_inject_agent_hints_cover_manual_paths(
         headers: serde_json::Map::new(),
         content: serde_json::json!("scalar"),
     };
-    inject_agent_hints(&mut non_object_request, &mut None, &manual_only);
+    inject_agent_hints(
+        &mut non_object_request,
+        &mut None,
+        &manual_only,
+        &HintInjection::default(),
+    );
     assert_eq!(
         non_object_request.headers.get(AGENT_HINTS_HEADER_KEY),
         Some(&serde_json::to_value(&manual_only).unwrap())
     );
+}
+
+#[test]
+fn test_inject_agent_hints_follows_body_path_and_header_flag() {
+    let hints = manual_agent_hints(4, "agent", 1);
+    let serialized = serde_json::to_value(&hints).unwrap();
+
+    let mut request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({"metadata": {"user": "u1"}}),
+    };
+    inject_agent_hints(
+        &mut request,
+        &mut None,
+        &hints,
+        &HintInjection::new(false, "metadata.relay.hints"),
+    );
+    assert!(request.headers.get(AGENT_HINTS_HEADER_KEY).is_none());
+    assert_eq!(
+        request.content,
+        serde_json::json!({"metadata": {"user": "u1", "relay": {"hints": serialized}}})
+    );
+
+    // A non-object parent leaves the body unchanged; the header is still written.
+    let mut request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({"metadata": "scalar"}),
+    };
+    inject_agent_hints(
+        &mut request,
+        &mut None,
+        &hints,
+        &HintInjection::new(true, "metadata.relay.hints"),
+    );
+    assert_eq!(request.content, serde_json::json!({"metadata": "scalar"}));
+    assert_eq!(
+        request.headers.get(AGENT_HINTS_HEADER_KEY),
+        Some(&serialized)
+    );
+
+    // A path with an empty segment skips body injection.
+    let mut request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({}),
+    };
+    inject_agent_hints(
+        &mut request,
+        &mut None,
+        &hints,
+        &HintInjection::new(true, "nvext..agent_hints"),
+    );
+    assert_eq!(request.content, serde_json::json!({}));
 }

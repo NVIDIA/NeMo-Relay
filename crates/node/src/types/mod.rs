@@ -9,6 +9,7 @@
 
 mod resource_metrics;
 
+use napi::Env;
 use napi_derive::napi;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
@@ -749,8 +750,14 @@ impl GeminiGenerateContentCodec {
     }
 
     /// Decode a raw LLM response into structured form.
+    /// Throws a TypeError if the response contains a BigInt value.
     #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+    pub fn decode_response(
+        &self,
+        env: Env,
+        #[napi(ts_arg_type = "any")] response: napi::JsUnknown,
+    ) -> napi::Result<Json> {
+        let response = crate::convert::checked_json(&env, response)?;
         let annotated = self
             .inner_response_codec
             .decode_response(&response)

@@ -561,13 +561,6 @@ pub(super) fn validate_automatic_header_environment(signal_variable: &'static st
     Ok(())
 }
 
-/// Return whether an automatic OTLP exporter will attach environment headers.
-pub(super) fn automatic_signal_headers_configured(signal_variable: &str) -> bool {
-    [signal_variable, "OTEL_EXPORTER_OTLP_HEADERS"]
-        .into_iter()
-        .any(|variable| std::env::var(variable).is_ok_and(|value| !value.trim().is_empty()))
-}
-
 /// Whether an automatic exporter should preserve Relay's HTTP/protobuf default.
 ///
 /// A nonblank protocol setting is left entirely to the OTLP builder, including

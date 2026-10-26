@@ -198,6 +198,8 @@ class AtifConfig:
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
     storage: list[S3StorageConfig | HttpStorageConfig] | None = None
+    include_observed_events: bool = True
+    include_llm_requests: bool = True
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -211,6 +213,8 @@ class AtifConfig:
             "output_directory": self.output_directory,
             "filename_template": self.filename_template,
             "storage": self.storage,
+            "include_observed_events": self.include_observed_events,
+            "include_llm_requests": self.include_llm_requests,
         }
         if value["agent_version"] is None:
             value.pop("agent_version")

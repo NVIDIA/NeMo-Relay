@@ -418,6 +418,12 @@ fn atif_storage_uploads_trajectory_to_s3() {
 #[test]
 fn atif_storage_posts_trajectory_to_http_endpoints() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    for include_observed_events in [true, false] {
+        assert_atif_http_upload(include_observed_events);
+    }
+}
+
+fn assert_atif_http_upload(include_observed_events: bool) {
     reset_runtime();
     let mut server = start_http_server(2, vec![("/primary", 204), ("/secondary", 204)]);
     // SAFETY: this uniquely named env var is only touched by this test.
@@ -425,10 +431,12 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
         std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
     }
 
-    let config = build_http_observability_config(&[
+    let mut config = build_http_observability_config(&[
         format!("{}/primary", server.base_url),
         format!("{}/secondary", server.base_url),
     ]);
+    config.components[0].config.get_mut("atif").unwrap()["include_observed_events"] =
+        json!(include_observed_events);
     futures::executor::block_on(test_initialize_plugin_host_exact(config))
         .expect("observability plugin should initialize with HTTP storage");
 
@@ -488,6 +496,11 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
             Some("static-value")
         );
         let value: Json = serde_json::from_slice(&request.body).expect("HTTP body should be JSON");
+        assert_eq!(request.body, serde_json::to_vec(&value).unwrap());
+        assert_eq!(
+            value["extra"].get("observed_events").is_some(),
+            include_observed_events
+        );
         assert_eq!(value["schema_version"].as_str(), Some("ATIF-v1.7"));
         assert_eq!(
             value["session_id"].as_str(),

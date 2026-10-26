@@ -1561,6 +1561,44 @@ fn test_decode_response_text() {
 }
 
 #[test]
+fn test_decode_response_malformed_usage_is_invalid_argument() {
+    let codec = GeminiGenerateContentCodec;
+    for field in [
+        "promptTokenCount",
+        "candidatesTokenCount",
+        "totalTokenCount",
+        "cachedContentTokenCount",
+        "thoughtsTokenCount",
+        "toolUsePromptTokenCount",
+    ] {
+        for value in [
+            json!(-1),
+            json!(1.5),
+            json!("5"),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            let mut response = json!({
+                "candidates": [{
+                    "content": {"parts": [{"text": "IMPORTANT ANSWER"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+                "modelVersion": "gemini-2.5-flash"
+            });
+            response["usageMetadata"][field] = value.clone();
+
+            let err = codec.decode_response(&response).unwrap_err();
+            assert!(
+                matches!(&err, FlowError::InvalidArgument(message) if message.starts_with("Gemini response decode:")),
+                "{field}={value} should be invalid input, got: {err}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_decode_response_native_part_as_provider_native_content() {
     let codec = GeminiGenerateContentCodec;
     let response = json!({
@@ -7300,4 +7338,68 @@ fn gemini_legacy_surviving_call_keeps_signature_without_adding_id() {
     assert_eq!(parts[1]["functionCall"]["id"], "new");
     assert!(parts[1].get("thoughtSignature").is_none());
     assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+}
+
+#[test]
+fn test_decode_response_integral_float_token_counts() {
+    let response = json!({"usageMetadata": {
+        "promptTokenCount": 9e18,
+        "candidatesTokenCount": 5.0,
+        "thoughtsTokenCount": 10.0,
+        "toolUsePromptTokenCount": 10.0,
+        "cachedContentTokenCount": 2.0
+    }});
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+    assert_eq!(usage.prompt_tokens, Some(9_000_000_000_000_000_000));
+    assert_eq!(usage.completion_tokens, Some(5));
+    assert_eq!(usage.cache_read_tokens, Some(2));
+    assert_eq!(usage.total_tokens, Some(9_000_000_000_000_000_025));
+}
+
+#[test]
+fn test_decode_response_token_count_bounds() {
+    for field in [
+        "promptTokenCount",
+        "candidatesTokenCount",
+        "totalTokenCount",
+        "cachedContentTokenCount",
+        "thoughtsTokenCount",
+        "toolUsePromptTokenCount",
+    ] {
+        for count in [
+            json!(0.0),
+            json!(4_294_967_296.0),
+            json!(9_007_199_254_740_992.0),
+            json!(u64::MAX),
+            Json::Null,
+        ] {
+            let response = json!({"usageMetadata": {field: count}});
+            assert!(
+                GeminiGenerateContentCodec
+                    .decode_response(&response)
+                    .is_ok(),
+                "{response}"
+            );
+        }
+        for count in [
+            json!(-1),
+            json!(-1.0),
+            json!(0.5),
+            json!(u64::MAX as f64),
+            json!("5"),
+            json!(true),
+        ] {
+            let response = json!({"usageMetadata": {field: count}});
+            assert!(
+                GeminiGenerateContentCodec
+                    .decode_response(&response)
+                    .is_err(),
+                "{response}"
+            );
+        }
+    }
 }

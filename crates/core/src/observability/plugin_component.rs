@@ -611,6 +611,16 @@ pub struct AtifSectionConfig {
     /// [`output_directory`]: Self::output_directory
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub storage: Vec<AtifStorageConfig>,
+    /// Keep raw events in `extra.observed_events`. Defaults to `true`.
+    #[serde(default = "default_atif_include_payloads")]
+    pub include_observed_events: bool,
+    /// Keep full provider requests in step `extra.llm_request` fields. Defaults to `true`.
+    #[serde(default = "default_atif_include_payloads")]
+    pub include_llm_requests: bool,
+}
+
+fn default_atif_include_payloads() -> bool {
+    true
 }
 
 impl Default for AtifSectionConfig {
@@ -625,6 +635,8 @@ impl Default for AtifSectionConfig {
             output_directory: None,
             filename_template: default_atif_filename_template(),
             storage: Vec::new(),
+            include_observed_events: true,
+            include_llm_requests: true,
         }
     }
 }
@@ -1242,6 +1254,8 @@ crate::editor_config! {
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
         storage => { label: "storage", kind: List, optional: true, list: &ATIF_STORAGE_LIST },
+        include_observed_events => { label: "include_observed_events", kind: Boolean },
+        include_llm_requests => { label: "include_llm_requests", kind: Boolean },
     }
 }
 
@@ -3245,6 +3259,23 @@ struct AtifDispatcher {
     validated_sinks: HashSet<SinkLabel>,
 }
 
+#[derive(Clone, Copy)]
+struct AtifOutputOptions {
+    include_observed_events: bool,
+    include_llm_requests: bool,
+    compact: bool,
+}
+
+impl From<&AtifSectionConfig> for AtifOutputOptions {
+    fn from(config: &AtifSectionConfig) -> Self {
+        Self {
+            include_observed_events: config.include_observed_events,
+            include_llm_requests: config.include_llm_requests,
+            compact: !config.storage.is_empty(),
+        }
+    }
+}
+
 struct ManagedAtifExporter {
     exporter: AtifExporter,
     filename: String,
@@ -3254,6 +3285,7 @@ struct ManagedAtifExporter {
     observed_events: Vec<Event>,
     observed_event_keys: HashSet<String>,
     written: bool,
+    output_options: AtifOutputOptions,
 }
 
 struct PendingAtifWrite {
@@ -3281,6 +3313,7 @@ struct PendingAtifExport {
     local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
     correlation: AtifCorrelation,
+    output_options: AtifOutputOptions,
 }
 
 #[derive(Clone)]
@@ -3408,9 +3441,14 @@ impl AtifDispatcher {
                 local_root,
                 local_path,
                 correlation,
-                observed_events: vec![event.clone()],
+                observed_events: if self.config.include_observed_events {
+                    vec![event.clone()]
+                } else {
+                    Vec::new()
+                },
                 observed_event_keys: HashSet::from([event_observation_key(event)]),
                 written: false,
+                output_options: AtifOutputOptions::from(&self.config),
             },
         );
 
@@ -3469,7 +3507,9 @@ impl AtifDispatcher {
             return None;
         }
         (agent.exporter.subscriber())(event);
-        agent.observed_events.push(event.clone());
+        if agent.output_options.include_observed_events {
+            agent.observed_events.push(event.clone());
+        }
         if !should_finalize || agent.written {
             return None;
         }
@@ -3577,6 +3617,7 @@ impl AtifDispatcher {
                     local_root: agent.local_root.clone(),
                     local_path: agent.local_path.clone(),
                     correlation: agent.correlation.clone(),
+                    output_options: agent.output_options,
                 });
             }
         }
@@ -3941,6 +3982,7 @@ fn prepare_atif_file(
         trajectory,
         observed_events,
         agent.correlation.clone(),
+        agent.output_options,
     )
 }
 
@@ -3966,18 +4008,24 @@ fn prepare_atif_shutdown_file(
         trajectory,
         observed_events,
         export.correlation.clone(),
+        export.output_options,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_atif_payload(
     agent_uuid: Uuid,
     filename: String,
     local_root: Option<PathBuf>,
     local_path: Option<PathBuf>,
-    trajectory: crate::observability::atif::AtifTrajectory,
+    mut trajectory: crate::observability::atif::AtifTrajectory,
     observed_events: Vec<Event>,
     correlation: AtifCorrelation,
+    output_options: AtifOutputOptions,
 ) -> std::io::Result<PendingAtifWrite> {
+    if !output_options.include_llm_requests {
+        omit_atif_llm_requests(&mut trajectory);
+    }
     let session_id = trajectory.session_id.clone();
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
@@ -3987,10 +4035,12 @@ fn prepare_atif_payload(
             Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
             None => Map::new(),
         };
-        extra.insert(
-            "observed_events".to_string(),
-            serde_json::to_value(observed_events)?,
-        );
+        if output_options.include_observed_events {
+            extra.insert(
+                "observed_events".to_string(),
+                serde_json::to_value(observed_events)?,
+            );
+        }
         let mut nemo_relay = match extra.remove("nemo_relay") {
             Some(Json::Object(fields)) => fields,
             Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
@@ -4002,7 +4052,11 @@ fn prepare_atif_payload(
         extra.insert("nemo_relay".to_string(), Json::Object(nemo_relay));
         object.insert("extra".to_string(), Json::Object(extra));
     }
-    let payload = serde_json::to_vec_pretty(&value)?;
+    let payload = if output_options.compact {
+        serde_json::to_vec(&value)?
+    } else {
+        serde_json::to_vec_pretty(&value)?
+    };
     Ok(PendingAtifWrite {
         agent_uuid,
         session_id,
@@ -4011,6 +4065,20 @@ fn prepare_atif_payload(
         local_path,
         payload,
     })
+}
+
+// Remove requests after building the trajectory. Matching and codecs still use full requests.
+fn omit_atif_llm_requests(trajectory: &mut crate::observability::atif::AtifTrajectory) {
+    for step in &mut trajectory.steps {
+        if let Some(Json::Object(extra)) = &mut step.extra {
+            extra.remove("llm_request");
+        }
+    }
+    if let Some(children) = &mut trajectory.subagent_trajectories {
+        for child in children {
+            omit_atif_llm_requests(child);
+        }
+    }
 }
 
 fn write_atif(
@@ -4509,7 +4577,7 @@ fn validate_opentelemetry_plaintext_destinations(
             diagnostics,
             "opentelemetry.traces",
             format!("endpoints[{index}].endpoint"),
-            super::header_file::validate_trace_transport(&endpoint.endpoint, plaintext),
+            super::header_file::validate_otlp_transport(&endpoint.endpoint, plaintext, "trace"),
         );
     }
     for (signal, enabled, explicit) in [
@@ -4569,10 +4637,10 @@ fn validate_automatic_plaintext_destinations(
     plaintext: &PlaintextPolicy,
 ) {
     for (signal, enabled, variable_prefix, exporter_variable) in [
-        ("traces", signals.traces, "TRACES", "OTEL_TRACES_EXPORTER"),
-        ("logs", signals.logs, "LOGS", "OTEL_LOGS_EXPORTER"),
+        ("trace", signals.traces, "TRACES", "OTEL_TRACES_EXPORTER"),
+        ("log", signals.logs, "LOGS", "OTEL_LOGS_EXPORTER"),
         (
-            "metrics",
+            "metric",
             signals.metrics,
             "METRICS",
             "OTEL_METRICS_EXPORTER",
@@ -4581,27 +4649,18 @@ fn validate_automatic_plaintext_destinations(
         if !enabled || !environment_signal_enabled(exporter_variable) {
             continue;
         }
-        let header_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_HEADERS");
-        if signal != "traces"
-            && !super::otel_signal::automatic_signal_headers_configured(&header_variable)
-        {
-            continue;
-        }
         let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_ENDPOINT");
         let validation = super::otel_signal::automatic_signal_endpoint(&endpoint_variable)
             .map_err(|error| error.to_string())
             .and_then(|endpoint| match endpoint {
-                Some(endpoint) if signal == "traces" => {
-                    super::header_file::validate_trace_transport(&endpoint, plaintext)
-                }
                 Some(endpoint) => {
-                    super::header_file::validate_header_http_endpoint(&endpoint, plaintext)
+                    super::header_file::validate_otlp_transport(&endpoint, plaintext, signal)
                 }
                 None => Ok(()),
             });
         push_plaintext_preflight_diagnostic(
             diagnostics,
-            &format!("opentelemetry.automatic.{signal}"),
+            &format!("opentelemetry.automatic.{signal}s"),
             "endpoints[0].endpoint".to_string(),
             validation,
         );
@@ -4737,6 +4796,8 @@ fn validate_observability_section_fields(
             "output_directory",
             "filename_template",
             "storage",
+            "include_observed_events",
+            "include_llm_requests",
         ],
     );
     validate_section_fields(

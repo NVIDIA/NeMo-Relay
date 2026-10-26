@@ -787,6 +787,71 @@ impl Plugin for HeaderPlugin {
 }
 
 #[tokio::test]
+async fn test_adaptive_hints_follow_configured_header_and_body_path() {
+    let _lock = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    test_initialize_plugin_host_exact(PluginConfig {
+        components: vec![
+            AdaptiveComponent::new(AdaptiveConfig {
+                adaptive_hints: Some(AdaptiveHintsComponentConfig {
+                    inject_header: false,
+                    inject_body_path: "metadata.relay_hints".into(),
+                    ..AdaptiveHintsComponentConfig::default()
+                }),
+                ..AdaptiveConfig::default()
+            })
+            .into(),
+        ],
+        ..PluginConfig::default()
+    })
+    .await
+    .unwrap();
+
+    let agent_scope = nemo_relay::api::scope::push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("hinted-agent")
+            .scope_type(nemo_relay::api::scope::ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    nemo_relay_adaptive::context_helpers::set_latency_sensitivity(5).unwrap();
+
+    let request = llm_request_intercepts(
+        "test-model",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": [], "metadata": {"user": "u1"}}),
+        },
+    )
+    .await
+    .unwrap()
+    .request;
+
+    nemo_relay::api::scope::pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&agent_scope.uuid)
+            .build(),
+    )
+    .unwrap();
+    test_close_plugin_host().unwrap();
+
+    assert!(
+        request
+            .headers
+            .get(nemo_relay_adaptive::intercepts::AGENT_HINTS_HEADER_KEY)
+            .is_none()
+    );
+    assert_eq!(request.content["metadata"]["user"], json!("u1"));
+    assert_eq!(
+        request.content["metadata"]["relay_hints"]["latency_sensitivity"],
+        json!(5.0)
+    );
+    assert!(request.content.get("nvext").is_none());
+}
+
+#[tokio::test]
 async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     let _lock = TEST_MUTEX.lock().await;
     reset_global();

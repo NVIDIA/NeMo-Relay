@@ -203,6 +203,12 @@ type ObservabilityAtifConfig struct {
 	OutputDirectory  string                               `json:"output_directory,omitempty"`
 	FilenameTemplate string                               `json:"filename_template,omitempty"`
 	Storage          []ObservabilityAtifStorageConfigurer `json:"storage,omitempty"`
+	// IncludeObservedEvents keeps raw events in the exported trajectory.
+	// Use nil for the default, true. Use a pointer to false to omit raw events.
+	IncludeObservedEvents *bool `json:"include_observed_events,omitempty"`
+	// IncludeLLMRequests keeps full provider requests in trajectory steps.
+	// Use nil for the default, true. Use a pointer to false to omit full requests.
+	IncludeLLMRequests *bool `json:"include_llm_requests,omitempty"`
 }
 
 // ObservabilityAtifStorageConfigurer is one remote ATIF trajectory storage destination.
