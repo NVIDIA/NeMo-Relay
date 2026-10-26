@@ -2888,6 +2888,41 @@ async fn streaming_gateway_call_guard_cancellation_while_waiting_releases_sessio
 }
 
 #[tokio::test]
+async fn streaming_gateway_call_guard_cancellation_during_cleanup_releases_session() {
+    let session_id = "stream-cancel-cleanup-lock";
+    let (manager, mut guard) = stream_error_test_guard(session_id).await;
+    let session_gate = manager.test_lock_session_gate(session_id).await;
+    {
+        let completion = guard.finish();
+        tokio::pin!(completion);
+        assert!(futures_util::poll!(completion.as_mut()).is_pending());
+        // Let cleanup reach the held session gate before cancelling its caller.
+        tokio::task::yield_now().await;
+    }
+    drop(guard);
+    drop(session_gate);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let closed = manager
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "cancelled_stream_cleanup",
+                )
+                .await
+                .unwrap();
+            if closed == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled cleanup retained its gateway session");
+}
+
+#[tokio::test]
 async fn uncontended_stream_completion_finishes_before_observer_poll_without_copying_response() {
     let captured_output = Arc::new(Mutex::new(None::<Value>));
     let captured = captured_output.clone();

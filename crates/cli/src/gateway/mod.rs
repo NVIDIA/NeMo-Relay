@@ -1362,14 +1362,17 @@ impl GatewayCallGuard {
         }
         self.response_ready = None;
         if let Some(sessions) = self.sessions.take() {
-            complete_gateway_call(
+            // Cleanup must survive cancellation of the request awaiting it.
+            let cleanup_task = tokio::spawn(complete_gateway_call(
                 sessions,
                 self.session_id.clone(),
                 self.owner_subagent_id.clone(),
                 None,
                 self.session_finish,
-            )
-            .await;
+            ));
+            cleanup_task
+                .await
+                .expect("gateway cleanup task should complete");
         }
     }
 }
