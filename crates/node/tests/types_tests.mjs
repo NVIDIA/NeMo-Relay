@@ -277,6 +277,21 @@ describe('GeminiGenerateContentCodec', () => {
     assert.equal(resp.usage?.prompt_tokens, 5);
   });
 
+  it('decodeResponse preserves large token counts and sums them exactly', () => {
+    const codec = new GeminiGenerateContentCodec();
+    for (const prompt of [2 ** 32, 2 ** 53, 9e18]) {
+      const resp = codec.decodeResponse({
+        usageMetadata: { promptTokenCount: prompt, candidatesTokenCount: 25 },
+      });
+      const expectedPrompt = BigInt(prompt);
+      assert.equal(BigInt(resp.usage.prompt_tokens), expectedPrompt);
+      assert.equal(BigInt(resp.usage.total_tokens), expectedPrompt + 25n);
+    }
+    for (const prompt of [-1, 1.5, 2 ** 64]) {
+      assert.throws(() => codec.decodeResponse({ usageMetadata: { promptTokenCount: prompt } }));
+    }
+  });
+
   it('decodeResponse maps functionCall id correctly', () => {
     const codec = new GeminiGenerateContentCodec();
     const raw = {
