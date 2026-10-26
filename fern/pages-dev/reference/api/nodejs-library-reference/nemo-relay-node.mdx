@@ -1129,8 +1129,11 @@ export declare class GeminiGenerateContentCodec {
   decode(request: Json): Json
   /** Encode structured changes back into an opaque LLM request. */
   encode(annotated: Json, original: Json): Json
-  /** Decode a raw LLM response into structured form. */
-  decodeResponse(response: Json): Json
+  /**
+   * Decode a raw LLM response into structured form.
+   * Throws a TypeError if the response contains a BigInt value.
+   */
+  decodeResponse(response: any): Json
 }
 ```
 
