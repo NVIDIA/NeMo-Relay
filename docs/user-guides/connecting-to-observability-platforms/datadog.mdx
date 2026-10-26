@@ -1,0 +1,81 @@
+---
+title: "Connect to Datadog"
+description: "Send Relay traces through an enterprise OTLP collector or tracing backend to Datadog."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
+to make Relay-observed runs available to a team investigating traces in
+Datadog. The example routes Relay OTLP traces to an organization-operated
+OpenTelemetry Collector; that Collector forwards them to your Datadog site.
+
+<Tip title="Use the same companion workload">
+Select `--destination datadog` in the parent guide's Hermes example. Supply your running Collector's trace URL. Its Datadog exporter and credentials stay in that collector or tracing backend.
+Find service `relay-support-triage` and apply this page's destination checks.
+</Tip>
+
+The example uses OpenInference to keep the same agent/model/tool roles as the
+Phoenix and LangSmith recipes. Datadog also supports OpenTelemetry GenAI
+conventions; use `gen_ai` when your pipeline standardizes on those attributes.
+This recipe verifies **APM trace arrival**. Enabling Datadog's Agent/LLM
+Observability product requires its additional
+[OpenTelemetry configuration](https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/).
+
+## Choose the collector or tracing backend
+
+Datadog recommends an Agent or OpenTelemetry Collector for production OTLP
+traffic. The collector or tracing backend can add host metadata, process spans, and apply
+central sampling. Choose one that the Relay worker or application can reach
+and that your platform team already operates. A direct Datadog
+[OTLP trace intake](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/traces/)
+is available when an Agent or Collector is not feasible; it uses a
+site-specific HTTPS endpoint and an API-key header.
+
+The following `plugins.toml` example sends OpenInference traces to a managed
+Collector. Replace the illustrative host with its actual HTTPS trace URL:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "https://otel-gateway.example.com/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+```
+
+If the Collector requires authentication from Relay, add its approved header
+with `header_env`; keep the secret outside `plugins.toml`. The Collector owns
+the Datadog site and API key in this topology. Follow Datadog's
+[Collector setup](https://docs.datadoghq.com/opentelemetry/setup/collector_exporter/)
+or [Agent OTLP ingestion](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest_in_the_agent/)
+for the chosen collector or tracing backend.
+
+## Check Datadog APM
+
+Find a recent trace under the service `relay-support-triage`. Confirm that
+its agent span has the observed model and tool work beneath it, then inspect
+model identity and sanitized payload fields.
+
+| Missing evidence | First place to check |
+| --- | --- |
+| No trace | Relay exporter delivery, Collector or Agent ingestion, and the Datadog site. |
+| Partial trace | Relay capture coverage and any sampling or span processing in the collector or tracing backend. |
+| Unexpected operation names | The selected trace projection and Datadog's OTLP span mapping. |
+
+Direct intake does not automatically compute APM trace metrics; plan that
+separately if the enterprise dashboard needs them. Datadog's
+[direct intake guide](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/traces/)
+explains that option and its required headers.

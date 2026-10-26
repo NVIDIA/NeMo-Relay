@@ -1,0 +1,74 @@
+---
+title: "Connect to LangSmith"
+description: "Export Relay traces to a LangSmith project and inspect correlated agent work."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
+to place Relay-observed work in a LangSmith project. Relay's `openinference`
+trace projection carries agent, model, and tool span attributes that LangSmith
+can map into its run view.
+
+<Tip title="Use the same companion workload">
+Select `--destination langsmith` in the parent guide's Hermes example. Supply the regional trace URL, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` in the runner environment.
+Find service `relay-support-triage` and apply this page's destination checks.
+</Tip>
+
+## Select the LangSmith project
+
+Choose the LangSmith region, API key, and project before changing Relay. This
+example sends OTLP/HTTP traces to the US SaaS intake and names the destination
+project. Use the regional or self-hosted URL for your deployment.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "https://api.smith.langchain.com/otel/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.header_env]
+"x-api-key" = "LANGSMITH_API_KEY"
+
+[components.config.opentelemetry.endpoints.headers]
+"Langsmith-Project" = "relay-enterprise"
+```
+
+The `header_env` entry reads the API key from the worker or application's
+environment; the project header determines where its spans land. Relay
+preserves an explicit URL path, so the endpoint includes LangSmith's full
+`/otel/v1/traces` trace path. LangSmith's
+[OpenTelemetry guide](https://docs.langchain.com/langsmith/trace-with-opentelemetry)
+lists current regional endpoints and header options.
+
+## Check the LangSmith run
+
+Open the selected project and find the run by time and service. Verify that the
+agent run and observed model and tool calls share the intended parentage.
+Inspect one span for model identity, token usage where the source provides it,
+and the approved redaction result.
+
+<Note>
+An accepted OTLP request does not by itself prove that the complete tree is
+visible. If a child span's parent is never exported, LangSmith may not show
+that child as a run. Confirm the root and descendants in the project.
+</Note>
+
+If nothing arrives, check the region, key, project header, and
+[Relay exporter diagnostics](/configure-plugins/observability/configuration).
+If part of the tree is missing, compare the LangSmith view with the events the
+chosen Relay capture path actually emits.

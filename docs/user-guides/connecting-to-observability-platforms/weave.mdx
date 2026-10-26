@@ -1,0 +1,69 @@
+---
+title: "Connect to W&B Weave"
+description: "Send Relay GenAI traces to a Weave project and inspect them in the Agents view."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
+to send Relay-observed agent activity to Weave. Its Agents view recognizes
+`gen_ai.operation.name` values for agent turns, model calls, and tool actions,
+so use Relay's `gen_ai` trace projection for this destination.
+
+<Tip title="Use the same companion workload">
+Select `--destination weave` in the parent guide's Hermes example. Supply the Agents trace URL, `WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_PROJECT` in the runner environment.
+Find service `relay-support-triage` and apply this page's destination checks.
+</Tip>
+
+## Route traces to the Weave project
+
+Choose the W&B entity and project where the enterprise team reviews runs.
+This example uses Weave's Agents OTLP intake and project resource attributes:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "https://trace.wandb.ai/agents/otel/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.header_env]
+"wandb-api-key" = "WANDB_API_KEY"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"wandb.entity" = "platform-team"
+"wandb.project" = "relay-agent-traces"
+```
+
+Set `WANDB_API_KEY` in the exporting process's secret-backed environment and
+replace the entity and project with your own. Weave drops spans without a
+routable entity and project. Its
+[Agents OTLP guide](https://docs.wandb.ai/weave/guides/tracking/trace-agents-otel)
+also describes a `project_id` header if resource attributes are unsuitable.
+Use the complete trace URL: Relay preserves this explicit path and sends only
+traces to this endpoint.
+
+## Check the Agents view
+
+Find the test turn in the selected project's Agents view. Verify that the
+`invoke_agent` turn contains observed `chat` model calls and `execute_tool`
+actions. Check the model and token fields that your capture path provides and
+inspect payloads for approved redaction.
+
+If traces arrive in Weave but do not appear as expected in Agents, inspect
+`gen_ai.operation.name` on the spans before changing project routing. If no
+spans arrive, check the API key, entity and project values, and
+[Relay exporter delivery](/configure-plugins/observability/configuration).

@@ -1,0 +1,96 @@
+---
+title: "Connect to Phoenix"
+description: "Export Relay OpenInference traces to Phoenix and confirm agent, model, and tool spans."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
+to send a real Relay-observed run to Phoenix. Phoenix receives OpenTelemetry
+traces; Relay supplies the agent, model, and tool spans it captured. Use the
+`openinference` projection so Phoenix can identify those span roles.
+
+<Tip title="Use the same companion workload">
+Select `--destination phoenix` in the parent guide's Hermes example. Start a local Phoenix instance, or supply its remote trace URL and required authorization. The loopback endpoint is the default.
+Find service `relay-support-triage` and apply this page's destination checks.
+</Tip>
+
+## Start a local Phoenix instance
+
+For a disposable local backend, run this in a separate terminal and keep it open:
+
+```bash
+uvx --from arize-phoenix phoenix serve
+```
+
+The UI and HTTP trace intake use port `6006` by default. Follow the
+[Phoenix terminal deployment instructions](https://arize.com/docs/phoenix/self-hosting/deployment-options/terminal)
+for a persistent installation. For a remote VM, forward the port as described
+in the parent guide; an unauthenticated Phoenix UI should stay on a trusted host.
+
+## Point the worker or application at Phoenix
+
+Choose the tracing intake URL for your Phoenix Cloud space or self-hosted
+instance. The address used to open the Phoenix UI may differ from the OTLP
+intake URL. The following `plugins.toml` example shows a remote HTTPS intake;
+replace the illustrative host with your deployment's complete trace URL.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "https://phoenix.example.com/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"openinference.project.name" = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "PHOENIX_AUTHORIZATION"
+```
+
+Set `PHOENIX_AUTHORIZATION` in the Relay worker or application environment to
+the full `Bearer <api-key>` header value when the intake requires an API key.
+For an unauthenticated loopback Phoenix instance, omit `header_env` and use
+that instance's local trace URL. Keep the credential outside the config file.
+Phoenix documents its [endpoint choices](https://arize.com/docs/phoenix/learn/faqs/what-is-my-phoenix-endpoint)
+and [authentication header](https://arize.com/docs/phoenix/deployment/authentication).
+
+## Check a complete trace
+
+In the `relay-support-triage` Phoenix project, find the test run by time and service name.
+Open its trace tree and check the following evidence:
+
+| Check | Expected result |
+| --- | --- |
+| Agent parent | The run has a recognizable top-level agent or turn span when the capture path emits one. |
+| Model and tool work | Calls observed by Relay are children or related spans in the same trace. |
+| Privacy | Restricted prompt or tool fields are absent or transformed according to the approved policy. |
+
+If no trace appears, first check the intake URL, authorization, and reachability
+from the actual Relay process. If only model or tool activity is missing,
+confirm that those calls crossed the Relay capture boundary. The
+[Observability reference](/configure-plugins/observability/configuration)
+provides exporter delivery diagnostics.
+
+## Example trace to recognize
+
+The Brev companion run exported `hermes.session` (`AGENT`) and `hermes.turn`
+(`CHAIN`), with four `openai.chat_completions` (`LLM`) spans beneath logical-call
+spans and two tool spans named `read_file` and `write_file`. All 12 spans shared
+one trace ID in project `relay-support-triage`. See the parent guide's measured
+example and compare your own run time and tree rather than expecting these
+exact call counts from every model.

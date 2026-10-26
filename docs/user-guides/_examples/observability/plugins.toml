@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "__LOG_DIRECTORY__"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "__PROJECTION__"
+endpoint = "__TRACE_ENDPOINT__"
+transport = "http_binary"
+service_name = "relay-support-triage"
