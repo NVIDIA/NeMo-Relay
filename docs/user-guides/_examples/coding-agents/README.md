@@ -16,9 +16,8 @@ systemd, sudo, Git, and Python 3.11+. Install a verified Relay CLI binary that
 includes `daemon managed-bundle`; use the version matching the docs. Install
 supported Claude Code and Codex CLI executables so each account can run its
 harness. Use the support matrix's minimum versions. Provider access must permit
-gateway routing. Alice needs an Anthropic API key or an approved
-Anthropic-compatible gateway credential for this example. Bob can use ChatGPT
-sign-in or an OpenAI API key. Do not put provider credentials in the shared
+gateway routing. Use Claude.ai subscription sign-in for Alice and ChatGPT
+sign-in for Bob. API keys or approved gateway credentials are alternatives. Do not put provider credentials in the shared
 configuration. A login on another machine or under another Linux user is not
 automatically available to these accounts.
 
@@ -70,8 +69,8 @@ echoing or saving a key in source, then run the installed launcher:
 ```bash
 # Terminal A
 sudo -iu alice
-IFS= read -r -s -p 'Anthropic API key: ' ANTHROPIC_API_KEY; printf '\n'
-export ANTHROPIC_API_KEY
+claude auth login
+claude auth status
 /opt/nvidia/share/relay-user-guide/session.sh
 ```
 
@@ -99,10 +98,18 @@ export OPENAI_API_KEY
 printenv OPENAI_API_KEY | codex login --with-api-key
 ```
 
-Claude.ai subscription OAuth is not supported through this example's managed
-`ANTHROPIC_BASE_URL`. Alice's native Claude login can be used for a separate
-hooks-only evaluation without redirecting her provider endpoint; that does not
-verify the example's model gateway path. Keep the two coverage claims separate.
+For Alice, select the Claude.ai account in browser login. Her subscription can
+route through the managed `ANTHROPIC_BASE_URL`; Relay must preserve provider
+authorization and the `anthropic-beta` OAuth capability. Leave
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `apiKeyHelper` unset for this
+subscription path. The launcher's custom Relay token header is separate.
+This was verified with Claude Code 2.1.309 and Relay 0.11.0-rc.1; do not infer
+compatibility for every older supported harness version.
+
+For API-key authentication instead, supply Alice's `ANTHROPIC_API_KEY` through
+your secret manager or hidden interactive input before launching. That selects
+API billing instead of subscription usage. See
+[Anthropic's subscription and gateway guidance](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways).
 
 In both sessions, ask the agent to read
 `/opt/nvidia/share/relay-user-guide/task.txt` and complete it in its current
@@ -154,8 +161,30 @@ One completed Phoenix trace contained one agent, one turn, six model calls, and
 eight tool calls, with all parent spans present. The `task.txt` tool result and
 final handoff were redacted; no original synthetic email appeared in the task's
 exported attributes. Bob's worker remained ready while his session stayed open.
-This result covers Codex; it does not establish Claude task completion or the
-two-user shutdown acceptance check.
+This result covers the interactive Codex path.
+
+### Measured Claude subscription result
+
+Alice completed the task with her existing Claude.ai Enterprise login through
+the managed Relay route, using Claude Code 2.1.309 and Relay 0.11.0-rc.1.
+Her initial six test methods passed but independent acceptance caught two Unicode
+prefix errors (19/21 cases passed). After review feedback, Claude repaired the
+implementation and added regression tests: seven test methods and all 21 cases
+passed. The initial task trace contained three model and five tool spans; the
+repair trace contained five model and five tool spans. Each was parented under
+`claude-code-turn`. The `task.txt` Read result was redacted, and the original
+synthetic email was absent from both traces' attributes.
+
+These bounded `claude -p` runs retained explicit approvals for task files and
+unittest. A first attempt stopped because the administrator's allow rule used a
+single slash instead of Claude's `//` syntax for absolute paths. Correcting the
+rule enabled the authorized read. A later shell-based rewrite was denied;
+Claude used the approved Edit tool instead. No bypass-permissions mode was used.
+
+Session-level agent parentage remains open: the runs emitted separate
+`mark:agent_end_without_start` diagnostics. After Alice exited, her workers
+were removed and Bob's original worker remained ready. Sending a new request
+inside Bob's still-open interactive session remains a separate continuity check.
 
 ## Apply the files elsewhere
 

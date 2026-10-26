@@ -747,12 +747,19 @@ or in Claude Code settings `env`. Without it, Claude model requests pass through
 the daemon without Relay telemetry, or receive `401` from a daemon started with
 `--require-worker`. When both variables are set, their tokens
 must match. Check `/mcp` after startup and verify that Relay hooks are
-enabled. Managed Claude model routing requires an Anthropic API key or an
-administrator-configured Anthropic-compatible gateway credential. Claude.ai OAuth
-is not supported with `ANTHROPIC_BASE_URL`: Claude Code refreshes that session
-against its native service rather than an Anthropic-compatible gateway. Do not set
-the managed base URL for a Claude.ai OAuth-only deployment; preserve native routing
-until Anthropic provides a supported OAuth gateway contract.
+enabled. Managed Claude model routing can preserve a Claude.ai subscription
+login when no provider credential override is active. Keep
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `apiKeyHelper` unset for this
+path; `ANTHROPIC_CUSTOM_HEADERS` carries the separate Relay routing token.
+Relay must forward the provider authorization and the OAuth capability in
+`anthropic-beta` unchanged. The managed route was verified with Claude Code
+2.1.309 and Relay 0.11.0-rc.1; validate your installed versions with an actual
+model call and supported tool hook before rollout.
+
+An Anthropic API key or administrator-configured Anthropic-compatible gateway
+credential is an alternative with its own billing. See Anthropic's
+[subscription and gateway guidance](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)
+and [required protocol headers](https://code.claude.com/docs/en/llm-gateway-protocol#request-headers).
 
 ### Pi
 
