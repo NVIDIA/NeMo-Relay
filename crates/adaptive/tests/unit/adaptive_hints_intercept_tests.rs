@@ -421,3 +421,40 @@ fn test_inject_agent_hints_follows_body_path_and_header_flag() {
     );
     assert_eq!(request.content, serde_json::json!({}));
 }
+
+#[test]
+fn test_inject_agent_hints_merges_into_modeled_metadata_through_a_codec() {
+    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+    use nemo_relay::codec::traits::LlmCodec;
+
+    let hints = manual_agent_hints(4, "agent", 1);
+    let original = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"user_id": "u1"}
+        }),
+    };
+    let mut request = original.clone();
+    let mut annotated = Some(OpenAIChatCodec.decode(&original).unwrap());
+
+    inject_agent_hints(
+        &mut request,
+        &mut annotated,
+        &hints,
+        &HintInjection::new(false, "metadata.relay_hints"),
+    );
+    let encoded = OpenAIChatCodec
+        .encode(annotated.as_ref().unwrap(), &original)
+        .unwrap();
+
+    // The user's metadata survives and the hints sit next to it.
+    assert_eq!(
+        encoded.content["metadata"],
+        serde_json::json!({
+            "user_id": "u1",
+            "relay_hints": serde_json::to_value(&hints).unwrap()
+        })
+    );
+}
