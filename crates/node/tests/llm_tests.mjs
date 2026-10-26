@@ -482,6 +482,164 @@ describe('LLM execute', () => {
 });
 
 // ===========================================================================
+// LLM codec callback failures
+// ===========================================================================
+
+describe('LLM codec callback failures', () => {
+  function makeCodecRequest() {
+    return {
+      headers: {},
+      content: { model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] },
+    };
+  }
+
+  function passthroughEncode({ original }) {
+    return original;
+  }
+
+  const decodeFailures = [
+    [
+      'throws',
+      () => {
+        throw new Error('decode boom');
+      },
+      /JS codec decode callback failed: decode boom/,
+    ],
+    [
+      'returns an unsupported value',
+      () => ({ messages: [], model: 1n }),
+      /JS codec decode callback failed: .*unsupported bigint value/,
+    ],
+    [
+      'returns an invalid annotation',
+      () => 'not an annotation',
+      /JS codec decode callback failed: expected AnnotatedLlmRequest/,
+    ],
+  ];
+
+  for (const [label, decode, pattern] of decodeFailures) {
+    it(`manual llmCall isolates a codecDecode that ${label}`, async () => {
+      const events = [];
+      const request = makeCodecRequest();
+      const original = structuredClone(request);
+      clearLastCallbackError();
+      registerSubscriber('manual_codec_failure_sub', (event) => events.push(event));
+      try {
+        const handle = llmCall(
+          'manual_codec_failure',
+          request,
+          null,
+          null,
+          null,
+          null,
+          'gpt-4',
+          null,
+          decode,
+          passthroughEncode,
+        );
+        llmCallEnd(handle, {});
+        await flushSubscribers();
+        assert.match(getLastCallbackError() ?? '', pattern);
+        const start = events.find(
+          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'start',
+        );
+        assert.deepEqual(start.data, original);
+        assert.equal(start.category_profile.annotated_request, undefined);
+        const end = events.find(
+          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'end',
+        );
+        assert.notEqual(end, undefined);
+        assert.deepEqual(request, original);
+      } finally {
+        deregisterSubscriber('manual_codec_failure_sub');
+      }
+    });
+  }
+
+  it('llmCallExecute rejects a throwing codecDecode without terminating Node', async () => {
+    await assert.rejects(
+      () =>
+        llmCallExecute(
+          'exec_codec_decode_throw',
+          makeCodecRequest(),
+          () => ({ ok: true }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          () => {
+            throw new Error('execute decode boom');
+          },
+          passthroughEncode,
+        ),
+      /JS codec decode callback failed: execute decode boom/,
+    );
+    const result = await llmCallExecute('exec_codec_after_decode_throw', makeCodecRequest(), () => ({
+      ok: true,
+    }));
+    assert.deepEqual(result, { ok: true });
+  });
+
+  it('llmCallExecute rejects a throwing codecEncode without terminating Node', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    await assert.rejects(
+      () =>
+        llmCallExecute(
+          'exec_codec_encode_throw',
+          makeCodecRequest(),
+          () => ({ ok: true }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          codec.decode.bind(codec),
+          () => {
+            throw new Error('execute encode boom');
+          },
+        ),
+      /JS codec encode callback failed: execute encode boom/,
+    );
+  });
+
+  it('llmCallExecute isolates a throwing responseCodecDecode', async () => {
+    const events = [];
+    clearLastCallbackError();
+    registerSubscriber('exec_response_codec_throw_sub', (event) => events.push(event));
+    try {
+      const result = await llmCallExecute(
+        'exec_response_codec_throw',
+        makeCodecRequest(),
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        () => {
+          throw new Error('response decode boom');
+        },
+      );
+      assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
+      assert.match(
+        getLastCallbackError() ?? '',
+        /JS response codec decode callback failed: response decode boom/,
+      );
+      const end = events.find(
+        (event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end',
+      );
+      assert.equal(end.category_profile.annotated_response, undefined);
+    } finally {
+      deregisterSubscriber('exec_response_codec_throw_sub');
+    }
+  });
+});
+
+// ===========================================================================
 // LLM guardrails
 // ===========================================================================
 
