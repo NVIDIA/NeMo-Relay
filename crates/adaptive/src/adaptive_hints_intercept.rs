@@ -123,12 +123,20 @@ fn inject_agent_hints(
         return;
     };
 
-    let body = annotated
-        .as_mut()
-        .map(|annotated| &mut annotated.extra)
-        .or_else(|| request.content.as_object_mut());
-    if let Some(body) = body
-        && let Some((field, parents)) = injection.body_path.split_last()
+    let path = injection.body_path.as_slice();
+    let root = match annotated.as_mut() {
+        // `metadata` is a modeled request field. Write through it so the codec keeps the
+        // caller's existing metadata; an `extra["metadata"]` entry would replace it on encode.
+        Some(annotated) if path.len() > 1 && path[0] == "metadata" => annotated
+            .metadata
+            .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .map(|metadata| (metadata, &path[1..])),
+        Some(annotated) => Some((&mut annotated.extra, path)),
+        None => request.content.as_object_mut().map(|body| (body, path)),
+    };
+    if let Some((body, path)) = root
+        && let Some((field, parents)) = path.split_last()
     {
         // Missing parents are created; a parent that is not an object leaves the body unchanged.
         let mut target = Some(body);
