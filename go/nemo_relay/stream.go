@@ -180,7 +180,8 @@ func (s *LlmStream) finishNext() {
 // return the first result. A Close from inside this stream's own collector or
 // finalizer returns nil at once and finishes cleanup after the callback
 // returns. After Close is called, any further calls to [LlmStream.Next] return
-// [io.EOF]. The finalizer runs once with any collected partial response.
+// [io.EOF]. The finalizer runs once with any collected partial response, and a
+// finalizer failure is the Close error.
 func (s *LlmStream) Close() error {
 	callerID := currentGoroutineID()
 	s.mu.Lock()

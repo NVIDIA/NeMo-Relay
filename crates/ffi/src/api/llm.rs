@@ -11,6 +11,7 @@ use super::{
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
     wrap_llm_exec_fn, wrap_llm_stream_exec_fn, wrap_stream_callbacks,
 };
+use nemo_relay::api::runtime::LlmFinalizer;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio_stream::StreamExt;
 
@@ -669,7 +670,8 @@ async fn forward_stream_to_channel(
 ///   May be null, in which case chunks are not collected.
 /// - `finalizer`: Callback invoked once when the stream is exhausted to produce
 ///   the aggregated response as a JSON C string. May be null, in which case the
-///   finalizer returns `Json::Null`.
+///   finalizer returns `Json::Null`. A null or non-JSON result marks the LLM end
+///   event ERROR with a null response and is reported by `nemo_relay_stream_close`.
 /// - `callback_user_data`: Opaque pointer passed to `collector` and `finalizer`.
 /// - `callback_free`: Optional destructor for `callback_user_data`.
 /// - `parent`: Optional parent scope handle, or null.
@@ -741,7 +743,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                 .request(parsed.request)
                 .func(default_fn)
                 .collector(wrapped_collector)
-                .finalizer(wrapped_finalizer)
+                .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
                 .parent_opt(parsed.parent_handle)
                 .attributes(parsed.attrs)
                 .data_opt(parsed.data)

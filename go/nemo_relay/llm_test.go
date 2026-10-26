@@ -1798,12 +1798,24 @@ func TestLlmStreamCloseWithoutNextNeverPullsProducer(t *testing.T) {
 	}
 }
 
+func assertFinalizerFailureEndEvent(t *testing.T, output func() json.RawMessage, metadata func() map[string]any, closeErr error) {
+	t.Helper()
+	if out := output(); out != nil {
+		t.Fatalf("end event output = %s, want no response", out)
+	}
+	fields := metadata()
+	if fields["otel.status_code"] != "ERROR" || fields["otel.status_description"] != closeErr.Error() {
+		t.Fatalf("end event metadata = %v, want ERROR with %q", fields, closeErr.Error())
+	}
+}
+
 func TestLlmStreamFinalizerPanicReportedByClose(t *testing.T) {
-	output, _, done := captureLlmEndEvent(t, "go_stream_finalizer_panic")
+	output, metadata, done := captureLlmEndEvent(t, "go_stream_finalizer_panic")
 	stream, err := LlmStreamCallExecute("finalizer_panic_llm", makeRequest(),
 		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
 		nil,
 		func() string { panic("finalizer boom") },
+		WithLLMData(json.RawMessage(`{"fallback": "data"}`)),
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1814,24 +1826,27 @@ func TestLlmStreamFinalizerPanicReportedByClose(t *testing.T) {
 		t.Fatalf("Close error = %v, want finalizer panic", closeErr)
 	}
 	done()
-	if out := strings.TrimSpace(string(output())); out != "" && out != "null" {
-		t.Fatalf("end event output = %q, want null aggregate", out)
-	}
+	assertFinalizerFailureEndEvent(t, output, metadata, closeErr)
 }
 
 func TestLlmStreamFinalizerInvalidJSONReportedByClose(t *testing.T) {
+	output, metadata, done := captureLlmEndEvent(t, "go_stream_finalizer_invalid_json")
 	stream, err := LlmStreamCallExecute("finalizer_invalid_json_llm", makeRequest(),
 		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
 		nil,
 		func() string { return "not json" },
+		WithLLMData(json.RawMessage(`{"fallback": "data"}`)),
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
 	}
 	drainStream(t, stream)
-	if closeErr := stream.Close(); closeErr == nil || !strings.Contains(closeErr.Error(), "invalid JSON") {
+	closeErr := stream.Close()
+	if closeErr == nil || !strings.Contains(closeErr.Error(), "stream finalizer callback failed: invalid JSON") {
 		t.Fatalf("Close error = %v, want invalid JSON report", closeErr)
 	}
+	done()
+	assertFinalizerFailureEndEvent(t, output, metadata, closeErr)
 }
 
 func TestLlmStreamCollectorMayCallRelay(t *testing.T) {

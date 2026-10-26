@@ -415,6 +415,11 @@ unsafe extern "C" fn finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_c
     CString::new(r#"{"done":true}"#).unwrap().into_raw()
 }
 
+unsafe extern "C" fn failing_finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
+    set_last_error("stream finalizer callback panicked: finalizer boom");
+    std::ptr::null_mut()
+}
+
 unsafe extern "C" fn subscriber_cb(user_data: *mut libc::c_void, event: *const FfiEvent) {
     let counter = unsafe { &*(user_data as *const Arc<AtomicUsize>) };
     if unsafe { (&*event).0.name() } == "ffi-event" {
@@ -891,8 +896,17 @@ fn assert_collector_and_finalizer_callbacks() {
     );
     collector(json!({"chunk": 1})).unwrap();
     assert_eq!(COLLECTED_COUNT.load(Ordering::SeqCst), 1);
-    assert_eq!(finalizer(), json!({"done": true}));
+    assert_eq!(finalizer().unwrap(), json!({"done": true}));
     assert!(error.lock().unwrap().is_none());
+
+    let (_, finalizer, error) =
+        wrap_stream_callbacks(None, Some(failing_finalizer_cb), std::ptr::null_mut(), None);
+    let failure = finalizer().unwrap_err().to_string();
+    assert_eq!(
+        failure,
+        "internal error: stream finalizer callback panicked: finalizer boom"
+    );
+    assert_eq!(error.lock().unwrap().as_deref(), Some(failure.as_str()));
 }
 
 fn assert_event_callbacks() {

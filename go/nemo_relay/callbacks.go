@@ -376,8 +376,8 @@ type CollectorFunc func(chunkJSON json.RawMessage)
 // FinalizerFunc is a callback invoked exactly once when a streaming LLM
 // response is exhausted, closed, or released. It takes no arguments and must
 // return a JSON string representing the aggregated response. It runs on a
-// runtime worker thread; a panic or non-JSON result is returned from
-// [LlmStream.Close].
+// runtime worker thread. A panic or non-JSON result marks the LLM end event
+// ERROR with a null response and is returned from [LlmStream.Close].
 type FinalizerFunc func() string
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
@@ -932,9 +932,6 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (status C.int32_t) {
 	defer recoverCallbackPanic("stream collector", func() { status = nemoRelayStatusInternal })
 	callbacks := lookupClosure(userData).(*streamCallbacks)
-	if callbacks.collector == nil {
-		return 0
-	}
 	defer callbacks.enter()()
 	callbacks.collector(json.RawMessage(C.GoString(chunkJSON)))
 	return 0
@@ -944,9 +941,6 @@ func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (st
 func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 	defer recoverCallbackPanic("stream finalizer", func() { cResult = nil })
 	callbacks := lookupClosure(userData).(*streamCallbacks)
-	if callbacks.finalizer == nil {
-		return nil
-	}
 	defer callbacks.enter()()
 	return C.CString(callbacks.finalizer())
 }

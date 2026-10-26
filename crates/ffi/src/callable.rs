@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
-    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn,
+    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
+    LlmFallibleFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext, ToolExecutionFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -1128,21 +1128,21 @@ pub fn wrap_llm_stream_exec_fn(
 pub(crate) type StreamCallbackError = Arc<std::sync::Mutex<Option<String>>>;
 
 /// Wrap the C collector and finalizer callbacks.
-#[allow(clippy::type_complexity)]
+///
+/// A finalizer failure is returned to the runtime, which marks the LLM end
+/// event ERROR with a null aggregate. The failure is also recorded in the
+/// returned slot for `nemo_relay_stream_close`, because the runtime's close
+/// result does not carry it.
 pub fn wrap_stream_callbacks(
     collector: Option<NemoRelayCollectorCb>,
     finalizer: Option<NemoRelayFinalizerCb>,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> (
-    Box<dyn FnMut(Json) -> Result<()> + Send>,
-    Box<dyn FnOnce() -> Json + Send>,
-    StreamCallbackError,
-) {
+) -> (LlmCollectorFn, LlmFallibleFinalizerFn, StreamCallbackError) {
     let ud = make_user_data(user_data, free_fn);
     let error_slot: StreamCallbackError = Arc::new(std::sync::Mutex::new(None));
 
-    let collector_fn: Box<dyn FnMut(Json) -> Result<()> + Send> = match collector {
+    let collector_fn: LlmCollectorFn = match collector {
         Some(cb) => {
             let ud = ud.clone();
             Box::new(move |chunk: Json| {
@@ -1161,30 +1161,21 @@ pub fn wrap_stream_callbacks(
         None => Box::new(|_: Json| Ok(())),
     };
 
-    let finalizer_fn: Box<dyn FnOnce() -> Json + Send> = match finalizer {
+    let finalizer_fn: LlmFallibleFinalizerFn = match finalizer {
         Some(cb) => {
             let slot = error_slot.clone();
             Box::new(move || {
                 clear_last_error();
                 let result_ptr = unsafe { cb(ud.ptr) };
-                let failure = if result_ptr.is_null() {
-                    last_error_message()
-                } else {
-                    let text = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
-                    serde_json::from_str::<Json>(&text)
-                        .err()
-                        .map(|error| format!("stream finalizer returned invalid JSON: {error}"))
-                };
-                let result = ptr_to_json(result_ptr);
+                let result = json_result_from_ptr(result_ptr, "stream finalizer callback failed");
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
-                if let Some(message) = failure {
-                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
-                    return Json::Null;
-                }
-                result
+                result.inspect_err(|error| {
+                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some(error.to_string());
+                })
             })
         }
-        None => Box::new(|| Json::Null),
+        None => Box::new(|| Ok(Json::Null)),
     };
 
     (collector_fn, finalizer_fn, error_slot)
@@ -1341,14 +1332,6 @@ pub fn wrap_codec_fn(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn ptr_to_json(ptr: *mut c_char) -> Json {
-    if ptr.is_null() {
-        return Json::Null;
-    }
-    let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
-    serde_json::from_str(&s).unwrap_or(Json::Null)
-}
 
 fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
     if ptr.is_null() {
