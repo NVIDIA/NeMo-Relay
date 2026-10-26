@@ -422,7 +422,12 @@ fn layer_status(path: &Path) -> ConfigLayer {
         }
     };
     match crate::configuration::validate_shared_config_shape(toml::Value::Table(table)) {
-        Ok(()) => layer,
+        Ok(unknown) if unknown.is_empty() => layer,
+        Ok(unknown) => ConfigLayer {
+            status: Status::Warn,
+            details: format!("unknown keys ignored: {}", unknown.join(", ")),
+            ..layer
+        },
         Err(err) => ConfigLayer {
             path: path.to_path_buf(),
             status: Status::Fail,
