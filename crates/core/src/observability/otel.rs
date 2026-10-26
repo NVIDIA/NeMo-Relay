@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::OpenTelemetryTlsConfig;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    validate_header_files, validate_trace_transport_typed,
+    validate_header_files, validate_otlp_transport_typed,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -311,7 +311,8 @@ pub(super) fn validate_trace_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> ExporterInitializationResult<()> {
-    validate_trace_transport_typed(endpoint, plaintext).map_err(ExporterInitializationError::from)
+    validate_otlp_transport_typed(endpoint, plaintext, "trace")
+        .map_err(ExporterInitializationError::from)
 }
 
 /// Open mode used when a trace file sink creates its output file.

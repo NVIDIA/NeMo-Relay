@@ -4509,7 +4509,7 @@ fn validate_opentelemetry_plaintext_destinations(
             diagnostics,
             "opentelemetry.traces",
             format!("endpoints[{index}].endpoint"),
-            super::header_file::validate_trace_transport(&endpoint.endpoint, plaintext),
+            super::header_file::validate_otlp_transport(&endpoint.endpoint, plaintext, "trace"),
         );
     }
     for (signal, enabled, explicit) in [
@@ -4569,10 +4569,10 @@ fn validate_automatic_plaintext_destinations(
     plaintext: &PlaintextPolicy,
 ) {
     for (signal, enabled, variable_prefix, exporter_variable) in [
-        ("traces", signals.traces, "TRACES", "OTEL_TRACES_EXPORTER"),
-        ("logs", signals.logs, "LOGS", "OTEL_LOGS_EXPORTER"),
+        ("trace", signals.traces, "TRACES", "OTEL_TRACES_EXPORTER"),
+        ("log", signals.logs, "LOGS", "OTEL_LOGS_EXPORTER"),
         (
-            "metrics",
+            "metric",
             signals.metrics,
             "METRICS",
             "OTEL_METRICS_EXPORTER",
@@ -4581,27 +4581,18 @@ fn validate_automatic_plaintext_destinations(
         if !enabled || !environment_signal_enabled(exporter_variable) {
             continue;
         }
-        let header_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_HEADERS");
-        if signal != "traces"
-            && !super::otel_signal::automatic_signal_headers_configured(&header_variable)
-        {
-            continue;
-        }
         let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{variable_prefix}_ENDPOINT");
         let validation = super::otel_signal::automatic_signal_endpoint(&endpoint_variable)
             .map_err(|error| error.to_string())
             .and_then(|endpoint| match endpoint {
-                Some(endpoint) if signal == "traces" => {
-                    super::header_file::validate_trace_transport(&endpoint, plaintext)
-                }
                 Some(endpoint) => {
-                    super::header_file::validate_header_http_endpoint(&endpoint, plaintext)
+                    super::header_file::validate_otlp_transport(&endpoint, plaintext, signal)
                 }
                 None => Ok(()),
             });
         push_plaintext_preflight_diagnostic(
             diagnostics,
-            &format!("opentelemetry.automatic.{signal}"),
+            &format!("opentelemetry.automatic.{signal}s"),
             "endpoints[0].endpoint".to_string(),
             validation,
         );
