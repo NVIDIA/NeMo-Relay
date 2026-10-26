@@ -897,7 +897,7 @@ fn assert_collector_and_finalizer_callbacks() {
     collector(json!({"chunk": 1})).unwrap();
     assert_eq!(COLLECTED_COUNT.load(Ordering::SeqCst), 1);
     assert_eq!(finalizer().unwrap(), json!({"done": true}));
-    assert!(error.lock().unwrap().is_none());
+    assert!(error.take_failure().is_none());
 
     let (_, finalizer, error) =
         wrap_stream_callbacks(None, Some(failing_finalizer_cb), std::ptr::null_mut(), None);
@@ -906,7 +906,7 @@ fn assert_collector_and_finalizer_callbacks() {
         failure,
         "internal error: stream finalizer callback panicked: finalizer boom"
     );
-    assert_eq!(error.lock().unwrap().as_deref(), Some(failure.as_str()));
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
 }
 
 fn assert_event_callbacks() {

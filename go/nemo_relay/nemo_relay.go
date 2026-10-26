@@ -1619,7 +1619,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	defer C.free(unsafe.Pointer(cRequest))
 
 	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer}
-	callbackID := registerClosure(callbacks)
+	callbackID := registerStreamCallbacks(callbacks)
 	cCollector := C.makeOptCollectorCb(nil)
 	if collector != nil {
 		cCollector = C.makeOptCollectorCb(C.NemoRelayCollectorCb(C.goStreamCollectorTrampoline))

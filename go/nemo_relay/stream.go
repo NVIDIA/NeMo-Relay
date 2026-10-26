@@ -49,7 +49,8 @@ import (
 //	}
 //
 // Calls to Next and Close are synchronized. If not closed explicitly, the
-// underlying C resources are freed automatically by a Go runtime finalizer.
+// native stream is released once the handle is unreachable, and the collector
+// and finalizer do not run after that.
 //
 // Each stream carries its own collector and finalizer, so multiple streams can
 // operate concurrently without interfering with one another.
@@ -57,6 +58,7 @@ type LlmStream struct {
 	mu        sync.Mutex
 	ptr       *C.FfiStream
 	callbacks *streamCallbacks
+	cleanup   runtime.Cleanup
 	closed    bool
 	closing   bool
 	inFlight  int
@@ -114,21 +116,15 @@ func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks) *LlmStream {
 		return nil
 	}
 	s := &LlmStream{ptr: ptr, callbacks: callbacks}
-	runtime.SetFinalizer(s, (*LlmStream).release)
+	s.cleanup = runtime.AddCleanup(s, releaseStream, ptr)
 	return s
 }
 
-// release frees the native handle without waiting for producer cleanup.
-// Explicit Close owns deterministic cleanup.
-func (s *LlmStream) release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ptr == nil {
-		return
-	}
-	C.nemo_relay_stream_free(s.ptr)
-	s.ptr = nil
-	s.closed = true
+// releaseStream frees the native stream of an unreachable handle. Relay
+// cancels the producer and emits the end event, and the Go callbacks report
+// the release instead of running.
+func releaseStream(ptr *C.FfiStream) {
+	C.nemo_relay_stream_free(ptr)
 }
 
 // Next returns the next chunk from the stream as a JSON value. It returns
@@ -205,7 +201,6 @@ func (s *LlmStream) Close() error {
 	s.closing = true
 	s.closeDone = make(chan struct{})
 	ptr := s.ptr
-	runtime.SetFinalizer(s, nil)
 	s.mu.Unlock()
 
 	if callbackDone, reentrant := s.callbacks.activeCallback(callerID); reentrant {
@@ -236,5 +231,6 @@ func (s *LlmStream) closeNative(ptr *C.FfiStream) {
 	s.closed = true
 	close(s.closeDone)
 	s.mu.Unlock()
+	s.cleanup.Stop()
 	C.nemo_relay_stream_free(ptr)
 }

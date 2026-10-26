@@ -1465,7 +1465,10 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
  * Stop a stream producer and wait for cleanup to complete.
  *
  * This operation is idempotent. It does not free `stream`; callers must still
- * release the handle with [`nemo_relay_stream_free`].
+ * release the handle with [`nemo_relay_stream_free`]. A call from inside this
+ * stream's own collector or finalizer requests cancellation and returns `Ok`
+ * at once. Cleanup finishes after the callback returns, and a later call
+ * reports its result.
  *
  * # Safety
  * `stream` must be a valid `FfiStream` pointer returned by
@@ -1481,7 +1484,9 @@ NemoRelayStatus nemo_relay_stream_close(struct FfiStream *stream);
  * - `1`: A chunk was written to `*out_chunk`. Caller must free with
  *   `nemo_relay_string_free`.
  * - `0`: The stream is complete (no more chunks).
- * - `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+ * - `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call
+ *   from inside this stream's own collector or finalizer fails this way
+ *   instead of waiting on itself.
  *
  * # Safety
  * `stream` and `out_chunk` must be valid, non-null pointers.

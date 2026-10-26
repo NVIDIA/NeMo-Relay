@@ -264,7 +264,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         wrap_stream_callbacks(None, Some(finalizer_null_cb), std::ptr::null_mut(), None);
     let failure = finalizer().unwrap_err().to_string();
     assert_eq!(failure, "internal error: stream finalizer callback failed");
-    assert_eq!(error.lock().unwrap().as_deref(), Some(failure.as_str()));
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
 
     let (_, finalizer, error) = wrap_stream_callbacks(
         None,
@@ -277,11 +277,11 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         failure,
         "internal error: stream finalizer callback failed: invalid JSON: expected ident at line 1 column 2"
     );
-    assert_eq!(error.lock().unwrap().as_deref(), Some(failure.as_str()));
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
 
     let (_, finalizer, error) = wrap_stream_callbacks(None, None, std::ptr::null_mut(), None);
     assert_eq!(finalizer().unwrap(), Json::Null);
-    assert!(error.lock().unwrap().is_none());
+    assert!(error.take_failure().is_none());
 }
 
 #[test]

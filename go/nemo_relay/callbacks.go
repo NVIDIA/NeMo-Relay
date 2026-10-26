@@ -101,6 +101,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+	"weak"
 )
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,16 @@ func recoverCallbackPanic(kind string, onPanic func()) {
 			onPanic()
 		}
 	}
+}
+
+// registerStreamCallbacks registers a stream's callbacks through a weak
+// pointer so a stream that its own callbacks capture stays collectable.
+func registerStreamCallbacks(callbacks *streamCallbacks) unsafe.Pointer {
+	return registerClosure(weak.Make(callbacks))
+}
+
+func lookupStreamCallbacks(userData unsafe.Pointer) *streamCallbacks {
+	return lookupClosure(userData).(weak.Pointer[streamCallbacks]).Value()
 }
 
 // registerClosure stores fn in the global registry and returns an
@@ -374,7 +385,7 @@ type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExec
 type CollectorFunc func(chunkJSON json.RawMessage)
 
 // FinalizerFunc is a callback invoked exactly once when a streaming LLM
-// response is exhausted, closed, or released. It takes no arguments and must
+// response is exhausted or closed. It takes no arguments and must
 // return a JSON string representing the aggregated response. It runs on a
 // runtime worker thread. A panic or non-JSON result marks the LLM end event
 // ERROR with a null response and is returned from [LlmStream.Close].
@@ -931,7 +942,11 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 //export goStreamCollectorTrampoline
 func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (status C.int32_t) {
 	defer recoverCallbackPanic("stream collector", func() { status = nemoRelayStatusInternal })
-	callbacks := lookupClosure(userData).(*streamCallbacks)
+	callbacks := lookupStreamCallbacks(userData)
+	if callbacks == nil {
+		setLastErrorMessage("stream released before the collector ran")
+		return nemoRelayStatusInternal
+	}
 	defer callbacks.enter()()
 	callbacks.collector(json.RawMessage(C.GoString(chunkJSON)))
 	return 0
@@ -940,7 +955,11 @@ func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (st
 //export goStreamFinalizerTrampoline
 func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 	defer recoverCallbackPanic("stream finalizer", func() { cResult = nil })
-	callbacks := lookupClosure(userData).(*streamCallbacks)
+	callbacks := lookupStreamCallbacks(userData)
+	if callbacks == nil {
+		setLastErrorMessage("stream released before the finalizer ran")
+		return nil
+	}
 	defer callbacks.enter()()
 	return C.CString(callbacks.finalizer())
 }

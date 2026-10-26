@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 )
 
 const (
@@ -1493,23 +1496,6 @@ func TestLlmStreamCollectorCanClose(t *testing.T) {
 	}
 }
 
-func TestLlmStreamReleaseIsIdempotent(t *testing.T) {
-	stream, err := LlmStreamCallExecute("release_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil, nil,
-	)
-	if err != nil {
-		t.Fatalf(llmStreamCallExecuteFailed, err)
-	}
-	stream.release()
-	stream.release()
-	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next after release error = %v, want io.EOF", err)
-	}
-}
-
 func TestLlmStreamCloseNativeWaitsForInFlightWork(t *testing.T) {
 	stream, err := LlmStreamCallExecute("finish_close_wait_llm", makeRequest(),
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
@@ -1895,24 +1881,55 @@ func TestLlmStreamCallbacksWaitForFirstNext(t *testing.T) {
 	stream.Close()
 }
 
-func TestLlmStreamAbandonedStreamStillFinalizes(t *testing.T) {
-	finalized := make(chan struct{}, 1)
-	stream, err := LlmStreamCallExecute("abandoned_llm", makeRequest(),
+func newSelfCapturingStream(t *testing.T, name string, finalizerRan *atomic.Bool) weak.Pointer[LlmStream] {
+	t.Helper()
+	var captured *LlmStream
+	stream, err := LlmStreamCallExecute(name, makeRequest(),
 		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		nil,
+		func(json.RawMessage) { _ = captured.Close() },
 		func() string {
-			finalized <- struct{}{}
+			finalizerRan.Store(true)
 			return `{"finalized": true}`
 		},
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
 	}
-	stream.release()
+	captured = stream
+	return weak.Make(stream)
+}
+
+func TestLlmStreamUnreachableStreamIsReleased(t *testing.T) {
+	ended := make(chan map[string]any, 1)
+	if err := RegisterSubscriber("go_stream_unreachable_release", func(event Event) {
+		if event.Kind() != "scope" || event.Category() != "llm" || event.ScopeCategory() != "end" || event.Name() != "unreachable_llm" {
+			return
+		}
+		var metadata map[string]any
+		_ = json.Unmarshal(event.Metadata(), &metadata)
+		ended <- metadata
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber("go_stream_unreachable_release")
+	var finalizerRan atomic.Bool
+	ref := newSelfCapturingStream(t, "unreachable_llm", &finalizerRan)
+	for attempt := 0; ref.Value() != nil && attempt < 10; attempt++ {
+		runtime.GC()
+	}
+	if ref.Value() != nil {
+		t.Fatal("a stream captured by its own collector stayed reachable")
+	}
 	select {
-	case <-finalized:
+	case metadata := <-ended:
+		if metadata["otel.status_code"] != "ERROR" || metadata["otel.status_description"] != "stream dropped before clean completion" {
+			t.Fatalf("end event metadata = %v, want dropped stream error", metadata)
+		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("finalizer did not run after the stream was released")
+		t.Fatal("the unreachable stream was not released")
+	}
+	if finalizerRan.Load() {
+		t.Fatal("finalizer ran after the stream handle became unreachable")
 	}
 }
 

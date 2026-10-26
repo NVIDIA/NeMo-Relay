@@ -588,7 +588,7 @@ pub struct FfiStream {
         tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>,
     pub(crate) cancel: tokio::sync::watch::Sender<bool>,
     pub(crate) closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
-    pub(crate) callback_error: crate::callable::StreamCallbackError,
+    pub(crate) callbacks: Arc<crate::callable::StreamCallbackState>,
     pub(crate) close_result: tokio::sync::Mutex<Option<Result<(), String>>>,
 }
 
@@ -709,7 +709,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
 ) -> NemoRelayStatus {
     clear_last_error();
     let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
-    let (wrapped_collector, wrapped_finalizer, callback_error) =
+    let (wrapped_collector, wrapped_finalizer, callbacks) =
         wrap_stream_callbacks(collector, finalizer, callback_user_data, callback_free);
     if out.is_null() {
         set_last_error("null pointer argument");
@@ -771,7 +771,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                 receiver: tokio::sync::Mutex::new(rx),
                 cancel,
                 closed: closed_rx,
-                callback_error,
+                callbacks,
                 close_result: tokio::sync::Mutex::new(None),
             });
             unsafe { *out = Box::into_raw(ffi_stream) };
@@ -784,7 +784,10 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
 /// Stop a stream producer and wait for cleanup to complete.
 ///
 /// This operation is idempotent. It does not free `stream`; callers must still
-/// release the handle with [`nemo_relay_stream_free`].
+/// release the handle with [`nemo_relay_stream_free`]. A call from inside this
+/// stream's own collector or finalizer requests cancellation and returns `Ok`
+/// at once. Cleanup finishes after the callback returns, and a later call
+/// reports its result.
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
@@ -799,6 +802,9 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
     let stream = unsafe { &*stream };
     stream.cancel.send_replace(true);
     stream.start();
+    if stream.callbacks.on_callback_thread() {
+        return NemoRelayStatus::Ok;
+    }
     let result = super::block_on(async {
         let mut close_result = stream.close_result.lock().await;
         if let Some(result) = close_result.as_ref() {
@@ -820,11 +826,7 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
                 undelivered.get_or_insert(error.to_string());
             }
         }
-        let finalizer_error = stream
-            .callback_error
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        let finalizer_error = stream.callbacks.take_failure();
         let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
         *close_result = Some(result.clone());
         result
@@ -855,7 +857,9 @@ fn combine_close_errors(errors: [Option<String>; 3]) -> Result<(), String> {
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
 ///   `nemo_relay_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call
+///   from inside this stream's own collector or finalizer fails this way
+///   instead of waiting on itself.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
@@ -869,6 +873,12 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
         return -1;
     }
     let stream = unsafe { &*stream };
+    if stream.callbacks.on_callback_thread() {
+        set_last_error(
+            "nemo_relay_stream_next called from inside the stream's own collector or finalizer",
+        );
+        return -1;
+    }
     stream.start();
     let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;

@@ -1125,27 +1125,81 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-pub(crate) type StreamCallbackError = Arc<std::sync::Mutex<Option<String>>>;
+/// State shared by one stream's collector and finalizer callbacks and its
+/// `FfiStream`.
+///
+/// The failure slot carries a finalizer failure to `nemo_relay_stream_close`,
+/// because the runtime's close result does not. The callback thread lets
+/// `nemo_relay_stream_close` and `nemo_relay_stream_next` recognize a call
+/// from inside the stream's own callback, which must not wait on itself.
+#[derive(Default)]
+pub struct StreamCallbackState {
+    failure: std::sync::Mutex<Option<String>>,
+    callback_thread: std::sync::Mutex<Option<std::thread::ThreadId>>,
+}
+
+impl StreamCallbackState {
+    /// Record a finalizer failure for `nemo_relay_stream_close` to report.
+    pub fn record_failure(&self, message: String) {
+        *lock_unpoisoned(&self.failure) = Some(message);
+    }
+
+    /// Take the recorded finalizer failure.
+    pub fn take_failure(&self) -> Option<String> {
+        lock_unpoisoned(&self.failure).take()
+    }
+
+    /// Whether the calling thread is inside this stream's collector or finalizer.
+    pub fn on_callback_thread(&self) -> bool {
+        *lock_unpoisoned(&self.callback_thread) == Some(std::thread::current().id())
+    }
+
+    fn enter_callback(&self) -> CallbackThreadGuard<'_> {
+        *lock_unpoisoned(&self.callback_thread) = Some(std::thread::current().id());
+        CallbackThreadGuard { state: self }
+    }
+}
+
+struct CallbackThreadGuard<'a> {
+    state: &'a StreamCallbackState,
+}
+
+impl Drop for CallbackThreadGuard<'_> {
+    fn drop(&mut self) {
+        *lock_unpoisoned(&self.state.callback_thread) = None;
+    }
+}
+
+fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Wrap the C collector and finalizer callbacks.
 ///
 /// A finalizer failure is returned to the runtime, which marks the LLM end
-/// event ERROR with a null aggregate. The failure is also recorded in the
-/// returned slot for `nemo_relay_stream_close`, because the runtime's close
-/// result does not carry it.
+/// event ERROR with a null aggregate, and recorded in the returned state for
+/// `nemo_relay_stream_close`.
 pub fn wrap_stream_callbacks(
     collector: Option<NemoRelayCollectorCb>,
     finalizer: Option<NemoRelayFinalizerCb>,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> (LlmCollectorFn, LlmFallibleFinalizerFn, StreamCallbackError) {
+) -> (
+    LlmCollectorFn,
+    LlmFallibleFinalizerFn,
+    Arc<StreamCallbackState>,
+) {
     let ud = make_user_data(user_data, free_fn);
-    let error_slot: StreamCallbackError = Arc::new(std::sync::Mutex::new(None));
+    let state = Arc::new(StreamCallbackState::default());
 
     let collector_fn: LlmCollectorFn = match collector {
         Some(cb) => {
             let ud = ud.clone();
+            let state = state.clone();
             Box::new(move |chunk: Json| {
+                let _callback = state.enter_callback();
                 clear_last_error();
                 let c_chunk = json_to_c_string(&chunk);
                 let status = unsafe { cb(ud.ptr, c_chunk) };
@@ -1163,22 +1217,20 @@ pub fn wrap_stream_callbacks(
 
     let finalizer_fn: LlmFallibleFinalizerFn = match finalizer {
         Some(cb) => {
-            let slot = error_slot.clone();
+            let state = state.clone();
             Box::new(move || {
+                let _callback = state.enter_callback();
                 clear_last_error();
                 let result_ptr = unsafe { cb(ud.ptr) };
                 let result = json_result_from_ptr(result_ptr, "stream finalizer callback failed");
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
-                result.inspect_err(|error| {
-                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                        Some(error.to_string());
-                })
+                result.inspect_err(|error| state.record_failure(error.to_string()))
             })
         }
         None => Box::new(|| Ok(Json::Null)),
     };
 
-    (collector_fn, finalizer_fn, error_slot)
+    (collector_fn, finalizer_fn, state)
 }
 
 /// Wrap a C event subscriber callback into a Rust closure.

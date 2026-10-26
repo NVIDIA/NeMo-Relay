@@ -1874,7 +1874,7 @@ fn test_ffi_stream_next_reports_error_items() {
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
         closed: tokio::sync::watch::channel(Some(Ok(()))).1,
-        callback_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        callbacks: std::sync::Arc::new(crate::callable::StreamCallbackState::default()),
         close_result: tokio::sync::Mutex::new(None),
     }));
 
@@ -4226,14 +4226,14 @@ fn stream_close_reports_undelivered_error_once() {
     )))
     .expect("expected error payload to be queued");
     drop(tx);
+    let callbacks = std::sync::Arc::new(crate::callable::StreamCallbackState::default());
+    callbacks.record_failure("finalizer failed".to_string());
     let stream = Box::into_raw(Box::new(FfiStream {
         pending: std::sync::Mutex::new(None),
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
         closed: tokio::sync::watch::channel(Some(Err("cleanup failed".to_string()))).1,
-        callback_error: std::sync::Arc::new(std::sync::Mutex::new(Some(
-            "finalizer failed".to_string(),
-        ))),
+        callbacks,
         close_result: tokio::sync::Mutex::new(None),
     }));
 
@@ -4252,6 +4252,82 @@ fn stream_close_reports_undelivered_error_once() {
             .into_owned();
         assert_eq!(repeated, message);
         let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        nemo_relay_stream_free(stream);
+    }
+}
+
+static REENTRANT_STREAM: std::sync::atomic::AtomicPtr<FfiStream> =
+    std::sync::atomic::AtomicPtr::new(ptr::null_mut());
+static REENTRANT_RESULTS: Mutex<Option<(i32, String, NemoRelayStatus)>> = Mutex::new(None);
+
+unsafe extern "C" fn reentrant_collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    _chunk_json: *const c_char,
+) -> i32 {
+    let stream = REENTRANT_STREAM.load(std::sync::atomic::Ordering::SeqCst);
+    let mut chunk = ptr::null_mut();
+    let next = unsafe { nemo_relay_stream_next(stream, &mut chunk) };
+    let next_error = unsafe { CStr::from_ptr(nemo_relay_last_error()) }
+        .to_string_lossy()
+        .into_owned();
+    let close = unsafe { nemo_relay_stream_close(stream) };
+    *lock_unpoisoned(&REENTRANT_RESULTS) = Some((next, next_error, close));
+    0
+}
+
+#[test]
+fn stream_close_and_next_from_the_stream_callback_do_not_wait() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    *lock_unpoisoned(finalizer_calls()) = 0;
+
+    unsafe {
+        let name = cstring("reentrant-stream");
+        let request = cstring(&json!({"headers": {}, "content": {"model": "m"}}).to_string());
+        let mut stream = ptr::null_mut();
+        assert_status!(
+            nemo_relay_llm_stream_call_execute(
+                name.as_ptr(),
+                request.as_ptr(),
+                llm_exec_cb,
+                ptr::null_mut(),
+                None,
+                Some(reentrant_collector_cb),
+                Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                None,
+                None,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                &mut stream,
+            ),
+            NemoRelayStatus::Ok
+        );
+        REENTRANT_STREAM.store(stream, std::sync::atomic::Ordering::SeqCst);
+
+        let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
+        nemo_relay_string_free(chunk);
+        let (next, next_error, close) = lock_unpoisoned(&REENTRANT_RESULTS)
+            .take()
+            .expect("collector ran");
+        assert_eq!(next, -1);
+        assert_eq!(
+            next_error,
+            "nemo_relay_stream_next called from inside the stream's own collector or finalizer"
+        );
+        assert_eq!(close, NemoRelayStatus::Ok);
+
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
         assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
         nemo_relay_stream_free(stream);
     }
