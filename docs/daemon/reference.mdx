@@ -570,14 +570,10 @@ execution guardrails, these response changes apply:
   formatting, stream comments, heartbeats, event IDs, or retry hints.
 - Provider HTTP errors keep their status, supported headers, and body.
 
-Relay waits for the first stream result before sending HTTP `200`. If an
-execution intercept rejects the call before the first chunk, recognized HTTP
-errors keep their status and plugin message. Once streaming starts, a request
-error ends the stream without a successful completion marker; OpenAI Chat
-Completions omits `[DONE]`. Clients must check for the provider's completion
-marker to distinguish a complete response from an interrupted one. These
-request errors preserve the assigned worker route. Failures on the connection
-between the daemon and worker still trigger recovery.
+If an execution intercept rejects a streaming request before the first chunk,
+Relay returns the corresponding HTTP error and plugin message. Errors after
+streaming begins end the response without a successful completion marker, such
+as `[DONE]` for OpenAI Chat Completions.
 
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit
