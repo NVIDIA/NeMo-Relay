@@ -136,6 +136,7 @@ rust = true
 auditwheel = true
 
 [tool.uv]
+managed = true
 default-groups = ["dev", "test"]
 package = true
 override-dependencies = [
