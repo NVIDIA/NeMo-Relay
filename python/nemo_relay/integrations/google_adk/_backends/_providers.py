@@ -38,11 +38,13 @@ def _unknown(cls: type[BaseLlm]) -> TypeError:
 
 
 async def backend_of(model: BaseLlm) -> Backend:
-    """Return provider, codec, and header channel for model's class.
+    """Return provider, codec, and header channel for a model.
 
-    Swap provider client's class so it applies each attempt's edits, records response fields `LlmResponse` drops, or
-    both. Raise `TypeError` for a class from ADK's `models` or `integrations` package that NeMo Relay does not model.
-    Any other class: class name as provider, Gemini codec.
+    Swap provider client's class so attempt edits apply and fields `LlmResponse` drops get recorded. Classes
+    outside ADK's `models` and `integrations` packages: class name as provider, Gemini codec.
+
+    Raises:
+        TypeError: ADK `models` or `integrations` class NeMo Relay doesn't support.
     """
     cls = type(model)
     if isinstance(model, ApigeeLlm):
@@ -71,4 +73,12 @@ async def backend_of(model: BaseLlm) -> Backend:
 
         if isinstance(model, AnthropicLlm):
             return await anthropic_backend(model)
+    if find_spec("litellm") is not None:
+        from google.adk.models.lite_llm import LiteLlm, _ensure_litellm_imported
+
+        if isinstance(model, LiteLlm):
+            _ensure_litellm_imported()
+            from nemo_relay.integrations.google_adk._backends._lite_llm import lite_llm_backend
+
+            return await lite_llm_backend(model)
     raise _unknown(cls)

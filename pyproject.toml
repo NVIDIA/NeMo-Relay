@@ -175,7 +175,7 @@ omit = [
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
 # LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
 # dependencies which aren't installed by default.
-allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "httpx", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "openai.**", "pytest"]
+allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "httpx", "langchain.**", "langchain_*.**", "langgraph.**", "litellm.**", "nemo_relay._native", "openai.**", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]

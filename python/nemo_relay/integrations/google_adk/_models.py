@@ -15,7 +15,7 @@ from google.adk.models.llm_response import LlmResponse
 
 import nemo_relay
 from nemo_relay import Json, JsonObject, LLMAttributes, LLMRequest
-from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, Attempt, Backend, backend_of
+from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, REQUEST_MODEL, Attempt, Backend, backend_of
 from nemo_relay.integrations.google_adk._context import integration_metadata, parent_handle, rejection_marked
 from nemo_relay.integrations.google_adk._serialization import (
     ProducedResponses,
@@ -83,7 +83,11 @@ def _methods(cls: type[BaseLlm]) -> Methods[BaseLlm]:
     original = cls.generate_content_async
 
     async def generate_content_async(self: BaseLlm, llm_request: LlmRequest, stream: bool = False) -> _Responses:
-        backend = await backend_of(self)
+        token = REQUEST_MODEL.set(llm_request.model)
+        try:
+            backend = await backend_of(self)
+        finally:
+            REQUEST_MODEL.reset(token)
 
         def inner(request: LlmRequest, *, stream: bool) -> _Responses:
             return original(self, request, stream)
@@ -159,9 +163,9 @@ async def _run(
         headers = header_text(request.headers)
         tool_choice = _tool_choice_edit(edited, adk_tool_choice)
         if backend.client_headers:
-            return edited, Attempt(tool_choice=tool_choice, headers=headers)
+            return edited, Attempt(tool_choice=tool_choice, headers=headers, provider=backend.provider)
         write_headers(edited, headers)
-        return edited, Attempt(tool_choice=tool_choice, headers={})
+        return edited, Attempt(tool_choice=tool_choice, headers={}, provider=backend.provider)
 
     def added(response: LlmResponse, attempt: Attempt) -> JsonObject:
         return produced.add(response, recorded=attempt.recorded, response_model=attempt.response_model)
