@@ -680,13 +680,9 @@ fn shutdown_metric_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-fn build_metric_provider(
-    config: &OpenTelemetryMetricConfig,
-    diagnostics: Arc<MetricDeliveryDiagnostics>,
-    resource_attributes: Option<Vec<KeyValue>>,
-) -> ExporterInitializationResult<SdkMeterProvider> {
-    let exporter = if config.automatic {
-        let builder = OtlpMetricExporter::builder();
+fn build_automatic_metric_exporter() -> ExporterInitializationResult<OtlpMetricExporter> {
+    let builder = OtlpMetricExporter::builder();
+    Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
             builder
                 .with_http()
@@ -708,7 +704,15 @@ fn build_metric_provider(
                 .with_http_client(automatic_otlp_http_client("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
-        }
+        },
+    )
+}
+
+fn build_metric_exporter(
+    config: &OpenTelemetryMetricConfig,
+) -> ExporterInitializationResult<OtlpMetricExporter> {
+    let exporter = if config.automatic {
+        build_automatic_metric_exporter()?
     } else {
         let temporality = config.temporality.sdk();
         match config.transport {
@@ -777,6 +781,15 @@ fn build_metric_provider(
             }
         }
     };
+    Ok(exporter)
+}
+
+fn build_metric_provider(
+    config: &OpenTelemetryMetricConfig,
+    diagnostics: Arc<MetricDeliveryDiagnostics>,
+    resource_attributes: Option<Vec<KeyValue>>,
+) -> ExporterInitializationResult<SdkMeterProvider> {
+    let exporter = build_metric_exporter(config)?;
 
     let exporter = DiagnosticMetricExporter {
         inner: exporter,

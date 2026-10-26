@@ -3200,33 +3200,7 @@ fn automatic_grpc_skips_tls_for_http_and_rejects_certificate_settings() {
                 "{signal}: HTTP must not load trusted certificates"
             );
 
-            for prefix in [String::new(), format!("{signal}_")] {
-                for fields in [
-                    &["CERTIFICATE"][..],
-                    &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
-                ] {
-                    unsafe {
-                        for field in fields {
-                            std::env::set_var(
-                                format!("OTEL_EXPORTER_OTLP_{prefix}{field}"),
-                                "unused.pem",
-                            );
-                        }
-                    }
-                    let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
-                        .unwrap_err()
-                        .to_string();
-                    unsafe {
-                        for field in fields {
-                            std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
-                        }
-                    }
-                    assert!(
-                        error.contains("TLS settings require an HTTPS endpoint"),
-                        "{error}"
-                    );
-                }
-            }
+            assert_http_rejects_tls_settings(signal);
         }
         unsafe {
             std::env::remove_var(endpoint_variable);
@@ -5844,74 +5818,77 @@ fn atif_compact_payload_preserves_json_and_reduced_history_grows_linearly() {
 #[test]
 fn atif_retention_options_cover_nested_steps_and_open_agent_teardown() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    for include_observed_events in [false, true] {
-        for include_llm_requests in [false, true] {
-            for close_agent in [false, true] {
-                reset_runtime();
-                let dir = temp_dir("observability-atif-retention");
-                let config = plugin_config(json!({
-                    "policy": {"unknown_field": "error"},
-                    "atif": {
-                        "enabled": true,
-                        "output_directory": dir,
-                        "include_observed_events": include_observed_events,
-                        "include_llm_requests": include_llm_requests
-                    }
-                }));
-                futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
-                let agent = push_agent("retention-agent");
-                // Test a fresh user request and a continuation of the same turn.
-                // They store requests on user and agent steps, respectively.
-                for nested in [false, true] {
-                    let child = nested.then(|| push_agent("nested-retention-agent"));
-                    for continuation in [false, true] {
-                        let messages = if continuation {
-                            json!([{"role": "tool", "tool_call_id": "call-1", "content": "result"}])
-                        } else {
-                            json!([{"role": "user", "content": "hello"}])
-                        };
-                        let llm = crate::api::scope::push_scope(
-                            PushScopeParams::builder()
-                                .name("retention-llm")
-                                .scope_type(ScopeType::Llm)
-                                .input(
-                                    json!({"messages": messages, "request_marker": "full-request"}),
-                                )
-                                .build(),
-                        )
-                        .unwrap();
-                        crate::api::scope::pop_scope(
-                            PopScopeParams::builder()
-                                .handle_uuid(&llm.uuid)
-                                .output(json!({"content": "answer", "usage": {"prompt_tokens": 3, "completion_tokens": 1}}))
-                                .build(),
-                        ).unwrap();
-                    }
-                    if let Some(child) = child {
-                        pop(&child);
-                    }
-                }
-                if close_agent {
-                    pop(&agent);
-                }
-                test_close_plugin_host().unwrap();
-                let payload =
-                    fs::read(dir.join(format!("nemo-relay-atif-{}.json", agent.uuid))).unwrap();
-                let value: Json = serde_json::from_slice(&payload).unwrap();
-                assert!(payload.contains(&b'\n'), "local-only output stays pretty");
-                assert_eq!(
-                    value["extra"].get("observed_events").is_some(),
-                    include_observed_events
-                );
-                let child = &value["subagent_trajectories"][0];
-                assert!(child.is_object());
-                for trajectory in [&value, child] {
-                    assert_atif_retention_projection(trajectory, include_llm_requests);
-                }
-                if !close_agent {
-                    pop(&agent);
-                }
+    for (include_observed_events, include_llm_requests, close_agent) in [false, true]
+        .into_iter()
+        .flat_map(|include_observed_events| {
+            [false, true]
+                .map(|include_llm_requests| (include_observed_events, include_llm_requests))
+        })
+        .flat_map(|(include_observed_events, include_llm_requests)| {
+            [false, true]
+                .map(|close_agent| (include_observed_events, include_llm_requests, close_agent))
+        })
+    {
+        reset_runtime();
+        let dir = temp_dir("observability-atif-retention");
+        let config = plugin_config(json!({
+            "policy": {"unknown_field": "error"},
+            "atif": {
+                "enabled": true,
+                "output_directory": dir,
+                "include_observed_events": include_observed_events,
+                "include_llm_requests": include_llm_requests
             }
+        }));
+        futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+        let agent = push_agent("retention-agent");
+        // Test a fresh user request and a continuation of the same turn.
+        // They store requests on user and agent steps, respectively.
+        for nested in [false, true] {
+            let child = nested.then(|| push_agent("nested-retention-agent"));
+            for continuation in [false, true] {
+                let messages = if continuation {
+                    json!([{"role": "tool", "tool_call_id": "call-1", "content": "result"}])
+                } else {
+                    json!([{"role": "user", "content": "hello"}])
+                };
+                let llm = crate::api::scope::push_scope(
+                    PushScopeParams::builder()
+                        .name("retention-llm")
+                        .scope_type(ScopeType::Llm)
+                        .input(json!({"messages": messages, "request_marker": "full-request"}))
+                        .build(),
+                )
+                .unwrap();
+                crate::api::scope::pop_scope(
+                    PopScopeParams::builder()
+                        .handle_uuid(&llm.uuid)
+                        .output(json!({"content": "answer", "usage": {"prompt_tokens": 3, "completion_tokens": 1}}))
+                        .build(),
+                ).unwrap();
+            }
+            if let Some(child) = child {
+                pop(&child);
+            }
+        }
+        if close_agent {
+            pop(&agent);
+        }
+        test_close_plugin_host().unwrap();
+        let payload = fs::read(dir.join(format!("nemo-relay-atif-{}.json", agent.uuid))).unwrap();
+        let value: Json = serde_json::from_slice(&payload).unwrap();
+        assert!(payload.contains(&b'\n'), "local-only output stays pretty");
+        assert_eq!(
+            value["extra"].get("observed_events").is_some(),
+            include_observed_events
+        );
+        let child = &value["subagent_trajectories"][0];
+        assert!(child.is_object());
+        for trajectory in [&value, child] {
+            assert_atif_retention_projection(trajectory, include_llm_requests);
+        }
+        if !close_agent {
+            pop(&agent);
         }
     }
 }
@@ -9379,4 +9356,31 @@ fn assert_automatic_host_source_failure(
     assert_automatic_host_redacted(&serialized);
     assert_automatic_host_redacted(&legacy.message);
     assert!(!serialized.contains(&directory.to_string_lossy().to_string()));
+}
+
+fn assert_http_rejects_tls_settings(signal: &str) {
+    for prefix in [String::new(), format!("{signal}_")] {
+        for fields in [
+            &["CERTIFICATE"][..],
+            &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
+        ] {
+            unsafe {
+                for field in fields {
+                    std::env::set_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"), "unused.pem");
+                }
+            }
+            let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                .unwrap_err()
+                .to_string();
+            unsafe {
+                for field in fields {
+                    std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
+                }
+            }
+            assert!(
+                error.contains("TLS settings require an HTTPS endpoint"),
+                "{error}"
+            );
+        }
+    }
 }

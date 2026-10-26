@@ -418,26 +418,26 @@ mod tests {
         for block_bytes in 4..=9 {
             for capacity in 0..=8 {
                 let mut pool = super::DetailPool::new(capacity * block_bytes, block_bytes).unwrap();
-                for a in fields {
-                    for b in fields {
-                        for c in fields {
-                            let parts = [a, b, c];
-                            let plan = pool.plan_parts(parts);
-                            let fits = plan.is_some();
-                            let handle = plan.and_then(|plan| pool.allocate_plan(&plan));
-                            assert_eq!(handle.is_some(), fits);
-                            if let Some(handle) = handle {
-                                let mut text = String::new();
-                                pool.view(handle).unwrap().copy_into(&mut text).unwrap();
-                                assert_eq!(text, parts.concat());
-                                assert_eq!(pool.logical_bytes(), text.len());
-                                pool.free(handle);
-                                assert_eq!(pool.used_bytes(), 0);
-                                assert_eq!(pool.logical_bytes(), 0);
-                                if !text.is_empty() {
-                                    assert!(pool.view(handle).is_none());
-                                }
-                            }
+                for (a, b, c) in fields
+                    .into_iter()
+                    .flat_map(|a| fields.map(|b| (a, b)))
+                    .flat_map(|(a, b)| fields.map(|c| (a, b, c)))
+                {
+                    let parts = [a, b, c];
+                    let plan = pool.plan_parts(parts);
+                    let fits = plan.is_some();
+                    let handle = plan.and_then(|plan| pool.allocate_plan(&plan));
+                    assert_eq!(handle.is_some(), fits);
+                    if let Some(handle) = handle {
+                        let mut text = String::new();
+                        pool.view(handle).unwrap().copy_into(&mut text).unwrap();
+                        assert_eq!(text, parts.concat());
+                        assert_eq!(pool.logical_bytes(), text.len());
+                        pool.free(handle);
+                        assert_eq!(pool.used_bytes(), 0);
+                        assert_eq!(pool.logical_bytes(), 0);
+                        if !text.is_empty() {
+                            assert!(pool.view(handle).is_none());
                         }
                     }
                 }

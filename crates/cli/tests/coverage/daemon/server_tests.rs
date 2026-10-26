@@ -4944,60 +4944,60 @@ async fn model_catalogs_use_the_selected_provider_credentials_and_destination() 
             (router(test_daemon_state(true, "", config.clone())), true),
             (crate::server::router(config), false),
         ] {
-            for provider in ["openai", "anthropic"] {
-                for path in ["/models", "/v1/models"] {
-                    let mut request =
-                        Request::get(format!("{path}?limit=1&after_id=cursor%2Ftest"))
-                            .header("x-nemo-relay-worker-token", "data-secret");
-                    if provider == "anthropic" {
-                        request = request.header("anthropic-version", "2023-06-01");
-                    }
-                    if source == "caller" {
-                        request = if provider == "anthropic" {
-                            request.header("x-api-key", "caller-anthropic")
-                        } else {
-                            request.header("authorization", "Bearer caller-openai")
-                        };
-                    }
-                    let response = app
-                        .clone()
-                        .oneshot(request.body(Body::empty()).unwrap())
-                        .await
-                        .unwrap();
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let body = response.into_body().collect().await.unwrap().to_bytes();
-                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(observed["provider"], provider, "{source}: {path}");
-                    assert_eq!(observed["uri"], "/v1/models?limit=1&after_id=cursor%2Ftest");
-                    let auth = match (source, allowed, provider) {
-                        ("configured", true, _) => Some(format!("Bearer configured-{provider}")),
-                        ("other-provider-only", true, "openai") => {
-                            Some("Bearer configured-openai".into())
-                        }
-                        ("environment", true, "openai") => Some("Bearer environment-openai".into()),
-                        ("caller", _, "openai") => Some("Bearer caller-openai".into()),
-                        _ => None,
-                    };
-                    let key = match (source, allowed, provider) {
-                        ("environment", true, "anthropic") => Some("environment-anthropic"),
-                        ("caller", _, "anthropic") => Some("caller-anthropic"),
-                        _ => None,
-                    };
-                    assert_eq!(
-                        observed["authorization"],
-                        serde_json::json!(auth),
-                        "{source}: {provider}"
-                    );
-                    assert_eq!(
-                        observed["key"],
-                        serde_json::json!(key),
-                        "{source}: {provider}"
-                    );
-                    assert_eq!(
-                        observed["version"],
-                        serde_json::json!((provider == "anthropic").then_some("2023-06-01"))
-                    );
+            for (provider, path) in ["openai", "anthropic"]
+                .into_iter()
+                .flat_map(|provider| ["/models", "/v1/models"].map(|path| (provider, path)))
+            {
+                let mut request = Request::get(format!("{path}?limit=1&after_id=cursor%2Ftest"))
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if provider == "anthropic" {
+                    request = request.header("anthropic-version", "2023-06-01");
                 }
+                if source == "caller" {
+                    request = if provider == "anthropic" {
+                        request.header("x-api-key", "caller-anthropic")
+                    } else {
+                        request.header("authorization", "Bearer caller-openai")
+                    };
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(observed["provider"], provider, "{source}: {path}");
+                assert_eq!(observed["uri"], "/v1/models?limit=1&after_id=cursor%2Ftest");
+                let auth = match (source, allowed, provider) {
+                    ("configured", true, _) => Some(format!("Bearer configured-{provider}")),
+                    ("other-provider-only", true, "openai") => {
+                        Some("Bearer configured-openai".into())
+                    }
+                    ("environment", true, "openai") => Some("Bearer environment-openai".into()),
+                    ("caller", _, "openai") => Some("Bearer caller-openai".into()),
+                    _ => None,
+                };
+                let key = match (source, allowed, provider) {
+                    ("environment", true, "anthropic") => Some("environment-anthropic"),
+                    ("caller", _, "anthropic") => Some("caller-anthropic"),
+                    _ => None,
+                };
+                assert_eq!(
+                    observed["authorization"],
+                    serde_json::json!(auth),
+                    "{source}: {provider}"
+                );
+                assert_eq!(
+                    observed["key"],
+                    serde_json::json!(key),
+                    "{source}: {provider}"
+                );
+                assert_eq!(
+                    observed["version"],
+                    serde_json::json!((provider == "anthropic").then_some("2023-06-01"))
+                );
             }
         }
     }

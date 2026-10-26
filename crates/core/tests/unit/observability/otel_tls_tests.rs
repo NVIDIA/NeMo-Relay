@@ -554,31 +554,9 @@ async fn collector(
                     let Ok(mut stream) = acceptor.accept(stream).await else {
                         return;
                     };
-                    let mut request = Vec::new();
-                    let mut buffer = [0u8; 4096];
-                    loop {
-                        let size = stream.read(&mut buffer).await.unwrap();
-                        if size == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&buffer[..size]);
-                        if let Some(header_end) =
-                            request.windows(4).position(|window| window == b"\r\n\r\n")
-                        {
-                            let headers = String::from_utf8_lossy(&request[..header_end]);
-                            let length: usize = headers
-                                .lines()
-                                .find_map(|line| {
-                                    line.to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
-                                        .map(|value| value.trim().parse().unwrap())
-                                })
-                                .unwrap_or(0);
-                            if request.len() >= header_end + 4 + length {
-                                break;
-                            }
-                        }
-                    }
+                    let Some(request) = read_collector_request(&mut stream).await else {
+                        return;
+                    };
                     let request_line = String::from_utf8_lossy(&request);
                     let signal = ["traces", "logs", "metrics"]
                         .into_iter()
@@ -698,6 +676,57 @@ fn export_all(endpoint: &str, transport: OtlpTransport, tls: OpenTelemetryTlsCon
     metrics.shutdown().unwrap();
 }
 
+fn configure_export_environment(
+    mode: &str,
+    grpc: bool,
+    endpoint: &str,
+    tls: &OpenTelemetryTlsConfig,
+) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    let mut env = Vec::new();
+    if mode.starts_with("automatic") {
+        for (name, value) in [
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint.to_owned()),
+            (
+                "OTEL_EXPORTER_OTLP_PROTOCOL",
+                if grpc {
+                    "grpc"
+                } else if mode == "automatic_json" {
+                    "http/json"
+                } else {
+                    "http/protobuf"
+                }
+                .into(),
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_CERTIFICATE",
+                tls.certificate.clone().unwrap(),
+            ),
+        ] {
+            env.push((name, std::env::var_os(name)));
+            unsafe {
+                std::env::set_var(name, value);
+            }
+        }
+        for (name, value) in [
+            (
+                "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+                &tls.client_certificate,
+            ),
+            ("OTEL_EXPORTER_OTLP_CLIENT_KEY", &tls.private_key),
+        ] {
+            env.push((name, std::env::var_os(name)));
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+    env
+}
+
 #[test]
 fn tls_and_mtls_export_all_signals_through_code_plugins_and_environment() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
@@ -708,44 +737,28 @@ fn tls_and_mtls_export_all_signals_through_code_plugins_and_environment() {
         .unwrap();
     let _entered = runtime.enter();
     runtime.block_on(async {
-        for grpc in [false, true] {
-            for require_client in [false, true] {
-                let certificates = Certificates::new();
-                let (endpoint, count, server) = collector(&certificates, grpc, require_client).await;
-                let transport = if grpc { OtlpTransport::Grpc } else { OtlpTransport::HttpBinary };
-                let mut tls = certificates.tls.clone();
-                if !require_client { tls.client_certificate = None; tls.private_key = None; }
-                for mode in ["code", "plugin", "automatic", "automatic_json"] {
-                    if grpc && mode == "automatic_json" { continue; }
-                    count.signals.store(0, Ordering::SeqCst);
-                    let before = count.load(Ordering::SeqCst);
-                    let mut env = Vec::new();
-                    if mode.starts_with("automatic") {
-                        for (name, value) in [
-                            ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint.clone()),
-                            ("OTEL_EXPORTER_OTLP_PROTOCOL", if grpc {"grpc"} else if mode == "automatic_json" {"http/json"} else {"http/protobuf"}.into()),
-                            ("OTEL_EXPORTER_OTLP_CERTIFICATE", tls.certificate.clone().unwrap()),
-                        ] {
-                            env.push((name, std::env::var_os(name)));
-                            unsafe { std::env::set_var(name, value); }
-                        }
-                        for (name, value) in [("OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE", &tls.client_certificate), ("OTEL_EXPORTER_OTLP_CLIENT_KEY", &tls.private_key)] {
-                            env.push((name, std::env::var_os(name)));
-                            unsafe { if let Some(value) = value { std::env::set_var(name, value); } else { std::env::remove_var(name); } }
-                        }
-                    }
-                    let endpoint = endpoint.clone();
-                    let tls = tls.clone();
-                    let result = tokio::task::spawn_blocking(move || export_all(&endpoint, transport, tls, mode)).await;
-                    for (name, value) in env {
-                        unsafe { if let Some(value) = value { std::env::set_var(name, value); } else { std::env::remove_var(name); } }
-                    }
-                    result.unwrap();
-                    assert!(count.load(Ordering::SeqCst) >= before + 3, "each signal must reach the collector: {mode}, grpc={grpc}, mtls={require_client}");
-                    assert_eq!(count.signals.load(Ordering::SeqCst), 7);
+        for (grpc, require_client) in [false, true].into_iter().flat_map(|grpc| [false, true].map(|require_client| (grpc, require_client))) {
+            let certificates = Certificates::new();
+            let (endpoint, count, server) = collector(&certificates, grpc, require_client).await;
+            let transport = if grpc { OtlpTransport::Grpc } else { OtlpTransport::HttpBinary };
+            let mut tls = certificates.tls.clone();
+            if !require_client { tls.client_certificate = None; tls.private_key = None; }
+            for mode in ["code", "plugin", "automatic", "automatic_json"] {
+                if grpc && mode == "automatic_json" { continue; }
+                count.signals.store(0, Ordering::SeqCst);
+                let before = count.load(Ordering::SeqCst);
+                    let env = configure_export_environment(mode, grpc, &endpoint, &tls);
+                let endpoint = endpoint.clone();
+                let tls = tls.clone();
+                let result = tokio::task::spawn_blocking(move || export_all(&endpoint, transport, tls, mode)).await;
+                for (name, value) in env {
+                    unsafe { if let Some(value) = value { std::env::set_var(name, value); } else { std::env::remove_var(name); } }
                 }
-                server.abort();
+                result.unwrap();
+                assert!(count.load(Ordering::SeqCst) >= before + 3, "each signal must reach the collector: {mode}, grpc={grpc}, mtls={require_client}");
+                assert_eq!(count.signals.load(Ordering::SeqCst), 7);
             }
+            server.abort();
         }
     });
 }
@@ -901,67 +914,65 @@ fn wrong_ca_trace_export_during_shutdown_reports_tls_and_releases_host() {
         let certificates = Certificates::new();
         let other = Certificates::new();
         let (endpoint, count, server) = collector(&certificates, false, false).await;
-        for trusted in [false, true] {
-            for file_headers in [false, true] {
-                let before = count.load(Ordering::SeqCst);
-                let endpoint = endpoint.clone();
-                let ca = if trusted { &certificates } else { &other }
-                    .tls.certificate.clone().unwrap();
-                let token = certificates._directory.path().join("token");
-                std::fs::write(&token, "secret-token").unwrap();
-                tokio::task::spawn_blocking(move || {
-                    use crate::plugin::dynamic::PluginHostActivation;
-                    let config = serde_json::from_value(json!({
-                        "components": [{"kind": "observability", "config": {
-                            "version": 4,
-                            "opentelemetry": {"enabled": true, "traces": [{
-                                "type": "full", "endpoint": if trusted { endpoint.clone() } else { format!("{endpoint}/private-path?secret-query") },
-                                "transport": "http_binary", "tls": {"certificate": ca},
-                                "scheduled_delay_millis": 600_000,
-                                "header_file": if file_headers { json!({"x-token": token}) } else { json!({}) }
-                            }]}
-                        }}]
-                    })).unwrap();
-                    let mut activation = futures::executor::block_on(
-                        PluginHostActivation::initialize_exact(config),
-                    ).unwrap();
-                    let callbacks: Vec<_> = crate::api::runtime::global_context()
-                        .read().unwrap().event_subscribers.values().cloned().collect();
-                    let uuid = uuid::Uuid::now_v7();
-                    for category in [ScopeCategory::Start, ScopeCategory::End] {
-                        let event = Event::Scope(ScopeEvent::new(
-                            BaseEvent::builder().uuid(uuid).name("tls.trace").build(),
-                            category, Vec::new(), EventCategory::agent(), None,
-                        ));
-                        for callback in &callbacks { callback(&event); }
+        for (trusted, file_headers) in [false, true].into_iter().flat_map(|trusted| [false, true].map(|file_headers| (trusted, file_headers))) {
+            let before = count.load(Ordering::SeqCst);
+            let endpoint = endpoint.clone();
+            let ca = if trusted { &certificates } else { &other }
+                .tls.certificate.clone().unwrap();
+            let token = certificates._directory.path().join("token");
+            std::fs::write(&token, "secret-token").unwrap();
+            tokio::task::spawn_blocking(move || {
+                use crate::plugin::dynamic::PluginHostActivation;
+                let config = serde_json::from_value(json!({
+                    "components": [{"kind": "observability", "config": {
+                        "version": 4,
+                        "opentelemetry": {"enabled": true, "traces": [{
+                            "type": "full", "endpoint": if trusted { endpoint.clone() } else { format!("{endpoint}/private-path?secret-query") },
+                            "transport": "http_binary", "tls": {"certificate": ca},
+                            "scheduled_delay_millis": 600_000,
+                            "header_file": if file_headers { json!({"x-token": token}) } else { json!({}) }
+                        }]}
+                    }}]
+                })).unwrap();
+                let mut activation = futures::executor::block_on(
+                    PluginHostActivation::initialize_exact(config),
+                ).unwrap();
+                let callbacks: Vec<_> = crate::api::runtime::global_context()
+                    .read().unwrap().event_subscribers.values().cloned().collect();
+                let uuid = uuid::Uuid::now_v7();
+                for category in [ScopeCategory::Start, ScopeCategory::End] {
+                    let event = Event::Scope(ScopeEvent::new(
+                        BaseEvent::builder().uuid(uuid).name("tls.trace").build(),
+                        category, Vec::new(), EventCategory::agent(), None,
+                    ));
+                    for callback in &callbacks { callback(&event); }
+                }
+                // Do not force-flush: the first export must fail inside
+                // shutdown, rather than taking the preexisting-failure path.
+                let result = activation.close();
+                assert!(!activation.is_active(), "one close must release ownership: {result:?}");
+                let report = activation.report();
+                if trusted {
+                    result.unwrap();
+                    assert!(report.config.runtime_diagnostics.is_empty());
+                } else {
+                    assert!(result.unwrap_err().to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER));
+                    let diagnostic = report.config.runtime_diagnostics.iter()
+                        .find(|diagnostic| diagnostic.code == "otel.tls_failed")
+                        .expect("actionable TLS diagnostic");
+                    assert!(diagnostic.message.contains(&endpoint));
+                    assert!(diagnostic.message.contains("TLS certificate verification failed"));
+                    for secret in ["private-path", "secret-query", "secret-token"] {
+                        assert!(!diagnostic.message.contains(secret));
                     }
-                    // Do not force-flush: the first export must fail inside
-                    // shutdown, rather than taking the preexisting-failure path.
-                    let result = activation.close();
-                    assert!(!activation.is_active(), "one close must release ownership: {result:?}");
-                    let report = activation.report();
-                    if trusted {
-                        result.unwrap();
-                        assert!(report.config.runtime_diagnostics.is_empty());
-                    } else {
-                        assert!(result.unwrap_err().to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER));
-                        let diagnostic = report.config.runtime_diagnostics.iter()
-                            .find(|diagnostic| diagnostic.code == "otel.tls_failed")
-                            .expect("actionable TLS diagnostic");
-                        assert!(diagnostic.message.contains(&endpoint));
-                        assert!(diagnostic.message.contains("TLS certificate verification failed"));
-                        for secret in ["private-path", "secret-query", "secret-token"] {
-                            assert!(!diagnostic.message.contains(secret));
-                        }
-                        assert_eq!(diagnostic.count, 1);
-                    }
-                    let mut next = futures::executor::block_on(
-                        PluginHostActivation::initialize_exact(Default::default()),
-                    ).expect("host must be available without a second close");
-                    next.close().unwrap();
-                }).await.unwrap();
-                assert_eq!(count.load(Ordering::SeqCst), before + usize::from(trusted));
-            }
+                    assert_eq!(diagnostic.count, 1);
+                }
+                let mut next = futures::executor::block_on(
+                    PluginHostActivation::initialize_exact(Default::default()),
+                ).expect("host must be available without a second close");
+                next.close().unwrap();
+            }).await.unwrap();
+            assert_eq!(count.load(Ordering::SeqCst), before + usize::from(trusted));
         }
         server.abort();
     });
@@ -1280,4 +1291,33 @@ fn public_exporter_errors_preserve_variants_and_tls_display() {
             assert!(!exporter_payload(error).is_empty());
         }
     }
+}
+
+async fn read_collector_request(
+    stream: &mut tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+) -> Option<Vec<u8>> {
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let size = stream.read(&mut buffer).await.unwrap();
+        if size == 0 {
+            return None;
+        }
+        request.extend_from_slice(&buffer[..size]);
+        if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse().unwrap())
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + length {
+                break;
+            }
+        }
+    }
+    Some(request)
 }

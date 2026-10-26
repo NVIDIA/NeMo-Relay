@@ -114,6 +114,23 @@ class DiagnosticDeliveryStats:
     uncertain: int = 0
 
 
+def _failure_disposition(failure: grpc.RpcError) -> str:
+    if failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
+        failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
+        and _NOT_CONSUMED_METADATA in tuple(failure.trailing_metadata() or ())
+    ):
+        return "not_consumed"
+    if failure.code() in (
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.OUT_OF_RANGE,
+        grpc.StatusCode.ALREADY_EXISTS,
+    ):
+        return "stop"
+    return "uncertain"
+
+
 class WorkerDiagnostics:
     """One negotiated, activation-owned bounded delivery facade."""
 
@@ -274,19 +291,70 @@ class WorkerDiagnostics:
                 if future is not None and not future.done():
                     future.set_exception(DiagnosticDeliveryError("closed"))
 
+    async def _send_attempts(
+        self, request: Any, policy: _DeliveryPolicy, sequence: int
+    ) -> tuple[Any, DiagnosticDeliveryError, int]:
+        result: Any = None
+        error = DiagnosticDeliveryError("uncertain")
+        acceptance_uncertain = False
+        for _ in range(policy.retry_attempts):
+            try:
+                result = await self._stub.SubmitDiagnostic(request, timeout=policy.retry_timeout)
+            except grpc.RpcError as failure:
+                disposition = _failure_disposition(failure)
+                if disposition == "not_consumed":
+                    if not acceptance_uncertain:
+                        self._increment("rejected")
+                        error = DiagnosticDeliveryError("not_consumed")
+                        break
+                    continue
+                if disposition == "stop":
+                    break
+                acceptance_uncertain = True
+                continue
+            if result.ByteSize() > policy.max_response_bytes:
+                result = None
+                break
+            if result.submission_sequence != sequence or result.status not in range(1, 6):
+                result = None
+                break
+            sequence += 1
+            if sequence > _MAX_COUNT:
+                self._stopped = True
+            if result.status == pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
+                self._increment("rejected")
+                error = DiagnosticDeliveryError("rejected")
+                result = None
+            break
+        return result, error, sequence
+
+    def _complete_barrier(self, future: Any) -> None:
+        if future is None or future.done():
+            return
+        if self._stats["uncertain"]:
+            future.set_exception(DiagnosticDeliveryError("uncertain"))
+        elif self._stopped:
+            future.set_exception(DiagnosticDeliveryError("closed"))
+        else:
+            future.set_result(None)
+
+    def _complete_submission(self, future: Any, result: Any, error: DiagnosticDeliveryError) -> None:
+        if result is None and error.kind == "uncertain":
+            self._increment("uncertain")
+            self._stopped = True
+        if future is not None and not future.done():
+            if result is None:
+                future.set_exception(error)
+            else:
+                future.set_result(result)
+
     async def _deliver(self) -> None:
         assert self._queue is not None
         sequence = 1
         while True:
             frozen, future = await self._queue.get()
             if frozen is None:
-                if future is not None and not future.done():
-                    if self._stats["uncertain"]:
-                        future.set_exception(DiagnosticDeliveryError("uncertain"))
-                    elif self._stopped:
-                        future.set_exception(DiagnosticDeliveryError("closed"))
-                    else:
-                        future.set_result(None)
+                self._complete_barrier(future)
                 continue
             result: Any = None
             error = DiagnosticDeliveryError("uncertain")
@@ -303,61 +371,14 @@ class WorkerDiagnostics:
                     self._increment("dropped")
                     error = DiagnosticDeliveryError("invalid")
                 else:
-                    acceptance_uncertain = False
                     try:
-                        for _ in range(policy.retry_attempts):
-                            try:
-                                result = await self._stub.SubmitDiagnostic(request, timeout=policy.retry_timeout)
-                            except grpc.RpcError as failure:
-                                not_consumed = failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
-                                    failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
-                                    and _NOT_CONSUMED_METADATA in tuple(failure.trailing_metadata() or ())
-                                )
-                                if not_consumed:
-                                    # This attempt was rejected; earlier attempts may have
-                                    # been accepted despite losing their response.
-                                    if not acceptance_uncertain:
-                                        self._increment("rejected")
-                                        error = DiagnosticDeliveryError("not_consumed")
-                                        break
-                                    continue
-                                if failure.code() in (
-                                    grpc.StatusCode.PERMISSION_DENIED,
-                                    grpc.StatusCode.UNAUTHENTICATED,
-                                    grpc.StatusCode.FAILED_PRECONDITION,
-                                    grpc.StatusCode.OUT_OF_RANGE,
-                                    grpc.StatusCode.ALREADY_EXISTS,
-                                ):
-                                    break
-                                acceptance_uncertain = True
-                                continue
-                            if result.ByteSize() > policy.max_response_bytes:
-                                result = None
-                                break
-                            if result.submission_sequence != sequence or result.status not in range(1, 6):
-                                result = None
-                                break
-                            sequence += 1
-                            if sequence > _MAX_COUNT:
-                                self._stopped = True
-                            if result.status == pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
-                                self._increment("rejected")
-                                error = DiagnosticDeliveryError("rejected")
-                                result = None
-                            break
+                        result, error, sequence = await self._send_attempts(request, policy, sequence)
                     except asyncio.CancelledError:
                         self._increment("uncertain")
                         if future is not None and not future.done():
                             future.set_exception(DiagnosticDeliveryError("uncertain"))
                         raise
-            if result is None and error.kind == "uncertain":
-                self._increment("uncertain")
-                self._stopped = True
-            if future is not None and not future.done():
-                if result is None:
-                    future.set_exception(error)
-                else:
-                    future.set_result(result)
+            self._complete_submission(future, result, error)
 
 
 class DiagnosticComponent:

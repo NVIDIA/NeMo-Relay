@@ -802,10 +802,7 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
             text = part.get("text")
             function = part.get("function_call")
             if isinstance(text, str) and function is None:
-                if run is not None and run.part.get("thought") == part.get("thought"):
-                    run.pieces.append(text)
-                    if "thought_signature" in part and "thought_signature" not in run.part:
-                        run.part["thought_signature"] = part["thought_signature"]
+                if _append_text_run(run, part, text):
                     continue
                 run = _TextRun(dict(part), [text])
                 runs.append(run)
@@ -813,8 +810,7 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                 continue
             run = None
             if function is not None:
-                if not _is_object(function):
-                    raise TypeError("ADK function_call must be an object")
+                function = _object(function, field="ADK function_call")
                 if not _joins_call(function, call):
                     _flush_call(parts, call)
                     call = None
@@ -823,6 +819,10 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                     continue
             parts.append(part)
     _flush_call(parts, call)
+    return _finish_aggregate(dumps, runs, parts)
+
+
+def _finish_aggregate(dumps: list[JsonObject], runs: list[_TextRun], parts: list[JsonObject | None]) -> JsonObject:
     for merged in runs:
         merged.part["text"] = "".join(merged.pieces)
     aggregate = _last_seen(dumps)
@@ -831,6 +831,15 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
         aggregate["content"] = {"role": "model", "parts": kept}
     aggregate["partial"] = False
     return aggregate
+
+
+def _append_text_run(run: _TextRun | None, part: JsonObject, text: str) -> bool:
+    if run is None or run.part.get("thought") != part.get("thought"):
+        return False
+    run.pieces.append(text)
+    if "thought_signature" in part and "thought_signature" not in run.part:
+        run.part["thought_signature"] = part["thought_signature"]
+    return True
 
 
 def _dump(chunk: Json) -> JsonObject:

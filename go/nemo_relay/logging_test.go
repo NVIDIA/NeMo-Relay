@@ -13,6 +13,13 @@ import (
 	"testing"
 )
 
+const (
+	loggingShutdownMode            = "=shutdown"
+	loggingDefaultTargetMessage    = "default target"
+	loggingConfigFilename          = "logging.toml"
+	loggingConfigEnvironmentPrefix = "NEMO_RELAY_LOG_CONFIG_PATH="
+)
+
 const loggingHelperEnvironment = "NEMO_RELAY_TEST_LOGGING_HELPER"
 
 var loggingEnvironmentNames = map[string]struct{}{
@@ -51,7 +58,7 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 					t.Fatalf("emit log record: %v", err)
 				}
 			}
-			if err := Info("", "default target", nil); err != nil {
+			if err := Info("", loggingDefaultTargetMessage, nil); err != nil {
 				t.Fatalf("emit default-target log record: %v", err)
 			}
 			if err := ShutdownLogging(); err != nil {
@@ -71,7 +78,7 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 
 func testBindingLoggingLevels(t *testing.T) {
 	directory := t.TempDir()
-	configPath := filepath.Join(directory, "logging.toml")
+	configPath := filepath.Join(directory, loggingConfigFilename)
 	logPath := filepath.Join(directory, "operational.jsonl")
 	config := `[logging]
 level = "trace"
@@ -91,7 +98,7 @@ queue_capacity = 16
 	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
 	command.Env = loggingTestEnvironment(
 		loggingHelperEnvironment+"=emit",
-		"NEMO_RELAY_LOG_CONFIG_PATH="+configPath,
+		loggingConfigEnvironmentPrefix+configPath,
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -124,15 +131,15 @@ queue_capacity = 16
 			t.Errorf("%s fields = %#v", level, record["fields"])
 		}
 	}
-	if records["default target"]["target"] != "nemo_relay.go" {
-		t.Errorf("default target = %v", records["default target"]["target"])
+	if records[loggingDefaultTargetMessage]["target"] != "nemo_relay.go" {
+		t.Errorf("default target = %v", records[loggingDefaultTargetMessage]["target"])
 	}
 }
 
 func testLoggingDisabledStderr(t *testing.T) {
 	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
 	command.Env = loggingTestEnvironment(
-		loggingHelperEnvironment+"=shutdown",
+		loggingHelperEnvironment+loggingShutdownMode,
 		"NEMO_RELAY_LOG=info",
 		"NEMO_RELAY_LOG_STDERR=false",
 	)
@@ -148,7 +155,7 @@ func testLoggingDisabledStderr(t *testing.T) {
 func testLoggingInitialization(t *testing.T) {
 	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
 	command.Env = loggingTestEnvironment(
-		loggingHelperEnvironment+"=shutdown",
+		loggingHelperEnvironment+loggingShutdownMode,
 		"NEMO_RELAY_LOG=info",
 		"NEMO_RELAY_LOG_STDERR_FORMAT=jsonl",
 	)
@@ -178,7 +185,7 @@ func testLoggingInvalidEnvironment(t *testing.T) {
 
 func testLoggingFileSinkShutdown(t *testing.T) {
 	directory := t.TempDir()
-	configPath := filepath.Join(directory, "logging.toml")
+	configPath := filepath.Join(directory, loggingConfigFilename)
 	logPath := filepath.Join(directory, "operational.jsonl")
 	config := `[logging]
 level = "info"
@@ -197,8 +204,8 @@ queue_capacity = 16
 
 	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
 	command.Env = loggingTestEnvironment(
-		loggingHelperEnvironment+"=shutdown",
-		"NEMO_RELAY_LOG_CONFIG_PATH="+configPath,
+		loggingHelperEnvironment+loggingShutdownMode,
+		loggingConfigEnvironmentPrefix+configPath,
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -240,47 +247,52 @@ func TestBindingLoggingRejectsInvalidRecords(t *testing.T) {
 func testLoggingFileSinkFailurePolicy(t *testing.T) {
 	for _, policy := range []string{"", "required", "optional"} {
 		t.Run("policy="+policy, func(t *testing.T) {
-			directory := t.TempDir()
-			blocked := filepath.Join(directory, "private-path-sentinel")
-			if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			healthy := filepath.Join(directory, "healthy.jsonl")
-			configPath := filepath.Join(directory, "logging.toml")
-			policyField := ""
-			if policy != "" {
-				policyField = "failure_policy = " + strconv.Quote(policy)
-			}
-			config := `[logging]
+			assertLoggingFileSinkFailurePolicy(t, policy)
+		})
+	}
+}
+
+func assertLoggingFileSinkFailurePolicy(t *testing.T, policy string) {
+	t.Helper()
+	directory := t.TempDir()
+	blocked := filepath.Join(directory, "private-path-sentinel")
+	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	healthy := filepath.Join(directory, "healthy.jsonl")
+	configPath := filepath.Join(directory, loggingConfigFilename)
+	policyField := ""
+	if policy != "" {
+		policyField = "failure_policy = " + strconv.Quote(policy)
+	}
+	config := `[logging]
 level = "info"
 stderr_enabled = false
 [[logging.sinks]]
 path = ` + strconv.Quote(filepath.Join(blocked, "relay.jsonl")) + "\n" + policyField + `
 [[logging.sinks]]
 path = ` + strconv.Quote(healthy) + "\n"
-			if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
-			command.Env = loggingTestEnvironment(loggingHelperEnvironment+"=shutdown", "NEMO_RELAY_LOG_CONFIG_PATH="+configPath)
-			output, err := command.CombinedOutput()
-			if policy == "optional" {
-				if err != nil {
-					t.Fatalf("optional sink blocked startup: %v\n%s", err, output)
-				}
-				if strings.Count(string(output), "optional logging sink logging.file.0 disabled") != 1 || strings.Contains(string(output), "private-path-sentinel") {
-					t.Fatalf("expected one safe warning: %s", output)
-				}
-				contents, err := os.ReadFile(healthy)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !strings.Contains(string(contents), `"event":"logging_shutdown_started"`) {
-					t.Fatalf("healthy sink lost output: %s", contents)
-				}
-			} else if err == nil || !strings.Contains(string(output), "failed to open logging sink") {
-				t.Fatalf("required sink did not fail startup: %v\n%s", err, output)
-			}
-		})
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
+	command.Env = loggingTestEnvironment(loggingHelperEnvironment+loggingShutdownMode, loggingConfigEnvironmentPrefix+configPath)
+	output, err := command.CombinedOutput()
+	if policy == "optional" {
+		if err != nil {
+			t.Fatalf("optional sink blocked startup: %v\n%s", err, output)
+		}
+		if strings.Count(string(output), "optional logging sink logging.file.0 disabled") != 1 || strings.Contains(string(output), "private-path-sentinel") {
+			t.Fatalf("expected one safe warning: %s", output)
+		}
+		contents, err := os.ReadFile(healthy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(contents), `"event":"logging_shutdown_started"`) {
+			t.Fatalf("healthy sink lost output: %s", contents)
+		}
+	} else if err == nil || !strings.Contains(string(output), "failed to open logging sink") {
+		t.Fatalf("required sink did not fail startup: %v\n%s", err, output)
 	}
 }

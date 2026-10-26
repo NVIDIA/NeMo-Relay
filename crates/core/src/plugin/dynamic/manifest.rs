@@ -651,6 +651,17 @@ fn validate_capability_shape(
     Ok(())
 }
 
+fn validate_callback_names<'a>(names: impl Iterator<Item = &'a String>, field: &str) -> Result<()> {
+    for name in names {
+        if name.trim().is_empty() || name != name.trim() {
+            return Err(PluginError::InvalidConfig(format!(
+                "{field}.by_name keys must be non-empty callback names without surrounding whitespace"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Checks required load fields and worker callback names.
 fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad) -> Result<()> {
     match (kind, load) {
@@ -681,22 +692,10 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
                         "load.max_message_bytes values must be integers in 1..=2147483647".into(),
                     ));
                 }
-                for name in limits.by_name.keys() {
-                    if name.trim().is_empty() || name != name.trim() {
-                        return Err(PluginError::InvalidConfig(
-                            "load.max_message_bytes.by_name keys must be non-empty callback names without surrounding whitespace".into(),
-                        ));
-                    }
-                }
+                validate_callback_names(limits.by_name.keys(), "load.max_message_bytes")?;
             }
             if let Some(timeouts) = &load.callback_timeouts {
-                for name in timeouts.by_name.keys() {
-                    if name.trim().is_empty() || name != name.trim() {
-                        return Err(PluginError::InvalidConfig(
-                            "load.callback_timeouts.by_name keys must be non-empty callback names without surrounding whitespace".into(),
-                        ));
-                    }
-                }
+                validate_callback_names(timeouts.by_name.keys(), "load.callback_timeouts")?;
             }
             match load.runtime {
                 Some(WorkerRuntime::Python | WorkerRuntime::Rust | WorkerRuntime::Command) => {}

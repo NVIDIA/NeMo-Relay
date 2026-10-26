@@ -116,6 +116,21 @@ async def method_peer(limits: dict[str, int], enforce_server: bool) -> Any:
         await server.stop(grace=0)
 
 
+async def _assert_callback_metadata_rejected(stub: Any, rpc: str, callback: str, stream: bool) -> None:
+    for metadata in ((), ((CALLBACK_METADATA, b"wrong-callback"),)):
+        request = api.pb.InvokeRequest(
+            registration_name=callback,
+            tool=api.pb.ToolInvocation(value=api._json_envelope(api.JSON_SCHEMA, {"text": ""})),
+        )
+        with pytest.raises(grpc.aio.AioRpcError) as error:
+            response = getattr(stub, rpc)(request, timeout=5, metadata=metadata)
+            if stream:
+                _ = [item async for item in response]
+            else:
+                await response
+        assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
 @pytest.mark.parametrize("worker", [True, False])
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize("direction", ["request", "response"])
@@ -190,18 +205,7 @@ async def test_callbacks_on_the_same_rpc_have_independent_limits(
             assert (await control(api.pb.HealthRequest() if worker else api.pb.LogRequest(), timeout=5)).ok
             if enforce_server:
                 if worker:
-                    for metadata in ((), ((CALLBACK_METADATA, b"wrong-callback"),)):
-                        request = api.pb.InvokeRequest(
-                            registration_name=callback,
-                            tool=api.pb.ToolInvocation(value=api._json_envelope(api.JSON_SCHEMA, {"text": ""})),
-                        )
-                        with pytest.raises(grpc.aio.AioRpcError) as error:
-                            response = getattr(stub, rpc)(request, timeout=5, metadata=metadata)
-                            if stream:
-                                _ = [item async for item in response]
-                            else:
-                                await response
-                        assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+                    await _assert_callback_metadata_rejected(stub, rpc, callback, stream)
                 with pytest.raises(grpc.aio.AioRpcError) as error:
                     await channel.unary_unary("/missing/Unknown")(b"", timeout=5)
                 assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED

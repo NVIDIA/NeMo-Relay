@@ -300,17 +300,13 @@ fn post_authenticated(
             "failed to read the Relay TLS tunnel response: {error}"
         ))
     })?;
-    let proof_valid = key.as_deref().is_some_and(|key| {
-        http_header(&tunnel_headers, "x-nemo-relay-bootstrap-proof").is_some_and(|proof| {
-            http_header(&tunnel_headers, "x-nemo-relay-instance-id").is_some_and(|instance| {
-                key.verify(
-                    &listener_fingerprint(bootstrap_fingerprint, address, instance),
-                    &nonce,
-                    proof,
-                )
-            })
-        })
-    });
+    let proof_valid = tunnel_proof_valid(
+        key.as_deref(),
+        &tunnel_headers,
+        bootstrap_fingerprint,
+        address,
+        &nonce,
+    );
     if http_status(&tunnel_headers) != Some(101) {
         return Err(VerifiedHttpError::before_readiness(
             "gateway did not establish an authenticated Relay TLS tunnel",
@@ -892,6 +888,26 @@ pub(crate) fn listener_fingerprint(
     instance: &str,
 ) -> String {
     format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0{instance}")
+}
+
+fn tunnel_proof_valid(
+    key: Option<&BootstrapChallengeKey>,
+    tunnel_headers: &[u8],
+    bootstrap_fingerprint: &str,
+    address: SocketAddr,
+    nonce: &str,
+) -> bool {
+    key.is_some_and(|key| {
+        http_header(tunnel_headers, "x-nemo-relay-bootstrap-proof").is_some_and(|proof| {
+            http_header(tunnel_headers, "x-nemo-relay-instance-id").is_some_and(|instance| {
+                key.verify(
+                    &listener_fingerprint(bootstrap_fingerprint, address, instance),
+                    nonce,
+                    proof,
+                )
+            })
+        })
+    })
 }
 
 #[cfg(test)]

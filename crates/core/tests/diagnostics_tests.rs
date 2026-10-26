@@ -3341,7 +3341,6 @@ fn diagnostic_recording_profile() {
     );
     const WRITERS: usize = 4;
     const OPERATIONS: usize = 25_000;
-    const SAMPLE_EVERY: usize = 50;
     const DETAIL: &str = "bounded producer detail for local recording and contention measurement";
 
     let disabled = Diagnostics::default();
@@ -3391,27 +3390,7 @@ fn diagnostic_recording_profile() {
                 .take(if contended { WRITERS } else { 1 })
                 .map(|recorder| {
                     let barrier = &barrier;
-                    scope.spawn(move || {
-                        let mut samples = Vec::with_capacity(OPERATIONS / SAMPLE_EVERY);
-                        barrier.wait();
-                        for index in 0..OPERATIONS {
-                            let started = (index % SAMPLE_EVERY == 0).then(Instant::now);
-                            let outcome = recorder
-                                .record_without_projection_lazy(|| {
-                                    Observation::new(
-                                        classification(FailureClass::Unknown),
-                                        DETAIL,
-                                        NonZeroU64::MIN,
-                                    )
-                                })
-                                .unwrap();
-                            black_box(outcome);
-                            if let Some(started) = started {
-                                samples.push(started.elapsed().as_nanos());
-                            }
-                        }
-                        samples
-                    })
+                    scope.spawn(move || profile_writer(recorder, barrier))
                 })
                 .collect::<Vec<_>>();
             let reader = contended.then(|| {
@@ -4654,4 +4633,31 @@ fn extension_names_cannot_authorize_operational_output() {
     assert_eq!(page.events[0].code(), "private.secret_name");
     assert_eq!(page.events[0].message(), Some("private evidence"));
     assert_eq!(page.coverage.loss.projections_suppressed.value.get(), 1);
+}
+
+fn profile_writer(recorder: &ComponentRecorder, barrier: &std::sync::Barrier) -> Vec<u128> {
+    use std::hint::black_box;
+    use std::time::Instant;
+    const OPERATIONS: usize = 25_000;
+    const SAMPLE_EVERY: usize = 50;
+    const DETAIL: &str = "bounded producer detail for local recording and contention measurement";
+    let mut samples = Vec::with_capacity(OPERATIONS / SAMPLE_EVERY);
+    barrier.wait();
+    for index in 0..OPERATIONS {
+        let started = (index % SAMPLE_EVERY == 0).then(Instant::now);
+        let outcome = recorder
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    DETAIL,
+                    NonZeroU64::MIN,
+                )
+            })
+            .unwrap();
+        black_box(outcome);
+        if let Some(started) = started {
+            samples.push(started.elapsed().as_nanos());
+        }
+    }
+    samples
 }

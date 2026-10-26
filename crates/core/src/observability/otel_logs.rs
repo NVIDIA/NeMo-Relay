@@ -601,13 +601,9 @@ fn shutdown_log_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-fn build_log_provider(
-    config: &OpenTelemetryLogConfig,
-    diagnostics: Arc<LogDeliveryDiagnostics>,
-    resource_attributes: Option<Vec<KeyValue>>,
-) -> ExporterInitializationResult<SdkLoggerProvider> {
-    let exporter = if config.automatic {
-        let builder = OtlpLogExporter::builder();
+fn build_automatic_log_exporter() -> ExporterInitializationResult<OtlpLogExporter> {
+    let builder = OtlpLogExporter::builder();
+    Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
             builder
                 .with_http()
@@ -629,7 +625,15 @@ fn build_log_provider(
                 .with_http_client(automatic_otlp_http_client("LOGS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
-        }
+        },
+    )
+}
+
+fn build_log_exporter(
+    config: &OpenTelemetryLogConfig,
+) -> ExporterInitializationResult<OtlpLogExporter> {
+    let exporter = if config.automatic {
+        build_automatic_log_exporter()?
     } else {
         match config.transport {
             OtlpTransport::HttpBinary => {
@@ -695,6 +699,15 @@ fn build_log_provider(
             }
         }
     };
+    Ok(exporter)
+}
+
+fn build_log_provider(
+    config: &OpenTelemetryLogConfig,
+    diagnostics: Arc<LogDeliveryDiagnostics>,
+    resource_attributes: Option<Vec<KeyValue>>,
+) -> ExporterInitializationResult<SdkLoggerProvider> {
+    let exporter = build_log_exporter(config)?;
 
     let mut batch_config = BatchConfigBuilder::default();
     if !config.automatic {
