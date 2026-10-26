@@ -339,4 +339,37 @@ describe('GeminiGenerateContentCodec', () => {
       /parts.*text must be a string/,
     );
   });
+
+  it('decodeResponse rejects BigInt without aborting the process', () => {
+    const output = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `
+        const assert = require('node:assert/strict');
+        const { GeminiGenerateContentCodec } = require('./index.js');
+        const codec = new GeminiGenerateContentCodec();
+        const response = {
+          candidates: [{ content: { parts: [{ text: 'hi' }] } }],
+          usageMetadata: { promptTokenCount: 10 },
+        };
+        for (const input of [
+          10n,
+          { ...response, usageMetadata: { promptTokenCount: 10n } },
+          { ...response, extra: [null, { value: 1n << 128n }] },
+          { ...response, get extra() { return 10n; } },
+        ]) {
+          assert.throws(() => codec.decodeResponse(input), {
+            name: 'TypeError',
+            message: /BigInt/,
+          });
+        }
+        assert.equal(codec.decodeResponse(response).message, 'hi');
+        console.log('AFTER');
+        `,
+      ],
+      { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8' },
+    );
+    assert.match(output, /AFTER/);
+  });
 });
