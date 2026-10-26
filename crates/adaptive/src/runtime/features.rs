@@ -680,6 +680,8 @@ struct AdaptiveHintsFeature {
     name: String,
     priority: i32,
     break_chain: bool,
+    inject_header: bool,
+    inject_body_path: String,
     hot_cache: Arc<RwLock<HotCache>>,
     agent_id: String,
 }
@@ -695,6 +697,8 @@ impl AdaptiveHintsFeature {
             name: format!("adaptive_{runtime_id}_adaptive_hints_request"),
             priority: config.priority,
             break_chain: config.break_chain,
+            inject_header: config.inject_header,
+            inject_body_path: config.inject_body_path,
             hot_cache,
             agent_id,
         }
@@ -708,7 +712,8 @@ impl AdaptiveFeature for AdaptiveHintsFeature {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let adaptive_hints =
-                AdaptiveHintsIntercept::new(self.hot_cache.clone(), self.agent_id.clone());
+                AdaptiveHintsIntercept::new(self.hot_cache.clone(), self.agent_id.clone())
+                    .with_injection(self.inject_header, &self.inject_body_path);
             ctx.register_llm_request_intercept(
                 &self.name,
                 self.priority,
