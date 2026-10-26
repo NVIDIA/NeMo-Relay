@@ -339,7 +339,12 @@ class TestObservabilityConfigHelpers:
             "agent_name": "NeMo Relay",
             "model_name": "unknown",
             "filename_template": "nemo-relay-atif-{session_id}.json",
+            "include_observed_events": True,
+            "include_llm_requests": True,
         }
+        reduced = AtifConfig(include_observed_events=False, include_llm_requests=False).to_dict()
+        assert reduced["include_observed_events"] is False
+        assert reduced["include_llm_requests"] is False
         assert OpenTelemetrySectionConfig().to_dict() == {
             "enabled": False,
             "endpoints": [],
