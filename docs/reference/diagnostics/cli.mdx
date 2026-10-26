@@ -296,9 +296,13 @@ with error reason `missing`; the CLI reports `worker not found`. An unrecognized
 404 response reports that the diagnostics endpoint is unavailable.
 
 Worker collection interprets structured error reasons before deciding whether to
-stop polling a session. `disabled` and `unsupported` stop polling for the current
-session. `shutting_down` is reported as the latest poll outcome and remains
-retryable. Unknown or malformed errors do not establish permanent disablement.
+stop polling a session. The reasons `disabled`, `query_disabled`,
+`http_read_disabled`, `collection_disabled`, `unsupported`, and `unsupported_schema`
+stop polling for the current session when the reason agrees with the HTTP status.
+For older endpoints, bodyless HTTP 404, 406, and 501 responses also stop polling.
+`shutting_down` is reported as the latest poll outcome and remains retryable.
+Unknown or malformed error bodies and reasons that disagree with the HTTP status
+do not establish permanent disablement.
 
 The read returns an explicit error in these cases:
 
