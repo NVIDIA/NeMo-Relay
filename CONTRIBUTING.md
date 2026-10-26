@@ -243,11 +243,33 @@ Use `git commit -s` when you create commits, or add a `Signed-off-by:` trailer m
 
 This section describes how to prepare and submit changes for review.
 
+### PR Etiquette
+
+- **New features**: Open or identify an issue and have repository maintainers
+  review it and approve the design before creating a PR. You may provide the
+  specification in any form; GitHub feature-request issues are preferred for
+  external contributors, and Linear tickets are preferred for NVIDIA internal
+  contributions. NVIDIA contributors may also use GitHub issues.
+- **Bug fixes**: Avoid opening a PR directly. Report or identify the bug in an
+  issue first and discuss the proposed fix with repository maintainers before
+  creating a PR.
+- **Related changes**: Group related PRs as a stack and explain their
+  dependencies and review order in each PR description.
+- **Well-defined scope**: Give each PR a clear purpose and scope so reviewers
+  can understand the change. Keep unrelated changes in separate PRs.
+- **Readiness**: Do not open a draft PR prematurely. Use the issue for early
+  discussion, and open a PR when the change is ready for review.
+- **Open PR limit**: Contributors who are not on the development team may have
+  no more than three open PRs at a time, including draft PRs.
+
 ### Before Submitting
 
 Complete these checks before opening or updating a pull request.
 
-1. Open or identify an issue describing the proposed enhancement or bug fix before submitting a pull request. External contributors should use a GitHub issue; NVIDIA contributors may use a GitHub or Linear issue.
+1. Open or identify an issue describing the proposed enhancement or bug fix and
+   follow the [PR etiquette](#pr-etiquette) requirements before creating a pull
+   request. External contributors should use a GitHub issue; NVIDIA contributors
+   may use a GitHub or Linear issue.
 2. Run `uv run pre-commit run` against the staged changes.
 3. Run focused tests and the canonical suites for directly affected surfaces.
 4. Run a build-only recipe when packaging, generated artifacts, or a surface
