@@ -244,7 +244,7 @@ pub(crate) async fn daemon_execute(
         .await?;
     // Balance daemon session accounting if the caller disconnects before response headers.
     // After setup, streaming delivery owns its own guard; unary/error paths finish the call.
-    let mut guard = GatewayCallGuard::new(
+    let guard = GatewayCallGuard::new(
         state.sessions.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
@@ -253,16 +253,14 @@ pub(crate) async fn daemon_execute(
         operational.clone(),
     );
     let response_timeout = state.config.response_timeout();
-    let execution = run_managed_gateway(state, prepared, prep, operational);
-    let result = match response_timeout {
+    let execution = run_managed_gateway(state, prepared, prep, operational, Some(guard));
+    match response_timeout {
         Some(timeout) => match tokio::time::timeout(timeout, execution).await {
             Ok(result) => result,
-            Err(_) => return Err(CliError::Launch("provider response-head timeout".into())),
+            Err(_) => Err(CliError::Launch("provider response-head timeout".into())),
         },
         None => execution.await,
-    };
-    guard.sessions.take();
-    result
+    }
 }
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
@@ -313,7 +311,7 @@ pub(crate) async fn passthrough(
         .sessions
         .prepare_gateway_call(&prepared.headers, start)
         .await?;
-    run_managed_gateway(state, prepared, prep, operational).await
+    run_managed_gateway(state, prepared, prep, operational, None).await
 }
 
 /// Upgrades an authorized provider WebSocket without entering the managed LLM pipeline.
@@ -456,6 +454,7 @@ async fn run_managed_gateway(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     operational: OperationalContext,
+    mut cancellation_guard: Option<GatewayCallGuard>,
 ) -> Result<Response<Body>, CliError> {
     let operational = operational.with_session(prep.session_id.clone());
     if prep.bypass_managed_pipeline {
@@ -477,13 +476,28 @@ async fn run_managed_gateway(
                 session_finish,
             )
             .await;
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.sessions.take();
+        }
         return run_unmanaged_gateway(state, prepared, Some(operational)).await;
     }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
-        run_managed_streaming(state, prepared, prep, codecs, operational).await
+        run_managed_streaming(
+            state,
+            prepared,
+            prep,
+            codecs,
+            operational,
+            cancellation_guard,
+        )
+        .await
     } else {
-        run_managed_buffered(state, prepared, prep, codecs, operational).await
+        let result = run_managed_buffered(state, prepared, prep, codecs, operational).await;
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.sessions.take();
+        }
+        result
     }
 }
 
@@ -847,7 +861,18 @@ async fn run_managed_streaming(
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
     operational: OperationalContext,
+    cancellation_guard: Option<GatewayCallGuard>,
 ) -> Result<Response<Body>, CliError> {
+    let mut guard = cancellation_guard.unwrap_or_else(|| {
+        GatewayCallGuard::new(
+            state.sessions.clone(),
+            prep.session_id.clone(),
+            prep.owner_subagent_id.clone(),
+            None,
+            prep.session_finish,
+            operational.clone(),
+        )
+    });
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
     let func = build_streaming_func(
         state.clone(),
@@ -862,15 +887,7 @@ async fn run_managed_streaming(
     // collector and finalizer for managed streaming, so without a codec we cannot use the managed
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
-        let session_finish = prep.session_finish;
-        state
-            .sessions
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                session_finish,
-            )
-            .await;
+        guard.finish().await;
         return passthrough_streaming(state, prepared, Some(operational)).await;
     };
     let streaming_codec: Arc<dyn StreamingCodec> = Arc::from(streaming_codec);
@@ -895,7 +912,7 @@ async fn run_managed_streaming(
         model_name,
         owner_subagent_id,
         bypass_managed_pipeline: _,
-        session_finish,
+        session_finish: _,
     } = prep;
     let (finalizer, response_completion, response_ready) = gateway_response_completion(
         state.sessions.clone(),
@@ -925,10 +942,7 @@ async fn run_managed_streaming(
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
         Err(error) => {
-            state
-                .sessions
-                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
-                .await;
+            guard.finish().await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
@@ -941,15 +955,17 @@ async fn run_managed_streaming(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    let guard = GatewayCallGuard::new(
-        state.sessions.clone(),
-        session_id.clone(),
-        owner_subagent_id,
-        Some(response_ready),
-        session_finish,
-        operational,
-    );
-    let body = client_sse_body(json_stream, provider_route, guard);
+    guard.operational = operational;
+    guard.response_ready = Some(response_ready);
+    let body = match prepare_streaming_response_body(json_stream, provider_route, guard).await {
+        Ok(body) => body,
+        Err(error) => {
+            if let Some(failure) = upstream_failures.take(&error) {
+                return selected_upstream_failure(failure);
+            }
+            return Err(translate_runtime_error(error));
+        }
+    };
 
     build_response(StatusCode::OK, headers, body)
 }
@@ -1245,21 +1261,52 @@ fn sse_json_stream_with_thresholds(
 // names are reconstructed from the JSON `type` field where providers populate it (Anthropic
 // Messages, OpenAI Responses); OpenAI Chat omits the `event:` line and appends the original
 // `data: [DONE]` terminator after the runtime stream completes.
-fn client_sse_body(
-    json_stream: LlmJsonStream,
+async fn prepare_streaming_response_body(
+    response_stream: LlmJsonStream,
     route: ProviderRoute,
     mut guard: GatewayCallGuard,
+) -> Result<Body, FlowError> {
+    guard.json_stream = Some(response_stream);
+    let first_event = match guard
+        .json_stream
+        .as_mut()
+        .expect("gateway stream installed")
+        .next()
+        .await
+    {
+        Some(Ok(event)) => Some(event),
+        Some(Err(error)) => {
+            operational::upstream_failed(&guard.operational, "runtime");
+            guard.finish().await;
+            return Err(error);
+        }
+        None => None,
+    };
+    let response_stream = guard.json_stream.take().expect("gateway stream installed");
+    Ok(client_sse_body(response_stream, route, guard, first_event))
+}
+
+fn client_sse_body(
+    response_stream: LlmJsonStream,
+    route: ProviderRoute,
+    mut guard: GatewayCallGuard,
+    first_event: Option<Value>,
 ) -> Body {
-    guard.json_stream = Some(json_stream);
+    guard.json_stream = Some(response_stream);
     let stream = stream! {
+        if let Some(event) = first_event {
+            yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
+        }
         while let Some(item) = guard.json_stream.as_mut().expect("gateway stream installed").next().await {
             match item {
-                Ok(event_json) => {
-                    yield Ok::<Bytes, CliError>(encode_sse_frame(&event_json, route));
+                Ok(event) => {
+                    yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
                 }
-                Err(error) => {
+                Err(_) => {
+                    // The managed stream records its error. Missing completion signals failure
+                    // to the client without turning this request failure into a broken worker link.
+                    operational::upstream_failed(&guard.operational, "runtime");
                     guard.finish().await;
-                    yield Err(CliError::InvalidPayload(error.to_string()));
                     return;
                 }
             }
@@ -1315,14 +1362,17 @@ impl GatewayCallGuard {
         }
         self.response_ready = None;
         if let Some(sessions) = self.sessions.take() {
-            complete_gateway_call(
+            // Cleanup must survive cancellation of the request awaiting it.
+            let cleanup_task = tokio::spawn(complete_gateway_call(
                 sessions,
                 self.session_id.clone(),
                 self.owner_subagent_id.clone(),
                 None,
                 self.session_finish,
-            )
-            .await;
+            ));
+            cleanup_task
+                .await
+                .expect("gateway cleanup task should complete");
         }
     }
 }

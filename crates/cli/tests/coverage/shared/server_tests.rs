@@ -4288,9 +4288,19 @@ async fn gateway_rejects_responses_streams_without_final_events() {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let mut response_body = response.into_body();
-        if !body.is_empty() {
+        if body.is_empty() {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let error_body = response.into_body().collect().await.unwrap().to_bytes();
+            let error: Value = serde_json::from_slice(&error_body).unwrap();
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("stream ended before its final response event")
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut response_body = response.into_body();
             let first = response_body
                 .frame()
                 .await
@@ -4303,13 +4313,8 @@ async fn gateway_rejects_responses_streams_without_final_events() {
                     .unwrap()
                     .contains("response.created")
             );
+            assert!(response_body.frame().await.is_none());
         }
-        let error = response_body.frame().await.unwrap().unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("stream ended before its final response event")
-        );
         handle.abort();
     }
 }

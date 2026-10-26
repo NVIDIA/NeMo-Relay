@@ -33,6 +33,18 @@ struct ToolGuardrailCleanup(&'static str);
 #[path = "gateway_preparation_tests.rs"]
 mod gateway_preparation;
 
+impl SessionManager {
+    pub(crate) async fn test_lock_session_gate(
+        &self,
+        session_id: &str,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        session_gate(&self.session_gates, session_id)
+            .await
+            .lock_owned()
+            .await
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn idle_sweeper_reclaims_unused_session_gates_without_idle_sessions() {
     let manager = SessionManager::new(session_test_config());
