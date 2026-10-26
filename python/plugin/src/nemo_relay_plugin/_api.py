@@ -84,7 +84,7 @@ from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
-from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics
+from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics, _open_diagnostic_channel
 from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
 
 grpc: Any = importlib.import_module("grpc")
@@ -2515,7 +2515,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         asyncio.CancelledError: The task running the worker is cancelled.
 
     Note:
-        The function closes the gRPC server and host channel during shutdown or
+        The function closes the gRPC server and both host channels during shutdown or
         cancellation. It returns only after the host accepts a shutdown request.
     """
     _plugin_id(plugin)
@@ -2533,11 +2533,13 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     worker_target = _grpc_target(worker_endpoint)
     await _unlink_unix_socket(worker_endpoint)
     host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes, by_name=by_name)
+    authority = (("grpc.default_authority", "localhost"),) if host_endpoint.startswith("unix://") else ()
+    diagnostic_channel = _open_diagnostic_channel(_grpc_target(host_endpoint), authority)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
         host_stub=pb_grpc.RelayHostRuntimeStub(host_channel),
-        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(host_channel),
+        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
@@ -2557,8 +2559,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         await shutdown_event.wait()
     finally:
         await server.stop(grace=2)
-        await runtime._close_diagnostics()
-        await host_channel.close()
+        try:
+            await runtime._close_diagnostics()
+        finally:
+            await asyncio.gather(host_channel.close(), diagnostic_channel.close())
 
 
 @dataclass(slots=True)

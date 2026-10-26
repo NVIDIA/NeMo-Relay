@@ -492,16 +492,9 @@ Precedence, highest first:
 - Plugin `load.max_message_bytes.by_name`: exact callback registration name.
 - Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
 
-Limits are integers in `1..=2147483647`, covering complete sent/received
-messages, stream chunks, and continuations belonging to that callback. Other
-callbacks and control RPCs use the fallback; diagnostic budgets stay separate.
-The host and SDK carry the exact UTF-8 name in binary metadata
-`nemo-relay-worker-callback-bin` before decoding. In named-limit mode,
-`Invoke`/`InvokeStream` reject a mismatched name or missing metadata for a
-configured callback. Upgrade host
-and worker SDKs together, then restart. Scalar-only legacy callers may omit
-metadata. Send caps are now finite too; size limits with concurrency. These
-limits do not change model context limits or provide automatic compaction.
+Limits are positive 32-bit integers which cover all data belonging to that
+callback, such as data, streams, and continuations. These limits do not
+change model context limits or provide automatic compaction.
 
 ## JSON Envelopes and Errors
 

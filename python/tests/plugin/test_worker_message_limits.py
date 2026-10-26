@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -195,4 +197,126 @@ async def test_worker_host_channel_request_response_boundary(
         assert api._decode_required_envelope(response.value, "result") == control
     finally:
         await channel.close()
+        await server.stop(grace=0)
+
+
+@pytest.mark.parametrize("policy", ["scalar-small", "named-small", "named-large"])
+@pytest.mark.parametrize("transport", ["tcp", "unix"])
+async def test_diagnostics_keep_separate_budgets_inside_callbacks(
+    policy: str, transport: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real worker keeps diagnostic caps independent in both directions."""
+    if transport == "unix" and not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix sockets are unavailable")
+    limit = 256 * 1024 if policy == "named-large" else 4096
+    monkeypatch.setenv(LIMIT_ENV, str(limit if policy == "scalar-small" else 4 * 1024 * 1024))
+    monkeypatch.setenv(
+        "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME",
+        json.dumps({} if policy == "scalar-small" else {"inspect": limit}),
+    )
+
+    class Host(api.pb_grpc.RelayDiagnosticsServicer, api.pb_grpc.RelayHostRuntimeServicer):
+        async def ReadDiagnosticPage(self, request: Any, context: Any) -> Any:
+            # A permissive peer isolates the SDK's send and receive limits.
+            return api.pb.DiagnosticReadResponse(snapshot_json=b"x" * request.max_events)
+
+        async def LlmNext(self, request: Any, context: Any) -> Any:
+            return api.pb.JsonResult(value=api._json_envelope(api.JSON_SCHEMA, {"text": "x" * 8192}))
+
+    class DiagnosticPlugin(WorkerPlugin):
+        plugin_id = "test.diagnostic-limits"
+
+        def register(self, ctx: PluginContext, config: object) -> None:
+            async def inspect(name: str, args: Any) -> Any:
+                if args.get("execution"):
+                    response = await ctx.runtime._host_stub.LlmNext(api.pb.LlmNextRequest(), timeout=3)
+                    return {"bytes": len(api._decode_required_envelope(response.value, "response")["text"])}
+                response = await ctx.runtime._diagnostic_stub.ReadDiagnosticPage(
+                    api.pb.DiagnosticReadRequest(
+                        credentials=api.pb.DiagnosticCredentials(activation_id="test", auth_token="test-token"),
+                        continuation=b"x" * args.get("request_bytes", 0),
+                        max_events=args.get("response_bytes", 8192),
+                    ),
+                    timeout=3,
+                )
+                return {"bytes": len(response.snapshot_json)}
+
+            ctx.register_tool_request_intercept("inspect", inspect)
+
+    server = grpc.aio.server(options=api._worker_grpc_options(1024 * 1024))
+    host = Host()
+    api.pb_grpc.add_RelayDiagnosticsServicer_to_server(host, server)
+    api.pb_grpc.add_RelayHostRuntimeServicer_to_server(host, server)
+    host_endpoint = f"unix://{tmp_path / 'host.sock'}" if transport == "unix" else "tcp://127.0.0.1:0"
+    port = server.add_insecure_port(api._grpc_target(host_endpoint))
+    if transport == "tcp":
+        host_endpoint = f"http://127.0.0.1:{port}"
+    await server.start()
+    endpoint_file = tmp_path / "endpoint"
+    for key, value in {
+        "NEMO_RELAY_WORKER_SOCKET": "tcp://127.0.0.1:0",
+        "NEMO_RELAY_HOST_SOCKET": host_endpoint,
+        "NEMO_RELAY_WORKER_ID": "test",
+        "NEMO_RELAY_WORKER_TOKEN": "test-token",
+        "NEMO_RELAY_WORKER_ENDPOINT_FILE": str(endpoint_file),
+    }.items():
+        monkeypatch.setenv(key, value)
+    task = asyncio.create_task(serve_plugin(DiagnosticPlugin()))
+    channel = None
+    try:
+        for _ in range(200):
+            if endpoint_file.exists() or task.done():
+                break
+            await asyncio.sleep(0.01)
+        assert endpoint_file.exists(), "worker failed to start"
+        channel = grpc.aio.insecure_channel(api._grpc_target(endpoint_file.read_text()))
+        stub = api.pb_grpc.PluginWorkerStub(channel)
+        registered = await stub.Register(
+            api.pb.RegisterRequest(activation_id="test", auth_token="test-token"), timeout=3
+        )
+        assert not registered.HasField("error")
+
+        async def invoke(**args: Any) -> Any:
+            return await stub.Invoke(
+                api.pb.InvokeRequest(
+                    activation_id="test",
+                    auth_token="test-token",
+                    invocation_id="diagnostic",
+                    registration_name="inspect",
+                    surface=api.pb.TOOL_REQUEST_INTERCEPT,
+                    tool=api.pb.ToolInvocation(tool_name="inspect", value=api._json_envelope(api.JSON_SCHEMA, args)),
+                ),
+                metadata=(("nemo-relay-worker-callback-bin", b"inspect"),),
+                timeout=3,
+            )
+
+        async def healthy_diagnostic() -> None:
+            for request_bytes in (0, 8192):
+                response = await invoke(request_bytes=request_bytes)
+                assert not response.HasField("error"), response.error.message
+                assert api._decode_required_envelope(response.json.value, "result") == {"bytes": 8192}
+
+        await healthy_diagnostic()
+        for oversized in ({"request_bytes": 16 * 1024}, {"response_bytes": 128 * 1024}):
+            response = await invoke(**oversized)
+            assert response.HasField("error"), "diagnostics escaped their own finite transport budget"
+            assert "RESOURCE_EXHAUSTED" in response.error.message
+            await healthy_diagnostic()
+        response = await invoke(execution=True)
+        if limit < 8192:
+            assert response.HasField("error")
+            assert "RESOURCE_EXHAUSTED" in response.error.message
+        else:
+            assert not response.HasField("error")
+            assert api._decode_required_envelope(response.json.value, "result") == {"bytes": 8192}
+        assert (
+            await stub.Shutdown(api.pb.ShutdownRequest(activation_id="test", auth_token="test-token"), timeout=3)
+        ).accepted
+        await asyncio.wait_for(task, timeout=3)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        if channel is not None:
+            await channel.close()
         await server.stop(grace=0)

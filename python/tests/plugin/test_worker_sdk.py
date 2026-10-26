@@ -3422,7 +3422,7 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
 
 
 async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Close both allocated resources when the gRPC server cannot start."""
+    """Close both channels and the server when the gRPC server cannot start."""
 
     class FakeChannel:
         closed = False
@@ -3448,9 +3448,10 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: fake_channel)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
@@ -3464,11 +3465,11 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     with pytest.raises(RuntimeError, match="start failed"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Release the server and host channel when endpoint binding returns no port."""
+    """Release both channels and the server when endpoint binding returns no port."""
 
     class FakeChannel:
         closed = False
@@ -3490,9 +3491,10 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: fake_channel)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
@@ -3506,7 +3508,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     with pytest.raises(WorkerSdkError, match="failed to bind worker endpoint"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
