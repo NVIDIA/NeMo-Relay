@@ -176,10 +176,12 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
 mod adaptive;
+mod diagnostics;
 mod event_registry;
 mod llm;
 mod llm_registry;
 mod observability;
+pub use diagnostics::*;
 mod plugin;
 mod runtime_registry;
 mod scope;

@@ -106,6 +106,73 @@ const passthrough = new JsonPassthrough();
 
 Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavailable. Prefer dataclass, Pydantic, or explicit Node.js codecs when the framework owns a stable schema.
 
+For a tool that returns several result types, set `allowed_types` and
+`tool_result=True` on the same codec. The options serve different purposes:
+`allowed_types` lists the classes the codec can restore, and `tool_result=True`
+adds the JSON wrapper described in
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
+
+For example, a search tool can return a `SearchResult` object with matches or
+plain text when it finds none. Both results use the same codec:
+
+```python
+from dataclasses import dataclass
+
+from nemo_relay.typed import BestEffortAnyCodec
+
+@dataclass
+class SearchResult:
+    titles: list[str]
+
+result_codec = BestEffortAnyCodec(
+    allowed_types=[SearchResult],
+    tool_result=True,
+)
+
+matches = SearchResult(titles=["Relay codec guide"])
+encoded = result_codec.to_json(matches)
+assert encoded["schema"] == "nemo.relay.tool_result@1"
+assert encoded["content"] is None
+assert result_codec.from_json(encoded) == matches
+
+encoded = result_codec.to_json("No matches found.")
+assert encoded["content"] == "No matches found."
+assert result_codec.from_json(encoded) == "No matches found."
+```
+
+Pass `result_codec` to the `result_codec` argument of a typed tool helper such
+as `tool_execute`. The JSON wrapper stores the encoded value in `result`. The
+codec also fills `content` for strings and arrays of text or image parts. For other values,
+including the `SearchResult` object above, `content` is `null`.
+
+The codec sets `is_error` to `false`. It does not treat an application field
+named `status` or `error` as proof of failure. If you supply a valid wrapper,
+the codec keeps its content and failure flag.
+
+Without `allowed_types`, tagged dataclass and Pydantic values stay as JSON
+dictionaries during decoding. Each class must be listed on its own. Adding a
+base class does not allow its subclasses. Calling `to_json()` does not add
+classes to the list.
+
+By default, encoding leaves out the tool-result wrapper. With either setting,
+`from_json` reads a valid wrapper's `result` field and applies the same
+`allowed_types` rules. It also accepts older encoded values. It leaves wrappers
+with unknown versions or invalid fields as JSON.
+
+During decoding, the codec never imports modules. It ignores old
+`__nv_runtime_type__` tokens. Types outside the list remain dictionaries. Pickle
+decoding supports only a small set of Python built-in containers. The
+`allowed_types` option does not change these pickle rules.
+
+Restoring an allowed type calls its constructor or runs Pydantic validation
+on the input data. Choose classes that can safely handle the data you expect. With
+`allowed_types`, the codec also supports data saved earlier or encoded in
+another process.
+
+For one known schema, use `DataclassCodec` or `PydanticCodec`. Use a framework's
+own codec to restore its messages or commands. Use `JsonPassthrough` for
+model-controlled tool arguments, as the LangChain and LangGraph integrations do.
+
 ## Example: Typed Tool Boundary
 
 Use typed value codecs when the framework wants native objects but NeMo Relay should emit JSON payloads.

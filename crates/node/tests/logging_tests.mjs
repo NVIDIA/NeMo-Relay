@@ -190,3 +190,39 @@ relay.info('default target');
     assert.match(result.stderr, /log fields must be an object/);
   });
 });
+
+for (const policy of [undefined, 'required', 'optional']) {
+  it(`file sink startup policy: ${policy ?? 'default'}`, () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nemo-relay-node-optional-logging-'));
+    try {
+      const blocked = join(directory, 'private-path-sentinel');
+      writeFileSync(blocked, 'file');
+      const healthy = join(directory, 'healthy.jsonl');
+      const config = join(directory, 'logging.toml');
+      writeFileSync(
+        config,
+        `[logging]
+level = "info"
+stderr_enabled = false
+[[logging.sinks]]
+path = ${JSON.stringify(join(blocked, 'relay.jsonl'))}
+${policy ? `failure_policy = "${policy}"` : ''}
+[[logging.sinks]]
+path = ${JSON.stringify(healthy)}
+`,
+      );
+      const result = requireBinding({ NEMO_RELAY_LOG_CONFIG_PATH: config });
+      if (policy === 'optional') {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr.match(/optional logging sink logging.file.0 disabled/g)?.length, 1);
+        assert.doesNotMatch(result.stderr, /private-path-sentinel/);
+        assert.match(readFileSync(healthy, 'utf8'), /"event":"logging_shutdown_started"/);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /failed to open logging sink/);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}

@@ -77,14 +77,48 @@ fn worker_socket_cleanup_removes_only_socket_files() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// Builds a finite-limit runtime whose host RPCs cannot connect during local tests.
 fn disconnected_runtime() -> PluginRuntime {
     PluginRuntime {
         activation_id: "activation".into(),
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }
+}
+
+#[tokio::test]
+async fn callback_context_follows_stream_polling_without_widening_sibling_tasks() {
+    use futures_util::StreamExt;
+    use serde_json::json;
+
+    async fn exercise(name: &str) {
+        let mut stream = TASK_CALLBACK_NAME
+            .scope(Some(name.to_owned()), async {
+                ScopedJsonStream::new(
+                    Box::pin(futures_util::stream::once(async {
+                        tokio::task::yield_now().await;
+                        with_thread_scope(&None, || Ok(json!(current_callback_name())))
+                    })),
+                    None,
+                )
+            })
+            .await;
+        TASK_CALLBACK_NAME
+            .scope(Some("other_callback".into()), async {
+                assert_eq!(stream.next().await.unwrap().unwrap(), json!(name));
+                assert_eq!(current_callback_name().as_deref(), Some("other_callback"));
+            })
+            .await;
+        assert!(current_callback_name().is_none());
+    }
+
+    tokio::join!(exercise("large.guardrail-α"), exercise("small_guardrail"));
+    assert!(THREAD_CALLBACK_NAME.with(|name| name.borrow().is_none()));
 }
 
 fn llm_payload(
@@ -233,4 +267,92 @@ fn streaming_execution_context_has_no_response_codec() {
         .unwrap();
     assert!(context.request_codec().resolve_codec().is_some());
     assert!(context.response_codec().is_none());
+}
+
+#[test]
+fn worker_sdk_http_error_prefix_survives_callback_and_next_round_trip() {
+    for status in 400..=599 {
+        let message = http_error_message(status, "provider failure").unwrap();
+        let wire = sdk_error_to_worker(WorkerSdkError::Callback(message.clone()));
+        assert_eq!(wire.message, message);
+        assert!(!wire.retryable);
+        let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
+        assert_eq!(returned.message, message);
+    }
+    let ordinary = sdk_error_to_worker(WorkerSdkError::Callback("plain failure".into()));
+    assert_eq!(ordinary.message, "callback failed: plain failure");
+}
+
+#[test]
+fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
+    let wire = WorkerError {
+        code: "worker.cancelled".into(),
+        message: "HTTP 403: denied".into(),
+        retryable: false,
+        downstream_continuation_id: None,
+    };
+    let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
+    assert!(
+        returned
+            .message
+            .starts_with("callback failed: worker.cancelled:")
+    );
+}
+
+#[tokio::test]
+async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
+    struct TestPlugin;
+
+    impl WorkerPlugin for TestPlugin {
+        fn plugin_id(&self) -> &str {
+            "test.cancellation"
+        }
+
+        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    for repeated in [false, true] {
+        for reason in ["", "stream abandoned"] {
+            let task = tokio::spawn(std::future::pending::<()>());
+            let (completion_tx, completion_rx) = watch::channel(false);
+            let service = WorkerService {
+                plugin: Arc::new(TestPlugin),
+                runtime: disconnected_runtime(),
+                handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
+                active_invocations: Arc::new(Mutex::new(HashMap::from([(
+                    "invocation".into(),
+                    ActiveInvocation {
+                        generation: 0,
+                        abort_handle: task.abort_handle(),
+                        stream_cancel: None,
+                        completion: completion_rx,
+                        cancel_requested: repeated,
+                    },
+                )]))),
+                next_invocation_generation: Arc::new(AtomicU64::new(1)),
+            };
+            let cancellation = service.cancel_invocation(Request::new(CancelInvocationRequest {
+                activation_id: "activation".into(),
+                auth_token: "token".into(),
+                invocation_id: "invocation".into(),
+                reason: reason.into(),
+            }));
+            tokio::pin!(cancellation);
+            assert!(futures_util::poll!(&mut cancellation).is_pending());
+            completion_tx.send_replace(true);
+            let ack = cancellation.await.unwrap().into_inner();
+            assert_eq!(ack.accepted, !repeated);
+            let expected = if repeated {
+                "invocation is not active".into()
+            } else if reason.is_empty() {
+                "cancellation accepted".into()
+            } else {
+                format!("cancellation accepted: {reason}")
+            };
+            assert_eq!(ack.message, expected);
+            assert!(task.await.unwrap_err().is_cancelled());
+        }
+    }
 }

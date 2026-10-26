@@ -13,14 +13,15 @@ mod encoding;
 #[cfg(test)]
 mod merging;
 mod response;
+mod trace_context;
 mod types;
 
 pub(crate) use config::HookCommandConfig;
-pub(crate) use delivery::hook_forward;
 #[cfg(test)]
 pub(crate) use delivery::send_verified_hook_forward_request;
 #[cfg(test)]
 pub(crate) use delivery::{gateway_headers, insert_header, read_hook_payload_from};
+pub(crate) use delivery::{hook_forward, hook_forward_pi};
 #[cfg(test)]
 pub(crate) use destination::{
     HookGatewayLifecycle, resolve_hook_destination, transparent_gateway_spec,
@@ -41,10 +42,36 @@ pub(crate) use encoding::{
 pub(crate) use merging::merge_hooks;
 #[cfg(test)]
 pub(crate) use response::{handle_hook_forward_status, handle_verified_hook_forward_response};
+#[cfg(test)]
+pub(crate) use trace_context::{
+    MAX_TRACE_HEADER_BYTES, TRACEPARENT_ENV, TRACESTATE_ENV, launcher_trace_headers_from,
+};
+pub(crate) use trace_context::{TRACEPARENT_HEADER, TRACESTATE_HEADER, launcher_trace_headers};
 pub(crate) use types::{GatewayMode, HookFailurePolicy, HookForwardRequest};
 
 #[cfg(test)]
 use serde_json::json;
+
+/// Unknown payloads can hide a permission event. Block delivery failures by default.
+pub(crate) fn effective_fail_closed(policy: HookFailurePolicy, payload: Option<&[u8]>) -> bool {
+    match policy {
+        HookFailurePolicy::FailOpen => false,
+        HookFailurePolicy::FailClosed => true,
+        HookFailurePolicy::Default => policy.fail_closed() || payload_requires_fail_closed(payload),
+    }
+}
+
+pub(crate) fn payload_requires_fail_closed(payload: Option<&[u8]>) -> bool {
+    payload
+        .and_then(|payload| serde_json::from_slice::<serde_json::Value>(payload).ok())
+        .and_then(|payload| {
+            ["hook_event_name", "event_name", "event", "type"]
+                .into_iter()
+                .find_map(|name| payload.get(name).and_then(serde_json::Value::as_str))
+                .map(event_requires_fail_closed)
+        })
+        .unwrap_or(true)
+}
 
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/installer_tests.rs"]

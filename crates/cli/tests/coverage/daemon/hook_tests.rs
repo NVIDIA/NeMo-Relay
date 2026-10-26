@@ -18,8 +18,24 @@ fn capture_server(response: Vec<u8>) -> (String, Arc<Mutex<Vec<u8>>>, std::threa
     let address = listener.local_addr().unwrap();
     let request = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&request);
+    let tls = crate::gateway::tls::RelayTlsIdentity::load_or_create()
+        .unwrap()
+        .server_config()
+        .unwrap();
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let tunnel = crate::test_support::read_headers(&mut socket);
+        assert!(tunnel.starts_with("GET /bootstrap/tunnel "), "{tunnel}");
+        assert!(
+            !tunnel.to_lowercase().contains(CLIENT_TOKEN_HEADER),
+            "{tunnel}"
+        );
+        socket.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let connection = rustls::ServerConnection::new(tls).unwrap();
+        let mut stream = rustls::StreamOwned::new(connection, socket);
         let mut bytes = Vec::new();
         let mut byte = [0_u8; 1];
         while !bytes.ends_with(b"\r\n\r\n") {
@@ -134,6 +150,7 @@ async fn hook_forward_uses_the_exact_agent_path_and_one_route_header() {
         &options,
         b"{\"hook_event_name\":\"Stop\"}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -164,6 +181,78 @@ async fn hook_forward_uses_the_exact_agent_path_and_one_route_header() {
 }
 
 #[tokio::test]
+async fn hook_forward_sends_the_launcher_trace_context() {
+    let traceparent = "00-aaaabbbbccccddddeeeeffff00001111-1111222233334444-01";
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    let (daemon_address, captured, server) = capture_server(response.to_vec());
+    let options = Options {
+        agent: CodingAgent::Codex,
+        daemon_address,
+        failure_policy: HookFailurePolicy::FailClosed,
+    };
+    let trace_headers = crate::hooks::launcher_trace_headers_from(|name| match name {
+        crate::hooks::TRACEPARENT_ENV => Some(format!(" {traceparent} ")),
+        crate::hooks::TRACESTATE_ENV => Some("vendor=value".into()),
+        _ => None,
+    });
+
+    forward(
+        &options,
+        b"{\"hook_event_name\":\"SessionStart\"}".to_vec(),
+        route_token(&valid_token()).unwrap(),
+        &trace_headers,
+        &crate::operational::OperationalContext::new(),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+
+    let request = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    let header = |name: &str| {
+        request.lines().find_map(|line| {
+            line.split_once(':')
+                .filter(|(header, _)| header.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+    };
+    assert_eq!(
+        header("traceparent").as_deref(),
+        Some(traceparent),
+        "{request}"
+    );
+    assert_eq!(
+        header("tracestate").as_deref(),
+        Some("vendor=value"),
+        "{request}"
+    );
+}
+
+#[test]
+fn launcher_trace_headers_require_header_safe_traceparent() {
+    let headers = |traceparent: Option<&str>, tracestate: Option<&str>| {
+        crate::hooks::launcher_trace_headers_from(|name| match name {
+            crate::hooks::TRACEPARENT_ENV => traceparent.map(ToOwned::to_owned),
+            crate::hooks::TRACESTATE_ENV => tracestate.map(ToOwned::to_owned),
+            _ => None,
+        })
+    };
+
+    assert!(headers(None, Some("vendor=value")).is_empty());
+    assert!(headers(Some("  "), Some("vendor=value")).is_empty());
+    assert!(headers(Some("00-a\r\nx-injected: 1"), None).is_empty());
+    let oversized = "a".repeat(crate::hooks::MAX_TRACE_HEADER_BYTES + 1);
+    assert!(headers(Some(&oversized), None).is_empty());
+    assert_eq!(
+        headers(Some("00-trace"), Some(&oversized)),
+        vec![("traceparent", "00-trace".to_owned())]
+    );
+    assert_eq!(
+        headers(Some("00-trace"), Some("bad\nstate")),
+        vec![("traceparent", "00-trace".to_owned())]
+    );
+}
+
+#[tokio::test]
 async fn guardrail_rejections_are_never_failed_open() {
     let body = r#"{"error":{"type":"nemo_relay_guardrail_rejected","reason":"blocked"}}"#;
     let response = format!(
@@ -182,6 +271,7 @@ async fn guardrail_rejections_are_never_failed_open() {
         &options,
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -193,12 +283,12 @@ async fn guardrail_rejections_are_never_failed_open() {
 #[test]
 fn hook_validation_covers_malformed_payloads_urls_and_default_events() {
     assert!(read_hook_payload(&[0xff][..]).is_err());
-    assert!(!effective_fail_closed(HookFailurePolicy::Default, None));
-    assert!(!effective_fail_closed(
+    assert!(effective_fail_closed(HookFailurePolicy::Default, None));
+    assert!(effective_fail_closed(
         HookFailurePolicy::Default,
         Some(b"not-json")
     ));
-    assert!(!effective_fail_closed(
+    assert!(effective_fail_closed(
         HookFailurePolicy::Default,
         Some(br#"{"unrelated":true}"#)
     ));
@@ -254,6 +344,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
@@ -277,12 +368,18 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
         },
         b"{}".to_vec(),
         route_token(&valid_token()).unwrap(),
+        &[],
         &crate::operational::OperationalContext::new(),
     )
     .await
     .unwrap_err();
     server.join().unwrap();
-    assert!(matches!(error, CliError::PayloadTooLarge(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("HTTP response exceeds the 1048576-byte Relay limit"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -322,6 +419,11 @@ async fn missing_credential_honors_failure_policy_without_contacting_the_daemon(
                 &br#"{"type":"tool_call"}"#[..],
                 true,
             ),
+            (
+                HookFailurePolicy::FailOpen,
+                &br#"{"hook_event_name":"PostToolUse"}"#[..],
+                false,
+            ),
             (HookFailurePolicy::FailClosed, &b"not-json"[..], true),
         ] {
             let mut output = Vec::new();
@@ -343,7 +445,11 @@ async fn missing_credential_honors_failure_policy_without_contacting_the_daemon(
                 assert!(output.is_empty(), "{agent:?} {failure_policy:?}");
             } else {
                 result.expect("explicit fail-open passes through");
-                assert_eq!(output, expected, "{agent:?} {failure_policy:?}");
+                if effective_fail_closed(HookFailurePolicy::Default, Some(payload)) {
+                    assert!(output.is_empty());
+                } else {
+                    assert_eq!(output, expected, "{agent:?} {failure_policy:?}");
+                }
             }
         }
     }
@@ -374,4 +480,187 @@ async fn present_credential_still_honors_fail_closed_delivery_failures() {
     .expect_err("fail closed");
     assert!(matches!(error, CliError::HookDelivery { .. }), "{error}");
     assert!(output.is_empty());
+}
+
+/// Points every proxy environment variable reqwest consults at a closed loopback port and clears
+/// `NO_PROXY`, so a client that still applied the system proxy could not reach the daemon.
+struct ProxyEnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl ProxyEnvScope {
+    const NAMES: [&'static str; 8] = [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ];
+
+    fn pointing_at(proxy: &str) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = Self::NAMES
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in Self::NAMES {
+            unsafe {
+                if name.eq_ignore_ascii_case("NO_PROXY") {
+                    std::env::remove_var(name);
+                } else {
+                    std::env::set_var(name, proxy);
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for ProxyEnvScope {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hook_forward_ignores_proxy_environment_for_the_daemon_address() {
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let _environment = ProxyEnvScope::pointing_at(&proxy);
+
+    let response_body = b"{\"continue\":true}\n";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        String::from_utf8_lossy(response_body)
+    );
+    let (daemon_address, captured, server) = capture_server(response.into_bytes());
+    let options = Options {
+        agent: CodingAgent::ClaudeCode,
+        daemon_address,
+        failure_policy: HookFailurePolicy::FailClosed,
+    };
+
+    // A current-thread runtime keeps the environment scope held across the delivery without
+    // awaiting while holding its lock.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let body = runtime
+        .block_on(forward(
+            &options,
+            b"{\"hook_event_name\":\"PreToolUse\"}".to_vec(),
+            route_token(&valid_token()).unwrap(),
+            &[],
+            &crate::operational::OperationalContext::new(),
+        ))
+        .expect("delivery to the daemon must not go through the configured proxy");
+    server.join().unwrap();
+
+    assert_eq!(body, response_body);
+    let request = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert!(
+        request.starts_with("POST /hooks/claude-code HTTP/1.1\r\n"),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn unreadable_payloads_block_by_default_even_without_a_credential() {
+    let oversized = vec![b'x'; crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES + 1];
+    for payload in [
+        b"\xff".as_slice(),
+        b"not-json".as_slice(),
+        oversized.as_slice(),
+    ] {
+        for credential in [None, Some(RouteCredential::parse(valid_token()).unwrap())] {
+            let mut output = Vec::new();
+            let error = run_with(
+                Options {
+                    agent: CodingAgent::ClaudeCode,
+                    daemon_address: "http://127.0.0.1:1".into(),
+                    failure_policy: HookFailurePolicy::Default,
+                },
+                payload,
+                credential,
+                &mut output,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, CliError::HookDelivery { .. }), "{error}");
+            assert!(output.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_fail_open_does_not_emit_allow_for_permission_events() {
+    let mut output = Vec::new();
+    run_with(
+        Options {
+            agent: CodingAgent::ClaudeCode,
+            daemon_address: "http://127.0.0.1:1".into(),
+            failure_policy: HookFailurePolicy::FailOpen,
+        },
+        br#"{"hook_event_name":"PreToolUse"}"#.as_slice(),
+        None,
+        &mut output,
+    )
+    .await
+    .unwrap();
+    assert!(output.is_empty());
+}
+
+#[tokio::test]
+async fn squatter_cannot_receive_daemon_route_credentials_or_hook_payload() {
+    crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = crate::test_support::read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .unwrap();
+        request
+    });
+    let token = valid_token();
+    let mut output = Vec::new();
+    let error = run_with(
+        Options {
+            agent: CodingAgent::ClaudeCode,
+            daemon_address: format!("http://{address}"),
+            failure_policy: HookFailurePolicy::FailClosed,
+        },
+        br#"{"hook_event_name":"PreToolUse","tool_input":"secret-payload"}"#.as_slice(),
+        Some(RouteCredential::parse(token.clone()).unwrap()),
+        &mut output,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, CliError::HookDelivery { .. }));
+    assert!(output.is_empty());
+    let request = server.join().unwrap();
+    assert!(request.starts_with("GET /bootstrap/tunnel "));
+    assert!(!request.to_lowercase().contains(CLIENT_TOKEN_HEADER));
+    assert!(!request.contains(&token));
+    assert!(!request.contains("secret-payload"));
 }

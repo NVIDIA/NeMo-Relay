@@ -25,11 +25,13 @@ nemo-relay = { workspace = true, features = ["atof-streaming", "guardrails-remot
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 chrono = "0.4"
+log = "0.4"
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
 napi-derive = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+stacker = "0.1"
+tokio = { workspace = true, default-features = true, features = ["rt-multi-thread", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { workspace = true, features = ["v7"] }
 

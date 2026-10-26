@@ -191,6 +191,7 @@ fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtofEndpointConfig>()?;
     m.add_class::<PyAtofExporterConfig>()?;
     m.add_class::<PyAtofExporter>()?;
+    m.add_class::<PyOpenTelemetryTlsConfig>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOtlpFileSink>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;

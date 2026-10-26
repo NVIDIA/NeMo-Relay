@@ -11,6 +11,7 @@
 use std::io::{BufRead, BufReader};
 
 use axum::http::HeaderMap;
+use base64::Engine;
 use serde_json::{Map, Value, json};
 
 use crate::agents::shared::alignment::{
@@ -19,8 +20,9 @@ use crate::agents::shared::alignment::{
 use crate::events::{AgentKind, SessionEvent, SubagentEvent};
 
 // ChatGPT backend base URL used by Codex when authenticated with ChatGPT. This mirrors Codex's own
-// `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base.
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+// `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base. The gateway
+// replaces this base with `[upstream] chatgpt_codex_base_url` when it is set.
+pub(crate) const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 // The Codex fields needed to turn a child thread into a parent-owned subagent scope. Optional
 // display fields are copied through because they make Phoenix traces easier to inspect, but only
@@ -88,15 +90,26 @@ fn has_codex_client_metadata(body: &Value) -> bool {
 }
 
 // Gives the gateway a Codex-native upstream only when the inbound token is a recognized ChatGPT
-// auth token and no `OPENAI_API_KEY` is available to substitute. The gateway stays generic by
-// asking alignment for an optional override instead of knowing Codex backend URLs.
+// auth token and no `OPENAI_API_KEY` is available to substitute. The gateway asks alignment for
+// this decision only for the default OpenAI base or an explicit Codex backend path.
 pub(crate) fn chatgpt_upstream_url_if_needed(
     headers: &HeaderMap,
     route: GatewayRouteKind,
     path_and_query: &str,
     has_replacement_key: bool,
 ) -> Option<String> {
-    (is_chatgpt_backend_route(route) && has_chatgpt_auth_token(headers) && !has_replacement_key)
+    // An explicit backend path supports ChatGPT token prefixes. Ordinary provider keys still
+    // use the normal provider route.
+    let explicit_chatgpt_token = path_and_query.starts_with("/backend-api/codex/")
+        && headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.starts_with("Bearer eyJ") || value.starts_with("Bearer at-")
+            });
+    (is_chatgpt_backend_route(route)
+        && (explicit_chatgpt_token || has_chatgpt_auth_token(headers))
+        && !has_replacement_key)
         .then(|| chatgpt_upstream_url(path_and_query))
 }
 
@@ -110,9 +123,14 @@ pub(crate) fn strip_chatgpt_auth_for_openai_route(
     if !is_chatgpt_backend_route(route) || !has_replacement_key {
         return headers.clone();
     }
+    strip_chatgpt_auth(headers)
+}
+
+pub(crate) fn strip_chatgpt_auth(headers: &HeaderMap) -> HeaderMap {
     let mut out = headers.clone();
     if has_chatgpt_auth_token(&out) {
         out.remove(http::header::AUTHORIZATION);
+        out.remove("chatgpt-account-id");
     }
     out
 }
@@ -120,17 +138,42 @@ pub(crate) fn strip_chatgpt_auth_for_openai_route(
 // OpenAI API bases commonly include `/v1`, while the ChatGPT backend is rooted at
 // `/backend-api/codex`. Strip any `/v1` prefix from gateway routes before appending the path.
 fn chatgpt_upstream_url(path_and_query: &str) -> String {
-    let path = path_and_query.strip_prefix("/v1").unwrap_or(path_and_query);
+    let path = path_and_query
+        .strip_prefix("/backend-api/codex")
+        .or_else(|| path_and_query.strip_prefix("/v1"))
+        .unwrap_or(path_and_query);
     format!("{CHATGPT_CODEX_BASE_URL}{path}")
 }
 
-// Codex can authenticate to the ChatGPT backend with either an OAuth JWT (`eyJ...`) or a Codex
-// access token (`at-...`). Provider API keys (`sk-...`) and unrelated opaque tokens do not match.
+// These fields help choose a route. The upstream still validates the credential. A JWT prefix
+// does not identify its issuer. Opaque Codex tokens also need ChatGPT account metadata.
 fn has_chatgpt_auth_token(headers: &HeaderMap) -> bool {
-    headers
+    let Some(token) = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("Bearer eyJ") || value.starts_with("Bearer at-"))
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    if token.starts_with("at-") {
+        return headers
+            .get("chatgpt-account-id")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| !value.trim().is_empty());
+    }
+    let mut parts = token.split('.');
+    let (Some(_header), Some(payload), Some(_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
+        .and_then(|payload| serde_json::from_slice::<Value>(&payload).ok())
+        .is_some_and(|claims| {
+            claims.get("iss").and_then(Value::as_str) == Some("https://auth.openai.com")
+        })
 }
 
 // ChatGPT model requests use the backend. Live and Realtime connections retain the configured

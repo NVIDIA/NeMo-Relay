@@ -96,6 +96,58 @@ config to retain complete sanitized request input and annotations on every LLM
 start event. This disables turn filtering only; credential removal and
 sanitizers still apply.
 
+## Insecure HTTP Hosts
+
+<Warning>
+Not recommended. Plain HTTP and WebSocket send spans, logs, metrics, events,
+trajectories, and any configured `headers`, `header_env`, or `header_file`
+values unencrypted. Prefer HTTPS, or a collector reached over loopback.
+</Warning>
+
+OpenTelemetry trace endpoints require HTTPS unless the destination is
+`localhost`, a loopback IP address, or a host in `insecure_http_hosts`. This rule
+applies even when no headers are configured. Log and metric endpoints, ATOF
+stream sinks, and ATIF HTTP storage
+require HTTPS or WSS when they send configured headers. The header settings are
+`headers`, `header_env`, and `header_file`. Without configured headers, these
+other destinations can use plain HTTP or WebSocket without a host allowlist.
+Their telemetry still travels unencrypted.
+
+By default, these transport checks allow plain HTTP or WebSocket for
+`localhost` and loopback IP addresses. To allow another host, list it at the top
+level of the observability component config. For example, a containerized agent
+can reach a collector by its private network name:
+
+```toml
+[components.config]
+version = 4
+insecure_http_hosts = ["host.docker.internal", "collector.observability.svc.cluster.local"]
+```
+
+The list applies to every destination in the component: OpenTelemetry trace,
+log, and metric endpoints, including environment-configured ones, ATOF stream
+sinks over HTTP or WebSocket, and ATIF HTTP storage.
+
+- Each entry is a bare hostname or IP address. Entries with a scheme, port,
+  path, user information, wildcard, or leading dot fail validation. IPv4
+  addresses must use four decimal parts without leading zeros.
+- Matching is exact and case-insensitive, and ignores a trailing dot. A listed
+  host can use any port and path. Subdomains of a listed host are not trusted.
+- Relay compares the host in the destination URL only. DNS resolution never
+  grants trust, so a name that resolves to a listed IP address is still
+  rejected.
+- Unlike other component lists, this list does not concatenate across
+  [configuration layers](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
+  The highest-precedence layer that sets it wins, so the system configuration
+  can replace the hosts a user `plugins.toml` lists, or set
+  `insecure_http_hosts = []` to allow no additional hosts.
+
+Programmatic plugin configs set the same top-level `insecure_http_hosts`
+field. Exporters constructed directly through the Manual API, outside the
+observability plugin, take an `allow_insecure` option instead (`allowInsecure`
+in Node.js, `with_allow_insecure` in Rust). It allows plain HTTP or WebSocket
+to any host for that exporter and defaults to `false`.
+
 ## Multi-Endpoint Lifecycle
 
 OpenTelemetry endpoint construction is isolated. An endpoint that cannot be
@@ -149,7 +201,7 @@ above, changing or removing an inherited endpoint requires editing the layer
 that declares it.
 
 For complete layering rules, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
+[Configure](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
 For exporter-specific fields and behavior, refer to:
 

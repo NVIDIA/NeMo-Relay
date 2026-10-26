@@ -528,10 +528,36 @@ fn empty_message() -> Json {
 fn atif_content_value(value: &Json) -> Json {
     match value {
         Json::String(_) => value.clone(),
-        Json::Array(_) if is_atif_content_parts(value) => value.clone(),
         Json::Null => empty_message(),
-        _ => Json::String(json_to_string(value)),
+        _ => match canonicalize_atif_content_parts(value) {
+            Some(Json::Array(parts)) => {
+                // Text-only parts become one message, as provider responses and Responses input do.
+                let texts: Option<Vec<&str>> = parts
+                    .iter()
+                    .map(|part| part.get("text").and_then(Json::as_str))
+                    .collect();
+                match texts {
+                    Some(texts) => Json::String(texts.join("\n")),
+                    None => Json::Array(parts),
+                }
+            }
+            _ => Json::String(json_to_string(value)),
+        },
     }
+}
+
+/// Project only displayable user content; the full request stays in `extra.llm_request`.
+fn atif_user_content_value(value: &Json) -> Json {
+    let Some(parts) = value.as_array() else {
+        return atif_content_value(value);
+    };
+    let supported = Json::Array(
+        parts
+            .iter()
+            .filter_map(canonicalize_atif_content_part)
+            .collect(),
+    );
+    atif_content_value(&supported)
 }
 
 fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<Json> {
@@ -567,18 +593,28 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
 }
 
 fn observation_content_value(value: &Json) -> Option<Json> {
+    let value =
+        crate::codec::tool::projected_tool_result(value).map_or(value, |(content, _)| content);
     match value {
         Json::String(_) => Some(value.clone()),
-        Json::Array(_) if is_atif_content_parts(value) => Some(value.clone()),
-        _ => None,
+        _ => canonicalize_atif_content_parts(value),
     }
 }
 
-fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
+fn observation_extra(event: &Event, output: Option<&Json>, content: Option<&Json>) -> Json {
     let mut extra = event_extra(event);
     if let Json::Object(extra_object) = &mut extra {
-        if let Some(tool_result) = output.and_then(observation_tool_result_extra) {
-            extra_object.insert("tool_result".to_string(), tool_result);
+        if output
+            .and_then(crate::codec::tool::projected_tool_result)
+            .is_some_and(|(_, is_error)| is_error)
+        {
+            extra_object.insert("is_error".to_string(), Json::Bool(true));
+        }
+        // Keep the raw tool result unless the observation content already carries it unchanged.
+        if let Some(tool_result) =
+            output.filter(|output| !output.is_null() && content != Some(*output))
+        {
+            extra_object.insert("tool_result".to_string(), tool_result.clone());
         }
         if let Some(annotation) = super::tool_result_annotation(event) {
             extra_object.insert("tool_result_annotation".to_string(), annotation);
@@ -587,38 +623,40 @@ fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
     extra
 }
 
-fn observation_tool_result_extra(value: &Json) -> Option<Json> {
-    match value {
-        Json::Null | Json::String(_) => None,
-        Json::Array(_) if is_atif_content_parts(value) => None,
-        _ => Some(value.clone()),
+/// Strip each content part to its ATIF fields. Returns `None` unless `value` is an array of
+/// supported text and image parts, so callers never emit a partially converted array.
+fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
+    value
+        .as_array()?
+        .iter()
+        .map(canonicalize_atif_content_part)
+        .collect::<Option<Vec<_>>>()
+        .map(Json::Array)
+}
+
+fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
+    match part.get("type")?.as_str()? {
+        "text" => Some(serde_json::json!({
+            "type": "text",
+            "text": part.get("text")?.as_str()?,
+        })),
+        "image" => Some(serde_json::json!({
+            "type": "image",
+            "source": atif_image_source(part.get("source")?)?,
+        })),
+        _ => None,
     }
 }
 
-fn is_atif_content_parts(value: &Json) -> bool {
-    let Some(parts) = value.as_array() else {
-        return false;
-    };
-    parts.iter().all(|part| {
-        let Some(object) = part.as_object() else {
-            return false;
-        };
-        match object.get("type").and_then(Json::as_str) {
-            Some("text") => object.get("text").and_then(Json::as_str).is_some(),
-            Some("image") => is_atif_image_source(object.get("source")),
-            _ => false,
+fn atif_image_source(source: &Json) -> Option<Json> {
+    let media_type = source.get("media_type")?.as_str()?;
+    let path = source.get("path")?.as_str()?;
+    match media_type {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => {
+            Some(serde_json::json!({"media_type": media_type, "path": path}))
         }
-    })
-}
-
-fn is_atif_image_source(value: Option<&Json>) -> bool {
-    let Some(source) = value.and_then(Json::as_object) else {
-        return false;
-    };
-    matches!(
-        source.get("media_type").and_then(Json::as_str),
-        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
-    ) && source.get("path").and_then(Json::as_str).is_some()
+        _ => None,
+    }
 }
 
 fn json_to_string(value: &Json) -> String {
@@ -965,6 +1003,10 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
 /// Returns the latest user message content if present, a prompt if present, or
 /// a stringified representation of the input as a last resort.
 fn extract_user_messages(input: &Json) -> Json {
+    atif_user_content_value(&extract_user_message_content(input))
+}
+
+fn extract_user_message_content(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(messages) = obj.get("messages").and_then(Json::as_array)
         && let Some(message) = messages
@@ -977,7 +1019,7 @@ fn extract_user_messages(input: &Json) -> Json {
             })
             .and_then(|message| message.get("content"))
     {
-        return atif_content_value(message);
+        return message.clone();
     }
     if let Some(obj) = input.as_object()
         && let Some(message) = obj.get("input").and_then(openai_responses_input_message)
@@ -987,9 +1029,9 @@ fn extract_user_messages(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(prompt) = obj.get("prompt")
     {
-        return atif_content_value(prompt);
+        return prompt.clone();
     }
-    atif_content_value(input)
+    input.clone()
 }
 
 fn llm_start_user_step_message(event: &Event, input: &Json, has_paired_end: bool) -> Option<Json> {
@@ -1005,11 +1047,94 @@ fn llm_start_user_step_message(event: &Event, input: &Json, has_paired_end: bool
     event
         .annotated_request()
         .and_then(|request| atif_message_from_annotated_request(request.as_ref()))
+        .or_else(|| raw_provider_user_message(input))
         .or_else(|| Some(extract_user_messages(input)))
+}
+
+// Display projection only: request signatures must retain native image data.
+fn raw_provider_user_message(input: &Json) -> Option<Json> {
+    if let Some(contents) = input.get("contents").and_then(Json::as_array) {
+        let parts = contents
+            .iter()
+            .rev()
+            .find(|content| {
+                matches!(
+                    content.get("role").and_then(Json::as_str),
+                    Some("user") | None
+                )
+            })?
+            .get("parts")?
+            .as_array()?;
+        return Some(Json::String(
+            parts
+                .iter()
+                .filter(|part| part.get("thought").and_then(Json::as_bool) != Some(true))
+                .filter_map(|part| part.get("text").and_then(Json::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    let request = input.get("chatRequest").unwrap_or(input);
+    if request.get("apiFormat").and_then(Json::as_str) != Some("GENERIC") {
+        return None;
+    }
+    let parts = request
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Json::as_str) == Some("USER"))?
+        .get("content")?
+        .as_array()?;
+    Some(Json::String(
+        parts
+            .iter()
+            .filter(|part| part.get("type").and_then(Json::as_str) == Some("TEXT"))
+            .filter_map(|part| part.get("text").and_then(Json::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ))
+}
+
+fn gemini_contents_turn_state(contents: &[Json]) -> Option<RequestTurnState> {
+    let content = contents.last()?;
+    match content.get("role").and_then(Json::as_str) {
+        Some("model") => Some(RequestTurnState::Continuation),
+        Some("user") | None => {
+            let parts = content.get("parts")?.as_array()?;
+            let has_user_input = parts.iter().any(|part| {
+                part.get("thought").and_then(Json::as_bool) != Some(true)
+                    && ["text", "inlineData", "fileData"]
+                        .iter()
+                        .any(|key| part.get(key).is_some())
+            });
+            let has_tool_response = parts
+                .iter()
+                .any(|part| part.get("functionResponse").is_some());
+            Some(if has_tool_response && !has_user_input {
+                RequestTurnState::Continuation
+            } else {
+                RequestTurnState::FreshUser
+            })
+        }
+        _ => None,
+    }
 }
 
 fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     let object = input.as_object()?;
+    let oci_request = object.get("chatRequest").unwrap_or(input);
+    if oci_request.get("apiFormat").and_then(Json::as_str) == Some("GENERIC")
+        && let Some(messages) = oci_request.get("messages").and_then(Json::as_array)
+    {
+        return messages.iter().rev().find_map(|message| {
+            match message.get("role").and_then(Json::as_str) {
+                Some("USER") => Some(RequestTurnState::FreshUser),
+                Some("ASSISTANT" | "TOOL") => Some(RequestTurnState::Continuation),
+                _ => None,
+            }
+        });
+    }
     if let Some(messages) = object.get("messages").and_then(Json::as_array)
         && let Some(state) = chat_messages_turn_state(messages)
     {
@@ -1017,6 +1142,11 @@ fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     }
     if let Some(input_items) = object.get("input")
         && let Some(state) = openai_responses_turn_state(input_items)
+    {
+        return Some(state);
+    }
+    if let Some(contents) = object.get("contents").and_then(Json::as_array)
+        && let Some(state) = gemini_contents_turn_state(contents)
     {
         return Some(state);
     }
@@ -1154,7 +1284,9 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
             collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
         }
         return match text_parts.as_slice() {
-            [] => is_atif_content_parts(content).then(|| content.clone()),
+            // An image-only user turn is still a message. Do not fall back to
+            // an earlier turn or stringify the full request for display.
+            [] => Some(atif_user_content_value(content)),
             [text] => Some(Json::String(text.clone())),
             _ => Some(Json::String(text_parts.join("\n"))),
         };
@@ -1262,8 +1394,8 @@ fn tool_call_id_for_origin(
     }
 }
 
-// Annotation adapters: read the normalized message from an annotation, returning
-// None for multimodal content so the caller falls back to the raw extractor.
+// Annotation adapters: project user content from normalized parts. Assistant
+// responses still use the raw extractor for multimodal content.
 
 fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
     let content = request
@@ -1276,7 +1408,27 @@ fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<
         })?;
     match content {
         MessageContent::Text(text) => Some(Json::String(text.clone())),
-        MessageContent::Parts(_) => None,
+        MessageContent::Parts(parts) => {
+            let supported = Json::Array(
+                parts
+                    .iter()
+                    .filter_map(atif_annotated_user_content_part)
+                    .collect(),
+            );
+            Some(atif_content_value(&supported))
+        }
+    }
+}
+
+fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
+    match part {
+        ContentPart::Text { text, .. } => Some(serde_json::json!({"type": "text", "text": text})),
+        ContentPart::Image { image, .. } => Some(serde_json::json!({
+            "type": "image",
+            "source": atif_image_source(image.get("source")?)?,
+        })),
+        ContentPart::ProviderNative { value, .. } => canonicalize_atif_content_part(value),
+        _ => None,
     }
 }
 
@@ -1803,7 +1955,36 @@ impl LlmSpanCandidate {
 
 fn llm_request_signature(input: &Json) -> String {
     let content = unwrap_llm_request(input);
-    json_to_string(&extract_user_messages(&content))
+    // Responses display extraction joins text and omits accompanying image/file
+    // parts. Match multimodal requests using their raw latest user content.
+    if content.get("messages").is_none()
+        && let Some(message) = content
+            .get("input")
+            .and_then(raw_openai_responses_input_message)
+        && message.as_array().is_some_and(|parts| {
+            parts.iter().any(|part| {
+                !matches!(
+                    part.get("type").and_then(Json::as_str),
+                    Some("text" | "input_text")
+                )
+            })
+        })
+    {
+        return json_to_string(&atif_content_value(message));
+    }
+    // Matching spans must retain unsupported parts, including image bytes, even
+    // when the user-facing message omits them.
+    json_to_string(&atif_content_value(&extract_user_message_content(&content)))
+}
+
+fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
+    input.as_array()?.iter().rev().find_map(|item| {
+        if item.get("role").and_then(Json::as_str) == Some("user") {
+            item.get("content")
+        } else {
+            None
+        }
+    })
 }
 
 fn llm_response_signature(output: &Json) -> String {
@@ -2809,11 +2990,12 @@ impl StepConversionState {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
+            let content = output.and_then(observation_content_value);
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
-                content: output.and_then(observation_content_value),
+                extra: Some(observation_extra(event, output, content.as_ref())),
+                content,
                 subagent_trajectory_ref: None,
-                extra: Some(observation_extra(event, output)),
             });
         }
 

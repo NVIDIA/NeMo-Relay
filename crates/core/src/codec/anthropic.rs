@@ -113,19 +113,23 @@ struct RawAnthropicIterationUsage {
 /// Keep this separate from [`RawAnthropicResponse`]: a malformed token count must not erase a
 /// mixed-model iteration signal before the end-event pricing step sees it.
 #[derive(Deserialize)]
-struct RawAnthropicPricingEligibility {
-    model: Option<String>,
-    usage: Option<RawAnthropicPricingUsage>,
+struct RawAnthropicPricingEligibility<'a> {
+    #[serde(borrow)]
+    model: Option<&'a str>,
+    #[serde(borrow)]
+    usage: Option<RawAnthropicPricingUsage<'a>>,
 }
 
 #[derive(Deserialize)]
-struct RawAnthropicPricingUsage {
-    iterations: Option<Vec<RawAnthropicIterationModel>>,
+struct RawAnthropicPricingUsage<'a> {
+    #[serde(borrow)]
+    iterations: Option<Vec<RawAnthropicIterationModel<'a>>>,
 }
 
 #[derive(Deserialize)]
-struct RawAnthropicIterationModel {
-    model: Option<String>,
+struct RawAnthropicIterationModel<'a> {
+    #[serde(borrow)]
+    model: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,24 +1007,39 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
     }
 
     fn allows_estimated_cost(&self, response: &Json) -> bool {
-        serde_json::from_value::<RawAnthropicPricingEligibility>(response.clone()).is_ok_and(
-            |raw| {
-                raw.usage.as_ref().is_none_or(|usage| {
-                    usage.iterations.as_ref().is_none_or(|iterations| {
-                        iterations.iter().all(|iteration| {
-                            iteration
-                                .model
-                                .as_deref()
-                                .is_none_or(|model| Some(model) == raw.model.as_deref())
-                        })
+        RawAnthropicPricingEligibility::deserialize(response).is_ok_and(|raw| {
+            raw.usage.as_ref().is_none_or(|usage| {
+                usage.iterations.as_ref().is_none_or(|iterations| {
+                    iterations.iter().all(|iteration| {
+                        iteration.model.is_none_or(|model| Some(model) == raw.model)
                     })
                 })
-            },
-        )
+            })
+        })
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawAnthropicResponse = serde_json::from_value(response.clone())
+        // The provider payload is already JSON. Clone its retained array directly
+        // instead of deserializing every nested value through Serde a second time.
+        let decode = || -> std::result::Result<RawAnthropicResponse, serde_json::Error> {
+            let Some(object) = response.as_object() else {
+                return RawAnthropicResponse::deserialize(response);
+            };
+            let fields = object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "content")
+                .map(|(key, value)| (key.as_str(), value));
+            let mut raw =
+                RawAnthropicResponse::deserialize(serde::de::value::MapDeserializer::new(fields))?;
+            raw.content = match object.get("content") {
+                None | Some(Json::Null) => None,
+                Some(Json::Array(items)) => Some(items.clone()),
+                // Preserve the codec's existing validation for malformed arrays.
+                Some(value) => Some(Vec::<Json>::deserialize(value)?),
+            };
+            Ok(raw)
+        };
+        let raw = decode()
             .map_err(|e| FlowError::Internal(format!("Anthropic Messages response decode: {e}")))?;
 
         let content_blocks = raw.content.as_deref();
@@ -1035,7 +1054,6 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let usage = anthropic_usage(raw.usage, raw.model.as_deref());
 
         // Build API-specific fields: all content blocks + stop_sequence.
-        let api_specific_content_blocks = raw.content.clone();
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
             object_type: raw.object_type,
             role: raw.role,
@@ -1043,7 +1061,7 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
             stop_sequence: raw.stop_sequence,
             service_tier: raw.service_tier,
             container: raw.container,
-            content_blocks: api_specific_content_blocks,
+            content_blocks: raw.content,
         });
 
         Ok(AnnotatedLlmResponse {
@@ -1191,22 +1209,37 @@ impl LlmCodec for AnthropicMessagesCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
-        let mut content = original.content.clone();
-        let obj = content
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        patch_anthropic_messages_and_model(obj, annotated, &baseline)?;
-        patch_anthropic_params(obj, annotated, &baseline);
-        patch_anthropic_tools(obj, annotated, &baseline)?;
-        patch_anthropic_common_fields(obj, annotated, &baseline);
-        validate_anthropic_supported_fields(annotated, &baseline)?;
+        patch_anthropic_messages_and_model(obj, annotated, baseline)?;
+        patch_anthropic_params(obj, annotated, baseline);
+        patch_anthropic_tools(obj, annotated, baseline)?;
+        patch_anthropic_common_fields(obj, annotated, baseline);
+        validate_anthropic_supported_fields(annotated, baseline)?;
         patch_anthropic_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
-        Ok(LlmRequest {
-            headers: original.headers.clone(),
-            content,
-        })
+        Ok(original)
     }
 }
 
@@ -1261,6 +1294,17 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
         })
     }
 
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event);
+            Ok(())
+        }))
+    }
+
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
@@ -1295,10 +1339,14 @@ struct AnthropicMessagesStreamingState {
     /// Final context-management result. Anthropic emits this on `message_delta`, and callers
     /// need the same field on the assembled response as they receive from buffered Messages.
     context_management: Option<Json>,
-    /// Indexed by the SSE event's `index` field. `None` slots accommodate sparse indices though
-    /// Anthropic emits them in order today.
-    blocks: Vec<Option<StreamingBlock>>,
+    /// Dense storage for the first 2048 indices keeps ordinary streams inexpensive.
+    dense_blocks: Vec<Option<StreamingBlock>>,
+    /// Higher indices use sparse storage so untrusted indices cannot allocate unbounded gaps.
+    /// Ordered keys preserve content block order during finalization.
+    sparse_blocks: std::collections::BTreeMap<u64, StreamingBlock>,
 }
+
+const DENSE_CONTENT_BLOCK_LIMIT: u64 = 2048;
 
 #[derive(Debug, Default, Clone)]
 struct StreamingBlock {
@@ -1371,29 +1419,38 @@ impl AnthropicMessagesStreamingState {
             Json::Object(map) => map.clone(),
             _ => return,
         };
-        let index = index as usize;
-        while self.blocks.len() <= index {
-            self.blocks.push(None);
-        }
-        self.blocks[index] = Some(StreamingBlock {
+        let block = StreamingBlock {
             skeleton,
             ..StreamingBlock::default()
-        });
+        };
+        if index < DENSE_CONTENT_BLOCK_LIMIT {
+            let index = index as usize;
+            self.dense_blocks
+                .resize_with(self.dense_blocks.len().max(index + 1), || None);
+            self.dense_blocks[index] = Some(block);
+        } else {
+            self.sparse_blocks.insert(index, block);
+        }
     }
 
     fn observe_content_block_delta(&mut self, event: &Json) {
         let Some(index) = event.get("index").and_then(Json::as_u64) else {
             return;
         };
-        let index = index as usize;
         let Some(delta) = event.get("delta") else {
             return;
         };
         let delta_type = delta.get("type").and_then(Json::as_str).unwrap_or("");
-        let Some(slot) = self.blocks.get_mut(index) else {
+        let block = if index < DENSE_CONTENT_BLOCK_LIMIT {
+            self.dense_blocks
+                .get_mut(index as usize)
+                .and_then(Option::as_mut)
+        } else {
+            self.sparse_blocks.get_mut(&index)
+        };
+        let Some(block) = block else {
             return;
         };
-        let Some(block) = slot.as_mut() else { return };
         match delta_type {
             "text_delta" => {
                 if let Some(text) = delta.get("text").and_then(Json::as_str) {
@@ -1484,9 +1541,11 @@ impl AnthropicMessagesStreamingState {
             }
         }
         let content: Vec<Json> = self
-            .blocks
+            .dense_blocks
             .into_iter()
-            .filter_map(|block| block.map(StreamingBlock::finalize))
+            .flatten()
+            .chain(self.sparse_blocks.into_values())
+            .map(StreamingBlock::finalize)
             .collect();
         output.insert("content".to_string(), Json::Array(content));
         if let Some(reason) = self.stop_reason {
@@ -1511,7 +1570,9 @@ impl StreamingBlock {
             self.skeleton
                 .insert("text".to_string(), Json::String(self.text));
         }
-        if self.has_partial_json {
+        // A tool called without arguments streams only an empty fragment; keep the `{}` input
+        // from content_block_start.
+        if self.has_partial_json && !self.partial_json.is_empty() {
             // Concatenated `partial_json` fragments are expected to parse as a JSON object — that's
             // the assembled tool input. If parsing fails (Anthropic emits malformed deltas, stream
             // truncated mid-block), surface the raw concatenation so observability still captures

@@ -181,12 +181,14 @@ class PluginConfig:
     version: int
     components: list[PluginComponentSpec]
     policy: ConfigPolicy
+    diagnostics: JsonObject | None
 
     def __init__(
         self,
         version: int = 1,
         components: list[PluginComponentSpec] = ...,
         policy: ConfigPolicy = ...,
+        diagnostics: JsonObject | None = None,
     ) -> None: ...
     def to_dict(self) -> JsonObject: ...
 

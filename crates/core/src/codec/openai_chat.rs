@@ -1129,32 +1129,34 @@ impl LlmResponseCodec for OpenAIChatCodec {
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawChatCompletion = serde_json::from_value(response.clone())
+        let raw = RawChatCompletion::deserialize(response)
             .map_err(|e| FlowError::Internal(format!("OpenAI Chat response decode: {e}")))?;
 
         // Extract first choice (if any).
-        let choice = raw.choices.as_ref().and_then(|c| c.first());
+        let mut choice = raw.choices.and_then(|c| c.into_iter().next());
 
         // Map message content.
         let message = choice
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.as_ref())
-            .map(|s| super::request::MessageContent::Text(s.clone()));
+            .as_mut()
+            .and_then(|c| c.message.as_mut())
+            .and_then(|m| m.content.take())
+            .map(super::request::MessageContent::Text);
 
         // Map tool calls, skipping entries that lack a usable function body.
         // Some providers (proxies, vLLM, NIM) may return partial tool_calls
         // entries where `function` or `function.name` is absent or null.
         let tool_calls = choice
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.tool_calls.as_ref())
+            .as_mut()
+            .and_then(|c| c.message.as_mut())
+            .and_then(|m| m.tool_calls.take())
             .map(|tcs| {
-                tcs.iter()
+                tcs.into_iter()
                     .filter_map(|tc| {
-                        let func = tc.function.as_ref()?;
-                        let name = func.name.as_ref()?;
+                        let func = tc.function?;
+                        let name = func.name?;
                         Some(ResponseToolCall {
-                            id: tc.id.clone().unwrap_or_default(),
-                            name: name.clone(),
+                            id: tc.id.unwrap_or_default(),
+                            name,
                             arguments: func
                                 .arguments
                                 .as_deref()
@@ -1167,6 +1169,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
 
         // Map finish reason.
         let finish_reason = choice
+            .as_ref()
             .and_then(|c| c.finish_reason.as_deref())
             .map(map_chat_finish_reason);
 
@@ -1207,7 +1210,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
         });
 
         // Build API-specific fields.
-        let logprobs = choice.and_then(|c| c.logprobs.clone());
+        let logprobs = choice.and_then(|c| c.logprobs);
         let api_specific = Some(ApiSpecificResponse::OpenAIChat {
             logprobs,
             system_fingerprint: raw.system_fingerprint,
@@ -1395,21 +1398,36 @@ impl LlmCodec for OpenAIChatCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
-        let mut content = original.content.clone();
-        let obj = content
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        patch_chat_messages_and_validate(obj, annotated, &baseline)?;
-        patch_chat_model_and_params(obj, annotated, &baseline);
-        patch_chat_tools(obj, annotated, &baseline)?;
-        patch_chat_common_fields(obj, annotated, &baseline);
+        patch_chat_messages_and_validate(obj, annotated, baseline)?;
+        patch_chat_model_and_params(obj, annotated, baseline);
+        patch_chat_tools(obj, annotated, baseline)?;
+        patch_chat_common_fields(obj, annotated, baseline);
         patch_chat_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
-        Ok(LlmRequest {
-            headers: original.headers.clone(),
-            content,
-        })
+        Ok(original)
     }
 }
 
@@ -1480,6 +1498,17 @@ impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
         })
     }
 
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event);
+            Ok(())
+        }))
+    }
+
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
@@ -1526,24 +1555,29 @@ struct ToolCallState {
 impl OpenAIChatStreamingState {
     fn observe(&mut self, chunk: &Json) {
         // Top-level fields (id, object, created, model) are repeated on every chunk; capture once
-        // each so unrelated later chunks can't overwrite the canonical values.
+        // each so unrelated later chunks can't overwrite the canonical values. Empty values are
+        // skipped: Azure OpenAI's leading prompt-filter chunk carries "" and 0 for all four.
         if self.id.is_none()
             && let Some(id) = chunk.get("id").and_then(Json::as_str)
+            && !id.is_empty()
         {
             self.id = Some(id.to_string());
         }
         if self.object.is_none()
             && let Some(obj) = chunk.get("object").and_then(Json::as_str)
+            && !obj.is_empty()
         {
             self.object = Some(obj.to_string());
         }
         if self.created.is_none()
             && let Some(c) = chunk.get("created").and_then(Json::as_u64)
+            && c != 0
         {
             self.created = Some(c);
         }
         if self.model.is_none()
             && let Some(m) = chunk.get("model").and_then(Json::as_str)
+            && !m.is_empty()
         {
             self.model = Some(m.to_string());
         }

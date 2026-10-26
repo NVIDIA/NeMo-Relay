@@ -13,6 +13,8 @@
 pub mod api;
 /// Normalized LLM request and response data types.
 pub mod codec;
+/// Versioned runtime diagnostic models and inspection wire contracts.
+pub mod diagnostics;
 /// Plugin configuration diagnostic data types.
 pub mod plugin;
 

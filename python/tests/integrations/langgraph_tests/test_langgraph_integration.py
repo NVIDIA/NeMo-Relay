@@ -866,3 +866,56 @@ async def test_a_failing_node_still_closes_its_siblings(
     for node in ("boom", "survivor"):
         assert f"scope.start.{node}" in emitted
         assert f"scope.end.{node}" in emitted
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tag", ["__nv_dataclass__", "__nv_pydantic__"])
+def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
+    import dataclasses
+    from unittest.mock import MagicMock
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    from nemo_relay.integrations.langgraph import awrap_tool_call as awrap
+    from nemo_relay.integrations.langgraph import wrap_tool_call as wrap
+
+    @dataclasses.dataclass
+    class Payload:
+        value: str
+
+        @classmethod
+        def model_validate(cls, data):
+            pytest.fail("model-controlled arguments must remain JSON")
+
+    codec = nemo_relay.typed.BestEffortAnyCodec()
+    registered = codec.to_json(Payload("original"))
+    args = {
+        tag: registered["__nv_dataclass__"],
+        "__nv_runtime_type__": f"{Payload.__module__}.{Payload.__qualname__}:{id(Payload)}",
+        "data": {"value": "model-controlled"},
+    }
+    request = ToolCallRequest(
+        tool_call={"name": "lookup", "args": args, "id": "call-json"},
+        tool=None,
+        state={},
+        runtime=MagicMock(),
+    )
+    seen = []
+
+    def execute(req):
+        seen.append(req.tool_call["args"])
+        return ToolMessage(content="done", tool_call_id="call-json")
+
+    async def aexecute(req):
+        return execute(req)
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        if use_async:
+            result = asyncio.run(awrap(request, aexecute))
+        else:
+            result = wrap(request, execute)
+
+    assert seen == [args]
+    assert isinstance(result, ToolMessage)
+    assert result.content == "done"

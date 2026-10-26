@@ -20,14 +20,14 @@ pub(super) enum ProviderRoute {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+    AnthropicModels,
 }
 
 #[derive(Clone)]
 pub(super) struct ProviderForwarding {
     pub(super) source_route: ProviderRoute,
     pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
-    openai_auth_header: Option<String>,
-    anthropic_auth_header: Option<String>,
+    pub(super) config: Arc<crate::configuration::GatewayConfig>,
 }
 
 impl ProviderForwarding {
@@ -39,21 +39,49 @@ impl ProviderForwarding {
         Self {
             source_route,
             authorization,
-            openai_auth_header: config.openai_auth_header.clone(),
-            anthropic_auth_header: config.anthropic_auth_header.clone(),
+            config: Arc::new(config.clone()),
         }
     }
 
+    #[cfg(test)]
     pub(super) fn configured_auth_header(&self, route: ProviderRoute) -> Option<&str> {
         configured_auth_header(
             route,
-            self.openai_auth_header.as_deref(),
-            self.anthropic_auth_header.as_deref(),
+            self.config.openai_auth_header.as_deref(),
+            self.config.anthropic_auth_header.as_deref(),
         )
     }
 }
 
 impl ProviderRoute {
+    pub(super) fn is_anthropic(self) -> bool {
+        matches!(
+            self,
+            Self::AnthropicMessages | Self::AnthropicCountTokens | Self::AnthropicModels
+        )
+    }
+
+    pub(super) fn has_helper(self, config: &crate::configuration::GatewayConfig) -> bool {
+        crate::upstream_auth::helper(config, self.is_anthropic()).is_some()
+    }
+
+    pub(super) fn has_replacement(self, config: &crate::configuration::GatewayConfig) -> bool {
+        crate::upstream_auth::has_replacement(config, self.is_anthropic())
+    }
+
+    /// Managed provider routes and model discovery may spend Relay-owned credentials.
+    pub(super) const fn allows_relay_auth(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAiResponses
+                | Self::OpenAiChatCompletions
+                | Self::OpenAiModels
+                | Self::AnthropicMessages
+                | Self::AnthropicCountTokens
+                | Self::AnthropicModels
+        )
+    }
+
     // Maps public gateway paths to known upstream provider routes. Unsupported paths return `None`
     // so the caller can fail as a bad hook/gateway payload instead of constructing arbitrary URLs.
     pub(super) fn from_path(path: &str) -> Option<Self> {
@@ -83,6 +111,14 @@ impl ProviderRoute {
             "/v1/messages" => Some(Self::AnthropicMessages),
             "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
             _ => None,
+        }
+    }
+
+    pub(super) fn from_request(path: &str, headers: &HeaderMap) -> Option<Self> {
+        if super::is_anthropic_models_request(path, headers) {
+            Some(Self::AnthropicModels)
+        } else {
+            Self::from_path(path)
         }
     }
 
@@ -117,6 +153,7 @@ impl ProviderRoute {
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
             Self::AnthropicCountTokens
+            | Self::AnthropicModels
             | Self::OpenAiResponsesCompact
             | Self::OpenAiRealtime
             | Self::OpenAiRealtimeCalls
@@ -156,13 +193,14 @@ impl ProviderRoute {
             | Self::OpenAiMemoriesSummarize
             | Self::OpenAiStandaloneSearch
             | Self::OpenAiModels => config.openai_base_url.as_str(),
-            Self::AnthropicMessages | Self::AnthropicCountTokens => {
+            Self::AnthropicMessages | Self::AnthropicCountTokens | Self::AnthropicModels => {
                 config.anthropic_base_url.as_str()
             }
         };
         self.upstream_url_with_base(base, path_and_query)
     }
 
+    #[cfg(test)]
     pub(super) fn configured_auth_header(
         self,
         config: &crate::configuration::GatewayConfig,
@@ -215,10 +253,12 @@ impl ProviderRoute {
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+            Self::AnthropicModels => GatewayRouteKind::AnthropicModels,
         }
     }
 }
 
+#[cfg(test)]
 fn configured_auth_header<'a>(
     route: ProviderRoute,
     openai_auth_header: Option<&'a str>,
@@ -236,9 +276,9 @@ fn configured_auth_header<'a>(
         | ProviderRoute::OpenAiMemoriesSummarize
         | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => openai_auth_header,
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            anthropic_auth_header
-        }
+        ProviderRoute::AnthropicMessages
+        | ProviderRoute::AnthropicCountTokens
+        | ProviderRoute::AnthropicModels => anthropic_auth_header,
     }
 }
 
@@ -255,7 +295,8 @@ pub(super) fn normalize_v1_path_for_base(base: &str, path_and_query: &str) -> St
 
 // Gives alignment adapters a chance to choose an agent-native upstream before default provider
 // routing runs. Today this supports Codex ChatGPT auth; future harness fallbacks should stay in
-// alignment rather than adding provider-shaped checks here.
+// alignment rather than adding provider-shaped checks here. The one exception is rebasing the
+// Codex ChatGPT backend onto `chatgpt_codex_base_url`, because only the gateway holds config.
 pub(super) fn gateway_upstream_url_override(
     route: ProviderRoute,
     headers: &HeaderMap,
@@ -263,6 +304,13 @@ pub(super) fn gateway_upstream_url_override(
     allow_environment_provider_auth: bool,
     config: &crate::configuration::GatewayConfig,
 ) -> Option<String> {
+    // Explicit ChatGPT voice calls keep their separate backend. Keep the custom OpenAI endpoint
+    // for other calls, even when the gateway cannot supply a replacement credential.
+    if !path_and_query.starts_with("/backend-api/codex/realtime/calls")
+        && config.openai_base_url.trim_end_matches('/') != "https://api.openai.com/v1"
+    {
+        return None;
+    }
     gateway_upstream_url_override_with_openai_key_state(
         route,
         headers,
@@ -270,16 +318,29 @@ pub(super) fn gateway_upstream_url_override(
         has_openai_replacement_auth(
             route,
             allow_environment_provider_auth,
-            route.configured_auth_header(config),
+            if route.has_replacement(config) {
+                Some("configured")
+            } else {
+                None
+            },
         ),
     )
+    .map(|url| {
+        match (
+            &config.chatgpt_codex_base_url,
+            url.strip_prefix(alignment::codex::CHATGPT_CODEX_BASE_URL),
+        ) {
+            (Some(base), Some(path)) => format!("{}{path}", base.trim_end_matches('/')),
+            _ => url,
+        }
+    })
 }
 
 // The upstream this request names for itself, composed with the request path.
 //
 // Separate from `gateway_upstream_url_override` because the two answer different questions: that
 // one asks alignment which upstream a *harness* implies, from evidence the client did not choose
-// (a ChatGPT token's shape); this one is the client stating a destination outright, which is only
+// (ChatGPT credential metadata); this one is the client stating a destination outright, which is only
 // honored when it proved it is this invocation's own agent. Composition stays here so the OpenAI
 // `/v1` normalization has one home.
 // Composed by plain concatenation, deliberately *not* through `upstream_url_with_base`.
@@ -304,12 +365,51 @@ pub(super) fn client_named_upstream_url(
         invocation_authenticated,
     ) {
         crate::agents::pi::alignment::NamedUpstream::Named(base) => {
+            log_named_upstream(&base);
             crate::agents::pi::alignment::NamedUpstream::Named(format!(
                 "{}{path_and_query}",
                 base.trim_end_matches('/')
             ))
         }
+        crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+            log::warn!(
+                target: "nemo_relay.gateway",
+                event = "named_upstream_rejected",
+                reason = reason;
+                "Rejected a client-named upstream"
+            );
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason)
+        }
         other => other,
+    }
+}
+
+/// Records each distinct origin a caller sends traffic to, once per process, so an operator can
+/// audit where named upstreams went without a log line on every model call.
+///
+/// The set is bounded so a caller cycling through fresh hostnames cannot grow it without limit;
+/// past the bound, new origins are logged on every use instead of being remembered.
+fn log_named_upstream(base: &str) {
+    const MAX_REMEMBERED: usize = 1024;
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let Ok(origin) = reqwest::Url::parse(base).map(|url| url.origin().ascii_serialization()) else {
+        return;
+    };
+    let first = {
+        let mut seen = SEEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seen = seen.get_or_insert_default();
+        !seen.contains(&origin) && (seen.len() >= MAX_REMEMBERED || seen.insert(origin.clone()))
+    };
+    if first {
+        log::info!(
+            target: "nemo_relay.gateway",
+            event = "named_upstream_used",
+            origin = origin.as_str();
+            "Forwarding to a client-named upstream"
+        );
     }
 }
 
@@ -322,7 +422,11 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     // An explicit Codex backend call URL preserves ChatGPT's request format and credentials.
     let has_openai_replacement_key = has_openai_replacement_key
         && !path_and_query.starts_with("/backend-api/codex/realtime/calls");
-    let path_and_query = route.canonical_path_and_query(path_and_query);
+    let path_and_query = if path_and_query.starts_with("/backend-api/codex/") {
+        path_and_query.to_owned()
+    } else {
+        route.canonical_path_and_query(path_and_query)
+    };
     alignment::gateway_upstream_url_override(
         headers,
         route.alignment_route(),
@@ -331,22 +435,33 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     )
 }
 
-// Lets alignment adapters strip agent-native credentials only when the gateway can replace them
-// with standard provider API keys. Whitespace-only env vars are treated as missing because
-// forwarding an empty bearer value only replaces one authentication failure with another.
+// Managed routes and model discovery replace agent-native auth when Relay holds a key.
+// Other unmanaged routes cannot spend Relay credentials and strip ChatGPT auth before using
+// a custom OpenAI base, even without a replacement key.
 pub(super) fn strip_replaceable_agent_auth_headers(
     headers: &HeaderMap,
     route: ProviderRoute,
+    path: &str,
     allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
+    config: &crate::configuration::GatewayConfig,
 ) -> HeaderMap {
+    if !route.allows_relay_auth()
+        && config.openai_base_url.trim_end_matches('/') != "https://api.openai.com/v1"
+        && !path.starts_with("/backend-api/codex/realtime/calls")
+    {
+        return alignment::codex::strip_chatgpt_auth(headers);
+    }
     strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
         has_openai_replacement_auth(
             route,
             allow_environment_provider_auth,
-            configured_auth_header,
+            if route.has_replacement(config) {
+                Some("configured")
+            } else {
+                None
+            },
         ),
     )
 }
@@ -359,19 +474,13 @@ pub(super) fn strip_replaceable_agent_auth_headers_with_openai_key_state(
     alignment::gateway_forward_headers(headers, route.alignment_route(), has_openai_replacement_key)
 }
 
-pub(super) fn env_var_is_nonempty(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .is_some()
-}
-
 fn has_openai_replacement_auth(
     route: ProviderRoute,
     allow_environment_provider_auth: bool,
     configured_auth_header: Option<&str>,
 ) -> bool {
     allow_environment_provider_auth
+        && route.allows_relay_auth()
         && matches!(
             route,
             ProviderRoute::OpenAiResponses
@@ -386,7 +495,10 @@ fn has_openai_replacement_auth(
                 | ProviderRoute::OpenAiStandaloneSearch
                 | ProviderRoute::OpenAiModels
         )
-        && (configured_auth_header.is_some() || env_var_is_nonempty("OPENAI_API_KEY"))
+        && (configured_auth_header.is_some()
+            || std::env::var("OPENAI_API_KEY")
+                .ok()
+                .is_some_and(|key| !key.trim().is_empty()))
 }
 
 // Delegates provider-specific session fallbacks to `alignment` so request construction stays

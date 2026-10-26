@@ -29,12 +29,13 @@ pub(crate) use types::*;
 use self::config_io::*;
 use self::dynamic_editor::*;
 use self::editor_model::*;
+pub(crate) use self::prompt::edit_string_list;
 use self::prompt::{editor_error, print_editor_help, prompt_menu};
 
 #[cfg(test)]
 use self::prompt::menu_error;
 
-const PLUGIN_EDIT_CANCELLED_MESSAGE: &str = "plugin edit cancelled; no plugin changes saved";
+const PLUGIN_EDIT_CANCELLED_MESSAGE: &str = "configuration edit cancelled; no changes saved";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShortcut {

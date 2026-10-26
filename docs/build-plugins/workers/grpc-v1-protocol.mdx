@@ -8,8 +8,122 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 `grpc-v1` is the stable worker protocol implemented by the Rust and Python SDKs. The
 current source of truth is
-[`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
-Generated protobuf types are wire material, not the recommended authoring API.
+[`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/e748bb85eaea31a7718f4cea621970913a418011/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
+Use SDK helpers to manage the lifecycle. The diagnostics helper accepts generated
+observation and code-definition messages directly.
+
+## Diagnostic Delivery
+
+The optional `RelayDiagnostics` service shares the authenticated host endpoint.
+It exposes four RPCs:
+
+- `GetDiagnosticCapabilities`.
+- `OpenDiagnosticSession`.
+- `SubmitDiagnostic`.
+- `ReadDiagnosticPage`.
+
+Its decode and admission limits are separate from `RelayHostRuntime`, logging,
+and execution payload limits.
+
+Older hosts return `UNIMPLEMENTED`. For unsupported hosts or disabled collection,
+the SDK returns an inactive helper that skips lazy observation factories. Diagnostic
+availability does not decide whether a plugin executes.
+
+### Negotiate Settings and Authority
+
+The host returns `DiagnosticCapabilities` before opening a session and again when
+the session opens. Both values must agree. The SDK checks contract versions and
+its local safety ceilings. It then uses the host's exact request and response
+limits, queue capacity, retry count, and per-attempt timeout.
+
+A mismatch or unsupported limit produces an inactive `unsupported` helper.
+Plugin execution continues. The SDK does not negotiate different limits or use
+local delivery defaults. Bootstrap calls have a separate local safety timeout.
+Flush and shutdown drain also have local bounds. These are separate from the
+host's per-attempt RPC timeout.
+
+Recording uses activation credentials. Those credentials do not grant snapshot
+read access: `can_read_context` is false, and canonical reads are denied. Query
+filters do not grant permission. The read RPC reserves a separate access boundary.
+
+Opening an already live session returns the same session. The host assigns its
+UUID and ownership. Registration returns component and code handles. Code handles
+are one-based positions in the registration's code list.
+
+Workers can register common plugin failure codes, but not host-owned lifecycle
+codes. Extensions can describe failure, success, or unspecified outcomes under a
+host-assigned session namespace. Unknown authoring codes and failure classes are
+rejected. Detail and correlation limits come from the core context.
+
+### Submit and Retry Observations
+
+`SubmitDiagnostic` uses one sequence, starting at one, for registration, recording,
+component close, and session close. Positive counts of two and three add five
+occurrences. The host commits a digest and receipt atomically with the record.
+
+Receipts and sequence handling follow these rules:
+
+- Retrying the last request with identical content returns its receipt without
+  counting the observation again. Conflicts, gaps, and older sequences fail.
+- Malformed requests do not consume a sequence. A structurally valid request
+  rejected during admission consumes a sequence and returns a terminal `Rejected`
+  receipt.
+- `Recorded` confirms in-memory counts. Evidence can be retained, truncated, or
+  dropped. `Registered`, `Closed`, and `Disabled` add no occurrences.
+
+The SDK freezes request bytes and sends one request at a time. Each retry uses
+identical bytes, up to the host's attempt count and per-attempt deadline. If the
+SDK cannot confirm acceptance, it stops delivery. Pending observations are never
+replayed into a new session.
+
+This release allows one session per activation. A closed session keeps its last
+receipt until activation cleanup. Starting a new session requires a new activation.
+
+### Delivery Limits
+
+Delivery uses the following limits in addition to core storage limits:
+
+| Resource | Diagnostic Limit |
+| --- | --- |
+| Sessions | Up to 32 per host process, with one session per activation. |
+| Components | Eight registrations per session, including closed registrations. |
+| Extensions and codes | Up to 16 extensions per session and 32 codes per component. |
+| Registration metadata | 16 KiB per session, also subject to core capacity. |
+| Protobuf frame | Host-advertised maximum. The SDK reserves 256 bytes for credentials, session identity, sequence, and framing, then checks the complete frame against the exact limit. |
+| Extension name and description | 32 and 256 UTF-8 bytes, respectively. |
+| SDK queue | Host-advertised slots plus one in-flight request, within the SDK's safety ceiling. |
+| Host decode admission | Up to 16 concurrent diagnostic requests. There is no wait queue. |
+| Response ceiling | Host-advertised maximum, within the SDK's safety ceiling. |
+| Replay storage | One digest and bounded receipt per session. |
+
+The service takes a concurrency permit before decoding protobuf. A slow response
+keeps that permit until its body reaches its delivery deadline or is dropped.
+HTTP/2 buffers, channel state, allocator overhead, and core pools have separate
+costs. These limits do not cap whole-process RSS.
+
+### Handle Loss and Shutdown
+
+`delivery_stats` reports local dropped, rejected, and uncertain totals separately
+from host occurrence counts. An explicit `INVALID_ARGUMENT` response counts as
+rejected, even when the host leaves its sequence available for a corrected request.
+
+A host capacity rejection uses `RESOURCE_EXHAUSTED` with
+`nemo-relay-diagnostic-not-consumed: 1` status metadata. The SDK counts a definite
+rejection and preserves the sequence for later submissions. The metadata confirms
+only that attempt. If an earlier attempt had an uncertain result, the SDK keeps
+retrying the identical request within its policy. Without a receipt, delivery stays
+uncertain and stops. A client-side or unmarked capacity error is also uncertain.
+These decisions never depend on error-message text.
+
+`flush` waits for earlier queued work. It returns an error for uncertain delivery.
+Counters expose known losses. `close` drains and releases queued work within the
+shutdown allowance. Activation teardown stops submissions and closes registrations.
+The runtime context remains available.
+
+Restricted evidence uses state-only recording. It never enters `Log`, `EmitMark`,
+legacy reports, or exporters.
+
+## Execution Protocol Compatibility
 
 Relay 0.8 retains the `grpc-v1` identifier and `nemo.relay.worker.v1` package, but it
 changes the tool-result boundary to structural protobuf messages. Rebuild workers,
@@ -43,6 +157,8 @@ service PluginWorker {
 service RelayHostRuntime {
   rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest)
+      returns (GetCurrentScopeStackSnapshotResponse);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest)
       returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
@@ -69,7 +185,7 @@ service RelayHostRuntime {
 | `Register` | Receives valid component config and returns owned registrations with local name, surface, priority, and `break_chain`. |
 | `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or unary execution callback and returns the surface-appropriate result. |
 | `InvokeStream` | Dispatches an LLM stream execution intercept and emits incremental value or error chunks. |
-| `CancelInvocation` | Cooperatively cancels one active invocation ID and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
+| `CancelInvocation` | Cooperatively cancels one active invocation ID, waits for callback-owned cleanup, and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
 | `Shutdown` | Stops new work for an activation and begins orderly worker termination with a reason. |
 
 Each lifecycle message carries the following fields. Fields described as envelopes use
@@ -280,6 +396,7 @@ capability IDs behind `resolve_codec()` proxies.
 |---|---|
 | `Log` | Emits an authenticated operational log record through Relay's configured sinks. |
 | `EmitMark` | Emits mark data and metadata under the supplied scope context. |
+| `GetCurrentScopeStackSnapshot` | Reads detached scope UUID/type entries from the exact authenticated binding. |
 | `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
 | `PushScope` | Opens a typed scope with name, data, metadata, input, and an optional historical start timestamp, returning the handle required for pop. |
 | `PopScope` | Closes the owned scope handle with output, metadata, and an optional historical end timestamp. |
@@ -298,6 +415,7 @@ The host-runtime request and response fields are complete in the following table
 |---|---|---|
 | `Log` | `activation_id`, `auth_token`, required `level`, optional `target`, `message`, and JSON-object `fields` | `HostAck.ok` or `HostAck.error` |
 | `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
+| `GetCurrentScopeStackSnapshot` | `activation_id`, `auth_token`, and optional current `scope` | Optional `snapshot` with ordered `scopes`, or `error`; binding/authentication failures may return gRPC status. |
 | `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
 | `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, `input`, and `timestamp_unix_micros` | `scope_handle_id` or `error` |
 | `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output`, `metadata`, and `timestamp_unix_micros` | `HostAck.ok` or `HostAck.error` |
@@ -352,6 +470,31 @@ workers:
 | `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
 | `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
 | `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host fallback override, replacing plugin `default_bytes` and `by_name` limits. When unset: plugin `default_bytes`, then 4 MiB. Relay forwards the resolved fallback to the worker. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact callback registration names to byte limits. Relay forwards resolved per-callback overrides to the worker. |
+
+### Configure Execution Message Size
+
+Use exact callback registration names, as with `callback_timeouts`:
+
+```toml
+[load.max_message_bytes]
+default_bytes = 4194304
+[load.max_message_bytes.by_name]
+input_guardrail = 16777216
+output_guardrail = 8388608
+```
+
+Precedence, highest first:
+
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON callback-to-bytes map, such as `{"input_guardrail":16777216}`.
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
+- Plugin `load.max_message_bytes.by_name`: exact callback registration name.
+- Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
+
+Limits are positive 32-bit integers which cover all data belonging to that
+callback, such as data, streams, and continuations. These limits do not
+change model context limits or provide automatic compaction.
 
 ## JSON Envelopes and Errors
 
@@ -414,9 +557,12 @@ process:
 
 1. Relay stops routing new calls to the component and sends `CancelInvocation` for
    in-flight work that cannot drain normally.
-2. The worker acknowledges known active invocations and cooperatively cancels their async
-   tasks. Continuation and codec capabilities become unusable when their owner invocation
-   ends.
+2. The worker cooperatively cancels known active invocations and acknowledges only after
+   their callback tasks and stream-owned cleanup have completed. Managed stream close
+   waits for this acknowledgment, including after a terminal stream error. Flush exporters
+   after close to collect final cleanup events. Continuation and codec capabilities become
+   unusable when their owner invocation ends. Unmanaged background work started by a
+   callback remains the plugin's responsibility.
 3. Relay sends `Shutdown` with the activation ID, token, and reason. The worker stops its
    service and closes the local endpoint.
 4. Relay waits for the managed process within its shutdown policy, terminates it if
@@ -427,3 +573,27 @@ Successful protocol verification covers authentication failures, envelope schema
 failures, every registration and result variant, repeated unary and incremental stream
 continuations, cancellation before and during callbacks, codec capability expiry, host
 runtime ownership errors, health, and orderly plus forced shutdown.
+
+
+## Scope Snapshot Extension
+
+`GetCurrentScopeStackSnapshot` is additive to `grpc-v1`. Existing enum numbers
+and RPCs remain unchanged. `ScopeStackEntry.scope_id` is a canonical UUID
+string; `scope_type` reuses the existing enum. `ScopeStackSnapshot.scopes`
+is ordered root to top and includes the implicit root. Snapshot decoders map
+UNSPECIFIED and future unknown numeric scope types to `Unknown`.
+
+A missing request `scope` returns response absence after authentication. A
+present context with an empty stack ID is invalid. Unknown, foreign, expired,
+cancelled, and dropped bindings return explicit errors. When supplied, a
+parent binding must be a live host-issued scope handle owned by the same stack.
+The getter reads that stack's visible entries. No ambient thread fallback or
+invocation-entry cache is used. Host cleanup and reads are ordered so the
+returned value is coherent and detached.
+
+Older hosts return gRPC `UNIMPLEMENTED`; SDKs surface an unsupported-operation
+error distinctly from absence. This operation uses RPC feature detection and
+requires no change to handshake registration-surface negotiation. Regenerate
+custom bindings to call it. See the
+[worker example](/build-plugins/workers/runtime-events-and-scopes#inspect-scope-identities)
+for nearest-Agent correlation and synthetic-root limitations.

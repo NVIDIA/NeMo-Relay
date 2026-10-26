@@ -1054,6 +1054,8 @@ class AtofStreamSinkConfig:
     header_env: dict[str, str]
     timeout_millis: int
     field_name_policy: str
+    allow_insecure: bool
+    """Allow ``http://`` or ``ws://`` to any host; events and configured headers travel unencrypted."""
 
     def __init__(
         self,
@@ -1064,6 +1066,7 @@ class AtofStreamSinkConfig:
         header_env: dict[str, str] | None = None,
         timeout_millis: int = 3000,
         field_name_policy: str = "preserve",
+        allow_insecure: bool = False,
     ) -> None:
         """Create an ATOF stream sink config.
 
@@ -1084,6 +1087,7 @@ class AtofExporterConfig:
     header_env: dict[str, str]
     timeout_millis: int
     field_name_policy: str
+    allow_insecure: bool
 
     def __init__(self) -> None:
         """Create an ATOF exporter config with native defaults."""
@@ -1164,6 +1168,16 @@ class LlmStream:
         """Cancel the producer and release native stream resources."""
         ...
 
+class OpenTelemetryTlsConfig:
+    """Paths to PEM certificate and private key files for one OTLP endpoint."""
+
+    certificate: str | None
+    client_certificate: str | None
+    private_key: str | None
+    def __init__(
+        self, certificate: str | None = None, client_certificate: str | None = None, private_key: str | None = None
+    ) -> None: ...
+
 class OpenTelemetryConfig:
     """Mutable configuration for ``OpenTelemetrySubscriber``.
 
@@ -1178,6 +1192,7 @@ class OpenTelemetryConfig:
     transport: str
     type: Literal["full", "gen_ai", "openinference"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: Optional[str]
     service_version: Optional[str]
@@ -1212,6 +1227,8 @@ class OpenTelemetryConfig:
     def header_env(self, value: dict[str, str]) -> None:
         """Replace environment-backed exporter header references."""
         ...
+    allow_insecure: bool
+    """Allow plain HTTP to any host; spans and configured headers travel unencrypted."""
     @property
     def resource_attributes(self) -> dict[str, str]:
         """Return additional OpenTelemetry resource attributes."""
@@ -1337,6 +1354,7 @@ class OpenTelemetryLogConfig:
 
     transport: Literal["http_binary", "grpc"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: str | None
     service_version: str | None
@@ -1357,6 +1375,7 @@ class OpenTelemetryLogConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
+    allow_insecure: bool
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
@@ -1387,6 +1406,7 @@ class OpenTelemetryMetricConfig:
 
     transport: Literal["http_binary", "grpc"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: str | None
     service_version: str | None
@@ -1406,6 +1426,7 @@ class OpenTelemetryMetricConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
+    allow_insecure: bool
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
@@ -1925,6 +1946,7 @@ def llm_call(
     metadata: _Json | None = None,
     model_name: str | None = None,
     timestamp: datetime | None = None,
+    codec: object | None = None,
 ) -> LLMHandle:
     """Begin a manual LLM lifecycle span.
 
@@ -1941,6 +1963,8 @@ def llm_call(
             category profile.
         timestamp: Optional timezone-aware datetime recorded on the start event.
             When omitted, the current runtime time is used.
+        codec: Optional request codec used to sanitize and annotate the request
+            copy saved in telemetry. The caller's request stays unchanged.
 
     Returns:
         LLM handle that must be passed to ``llm_call_end``.
@@ -2843,4 +2867,49 @@ def __getattr__(name: str) -> object:
     Exceptional flow:
         Raises ``AttributeError`` when no native attribute exists.
     """
+    ...
+
+class ScopeStackEntry:
+    """Immutable UUID and canonical type of one visible scope."""
+    @property
+    def scope_id(self) -> str: ...
+    @property
+    def scope_type(self) -> ScopeType: ...
+
+class ScopeStackSnapshot:
+    """Detached root-to-top scope identities."""
+    @property
+    def scopes(self) -> list[ScopeStackEntry]: ...
+
+def current_scope_stack_snapshot(stack: ScopeStack | None = None) -> ScopeStackSnapshot | None: ...
+
+class DiagnosticsReader:
+    """Restricted in-process reader; returned pages never retain core leases."""
+
+    def snapshot_json(self, query_json: str = "{}") -> str:
+        """Return canonical JSON using a bounded canonical query."""
+        ...
+
+    def snapshot(self, query_json: str = "{}") -> dict[str, object]:
+        """Return a snapshot dictionary with lossless integer values."""
+        ...
+
+    def inspect_memory_json(self, query_json: str = "{}") -> str:
+        """Return canonical memory-page JSON using a bounded canonical query."""
+        ...
+
+    def inspect_memory(self, query_json: str = "{}") -> dict[str, object]:
+        """Return a memory-page dictionary with lossless integer values."""
+        ...
+
+    def info(self) -> dict[str, object]:
+        """Return core/adapter budgets, memory usage, and integration coverage."""
+        ...
+
+def _diagnostics_query_contract() -> str:
+    """Return the internal core query contract consumed by the Python adapter."""
+    ...
+
+def diagnostics_reader() -> DiagnosticsReader:
+    """Obtain inspection authority without initializing diagnostics."""
     ...

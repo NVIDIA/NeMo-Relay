@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import importlib
 import json
@@ -20,13 +21,20 @@ from langchain_core.messages import (
     messages_from_dict,
     messages_to_dict,
 )
+from langchain_core.tools import BaseTool
 from langgraph.types import Command, Send
+from pydantic import BaseModel
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, LLMRequest
 from nemo_relay.codecs import LlmCodec
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from langchain.agents.middleware import ModelRequest
+    from typing_extensions import TypeIs
+
+    from nemo_relay import Json, JsonObject
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
 _LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
@@ -245,7 +253,9 @@ class LangChainCodec(LlmCodec):
         if not isinstance(raw_messages, list):
             return []
 
-        return [(cls._langchain_message_to_annotated(message), message) for message in messages_from_dict(raw_messages)]
+        return [
+            (cls._langchain_message_to_annotated(message), message) for message in _langchain_messages(raw_messages)
+        ]
 
     @staticmethod
     def _message_content_matches(message: dict[str, Any], original_message: dict[str, Any]) -> bool:
@@ -302,7 +312,7 @@ class LangChainCodec(LlmCodec):
             return []
 
         provider_tool_calls: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-        for message in messages_from_dict(raw_messages):
+        for message in _langchain_messages(raw_messages):
             raw_tool_calls = None
             if isinstance(message, AIMessage):
                 candidate = message.additional_kwargs.get("tool_calls")
@@ -343,11 +353,13 @@ class LangChainCodec(LlmCodec):
         raw_messages = payload.get("messages", [])
         messages: list[dict[str, Any]] = []
         if isinstance(raw_messages, list):
-            for message in messages_from_dict(raw_messages):
+            for message in _langchain_messages(raw_messages):
                 messages.append(self._langchain_message_to_annotated(message))
 
         model = payload.get("model")
         tools = payload.get("tools")
+        if isinstance(tools, list) and not _are_objects(tools):
+            raise ValueError("LangChain request tools must be objects")
         tool_choice = payload.get("tool_choice")
         extra = {key: value for key, value in payload.items() if key not in _LANGCHAIN_MODELED_REQUEST_KEYS}
 
@@ -379,11 +391,11 @@ class LangChainCodec(LlmCodec):
             encoded_messages.append(
                 self._annotated_message_to_langchain(message, provider_tool_calls, original_message)
             )
-        payload["messages"] = messages_to_dict(encoded_messages)
+        payload["messages"] = [*messages_to_dict(encoded_messages)]
         if annotated.model is not None:
             payload["model"] = annotated.model
         if annotated.tools is not None:
-            payload["tools"] = annotated.tools
+            payload["tools"] = [*annotated.tools]
         if annotated.tool_choice is not None:
             payload["tool_choice"] = annotated.tool_choice
         return LLMRequest(dict(original.headers), payload)
@@ -399,6 +411,141 @@ def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | N
     if messages and isinstance(messages[0], SystemMessage):
         return messages[0], messages[1:]
     return None, messages
+
+
+def _native_tool_schema(definition: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "provider_native",
+        "provider": _LANGCHAIN_PROVIDER,
+        "kind": "tool",
+        "value": copy.deepcopy(definition),
+    }
+
+
+def _are_objects(values: Sequence[Json]) -> TypeIs[Sequence[JsonObject]]:
+    """Return whether every entry in `values` is a JSON object."""
+    return all(isinstance(value, dict) for value in values)
+
+
+def _langchain_messages(raw_messages: Sequence[Json]) -> list[BaseMessage]:
+    """Return LangChain messages from their dict form. Raise `TypeError` when an entry is not an object."""
+    if not _are_objects(raw_messages):
+        raise TypeError("LangChain messages must be objects")
+    return messages_from_dict(raw_messages)
+
+
+def _model_tool_schemas(tools: list[BaseTool | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create editable Relay views without changing the original tools."""
+    schemas: list[dict[str, Any]] = []
+
+    for tool in tools:
+        if isinstance(tool, dict):
+            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+                schemas.append(copy.deepcopy(tool))
+            else:
+                schemas.append(_native_tool_schema(tool))
+            continue
+
+        provider_definition = (tool.extras or {}).get("provider_tool_definition")
+        if provider_definition is not None:
+            if not isinstance(provider_definition, dict):
+                raise ValueError("LangChain provider tool definition must be an object")
+            schemas.append(_native_tool_schema(provider_definition))
+            continue
+
+        input_schema = tool.tool_call_schema
+        if isinstance(input_schema, dict):
+            parameters = copy.deepcopy(input_schema)
+        elif issubclass(input_schema, BaseModel):
+            parameters = copy.deepcopy(input_schema.model_json_schema())
+        else:
+            parameters = copy.deepcopy(input_schema.schema())
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": parameters,
+                },
+            }
+        )
+
+    return schemas
+
+
+def _restore_model_tools(
+    original_tools: list[BaseTool | dict[str, Any]],
+    edited_schemas: Sequence[dict[str, Any]],
+) -> list[BaseTool | dict[str, Any]]:
+    original_schemas = _model_tool_schemas(original_tools)
+    if len(edited_schemas) != len(original_tools):
+        raise ValueError("Relay cannot add or remove LangChain tools")
+
+    restored_tools: list[BaseTool | dict[str, Any]] = []
+
+    for original_tool, original_schema, edited_schema in zip(
+        original_tools, original_schemas, edited_schemas, strict=True
+    ):
+        if edited_schema == original_schema:
+            restored_tools.append(original_tool)
+            continue
+
+        if edited_schema.get("type") != original_schema["type"]:
+            raise ValueError("Relay cannot change a LangChain tool's representation")
+
+        if original_schema["type"] == "provider_native":
+            if (
+                edited_schema.get("provider") != _LANGCHAIN_PROVIDER
+                or edited_schema.get("kind") != "tool"
+                or not isinstance(edited_schema.get("value"), dict)
+            ):
+                raise ValueError("Invalid edited LangChain provider tool")
+
+            edited_definition = copy.deepcopy(edited_schema["value"])
+            original_definition = original_schema["value"]
+            for identity_field in ("type", "name"):
+                if edited_definition.get(identity_field) != original_definition.get(identity_field):
+                    raise ValueError("Relay cannot change a LangChain provider tool's identity")
+            if "type" not in original_definition and "name" not in original_definition:
+                if edited_definition.keys() != original_definition.keys():
+                    raise ValueError("Relay cannot change a LangChain provider tool's identity")
+            if isinstance(original_tool, BaseTool):
+                extras = copy.deepcopy(original_tool.extras or {})
+                extras["provider_tool_definition"] = edited_definition
+                restored_tools.append(original_tool.model_copy(update={"extras": extras}))
+            else:
+                restored_tools.append(edited_definition)
+            continue
+
+        original_function = original_schema["function"]
+        edited_function = edited_schema.get("function")
+        if not isinstance(edited_function, dict) or edited_function.get("name") != original_function["name"]:
+            raise ValueError("Relay cannot rename or reorder LangChain tools")
+
+        if isinstance(original_tool, dict):
+            restored_tools.append(copy.deepcopy(edited_schema))
+            continue
+
+        description = edited_function.get("description")
+        parameters = edited_function.get("parameters")
+        if not isinstance(description, str) or not isinstance(parameters, dict):
+            raise ValueError("Edited LangChain function fields have invalid types")
+
+        allowed_schema = copy.deepcopy(original_schema)
+        allowed_schema["function"]["description"] = description
+        allowed_schema["function"]["parameters"] = parameters
+        if edited_schema != allowed_schema:
+            raise ValueError("Unsupported edit to a LangChain function tool")
+
+        changes = {}
+        if description != original_function["description"]:
+            changes["description"] = description
+        if parameters != original_function["parameters"]:
+            changes["args_schema"] = parameters
+        restored_tools.append(original_tool.model_copy(update=changes))
+
+    return restored_tools
 
 
 def model_request_to_payload(model_name: str | None, request: ModelRequest[Any]) -> dict[str, Any]:
@@ -417,6 +564,8 @@ def model_request_to_payload(model_name: str | None, request: ModelRequest[Any])
         payload["model_settings"] = request.model_settings
     if request.response_format is not None:
         payload["response_format"] = repr(request.response_format)
+    if request.tools:
+        payload["tools"] = _model_tool_schemas(request.tools)
     return payload
 
 
@@ -483,7 +632,7 @@ def payload_to_model_request(
     raw_messages = llm_request.content.get("messages")
     if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
-            system_message, messages = split_system_message(messages_from_dict(raw_messages))
+            system_message, messages = split_system_message(_langchain_messages(raw_messages))
             overrides["system_message"] = system_message
             overrides["messages"] = messages
         except Exception:
@@ -512,6 +661,13 @@ def payload_to_model_request(
 
     if "tool_choice" in llm_request.content:
         overrides["tool_choice"] = llm_request.content["tool_choice"]
+
+    if "tools" in llm_request.content:
+        tool_schemas = llm_request.content["tools"]
+        if not isinstance(tool_schemas, list) or not _are_objects(tool_schemas):
+            raise ValueError("LangChain model request tools must be a list of tool schema objects")
+        if tool_schemas != _model_tool_schemas(original.tools):
+            overrides["tools"] = _restore_model_tools(original.tools, tool_schemas)
 
     return original.override(**overrides) if overrides else original
 

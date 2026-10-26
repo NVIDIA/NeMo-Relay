@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,7 +28,7 @@ use crate::configuration::{
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::filesystem::bounded::{
-    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, read_bounded_regular_file,
+    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, open_bounded_regular_file,
 };
 use crate::plugins::policy::{
     EvaluatedDynamicPluginHostPolicy, evaluate_dynamic_plugin_host_policy,
@@ -591,6 +592,7 @@ pub(crate) fn inspect(
     let entry = find_registered_entry(&scopes, Some(&resolved), "plugins inspect", &command.id)?;
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
+    let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     if command.json {
         print_response_json(&inspect_success(
             "plugins inspect",
@@ -599,6 +601,7 @@ pub(crate) fn inspect(
             &manifest,
             &manifest_ref,
             host_config_by_id.get(&command.id),
+            &policy,
         ))?;
     } else {
         println!(
@@ -608,6 +611,7 @@ pub(crate) fn inspect(
                 manifest: &manifest,
                 manifest_ref: &manifest_ref,
                 host_config: host_config_by_id.get(&command.id),
+                policy: &policy,
             }
         );
     }
@@ -1517,15 +1521,20 @@ fn copy_snapshot_regular_file(
     budget: &mut SnapshotBudget,
     description: &str,
 ) -> Result<(), CliError> {
-    let bytes = read_bounded_regular_file(source, &format!("dynamic plugin {description}"))
-        .map_err(CliError::Config)?;
-    budget.record_bytes(source, bytes.len())?;
-    fs::write(destination, bytes).map_err(|error| {
-        CliError::Config(format!(
+    let description = format!("dynamic plugin {description}");
+    let source_file = open_bounded_regular_file(source, &description).map_err(CliError::Config)?;
+    budget.record_bytes(source, source_file.len())?;
+    let write_error = |error| {
+        format!(
             "failed to write dynamic plugin snapshot file {}: {error}",
             destination.display()
-        ))
-    })?;
+        )
+    };
+    let mut output =
+        fs::File::create(destination).map_err(|error| CliError::Config(write_error(error)))?;
+    source_file
+        .stream(|chunk| output.write_all(chunk).map_err(write_error))
+        .map_err(CliError::Config)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1635,10 +1644,13 @@ fn snapshot_tree_digest(root: &Path, stable_identity: bool) -> Result<String, Cl
                 target,
             );
         } else {
-            let bytes = read_bounded_regular_file(&path, "dynamic plugin activation snapshot file")
-                .map_err(CliError::Config)?;
-            budget.record(&path, bytes.len())?;
-            update_snapshot_entry_digest(&mut digest, &relative, SnapshotEntryKind::File, &bytes);
+            digest_snapshot_file(
+                &mut digest,
+                &relative,
+                &path,
+                "dynamic plugin activation snapshot file",
+                &mut budget,
+            )?;
         }
     }
     Ok(digest
@@ -1847,15 +1859,26 @@ impl RuntimeClosureSources {
             if relative == activation_manifest {
                 continue;
             }
-            let bytes = match source {
+            match source {
                 RuntimeClosureSource::File(path) => {
-                    read_bounded_regular_file(&path, "dynamic plugin runtime closure file")
-                        .map_err(CliError::Config)?
+                    digest_snapshot_file(
+                        &mut digest,
+                        &relative,
+                        &path,
+                        "dynamic plugin runtime closure file",
+                        &mut budget,
+                    )?;
                 }
-                RuntimeClosureSource::Bytes(bytes) => bytes,
-            };
-            budget.record(&relative, bytes.len())?;
-            update_snapshot_entry_digest(&mut digest, &relative, SnapshotEntryKind::File, &bytes);
+                RuntimeClosureSource::Bytes(bytes) => {
+                    budget.record(&relative, bytes.len())?;
+                    update_snapshot_entry_digest(
+                        &mut digest,
+                        &relative,
+                        SnapshotEntryKind::File,
+                        &bytes,
+                    );
+                }
+            }
         }
         Ok(digest
             .finalize()
@@ -1877,12 +1900,38 @@ fn update_snapshot_entry_digest(
     kind: SnapshotEntryKind,
     payload: &[u8],
 ) {
+    begin_snapshot_entry_digest(digest, relative, kind, payload.len());
+    digest.update(payload);
+}
+
+fn begin_snapshot_entry_digest(
+    digest: &mut Sha256,
+    relative: &Path,
+    kind: SnapshotEntryKind,
+    length: usize,
+) {
     let relative = relative.as_os_str().as_encoded_bytes();
     digest.update([kind as u8]);
     digest.update((relative.len() as u64).to_le_bytes());
     digest.update(relative);
-    digest.update((payload.len() as u64).to_le_bytes());
-    digest.update(payload);
+    digest.update((length as u64).to_le_bytes());
+}
+
+fn digest_snapshot_file(
+    digest: &mut Sha256,
+    relative: &Path,
+    path: &Path,
+    description: &str,
+    budget: &mut SnapshotBudget,
+) -> Result<(), CliError> {
+    let file = open_bounded_regular_file(path, description).map_err(CliError::Config)?;
+    budget.record(path, file.len())?;
+    begin_snapshot_entry_digest(digest, relative, SnapshotEntryKind::File, file.len());
+    file.stream(|chunk| {
+        digest.update(chunk);
+        Ok(())
+    })
+    .map_err(CliError::Config)
 }
 
 fn collect_declared_runtime_closure_file(
@@ -2167,7 +2216,9 @@ fn active_dynamic_plugin_components_from_scopes(
                     .find(|scope| scope.plugins_toml_path == resolved_plugin.source)
                     .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
             })
-            .filter(|record| !record.is_tombstoned() && record.spec.enabled)
+            .filter(|record| {
+                !record.is_tombstoned() && record.spec.enabled && !optional_trust_failure(record)
+            })
             .filter_map(|record| match record.metadata.kind {
                 DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
                 DynamicPluginKind::Worker => record.source.manifest_ref.clone().map(Ok),
@@ -2205,7 +2256,7 @@ fn active_dynamic_plugin_components_from_scopes(
                 resolved_plugin.plugin_id
             )));
         };
-        if record.is_tombstoned() || !record.spec.enabled {
+        if record.is_tombstoned() || !record.spec.enabled || optional_trust_failure(record) {
             continue;
         }
         let host_config = host_config_by_id.get(&record.metadata.id).ok_or_else(|| {
@@ -2692,6 +2743,13 @@ fn restore_plugins_toml(path: &std::path::Path, original: Option<&[u8]>) -> Resu
         None => {}
     }
     Ok(())
+}
+
+fn optional_trust_failure(record: &nemo_relay::plugin::dynamic::DynamicPluginRecord) -> bool {
+    record.status.startup_class
+        == Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional)
+        && (record.status.validation.integrity == DynamicPluginCheckState::Invalid
+            || record.status.validation.authenticity == DynamicPluginCheckState::Invalid)
 }
 
 fn required_startup_failure(

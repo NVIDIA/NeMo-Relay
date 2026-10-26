@@ -6,10 +6,79 @@ navigation:
     title: "About NVIDIA NeMo Relay"
     slug: about-nemo-relay
     title-source: frontmatter
-  - folder: ./getting-started
-    title: "Getting Started"
+  - section: "Getting Started"
     slug: getting-started
-    title-source: frontmatter
+    contents:
+      - page: "About"
+        path: ./getting-started/about.mdx
+        slug: about
+      - page: "Installation Overview"
+        path: ./getting-started/installation.mdx
+        slug: installation
+      - page: "Configuration / Setup Overview"
+        path: ./getting-started/configuration.mdx
+        slug: configuration
+      - section: "Quick Starts"
+        path: ./getting-started/quick-start/index.mdx
+        slug: quick-start
+        collapsed: open-by-default
+        contents:
+          - section: "Agent Frameworks"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Deep Agents"
+                icon: fa-solid fa-layer-group
+                path: ./getting-started/quick-start/deep-agents.mdx
+                slug: deep-agents
+              - page: "Google ADK"
+                icon: fa-brands fa-google
+                path: ./getting-started/quick-start/google-adk.mdx
+                slug: google-adk
+              - page: "LangChain"
+                icon: fa-solid fa-link
+                path: ./getting-started/quick-start/langchain.mdx
+                slug: langchain
+              - page: "LangGraph"
+                icon: fa-solid fa-diagram-project
+                path: ./getting-started/quick-start/langgraph.mdx
+                slug: langgraph
+          - section: "Agent Harnesses"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
+              - page: "Claude Code"
+                icon: fa-brands fa-claude
+                path: ./getting-started/quick-start/claude-code.mdx
+                slug: claude-code
+              - page: "Hermes Agent"
+                icon: fa-solid fa-terminal
+                path: ./getting-started/quick-start/hermes.mdx
+                slug: hermes
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+                slug: pi
+          - section: "Application APIs"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Python"
+                icon: fa-brands fa-python
+                path: ./getting-started/quick-start/python.mdx
+                slug: python
+              - page: "Node.js"
+                icon: fa-brands fa-node-js
+                path: ./getting-started/quick-start/nodejs.mdx
+                slug: nodejs
+              - page: "Rust"
+                icon: fa-brands fa-rust
+                path: ./getting-started/quick-start/rust.mdx
+                slug: rust
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
@@ -26,39 +95,50 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - section: "Configure Plugins"
+  - section: "Use Plugins"
     slug: configure-plugins
     contents:
       - page: "About"
         path: ./configure-plugins/about.mdx
         slug: about
-      - page: "Configure and Initialize Plugins"
-        path: ./configure-plugins/initialize-plugins.mdx
-        slug: initialize-plugins
-      - folder: ./configure-plugins/observability
-        title: "Observability"
-        title-source: frontmatter
-      - folder: ./configure-plugins/adaptive
-        title: "Adaptive"
-        title-source: frontmatter
-      - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails (Deprecated)"
-        title-source: frontmatter
-      - folder: ./configure-plugins/pii-redaction
-        title: "PII Redaction"
-        title-source: frontmatter
-      - page: "Model Pricing"
-        path: ./configure-plugins/model-pricing.mdx
-        slug: model-pricing
-      - page: "Resource Metrics"
-        path: ./configure-plugins/resource-metrics.mdx
-        slug: resource-metrics
-      - page: "Configure Discoverable Plugins"
-        path: ./configure-plugins/discoverable-plugins.mdx
-        slug: discoverable-plugins
-      - page: "Plugin Configuration Files"
+      - page: "Configure"
         path: ./configure-plugins/plugin-configuration-files.mdx
         slug: plugin-configuration-files
+      - page: "Manage"
+        path: ./configure-plugins/discoverable-plugins.mdx
+        slug: discoverable-plugins
+      - page: "Initialize"
+        path: ./configure-plugins/initialize-plugins.mdx
+        slug: initialize-plugins
+      - section: "Built-in Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - folder: ./configure-plugins/observability
+            title: "Observability"
+            title-source: frontmatter
+          - folder: ./configure-plugins/adaptive
+            title: "Adaptive Runtime"
+            title-source: frontmatter
+          - folder: ./configure-plugins/nemo-guardrails
+            title: "NeMo Guardrails (Deprecated)"
+            title-source: frontmatter
+          - folder: ./configure-plugins/pii-redaction
+            title: "PII Redaction"
+            title-source: frontmatter
+          - page: "Model Pricing"
+            path: ./configure-plugins/model-pricing.mdx
+            slug: model-pricing
+          - page: "Resource Metrics"
+            path: ./configure-plugins/resource-metrics.mdx
+            slug: resource-metrics
+      - section: "First Party Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "NeMo Switchyard"
+            path: ./configure-plugins/switchyard.mdx
+            slug: switchyard
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks
@@ -102,6 +182,9 @@ navigation:
       - page: "Package Discoverable Plugins"
         path: ./build-plugins/package-discoverable-plugins.mdx
         slug: package-discoverable-plugins
+      - page: "Plugin Diagnostics"
+        path: ./build-plugins/diagnostics.mdx
+        slug: diagnostics
       - section: "Native Dynamic Plugins"
         slug: native
         contents:
@@ -123,6 +206,9 @@ navigation:
           - page: "Runtime Events and Scopes"
             path: ./build-plugins/native/runtime-events-and-scopes.mdx
             slug: runtime-events-and-scopes
+          - page: "Diagnostics"
+            path: ./build-plugins/native/diagnostics.mdx
+            slug: diagnostics
           - page: "Native ABI Reference"
             path: ./build-plugins/native/native-abi-reference.mdx
             slug: native-abi-reference

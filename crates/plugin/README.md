@@ -32,12 +32,13 @@ the dynamic-library boundary on the stable C-compatible ABI.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v7 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Relay 0.10 adds request and response codec context to LLM execution callbacks and requires native plugins to rebuild against that layout. |
+| Native ABI v8 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Preserves v7 callbacks; adds scope inspection and an optional, independently versioned diagnostics extension. |
 | Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
-| Runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` snapshot. Entries are ordered and available through `get(code)`. |
+| Legacy runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
+| Canonical diagnostics | `PluginRuntime::diagnostics()` records internal observations and offers separately authorized snapshot and memory reads. |
 
 ## Installation
 
@@ -158,3 +159,17 @@ ABI-v2 compatibility tables cannot use runtime diagnostics.
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit
 that scope context.
+
+## Canonical Native Diagnostics
+
+Use `PluginRuntime::diagnostics()` for plugin-internal observations. Recording
+shares the host's selected context and does not require a read grant. Canonical
+reads require the host's `native_diagnostics_read_context` permission, which
+exposes the whole context and defaults to false. Disabled or unsupported facades
+skip lazy factories; diagnostic failures must preserve the execution result.
+
+Refer to [Native Plugin Diagnostics](../../docs/build-plugins/native/diagnostics.mdx)
+for authoring, acceptance receipts, concurrency, buffer ownership, and permissions.
+The [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension)
+describes execution ABI 8 and diagnostics extension contract 1. The existing
+`runtime_diagnostics()` legacy report remains separate.

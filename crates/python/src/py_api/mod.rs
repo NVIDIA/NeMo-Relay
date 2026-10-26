@@ -477,6 +477,21 @@ pub(crate) async fn forward_stream_to_channel(
 // Scope stack creation
 // ---------------------------------------------------------------------------
 
+/// Inspect a selected Python binding without synchronizing or activating a stack.
+#[pyfunction]
+#[pyo3(signature = (stack=None))]
+pub fn current_scope_stack_snapshot(
+    stack: Option<&PyScopeStack>,
+) -> PyResult<Option<crate::py_types::PyScopeStackSnapshot>> {
+    let snapshot = match stack {
+        Some(stack) => nemo_relay::api::runtime::scope_stack_snapshot(&stack.inner).map(Some),
+        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+    };
+    snapshot
+        .map(|snapshot| snapshot.map(|inner| crate::py_types::PyScopeStackSnapshot { inner }))
+        .map_err(flow_error_to_py_err)
+}
+
 /// Create a new isolated scope stack with its own root scope.
 ///
 /// Returns:
@@ -1073,6 +1088,8 @@ fn tool_call_execute<'py>(
 /// for performing the LLM request themselves and later calling ``llm_call_end``.
 /// Sanitize-request guardrails affect the emitted start-event payload; request
 /// and execution intercepts run only through ``llm_call_execute``.
+/// An optional request codec helps sanitize and annotate the telemetry copy.
+/// The caller's request stays unchanged.
 ///
 /// Args:
 ///     name: Model/provider name.
@@ -1082,6 +1099,7 @@ fn tool_call_execute<'py>(
 ///     data: Optional JSON-serializable application payload stored on the LLM handle.
 ///     metadata: Optional JSON-serializable metadata recorded on the start event.
 ///     model_name: Optional normalized model name recorded in the LLM event category profile.
+///     codec: Optional request codec used to sanitize and annotate the telemetry copy.
 ///     timestamp: Optional timezone-aware ``datetime.datetime`` recorded as the handle
 ///         start time and on the emitted start event. When omitted, the current
 ///         runtime time is used.
@@ -1103,8 +1121,9 @@ fn tool_call_execute<'py>(
 	    data: "object | None"=None,
 	    metadata: "object | None"=None,
 	    model_name: "str | None"=None,
-	    timestamp: "datetime.datetime | None"=None
-) -> "LlmHandle", text_signature = "(name: str, request: LlmRequest, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, timestamp: datetime.datetime | None = None) -> LlmHandle")]
+	    timestamp: "datetime.datetime | None"=None,
+    codec: "object | None"=None
+) -> "LlmHandle", text_signature = "(name: str, request: LlmRequest, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, timestamp: datetime.datetime | None = None, codec: object | None = None) -> LlmHandle")]
 fn llm_call(
     _py: Python<'_>,
     name: &str,
@@ -1115,6 +1134,7 @@ fn llm_call(
     metadata: Option<&Bound<'_, PyAny>>,
     model_name: Option<String>,
     timestamp: Option<&Bound<'_, PyAny>>,
+    codec: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyLLMHandle> {
     let attrs = attributes
         .map(|a| a.inner)
@@ -1131,6 +1151,7 @@ fn llm_call(
         .metadata_opt(metadata)
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
+        .codec_opt(py_llm_codec(codec))
         .build();
     with_python_publication_context(|| core_llm_api::llm_call(params))
         .map(PyLLMHandle::from)
@@ -2361,6 +2382,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_collect_resource_metrics, m)?)?;
 
     // Scope stack creation / binding / query
+    m.add_function(wrap_pyfunction!(current_scope_stack_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_rootless_propagation_context, m)?)?;

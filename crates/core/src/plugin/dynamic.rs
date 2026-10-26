@@ -25,7 +25,9 @@ pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
 mod bounded;
 mod configuration;
+mod diagnostics;
 mod host;
+mod http_error;
 mod manifest;
 mod native;
 mod policy;
@@ -402,7 +404,7 @@ pub enum DynamicPluginRuntimeState {
     Failed,
 }
 
-/// Recent failure phase for diagnostics and operator UX.
+/// Recent failure phase or policy-gate context for diagnostics and operator UX.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -414,7 +416,7 @@ pub enum DynamicPluginFailurePhase {
     Activation,
     /// Failure occurred after activation while running.
     Runtime,
-    /// Failure occurred because policy no longer permits realization.
+    /// Host policy evaluation blocked or revoked permission for realization.
     Policy,
 }
 
@@ -540,6 +542,12 @@ pub struct DynamicPluginWorkerLoadContract {
     pub runtime: WorkerRuntime,
     /// Worker entrypoint or registration target.
     pub entrypoint: String,
+    /// Plugin-authored per-callback byte limits, before host environment overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_message_bytes: Option<WorkerMessageLimits>,
+    /// Deadlines for short callbacks in this plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_timeouts: Option<WorkerCallbackTimeouts>,
 }
 
 /// Lane-specific load contract for native shared libraries.
@@ -556,7 +564,7 @@ pub struct DynamicPluginRustLoadContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DynamicPluginFailure {
-    /// Failure phase.
+    /// Failure phase or policy-gate context.
     pub phase: DynamicPluginFailurePhase,
     /// Machine-readable failure code.
     pub code: String,

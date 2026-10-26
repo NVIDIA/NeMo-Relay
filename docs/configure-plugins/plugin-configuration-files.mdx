@@ -1,22 +1,23 @@
 ---
-title: "Plugin Configuration Files"
+title: "Configure"
 description: "Configure plugins.toml discovery, layering, validation, and interactive editing."
-position: 4
+position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use `plugins.toml` when Relay should activate plugins from file configuration.
+Use this guide to configure plugins in `plugins.toml`, either by editing the
+file directly or with `nemo-relay plugins edit`.
 The runtime discovers and layers this generic plugin document for direct Rust,
 Python, and Node.js integrations as well as for the `nemo-relay` CLI gateway.
 The file encodes the same document that binding APIs accept, but uses TOML at
 the file root.
 
-This guide documents runtime file discovery, precedence, merge behavior, and
-conflict rules. It also identifies gateway-only editor, explicit-config, and
-discoverable-plugin workflows. Each component guide documents its
-component-specific fields.
+This guide covers file locations, the interactive editor, discovery, and merge
+rules. Use [Manage](/configure-plugins/discoverable-plugins) to install and manage
+discoverable plugins with the CLI, or [Initialize](/configure-plugins/initialize-plugins)
+for SDK initialization. Each component guide documents its specific fields.
 
 <Note>
 NeMo Relay plugin configuration keys use `snake_case` regardless of language or
@@ -25,6 +26,68 @@ generic plugin document and component-local `config` objects use canonical
 `snake_case` keys.
 
 </Note>
+
+## Gateway Editing Files
+
+Use the interactive editor for Observability, Adaptive, PII Redaction, and
+existing NeMo Guardrails configuration. The built-in `nemo_guardrails`
+component is deprecated and scheduled for removal in NeMo Relay 0.9; do not
+use the editor to start a new Guardrails deployment. The editor also updates
+the configuration of manifest-backed dynamic plugins that `plugins add` has
+registered:
+
+```bash
+nemo-relay plugins edit
+```
+
+By default, the editor writes the user plugin file:
+
+```text
+$XDG_CONFIG_HOME/nemo-relay/plugins.toml
+```
+
+or:
+
+```text
+~/.config/nemo-relay/plugins.toml
+```
+
+When the top-level CLI receives `--plugin-config-path`, the editor uses that
+exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
+sibling `path/to/plugins.toml`, matching the runtime selection for that
+configuration. This explicit file replaces the user editor target, so
+`plugins edit --user` keeps the inherited explicit target. Use `--global` to
+edit the system layer. These rules only select the file
+opened by the editor; they do not change runtime discovery, layering, or merge
+precedence.
+
+Use a scope flag to edit another location:
+
+```bash
+nemo-relay plugins edit --global
+```
+
+Scope flags are mutually exclusive.
+
+`--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
+elevated filesystem permissions.
+
+The editor menus support these controls:
+
+| Key | Behavior |
+|---|---|
+| Arrow keys, `j`, `k` | Move through menu items. |
+| `Enter`, `Space` | Select or toggle the highlighted item. |
+| `Backspace`, `Delete` | Clear the highlighted optional field. |
+| `r` | Reset the highlighted field or section to its default. |
+| `p` | Preview TOML from the main menu. |
+| `s` | Save from the main menu. |
+| `?` | Show help. |
+| `q`, `Esc` | Go back or cancel without saving. |
+
+Text and JSON value prompts use normal line editing. Use the surrounding field
+menu to reset, clear, preview, or save.
 
 ## Shortest Path Example
 
@@ -168,38 +231,11 @@ configuration.
 Run `nemo-relay plugins validate <plugin-id>` to validate it against the
 manifest’s optional static JSON Schema before you enable or run the plugin. Use
 `nemo-relay plugins add`, `validate`, `inspect`, and `enable` to manage the
-dynamic-plugin lifecycle. Refer to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+dynamic-plugin lifecycle. Refer to [Manage](/configure-plugins/discoverable-plugins)
 for manifest, trust, and policy requirements.
 
-### Embedded Python Host Initialization
-
-Python hosts pass an optional explicit `plugins.toml` directly to the unified
-host initializer:
-
-```python
-import asyncio
-
-from nemo_relay import plugin
-
-
-async def main() -> None:
-    async with plugin.activate(
-        {}, "path/to/plugins.toml"
-    ) as activation:
-        # Run your host application while dynamic plugins are active.
-        print(activation.report)
-        ...
-
-
-asyncio.run(main())
-```
-
-Core resolves manifest references relative to the declaring file, applies
-lifecycle state and trust policy, validates all selected plugins before loading
-code, and owns every resulting runtime through the returned activation handle.
-Use `plugin.activate(...)` when the host lifetime fits one `async with` block.
-Use `await plugin.initialize(...)` when the caller needs to retain and close the
-activation manually.
+For SDK initialization and activation handles, see
+[Initialize](/configure-plugins/initialize-plugins).
 
 The runtime reads only files named `plugins.toml` during default discovery.
 
@@ -243,68 +279,6 @@ multiple paths or symlinks select it. If no plugin config source exists,
 initialization continues without process-level plugin activation.
 Repository-local `.nemo-relay/plugins.toml` files are not discovered.
 
-## Gateway Editing Files
-
-Use the interactive editor for Observability, Adaptive, PII Redaction, and
-existing NeMo Guardrails configuration. The built-in `nemo_guardrails`
-component is deprecated and scheduled for removal in NeMo Relay 0.9; do not
-use the editor to start a new Guardrails deployment. The editor also updates
-the configuration of manifest-backed dynamic plugins that `plugins add` has
-registered:
-
-```bash
-nemo-relay plugins edit
-```
-
-By default, the editor writes the user plugin file:
-
-```text
-$XDG_CONFIG_HOME/nemo-relay/plugins.toml
-```
-
-or:
-
-```text
-~/.config/nemo-relay/plugins.toml
-```
-
-When the top-level CLI receives `--plugin-config-path`, the editor uses that
-exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
-sibling `path/to/plugins.toml`, matching the runtime selection for that
-configuration. This explicit file replaces the user editor target, so
-`plugins edit --user` keeps the inherited explicit target. Use `--global` to
-edit the system layer. These rules only select the file
-opened by the editor; they do not change runtime discovery, layering, or merge
-precedence.
-
-Use a scope flag to edit another location:
-
-```bash
-nemo-relay plugins edit --global
-```
-
-Scope flags are mutually exclusive.
-
-`--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
-`%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
-elevated filesystem permissions.
-
-The editor menus support these controls:
-
-| Key | Behavior |
-|---|---|
-| Arrow keys, `j`, `k` | Move through menu items. |
-| `Enter`, `Space` | Select or toggle the highlighted item. |
-| `Backspace`, `Delete` | Clear the highlighted optional field. |
-| `r` | Reset the highlighted field or section to its default. |
-| `p` | Preview TOML from the main menu. |
-| `s` | Save from the main menu. |
-| `?` | Show help. |
-| `q`, `Esc` | Go back or cancel without saving. |
-
-Text and JSON value prompts use normal line editing. Use the surrounding field
-menu to reset, clear, preview, or save.
-
 ## Precedence and Merge Behavior
 
 When more than one `plugins.toml` file is discovered, later files have higher
@@ -313,7 +287,9 @@ precedence. System config overrides the selected explicit-or-user config.
 TOML tables merge recursively. Top-level lists inside a component's `config`
 concatenate, as do the declared observability destination lists. Entries from
 the higher-precedence layer are placed before entries from the lower-precedence
-layer. Other nested lists replace. For example, the following user
+layer. Other nested lists replace. The observability `insecure_http_hosts` list
+is an exception: the highest-precedence layer that sets it replaces the lists
+below it, and an explicit empty list clears them. For example, the following user
 configuration enables one ATOF file sink:
 
 ```toml

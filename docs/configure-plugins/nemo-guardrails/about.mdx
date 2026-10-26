@@ -116,6 +116,25 @@ In particular, `request_defaults.rails.dialog` and
 `request_defaults.rails.retrieval` are pass-through options. They are not
 separate managed middleware surfaces in NeMo Relay.
 
+## Remote HTTP errors
+
+In remote mode, NeMo Relay preserves received HTTP error status codes from
+400 through 599 when returning gateway and lifecycle-hook errors. This applies
+to buffered requests, streaming setup, and tool input and output checks, even
+when reading an error response body fails. The existing response envelopes and
+header handling remain in place. Remote HTTP failures remain non-retryable.
+
+Rust callers receive these failures as `FlowError::Upstream` with the original
+status in `UpstreamFailure.status`, rather than `FlowError::Internal`.
+Existing public API signatures and binding exception types remain unchanged,
+but error messages and classifications change. Explicit guardrail rejections
+continue to return HTTP 403. Agent-native hook decision responses retain their
+existing protocol behavior.
+
+The status is the final response received under the existing redirect policy.
+After streaming response headers have been sent, subsequent failures use the
+existing stream-error behavior and cannot change the HTTP status.
+
 ## Pages
 
 - [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)

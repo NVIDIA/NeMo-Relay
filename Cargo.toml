@@ -58,6 +58,7 @@ nemo-relay-cli = { version = "0.11.0", path = "crates/cli" }
 opentelemetry = { version = "0.32", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32.1", default-features = false, features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
+tokio = { version = "1.53.3", default-features = false }
 uuid = "=1.18.1"
 
 [workspace.lints.rust]
@@ -76,6 +77,11 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 panic = "unwind"
+
+# Rust 1.96.1's debug stripping can misalign Mach-O dylib string tables on macOS.
+# Keep the FFI library linkable and loadable: rust-lang/rust#157750.
+[profile.release.package.nemo-relay-ffi]
+strip = "none"
 
 # Preserve the transport driver's throughput-oriented release settings.
 [profile.daemon-transport]

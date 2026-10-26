@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use http::header::{HeaderValue, SET_COOKIE, TE, TRAILER};
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::{Frame, Incoming, SizeHint};
 use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
@@ -22,22 +22,36 @@ use tokio::task::JoinHandle;
 use super::*;
 
 #[test]
-fn forwarding_rejects_remote_cleartext_destinations() {
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let remote = "http://provider.example/v1/responses"
-        .parse()
-        .expect("remote URI");
-    assert!(prepare_forward_request(request, remote, &[]).is_err());
-
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let loopback = "http://127.0.0.1:8080/v1/responses"
-        .parse()
-        .expect("loopback URI");
-    assert!(prepare_forward_request(request, loopback, &[]).is_ok());
+fn forwarding_distinguishes_insecure_and_malformed_destinations() {
+    for destination in [
+        "http://provider.example/v1/responses",
+        "http://172.16.0.223:30919/v1/responses",
+    ] {
+        let error = prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[])
+            .unwrap_err();
+        assert!(matches!(error, TransportError::InsecureDestination));
+        assert_eq!(
+            error.to_string(),
+            "plain HTTP upstreams are allowed only for loopback hosts; use https"
+        );
+    }
+    for destination in ["/v1/responses", "ftp://provider.example/v1/responses"] {
+        assert!(matches!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]),
+            Err(TransportError::InvalidDestination)
+        ));
+    }
+    for destination in [
+        "https://provider.example/v1/responses",
+        "https://172.16.0.223:30443/v1/responses",
+        "http://localhost:8080/v1/responses",
+        "http://127.0.0.1:8080/v1/responses",
+        "http://[::1]:8080/v1/responses",
+    ] {
+        assert!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]).is_ok()
+        );
+    }
 }
 
 struct CausalBody {
@@ -931,9 +945,9 @@ async fn spawn_multiplexed_relay(
                         )
                     }
                 });
-                let mut builder = http2::Builder::new(TokioExecutor::new());
-                builder.max_concurrent_streams(256);
-                builder.max_pending_accept_reset_streams(256);
+                let mut builder = crate::daemon::worker::worker_connection_builder();
+                builder.http2().max_concurrent_streams(256);
+                builder.http2().max_pending_accept_reset_streams(256);
                 let _ = builder
                     .serve_connection(TokioIo::new(stream), service)
                     .await;
@@ -1151,4 +1165,172 @@ async fn websocket_clients_share_the_connection_pool() {
     }
     assert_eq!(connections.load(Ordering::SeqCst), 1);
     server.abort();
+}
+
+#[tokio::test]
+async fn worker_http2_flow_control_preserves_concurrent_large_uploads() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let accepted = connections.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            accepted.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let service = service_fn(|request: Request<Incoming>| async move {
+                    let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                    Ok::<_, Infallible>(Response::new(Full::new(bytes)))
+                });
+                let _ = crate::daemon::worker::worker_connection_builder()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    let client = pooled_h2c_client();
+    let uri = format!("http://{address}/upload");
+    let warm = client
+        .request(
+            Request::post(&uri)
+                .body(box_body(Full::new(Bytes::from_static(b"warm"))))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(warm.into_body().collect().await.unwrap().to_bytes(), "warm");
+    let mut uploads = tokio::task::JoinSet::new();
+    for index in 0..16u8 {
+        let client = client.clone();
+        let uri = uri.clone();
+        uploads.spawn(async move {
+            let expected = Bytes::from(vec![index; 1024 * 1024]);
+            let response = client
+                .request(
+                    Request::post(uri)
+                        .body(box_body(Full::new(expected.clone())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.version(), Version::HTTP_2);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                expected
+            );
+        });
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(result) = uploads.join_next().await {
+            result.unwrap();
+        }
+    })
+    .await
+    .expect("concurrent uploads must make progress");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_model_hosts_provider_hop_filters_headers_and_trailers_without_decoding_data() {
+    let config = crate::configuration::GatewayConfig {
+        openai_base_url: "http://model.test:8000/custom/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+            "other.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    for (url, client_named, allowed) in [
+        ("http://model.test:8000/custom/v1/responses", false, true),
+        ("http://model.test:8000/custom/v1/responses", true, false),
+        ("http://model.test:9000/responses", false, false),
+        ("http://other.test:8000/responses", false, false),
+        ("http://unlisted.test:8000/responses", false, false),
+    ] {
+        let trailers = HeaderMap::from_iter([
+            (
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer trailer-secret"),
+            ),
+            (
+                HeaderName::from_static("x-custom-token"),
+                HeaderValue::from_static("trailer-secret"),
+            ),
+            (
+                HeaderName::from_static("content-language"),
+                HeaderValue::from_static("en"),
+            ),
+        ]);
+        let frames = futures_util::stream::iter([
+            Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"opaque-compressed-body"))),
+            Ok(Frame::trailers(trailers)),
+        ]);
+        let request = Request::post("/responses")
+            .header("authorization", "Bearer header-secret")
+            .header("cookie", "session=secret")
+            .header("x-custom-token", "secret")
+            .header("content-encoding", "gzip")
+            .header("content-type", "application/json")
+            .body(http_body_util::StreamBody::new(frames))
+            .unwrap();
+        let request =
+            prepare_provider_request(request, url.parse().unwrap(), &[], &config, client_named);
+        assert_eq!(
+            request.is_ok(),
+            allowed,
+            "{url}, client_named={client_named}"
+        );
+        if let Ok(request) = request {
+            assert_eq!(request.headers()["content-encoding"], "gzip");
+            assert_eq!(request.headers().len(), 4); // content type/encoding and generated Host/TE
+            let body = request.into_body().collect().await.unwrap();
+            let trailers = body.trailers().unwrap();
+            assert_eq!(trailers.len(), 1);
+            assert_eq!(trailers["content-language"], "en");
+            assert_eq!(body.to_bytes(), "opaque-compressed-body");
+        }
+    }
+    for method in [Method::CONNECT, Method::GET] {
+        let request = Request::builder()
+            .method(method)
+            .header(UPGRADE, "websocket")
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        assert!(
+            prepare_provider_request(
+                request,
+                "http://model.test:8000/".parse().unwrap(),
+                &[],
+                &config,
+                false
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn http_model_hosts_provider_hop_preserves_known_body_lengths_on_every_transport() {
+    let config = crate::configuration::GatewayConfig {
+        openai_base_url: "http://model.test:8000/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    for url in [
+        "http://model.test:8000/v1/responses",
+        "https://model.test/v1/responses",
+        "http://127.0.0.1:8000/v1/responses",
+    ] {
+        let request = Request::post("/responses")
+            .body(Full::new(Bytes::from_static(b"opaque-body")))
+            .unwrap();
+        let request =
+            prepare_provider_request(request, url.parse().unwrap(), &[], &config, false).unwrap();
+        assert_eq!(request.body().size_hint().exact(), Some(11), "{url}");
+    }
 }

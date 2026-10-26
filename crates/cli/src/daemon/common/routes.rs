@@ -25,6 +25,14 @@ pub(crate) enum ProviderRoute {
 }
 
 impl PublicRoute {
+    pub(crate) fn from_request(path: &str, headers: &axum::http::HeaderMap) -> Option<Self> {
+        if crate::gateway::is_anthropic_models_request(path, headers) {
+            Some(Self::Provider(ProviderRoute::Anthropic))
+        } else {
+            Self::from_path(path)
+        }
+    }
+
     pub(crate) fn from_path(path: &str) -> Option<Self> {
         match path {
             "/hooks/codex" => Some(Self::Hook(HookRoute::Codex)),

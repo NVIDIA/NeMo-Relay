@@ -9,11 +9,13 @@ pub(crate) mod tls;
 pub(crate) mod websocket;
 
 use request::*;
+pub(crate) use response::strip_redirect_location;
 use response::*;
 use routes::*;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use async_stream::stream;
 use axum::body::{Body, Bytes};
@@ -22,12 +24,13 @@ use axum::http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, header,
 };
 use futures_util::StreamExt;
+use nemo_relay::api::llm::gateway::{ResponseCompletionFn, execute as execute_gateway_stream};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{
-    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
+    TASK_SCOPE_STACK,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -36,8 +39,10 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::agents::shared::alignment::{self, GatewayRouteKind};
 use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
@@ -46,6 +51,7 @@ use crate::operational::{
     self, OperationalContext, UPSTREAM_RESPONSE_THRESHOLD_MILLIS,
     UPSTREAM_STREAM_STALL_THRESHOLD_MILLIS,
 };
+use crate::runtime_diagnostics::{self as diag, Operation};
 use crate::server::AppState;
 use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
@@ -58,7 +64,7 @@ pub(crate) fn daemon_gateway_start(
     request_json: Value,
     streaming: bool,
 ) -> Option<crate::sessions::LlmGatewayStart> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(request::build_llm_gateway_start_from_parts(
         headers,
         path,
@@ -96,7 +102,7 @@ pub(crate) fn daemon_provider_upstream_url_with_access(
     let path = path_and_query
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
-    let Some(provider) = ProviderRoute::from_path(path) else {
+    let Some(provider) = ProviderRoute::from_request(path, headers) else {
         return Ok(None);
     };
     match client_named_upstream_url(provider, headers, path_and_query, invocation_authenticated) {
@@ -124,6 +130,18 @@ pub(crate) fn daemon_provider_upstream_url_with_access(
     }
 }
 
+/// Whether a daemon delivery goes to an upstream the caller named, and so must be dialed through
+/// the named-upstream address policy rather than the shared provider pool.
+pub(crate) fn daemon_destination_is_client_named(
+    headers: &HeaderMap,
+    invocation_authenticated: bool,
+) -> bool {
+    matches!(
+        crate::agents::pi::alignment::client_named_upstream_base(headers, invocation_authenticated),
+        crate::agents::pi::alignment::NamedUpstream::Named(_)
+    )
+}
+
 /// Applies the personal gateway's agent-auth replacement rules to a daemon provider request.
 pub(crate) fn daemon_provider_forward_headers(
     headers: &HeaderMap,
@@ -146,13 +164,34 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     config: &crate::configuration::GatewayConfig,
     allow_provider_auth: bool,
 ) -> Option<HeaderMap> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        allow_provider_auth && path != "/backend-api/codex/realtime/calls",
-        provider.configured_auth_header(config),
+        path,
+        allow_provider_auth && provider.allows_relay_auth(),
+        config,
     ))
+}
+
+pub(crate) fn daemon_allows_provider_auth(
+    headers: &HeaderMap,
+    path: &str,
+    _config: &crate::configuration::GatewayConfig,
+) -> bool {
+    daemon_allows_environment_provider_auth(headers) && provider_route_allows_relay_auth(path)
+}
+
+/// Both model APIs share a path. Anthropic protocol headers select Anthropic; token shapes do not.
+pub(crate) fn is_anthropic_models_request(path: &str, headers: &HeaderMap) -> bool {
+    matches!(path, "/models" | "/v1/models")
+        && (headers.contains_key("anthropic-version") || headers.contains_key("anthropic-beta"))
+}
+
+/// Model discovery and managed routes may use Relay credentials, including in daemon mode.
+pub(crate) fn provider_route_allows_relay_auth(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    ProviderRoute::from_path(path).is_some_and(ProviderRoute::allows_relay_auth)
 }
 
 pub(crate) fn daemon_allows_environment_provider_auth(headers: &HeaderMap) -> bool {
@@ -205,25 +244,23 @@ pub(crate) async fn daemon_execute(
         .await?;
     // Balance daemon session accounting if the caller disconnects before response headers.
     // After setup, streaming delivery owns its own guard; unary/error paths finish the call.
-    let mut guard = GatewayCallGuard::new(
+    let guard = GatewayCallGuard::new(
         state.sessions.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
-        Arc::new(Mutex::new(None)),
+        None,
         prep.session_finish,
         operational.clone(),
     );
     let response_timeout = state.config.response_timeout();
-    let execution = run_managed_gateway(state, prepared, prep, operational);
-    let result = match response_timeout {
+    let execution = run_managed_gateway(state, prepared, prep, operational, Some(guard));
+    match response_timeout {
         Some(timeout) => match tokio::time::timeout(timeout, execution).await {
             Ok(result) => result,
-            Err(_) => return Err(CliError::Launch("provider response-head timeout".into())),
+            Err(_) => Err(CliError::Launch("provider response-head timeout".into())),
         },
         None => execution.await,
-    };
-    guard.sessions.take();
-    result
+    }
 }
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
@@ -274,7 +311,7 @@ pub(crate) async fn passthrough(
         .sessions
         .prepare_gateway_call(&prepared.headers, start)
         .await?;
-    run_managed_gateway(state, prepared, prep, operational).await
+    run_managed_gateway(state, prepared, prep, operational, None).await
 }
 
 /// Upgrades an authorized provider WebSocket without entering the managed LLM pipeline.
@@ -292,35 +329,39 @@ pub(crate) async fn websocket_passthrough(
     }
     let extensions = std::mem::take(request.extensions_mut());
     let prepared = prepare_gateway_request(&state.config, request, authorization, &path).await?;
-    let client = crate::daemon::common::transport::pooled_websocket_client()
-        .map_err(|e| CliError::Launch(e.to_string()))?;
+    if reqwest::Url::parse(&prepared.upstream_url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        return Err(CliError::InvalidPayload("remote HTTP model opt-in supports HTTP requests and SSE only; WebSocket upstreams require HTTPS or loopback".into()));
+    }
     let headers = inject_provider_auth(
         state
             .http
             .get(&prepared.upstream_url)
             .headers(prepared.headers.clone()),
         prepared.provider,
-        &prepared.headers,
         prepared.authorization.allow_environment_provider_auth,
-        prepared.provider.configured_auth_header(&state.config),
+        &state.config,
     )
-    .build()?
+    .await?
     .headers()
     .clone();
     let mut request = Request::new(Body::empty());
     *request.method_mut() = prepared.method;
     *request.headers_mut() = headers;
     *request.extensions_mut() = extensions;
-    Ok(websocket::forward(
-        &client,
+    websocket::forward_to_provider(
+        prepared.client_named_upstream,
+        prepared.authorization.allow_environment_provider_auth
+            && prepared.provider.has_helper(&state.config),
         request,
         &prepared.upstream_url,
-        None,
         state.hold_websocket(),
         &state.config,
         std::future::pending(),
     )
-    .await)
+    .await
+    .map_err(|e| CliError::Launch(e.to_string()))
 }
 
 /// Transparently proxies compaction, image generation, and voice call setup without emitting LLM events.
@@ -371,6 +412,7 @@ enum CapturedUpstreamFailure {
         bytes: Bytes,
     },
     Transport(reqwest::Error),
+    Authentication(CliError),
 }
 
 #[derive(Default)]
@@ -412,6 +454,7 @@ async fn run_managed_gateway(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     operational: OperationalContext,
+    mut cancellation_guard: Option<GatewayCallGuard>,
 ) -> Result<Response<Body>, CliError> {
     let operational = operational.with_session(prep.session_id.clone());
     if prep.bypass_managed_pipeline {
@@ -433,13 +476,28 @@ async fn run_managed_gateway(
                 session_finish,
             )
             .await;
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.sessions.take();
+        }
         return run_unmanaged_gateway(state, prepared, Some(operational)).await;
     }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
-        run_managed_streaming(state, prepared, prep, codecs, operational).await
+        run_managed_streaming(
+            state,
+            prepared,
+            prep,
+            codecs,
+            operational,
+            cancellation_guard,
+        )
+        .await
     } else {
-        run_managed_buffered(state, prepared, prep, codecs, operational).await
+        let result = run_managed_buffered(state, prepared, prep, codecs, operational).await;
+        if let Some(guard) = cancellation_guard.as_mut() {
+            guard.sessions.take();
+        }
+        result
     }
 }
 
@@ -454,12 +512,15 @@ async fn run_unmanaged_gateway(
     }
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
+        &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
             body_bytes: &prepared.body_bytes,
             headers: &prepared.headers,
             effective_request: None,
+            source_body: None,
             forwarding: ProviderForwarding::new(
                 prepared.provider,
                 prepared.authorization,
@@ -477,7 +538,7 @@ async fn run_unmanaged_gateway(
     {
         operational::upstream_status(operational, status.as_u16());
     }
-    let bytes = match response.bytes().await {
+    let bytes = match diagnostic_response_body(response).await {
         Ok(bytes) => bytes,
         Err(error) => {
             if let Some(operational) = operational.as_ref() {
@@ -498,10 +559,23 @@ struct RouteCodecs {
     request: Option<Arc<dyn LlmCodec>>,
     streaming: Option<Box<dyn StreamingCodec>>,
     response: Option<Arc<dyn LlmResponseCodec>>,
+    source_body: SourceRequestBody,
+}
+
+// Retain the consumed source content only while upstream execution can retry. Queued
+// event codecs hold weak references so middleware publication cannot prolong its lifetime.
+#[derive(Clone, Default)]
+struct SourceRequestBody(Arc<OnceLock<Value>>);
+
+impl SourceRequestBody {
+    fn matches(&self, content: &Value) -> bool {
+        !content.is_null() && self.0.get().is_some_and(|source| source == content)
+    }
 }
 
 struct GatewayRequestCodec {
     inner: Arc<dyn LlmCodec>,
+    source_body: Weak<OnceLock<Value>>,
 }
 
 impl LlmCodec for GatewayRequestCodec {
@@ -518,7 +592,17 @@ impl LlmCodec for GatewayRequestCodec {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> nemo_relay::error::Result<LlmRequest> {
-        let original_streaming = self.inner.decode(original)?.stream.unwrap_or(false);
+        let baseline = self.inner.decode(original)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let original_streaming = baseline.stream.unwrap_or(false);
         let edited_streaming = annotated.stream.unwrap_or(false);
         if edited_streaming != original_streaming {
             return Err(FlowError::InvalidArgument(
@@ -526,23 +610,44 @@ impl LlmCodec for GatewayRequestCodec {
                     .into(),
             ));
         }
-        self.inner.encode(annotated, original)
+        self.inner
+            .encode_with_baseline(annotated, original, baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let mut encoded = self.encode_with_baseline(annotated, &original, baseline)?;
+        encoded.headers.extend(original.headers);
+        if encoded.content == original.content
+            && let Some(source_body) = self.source_body.upgrade()
+        {
+            let _ = source_body.set(original.content);
+        }
+        Ok(encoded)
     }
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
+    let source_body = SourceRequestBody::default();
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
             request: Some(Arc::new(GatewayRequestCodec {
                 inner: build_request_codec(surface),
+                source_body: Arc::downgrade(&source_body.0),
             })),
             streaming: Some(build_streaming_codec(surface)),
             response: Some(build_response_codec(surface)),
+            source_body,
         },
         None => RouteCodecs {
             request: None,
             streaming: None,
             response: None,
+            source_body,
         },
     }
 }
@@ -560,6 +665,7 @@ async fn run_managed_buffered(
     let func = build_buffered_func(
         state.clone(),
         &prepared,
+        codecs.source_body,
         upstream_failures.clone(),
         operational.clone(),
     );
@@ -605,7 +711,7 @@ async fn run_managed_buffered(
                 .record_gateway_response_hints(
                     &session_id,
                     owner_subagent_id.clone(),
-                    response_json,
+                    Cow::Owned(response_json),
                 )
                 .await;
             state
@@ -634,10 +740,13 @@ async fn run_managed_buffered(
 fn build_buffered_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
+    source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
     operational: OperationalContext,
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
+    let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -646,6 +755,8 @@ fn build_buffered_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -653,16 +764,20 @@ fn build_buffered_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         let operational = operational.clone();
+        let source_body = source_body.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
+                &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
                     body_bytes: &body_bytes,
                     headers: &headers,
                     effective_request: Some(&request),
+                    source_body: Some(&source_body),
                     forwarding,
                     operational: Some(&operational),
                     streaming: false,
@@ -671,12 +786,17 @@ fn build_buffered_func(
             .await
             {
                 Ok(response) => response,
-                Err(error) if retry_aware => {
+                Err(CliError::Upstream(error)) if retry_aware => {
                     return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(CliError::Upstream(error)) => {
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
                 Err(error) => {
                     return Err(
-                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                        upstream_failures.capture(CapturedUpstreamFailure::Authentication(error))
                     );
                 }
             };
@@ -685,7 +805,7 @@ fn build_buffered_func(
                 operational::upstream_status(&operational, status.as_u16());
             }
             let response_headers = response_headers(response.headers());
-            let bytes = match response.bytes().await {
+            let bytes = match diagnostic_response_body(response).await {
                 Ok(bytes) => bytes,
                 Err(error) if retry_aware => {
                     operational::upstream_failed(&operational, "response_read");
@@ -731,21 +851,33 @@ fn build_buffered_func(
     })
 }
 
-// Runs a streaming gateway request through `llm_stream_call_execute`. The runtime wraps the
-// upstream byte stream as `LlmJsonStream`; the gateway then re-encodes the parsed events back into
-// SSE frames for the client (Option B trade-off: simpler chunk-level observability, one extra
-// JSON parse/serialize per chunk).
+/// Runs a gateway stream through its provider codec and the managed LLM lifecycle.
+///
+/// The codec checks completion before the runtime finalizes the call. The gateway then
+/// encodes each parsed event as an SSE frame for the client.
 async fn run_managed_streaming(
     state: AppState,
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
     operational: OperationalContext,
+    cancellation_guard: Option<GatewayCallGuard>,
 ) -> Result<Response<Body>, CliError> {
+    let mut guard = cancellation_guard.unwrap_or_else(|| {
+        GatewayCallGuard::new(
+            state.sessions.clone(),
+            prep.session_id.clone(),
+            prep.owner_subagent_id.clone(),
+            None,
+            prep.session_finish,
+            operational.clone(),
+        )
+    });
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
     let func = build_streaming_func(
         state.clone(),
         &prepared,
+        codecs.source_body,
         upstream_failures.clone(),
         operational.clone(),
     );
@@ -755,28 +887,19 @@ async fn run_managed_streaming(
     // collector and finalizer for managed streaming, so without a codec we cannot use the managed
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
-        let session_finish = prep.session_finish;
-        state
-            .sessions
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                session_finish,
-            )
-            .await;
+        guard.finish().await;
         return passthrough_streaming(state, prepared, Some(operational)).await;
     };
-    let collector = streaming_codec.collector();
-    let final_response = Arc::new(Mutex::new(None));
-    let final_response_for_finalizer = final_response.clone();
-    let original_finalizer = streaming_codec.finalizer();
-    let finalizer = Box::new(move || {
-        let response = original_finalizer();
-        *final_response_for_finalizer
-            .lock()
-            .expect("stream final response lock poisoned") = Some(response.clone());
-        response
+    let streaming_codec: Arc<dyn StreamingCodec> = Arc::from(streaming_codec);
+    let codec_for_stream = Arc::clone(&streaming_codec);
+    let func: LlmStreamExecutionNextFn = Arc::new(move |request| {
+        let future = func(request);
+        let codec = Arc::clone(&codec_for_stream);
+        Box::pin(async move { Ok(codec.validate_stream(future.await?)) })
     });
+    let collector = streaming_codec.collector();
+    let borrowed_collector = streaming_codec.borrowed_collector();
+    let finalizer = streaming_codec.finalizer();
 
     let GatewayCallPrep {
         scope_stack,
@@ -789,13 +912,20 @@ async fn run_managed_streaming(
         model_name,
         owner_subagent_id,
         bypass_managed_pipeline: _,
-        session_finish,
+        session_finish: _,
     } = prep;
+    let (finalizer, response_completion, response_ready) = gateway_response_completion(
+        state.sessions.clone(),
+        session_id.clone(),
+        owner_subagent_id.clone(),
+        finalizer,
+    );
     let params = LlmStreamCallExecuteParams::builder()
         .name(provider_name)
         .request(request)
         .func(func)
         .collector(collector)
+        .borrowed_collector_opt(borrowed_collector)
         .finalizer(finalizer)
         .parent_opt(parent)
         .attributes(attributes)
@@ -805,18 +935,14 @@ async fn run_managed_streaming(
         .response_codec_opt(codecs.response)
         .build();
     let json_stream_result = TASK_SCOPE_STACK
-        .scope(
-            scope_stack,
-            async move { llm_stream_call_execute(params).await },
-        )
+        .scope(scope_stack, async move {
+            execute_gateway_stream(params, response_completion).await
+        })
         .await;
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
         Err(error) => {
-            state
-                .sessions
-                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
-                .await;
+            guard.finish().await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
@@ -829,20 +955,71 @@ async fn run_managed_streaming(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    let guard = GatewayCallGuard::new(
-        state.sessions.clone(),
-        session_id.clone(),
-        owner_subagent_id,
-        final_response,
-        session_finish,
-        operational,
-    );
-    let body = client_sse_body(json_stream, provider_route, guard);
+    guard.operational = operational;
+    guard.response_ready = Some(response_ready);
+    let body = match prepare_streaming_response_body(json_stream, provider_route, guard).await {
+        Ok(body) => body,
+        Err(error) => {
+            if let Some(failure) = upstream_failures.take(&error) {
+                return selected_upstream_failure(failure);
+            }
+            return Err(translate_runtime_error(error));
+        }
+    };
 
-    // Streamed responses are finalized inside the runtime stream wrapper. The small finalizer tap
-    // above copies only the aggregate JSON payload so the session can update turn output and tool
-    // hints after the downstream client consumes the stream, without buffering SSE bytes here.
     build_response(StatusCode::OK, headers, body)
+}
+
+// Borrow the aggregate before runtime sanitization. Complete session bookkeeping
+// inline when uncontended, so client completion does not queue behind unrelated
+// response annotation. The observer retains the async fallback for busy sessions.
+fn gateway_response_completion(
+    sessions: SessionManager,
+    session_id: String,
+    owner_subagent_id: Option<String>,
+    finalizer: LlmFinalizerFn,
+) -> (LlmFinalizerFn, ResponseCompletionFn, oneshot::Receiver<()>) {
+    let (ready, receiver) = oneshot::channel();
+    let ready = Arc::new(Mutex::new(Some(ready)));
+    let finalizer_ready = ready.clone();
+    let finalizer_sessions = sessions.clone();
+    let finalizer_session_id = session_id.clone();
+    let finalizer_owner = owner_subagent_id.clone();
+    let finalizer: LlmFinalizerFn = Box::new(move || {
+        let response = finalizer();
+        if finalizer_sessions.try_record_gateway_response_hints(
+            &finalizer_session_id,
+            finalizer_owner,
+            &response,
+        ) && let Some(ready) = finalizer_ready
+            .lock()
+            .expect("stream completion lock poisoned")
+            .take()
+        {
+            let _ = ready.send(());
+        }
+        response
+    });
+    let observer: ResponseCompletionFn = Box::new(move |response| {
+        let ready = ready
+            .lock()
+            .expect("stream completion lock poisoned")
+            .take();
+        Box::pin(async move {
+            if let Some(ready) = ready {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        Cow::Borrowed(response),
+                    )
+                    .await;
+                let _ = ready.send(());
+            }
+            Ok(())
+        })
+    });
+    (finalizer, observer, receiver)
 }
 
 // Builds the streaming managed-execution callback. Each failure carries either retry-routing data
@@ -850,10 +1027,13 @@ async fn run_managed_streaming(
 fn build_streaming_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
+    source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
     operational: OperationalContext,
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
+    let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -862,6 +1042,8 @@ fn build_streaming_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -869,16 +1051,20 @@ fn build_streaming_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         let operational = operational.clone();
+        let source_body = source_body.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
+                &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
                     body_bytes: &body_bytes,
                     headers: &headers,
                     effective_request: Some(&request),
+                    source_body: Some(&source_body),
                     forwarding,
                     operational: Some(&operational),
                     streaming: true,
@@ -887,12 +1073,17 @@ fn build_streaming_func(
             .await
             {
                 Ok(response) => response,
-                Err(error) if retry_aware => {
+                Err(CliError::Upstream(error)) if retry_aware => {
                     return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(CliError::Upstream(error)) => {
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
                 Err(error) => {
                     return Err(
-                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                        upstream_failures.capture(CapturedUpstreamFailure::Authentication(error))
                     );
                 }
             };
@@ -902,7 +1093,7 @@ fn build_streaming_func(
             }
             let response_headers = response_headers(response.headers());
             if !status.is_success() {
-                let bytes = match response.bytes().await {
+                let bytes = match diagnostic_response_body(response).await {
                     Ok(bytes) => bytes,
                     Err(error) if retry_aware => {
                         operational::upstream_failed(&operational, "response_read");
@@ -1017,6 +1208,11 @@ fn sse_json_stream_with_thresholds(
                                 yield Ok(event.data);
                             }
                             Err(error) => {
+                                diag::failure(
+                                    Operation::Upstream,
+                                    CliFailureCode::UpstreamResponse,
+                                    FailureClass::Unknown,
+                                );
                                 operational::upstream_stream_read_failed(&operational);
                                 yield Err(error);
                                 return;
@@ -1025,6 +1221,11 @@ fn sse_json_stream_with_thresholds(
                     }
                 }
                 Err(error) => {
+                    diag::failure(
+                        Operation::Upstream,
+                        CliFailureCode::UpstreamResponse,
+                        FailureClass::Unknown,
+                    );
                     operational::upstream_stream_read_failed(&operational);
                     yield Err(FlowError::Internal(error.to_string()));
                     return;
@@ -1040,11 +1241,17 @@ fn sse_json_stream_with_thresholds(
             }
             Ok(None) => {}
             Err(error) => {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 operational::upstream_stream_read_failed(&operational);
                 yield Err(error);
                 return;
             }
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         operational::upstream_completed(&operational, true);
     };
     LlmJsonStream::new(stream)
@@ -1054,21 +1261,52 @@ fn sse_json_stream_with_thresholds(
 // names are reconstructed from the JSON `type` field where providers populate it (Anthropic
 // Messages, OpenAI Responses); OpenAI Chat omits the `event:` line and appends the original
 // `data: [DONE]` terminator after the runtime stream completes.
-fn client_sse_body(
-    json_stream: LlmJsonStream,
+async fn prepare_streaming_response_body(
+    response_stream: LlmJsonStream,
     route: ProviderRoute,
     mut guard: GatewayCallGuard,
+) -> Result<Body, FlowError> {
+    guard.json_stream = Some(response_stream);
+    let first_event = match guard
+        .json_stream
+        .as_mut()
+        .expect("gateway stream installed")
+        .next()
+        .await
+    {
+        Some(Ok(event)) => Some(event),
+        Some(Err(error)) => {
+            operational::upstream_failed(&guard.operational, "runtime");
+            guard.finish().await;
+            return Err(error);
+        }
+        None => None,
+    };
+    let response_stream = guard.json_stream.take().expect("gateway stream installed");
+    Ok(client_sse_body(response_stream, route, guard, first_event))
+}
+
+fn client_sse_body(
+    response_stream: LlmJsonStream,
+    route: ProviderRoute,
+    mut guard: GatewayCallGuard,
+    first_event: Option<Value>,
 ) -> Body {
-    let mut json_stream = json_stream;
+    guard.json_stream = Some(response_stream);
     let stream = stream! {
-        while let Some(item) = json_stream.next().await {
+        if let Some(event) = first_event {
+            yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
+        }
+        while let Some(item) = guard.json_stream.as_mut().expect("gateway stream installed").next().await {
             match item {
-                Ok(event_json) => {
-                    yield Ok::<Bytes, CliError>(encode_sse_frame(&event_json, route));
+                Ok(event) => {
+                    yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
                 }
-                Err(error) => {
+                Err(_) => {
+                    // The managed stream records its error. Missing completion signals failure
+                    // to the client without turning this request failure into a broken worker link.
+                    operational::upstream_failed(&guard.operational, "runtime");
                     guard.finish().await;
-                    yield Err(CliError::InvalidPayload(error.to_string()));
                     return;
                 }
             }
@@ -1088,7 +1326,8 @@ struct GatewayCallGuard {
     sessions: Option<SessionManager>,
     session_id: String,
     owner_subagent_id: Option<String>,
-    final_response: Arc<Mutex<Option<Value>>>,
+    response_ready: Option<oneshot::Receiver<()>>,
+    json_stream: Option<LlmJsonStream>,
     session_finish: GatewaySessionFinish,
     operational: OperationalContext,
 }
@@ -1098,7 +1337,7 @@ impl GatewayCallGuard {
         sessions: SessionManager,
         session_id: String,
         owner_subagent_id: Option<String>,
-        final_response: Arc<Mutex<Option<Value>>>,
+        response_ready: Option<oneshot::Receiver<()>>,
         session_finish: GatewaySessionFinish,
         operational: OperationalContext,
     ) -> Self {
@@ -1106,27 +1345,34 @@ impl GatewayCallGuard {
             sessions: Some(sessions),
             session_id,
             owner_subagent_id,
-            final_response,
+            response_ready,
+            json_stream: None,
             session_finish,
             operational,
         }
     }
 
     async fn finish(&mut self) {
+        // Drop first so an interrupted managed stream schedules its observer.
+        drop(self.json_stream.take());
+        // Keep ownership in the guard across this await so cancellation still
+        // runs session cleanup through Drop.
+        if let Some(ready) = self.response_ready.as_mut() {
+            let _ = ready.await;
+        }
+        self.response_ready = None;
         if let Some(sessions) = self.sessions.take() {
-            let response = self
-                .final_response
-                .lock()
-                .expect("stream final response lock poisoned")
-                .take();
-            complete_gateway_call(
+            // Cleanup must survive cancellation of the request awaiting it.
+            let cleanup_task = tokio::spawn(complete_gateway_call(
                 sessions,
                 self.session_id.clone(),
                 self.owner_subagent_id.clone(),
-                response,
+                None,
                 self.session_finish,
-            )
-            .await;
+            ));
+            cleanup_task
+                .await
+                .expect("gateway cleanup task should complete");
         }
     }
 }
@@ -1135,13 +1381,11 @@ async fn complete_gateway_call(
     sessions: SessionManager,
     session_id: String,
     owner_subagent_id: Option<String>,
-    response: Option<Value>,
+    response_ready: Option<oneshot::Receiver<()>>,
     session_finish: GatewaySessionFinish,
 ) {
-    if let Some(response) = response {
-        sessions
-            .record_gateway_response_hints(&session_id, owner_subagent_id.clone(), response)
-            .await;
+    if let Some(ready) = response_ready {
+        let _ = ready.await;
     }
     sessions
         .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
@@ -1150,6 +1394,7 @@ async fn complete_gateway_call(
 
 impl Drop for GatewayCallGuard {
     fn drop(&mut self) {
+        drop(self.json_stream.take());
         let Some(sessions) = self.sessions.take() else {
             return;
         };
@@ -1157,16 +1402,11 @@ impl Drop for GatewayCallGuard {
         let session_id = self.session_id.clone();
         let owner_subagent_id = self.owner_subagent_id.clone();
         let session_finish = self.session_finish;
-        let response = self
-            .final_response
-            .lock()
-            .expect("stream final response lock poisoned")
-            .take();
         let cleanup = complete_gateway_call(
             sessions,
             session_id,
             owner_subagent_id,
-            response,
+            self.response_ready.take(),
             session_finish,
         );
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -1210,14 +1450,17 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
 // Source authentication is normalized at ingress, before interceptors can select a target.
 async fn forward_upstream_request(
     http: &reqwest::Client,
+    helper_http: &reqwest::Client,
+    plaintext_http: &reqwest::Client,
     request: UpstreamForwardRequest<'_>,
-) -> Result<reqwest::Response, reqwest::Error> {
+) -> Result<reqwest::Response, CliError> {
     let UpstreamForwardRequest {
         method,
         url,
         body_bytes,
         headers,
         effective_request,
+        source_body,
         forwarding,
         operational,
         streaming,
@@ -1235,8 +1478,21 @@ async fn forward_upstream_request(
         effective_request,
         url,
         forwarding.source_route,
+        source_body,
     );
-    let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
+    let allow_configured_auth = matches!(
+        effective.credential_policy,
+        TargetCredentialPolicy::SourceOrEnvironment
+    ) && forwarding.authorization.allow_environment_provider_auth;
+    let http = if reqwest::Url::parse(&effective.url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        plaintext_http
+    } else if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
+        helper_http
+    } else {
+        http
+    };
     let mut upstream = http
         .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
@@ -1245,19 +1501,16 @@ async fn forward_upstream_request(
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(
+    let upstream = inject_provider_auth(
         upstream,
         effective.target_route,
-        &effective.headers,
-        matches!(
-            effective.credential_policy,
-            TargetCredentialPolicy::SourceOrEnvironment
-        ) && forwarding.authorization.allow_environment_provider_auth,
-        configured_auth_header,
-    );
+        allow_configured_auth,
+        &forwarding.config,
+    )
+    .await?;
     if let Some(operational) = operational {
         operational::upstream_started(operational, streaming);
-        let request = upstream.send();
+        let request = http.execute(upstream);
         tokio::pin!(request);
         let response = tokio::select! {
             response = &mut request => response,
@@ -1276,8 +1529,19 @@ async fn forward_upstream_request(
             operational::upstream_failed(operational, "transport");
         }
         response
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     } else {
-        upstream.send().await
+        http.execute(upstream)
+            .await
+            .inspect(|_| {
+                diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived)
+            })
+            .inspect_err(diag::transport_error)
+            .map_err(CliError::from)
     }
 }
 
@@ -1287,6 +1551,7 @@ struct UpstreamForwardRequest<'a> {
     body_bytes: &'a Bytes,
     headers: &'a HeaderMap,
     effective_request: Option<&'a LlmRequest>,
+    source_body: Option<&'a SourceRequestBody>,
     forwarding: ProviderForwarding,
     operational: Option<&'a OperationalContext>,
     streaming: bool,
@@ -1319,6 +1584,7 @@ fn effective_upstream_request(
         effective_request,
         "",
         ProviderRoute::OpenAiChatCompletions,
+        None,
     );
     (effective.body_bytes, effective.headers)
 }
@@ -1329,13 +1595,17 @@ fn effective_dispatch_request(
     effective_request: Option<&LlmRequest>,
     url: &str,
     route: ProviderRoute,
+    source_body: Option<&SourceRequestBody>,
 ) -> EffectiveUpstreamRequest {
     let mut headers = headers.clone();
     strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
         return source_request(body_bytes, headers, url, route);
     };
-    let Some((body_bytes, body_reencoded)) = reencode_request_body(request, body_bytes) else {
+    let body_unchanged = source_body.is_some_and(|source| source.matches(&request.content));
+    let Some((body_bytes, body_reencoded)) =
+        reencode_request_body(request, body_bytes, body_unchanged)
+    else {
         return source_request(body_bytes, headers, url, route);
     };
     let overrides = dispatch_overrides(&request.headers);
@@ -1348,7 +1618,7 @@ fn effective_dispatch_request(
     // Observable source headers exclude credentials. Applying the rewritten map only after source
     // credentials are removed lets an explicit target binding add its own authorization without
     // inheriting credentials intended for the original provider.
-    apply_rewritten_headers(&mut headers, &request.headers);
+    apply_rewritten_headers(&mut headers, &request.headers, body_unchanged);
     if body_reencoded {
         headers.remove(header::CONTENT_ENCODING);
     }
@@ -1376,8 +1646,12 @@ fn source_request(
     }
 }
 
-fn reencode_request_body(request: &LlmRequest, body_bytes: &Bytes) -> Option<(Bytes, bool)> {
-    if request.content.is_null() {
+fn reencode_request_body(
+    request: &LlmRequest,
+    body_bytes: &Bytes,
+    body_unchanged: bool,
+) -> Option<(Bytes, bool)> {
+    if request.content.is_null() || body_unchanged {
         return Some((body_bytes.clone(), false));
     }
     match serde_json::to_vec(&request.content) {
@@ -1437,12 +1711,15 @@ fn dispatch_overrides(headers: &serde_json::Map<String, Value>) -> DispatchOverr
 fn apply_rewritten_headers(
     headers: &mut HeaderMap,
     request_headers: &serde_json::Map<String, Value>,
+    preserve_content_encoding: bool,
 ) {
     for (name, value) in request_headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        if is_internal_dispatch_header(&name) {
+        if is_internal_dispatch_header(&name)
+            || (preserve_content_encoding && name == header::CONTENT_ENCODING)
+        {
             continue;
         }
         let Some(value) = json_header_value(value) else {
@@ -1489,89 +1766,23 @@ fn json_header_value(value: &Value) -> Option<HeaderValue> {
 // the provider's standard API key env var and attach it to the outbound request. Alignment may
 // have already normalized agent-native auth material; this function remains provider-generic and
 // only handles standard upstream auth injection.
-fn inject_provider_auth(
+async fn inject_provider_auth(
     builder: reqwest::RequestBuilder,
     route: ProviderRoute,
-    inbound: &HeaderMap,
-    allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
-) -> reqwest::RequestBuilder {
-    inject_provider_auth_with_env(
-        builder,
-        route,
-        inbound,
-        allow_environment_provider_auth,
-        configured_auth_header,
-        |key| std::env::var(key).ok(),
+    allow_configured_auth: bool,
+    config: &crate::configuration::GatewayConfig,
+) -> Result<reqwest::Request, CliError> {
+    let mut request = builder.build()?;
+    let destination = request.url().clone();
+    crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        destination.as_str(),
+        route.is_anthropic(),
+        allow_configured_auth && route.allows_relay_auth(),
+        config,
     )
-}
-
-// Pure variant exposed for tests. The env lookup is injected so cases can be exercised without
-// mutating process env state (which races with parallel test execution).
-fn inject_provider_auth_with_env<F>(
-    builder: reqwest::RequestBuilder,
-    route: ProviderRoute,
-    inbound: &HeaderMap,
-    allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
-    env_lookup: F,
-) -> reqwest::RequestBuilder
-where
-    F: Fn(&str) -> Option<String>,
-{
-    if !allow_environment_provider_auth {
-        return builder;
-    }
-    let already_authed = inbound.contains_key(http::header::AUTHORIZATION)
-        || inbound.contains_key("x-api-key")
-        || inbound.contains_key("api-key")
-        || inbound.contains_key("anthropic-api-key");
-    if already_authed {
-        return builder;
-    }
-    if let Some(value) = configured_auth_header {
-        return builder.header(http::header::AUTHORIZATION, value);
-    }
-    let (env_var, header_name) = match route {
-        ProviderRoute::OpenAiResponses
-        | ProviderRoute::OpenAiChatCompletions
-        | ProviderRoute::OpenAiResponsesCompact
-        | ProviderRoute::OpenAiRealtime
-        | ProviderRoute::OpenAiRealtimeCalls
-        | ProviderRoute::OpenAiLive
-        | ProviderRoute::OpenAiImagesGenerations
-        | ProviderRoute::OpenAiImagesEdits
-        | ProviderRoute::OpenAiMemoriesSummarize
-        | ProviderRoute::OpenAiStandaloneSearch
-        | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            ("ANTHROPIC_API_KEY", "x-api-key")
-        }
-    };
-    let Some(value) = env_lookup(env_var) else {
-        return builder;
-    };
-    // Trim before testing emptiness — a value of "   " is no more useful than "" and sending
-    // `Bearer ` with leading whitespace can confuse upstream auth parsers further down.
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return builder;
-    }
-    let header_value = match route {
-        ProviderRoute::OpenAiResponses
-        | ProviderRoute::OpenAiChatCompletions
-        | ProviderRoute::OpenAiResponsesCompact
-        | ProviderRoute::OpenAiRealtime
-        | ProviderRoute::OpenAiRealtimeCalls
-        | ProviderRoute::OpenAiLive
-        | ProviderRoute::OpenAiImagesGenerations
-        | ProviderRoute::OpenAiImagesEdits
-        | ProviderRoute::OpenAiMemoriesSummarize
-        | ProviderRoute::OpenAiStandaloneSearch
-        | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
-    };
-    builder.header(header_name, header_value)
+    .await?;
+    Ok(request)
 }
 
 // Plain byte passthrough used for streaming routes that lack a typed codec. The managed pipeline
@@ -1584,12 +1795,15 @@ async fn passthrough_streaming(
 ) -> Result<Response<Body>, CliError> {
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
+        &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
             body_bytes: &prepared.body_bytes,
             headers: &prepared.headers,
             effective_request: None,
+            source_body: None,
             forwarding: ProviderForwarding::new(
                 prepared.provider,
                 prepared.authorization,
@@ -1613,6 +1827,11 @@ async fn passthrough_streaming(
         let mut guard = UpstreamStreamGuard::new(operational_for_stream);
         while let Some(chunk) = bytes.next().await {
             if chunk.is_err() {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 if let Some(operational) = guard.context.as_ref() {
                     operational::upstream_stream_read_failed(operational);
                 }
@@ -1622,6 +1841,7 @@ async fn passthrough_streaming(
             }
             yield chunk;
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         guard.complete();
     });
     build_response(status, headers, body)
@@ -1691,15 +1911,15 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
             bytes,
         } => build_response(status, headers, Body::from(bytes)),
         CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
+        CapturedUpstreamFailure::Authentication(error) => Err(error),
     }
 }
 
 /// The HTTP client to dispatch with, chosen by where the destination came from.
 ///
-/// A caller-named destination gets the client that does not follow redirects. Validation
-/// applies to the URL that was named; a redirect names a different one, and following it would
-/// carry the caller's provider credential to a host nothing checked -- possibly over plain
-/// http, which the named URL itself would have been refused for.
+/// Both clients stop at redirects to keep credentials and prompts at the chosen destination.
+/// The client for caller-named destinations also checks resolved addresses. The client for
+/// configured destinations keeps the operator's network access.
 fn upstream_client(state: &AppState, client_named_upstream: bool) -> &reqwest::Client {
     if client_named_upstream {
         &state.http_no_redirect
@@ -1797,7 +2017,7 @@ fn bounded_error_body(body: &[u8]) -> String {
     String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]).into_owned()
 }
 
-/// Proxies OpenAI model-list requests without creating LLM runtime events.
+/// Proxies provider model-list requests without creating LLM runtime events.
 ///
 /// The route is registered as GET-only but still verifies the method so direct tests or future
 /// router changes return a 405 instead of forwarding a nonsensical request upstream.
@@ -1814,13 +2034,17 @@ pub(crate) async fn models(
             Body::empty(),
         );
     }
-    let provider = ProviderRoute::OpenAiModels;
-    let configured_auth_header = provider.configured_auth_header(&state.config);
     let request_path = parts.uri.path().to_string();
     let (authorization, provider_path) =
         state.authorize_provider_request(&mut parts.headers, &request_path)?;
+    let provider = if is_anthropic_models_request(&provider_path, &parts.headers) {
+        ProviderRoute::AnthropicModels
+    } else {
+        ProviderRoute::OpenAiModels
+    };
     let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
-    let mut allow_environment_provider_auth = authorization.allow_environment_provider_auth;
+    let mut allow_environment_provider_auth =
+        authorization.allow_environment_provider_auth && provider.allows_relay_auth();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let mut named_by_client = false;
     let agent_override = gateway_upstream_url_override(
@@ -1859,29 +2083,53 @@ pub(crate) async fn models(
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
+        &provider_path,
         allow_environment_provider_auth,
-        configured_auth_header,
+        &state.config,
     );
-    let mut upstream = if named_by_client {
-        state.http_no_redirect.get(upstream_url)
+    let http = if allow_environment_provider_auth && provider.has_helper(&state.config) {
+        &state.http_helper
     } else {
-        state.http.get(upstream_url)
+        upstream_client(&state, named_by_client)
     };
+    let mut upstream = http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(
+    let upstream = inject_provider_auth(
         upstream,
         provider,
-        &sanitized,
         allow_environment_provider_auth,
-        configured_auth_header,
-    );
-    let upstream_response = upstream.send().await?;
+        &state.config,
+    )
+    .await?;
+    let http = if crate::configuration::remote_http(upstream.url()) {
+        &state.http_plaintext
+    } else {
+        http
+    };
+    let upstream_response = http
+        .execute(upstream)
+        .await
+        .inspect(|_| diag::success(Operation::Upstream, SuccessCode::CliUpstreamHeadersReceived))
+        .inspect_err(diag::transport_error)?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
-    let bytes = upstream_response.bytes().await?;
+    let bytes = diagnostic_response_body(upstream_response).await?;
     build_response(status, headers, Body::from(bytes))
+}
+
+async fn diagnostic_response_body(response: reqwest::Response) -> Result<Bytes, reqwest::Error> {
+    let result = response.bytes().await;
+    match &result {
+        Ok(_) => diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted),
+        Err(_) => diag::failure(
+            Operation::Upstream,
+            CliFailureCode::UpstreamResponse,
+            FailureClass::Unknown,
+        ),
+    }
+    result
 }

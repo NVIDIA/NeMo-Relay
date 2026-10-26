@@ -128,6 +128,24 @@ sudo systemctl status nemo-relay-daemon.service
 sudo journalctl -u nemo-relay-daemon.service -n 50 --no-pager
 ```
 
+Hooks run as each user and check the daemon's TLS certificate before they send
+anything. They cannot read the service account's files, so publish the
+certificate, never the key, in the system configuration directory. Export it
+as the service account with the service's environment:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/nemo-relay
+sudo -u nemo-relay env HOME=/var/lib/nemo-relay XDG_CONFIG_HOME=/var/lib/nemo-relay/.config \
+  /opt/nvidia/bin/nemo-relay daemon tls-certificate \
+  | sudo tee /etc/nemo-relay/hook-tls-certificate.pem > /dev/null
+sudo chown root:root /etc/nemo-relay/hook-tls-certificate.pem
+sudo chmod 644 /etc/nemo-relay/hook-tls-certificate.pem
+```
+
+The certificate stays the same across restarts and upgrades. Publish it again
+only if the service identity under
+`/var/lib/nemo-relay/.config/nemo-relay/bootstrap` is removed.
+
 The service needs no `NEMO_RELAY_CLIENT_TOKEN`. Each user's harness supplies its
 own token to MCP and hook processes. The worker runs as that user, not as the
 `nemo-relay` service account.

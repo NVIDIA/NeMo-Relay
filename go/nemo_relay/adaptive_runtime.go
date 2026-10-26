@@ -176,6 +176,7 @@ func NewAdaptiveRuntime(config AdaptiveConfig) (*AdaptiveRuntime, error) {
 
 // Register activates all configured adaptive runtime features.
 func (r *AdaptiveRuntime) Register() error {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
@@ -184,6 +185,7 @@ func (r *AdaptiveRuntime) Register() error {
 
 // Deregister removes all adaptive runtime registrations owned by this runtime.
 func (r *AdaptiveRuntime) Deregister() error {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
@@ -192,6 +194,7 @@ func (r *AdaptiveRuntime) Deregister() error {
 
 // Shutdown deregisters the adaptive runtime and consumes its Rust runtime state.
 func (r *AdaptiveRuntime) Shutdown() error {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
@@ -204,6 +207,7 @@ func (r *AdaptiveRuntime) Shutdown() error {
 
 // WaitForIdle blocks until adaptive telemetry has processed pending events.
 func (r *AdaptiveRuntime) WaitForIdle() error {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
@@ -212,6 +216,7 @@ func (r *AdaptiveRuntime) WaitForIdle() error {
 
 // Report returns the runtime validation report captured during construction.
 func (r *AdaptiveRuntime) Report() (ConfigReport, error) {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return ConfigReport{}, errNilAdaptiveRuntime()
 	}
@@ -228,6 +233,8 @@ func (r *AdaptiveRuntime) Report() (ConfigReport, error) {
 
 // BindScope binds the runtime's ACG request rewrite to an active scope.
 func (r *AdaptiveRuntime) BindScope(scope *ScopeHandle) error {
+	defer runtime.KeepAlive(scope)
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
@@ -244,6 +251,7 @@ func (r *AdaptiveRuntime) BindScope(scope *ScopeHandle) error {
 
 // BuildCacheRequestFacts derives cache request facts from an annotated request.
 func (r *AdaptiveRuntime) BuildCacheRequestFacts(input CacheRequestFactsInput) (*CacheRequestFacts, error) {
+	defer runtime.KeepAlive(r)
 	if r == nil || r.ptr == nil {
 		return nil, errNilAdaptiveRuntime()
 	}

@@ -1027,7 +1027,7 @@ is_true() {
 '''
 
 # validate the documentation site, links, navigation, and generated references
-docs:
+docs: docs-examples
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
@@ -1037,7 +1037,7 @@ docs:
     npx fern docs broken-links --strict
 
 # validate documentation links and navigation without a full site build
-docs-linkcheck:
+docs-linkcheck: docs-examples
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
@@ -1045,6 +1045,10 @@ docs-linkcheck:
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings
     npx fern docs broken-links --strict
+
+# compile and run Rust examples shared with the documentation
+docs-examples:
+    cargo test --locked -p nemo-relay --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
@@ -1073,7 +1077,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents --extra google-adk --group google-adk-test
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
@@ -1583,7 +1587,7 @@ test-python-plugin-e2e:
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
         cargo nextest run --locked -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
-        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs)' \
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs) + test(python_worker_message_limits_follow_plugin_defaults)' \
         --no-capture \
         --profile ci
     kill "$gateway_pid" 2>/dev/null || true
@@ -1608,6 +1612,27 @@ test-python-langchain:
         python/tests/integrations/deepagents_tests \
         python/tests/integrations/langchain_tests \
         python/tests/integrations/langgraph_tests
+
+# --set [output_dir=<path>] [ci=true|false]
+test-python-google-adk:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    output_dir="{{ output_dir }}"
+    pytest_cmd=(pytest)
+    cd "$NEMO_RELAY_REPO_ROOT"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    if is_true "{{ ci }}"; then
+        coverage_out="$(prepare_artifact python-google-adk-coverage.xml)"
+        pytest_cmd+=(--cov --cov-config=python/tests/integrations/google_adk_tests/coverage.toml)
+        pytest_cmd+=(--cov-report term-missing --cov-report "xml:$coverage_out")
+    fi
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra google-adk --group google-adk-test
+    activate_project_venv
+    export_uv_python_runtime
+    python_executable="$(project_python_executable)"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --features __skip-implicit-config --skip-install
+    "$python_executable" -m "${pytest_cmd[@]}" python/tests/integrations/google_adk_tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-go:
@@ -1774,7 +1799,7 @@ test-pi:
     node --test crates/cli/tests/managed_pi_extension_tests.mjs
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi
+test-all: test-rust test-python test-python-langchain test-python-google-adk test-go test-node test-openclaw test-pi
 
 # Print a SemVer version in the PEP 440 form used for Python packages.
 semver-to-pep440 version:

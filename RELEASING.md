@@ -126,6 +126,10 @@ When a release branch no longer needs nightly alpha tags, open a PR against
 `main` to remove that branch from
 [`.github/nightly-alpha-branches.yaml`](.github/nightly-alpha-branches.yaml).
 
+The nightly alpha workflow deletes tags matching `<version>-alpha.YYYYMMDD`
+whose UTC date is older than 30 days, across all release lines. Tags dated
+exactly 30 days ago or newer are retained.
+
 ## Before You Cut A Release
 
 Before you create a release tag, confirm the following:
@@ -319,6 +323,13 @@ NVIDIA Artifactory publication for the same tag:
   Node.js package artifacts produced by GitHub Actions.
 - The Artifactory jobs publish those collected artifacts to the configured
   Python, Cargo, and npm Artifactory registries.
+- For non-alpha tags only, the collector also downloads all seven CLI binary
+  artifacts. The CLI publishing job uploads them to
+  `<generic-url>/<tag>/<filename>`,
+  preserving the GitHub release filenames, including `.exe` on Windows. It uses
+  the existing `NEMO_RELAY_CI_ARTIFACTORY_USER` and
+  `NEMO_RELAY_CI_ARTIFACTORY_KEY` credentials, which must have deploy access to
+  that repository. Alpha tags skip CLI binary collection and publication.
 
 npm trusted publishing has its own registry-side constraints:
 
@@ -328,10 +339,15 @@ npm trusted publishing has its own registry-side constraints:
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
-Stable docs versioning is managed through Fern configuration, not the release
-tag workflow. Update the Fern version entries when introducing a stable
-documentation version; prerelease tags do not publish a separate documentation
-artifact from CI.
+The Fern Docs workflow snapshots tagged documentation onto `docs-website`.
+On release publication and dev sync, it retains the highest patch for each
+major/minor version, then keeps only the five newest versions by numeric version
+order. It removes older entries from `fern/docs.yml` and deletes their
+`fern/pages-v*` directories and `fern/versions/v*.yml` files. `dev` is retained
+separately, and `latest` points to the highest retained stable version (or the
+default returns to `dev` if no stable version remains). Beta and RC tags share
+their base version's snapshot and count toward the five-version limit; alpha
+tags are skipped.
 
 ## Publish The GitHub Release Entry
 

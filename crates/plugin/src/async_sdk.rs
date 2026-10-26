@@ -1145,54 +1145,59 @@ unsafe extern "C" fn stream_trampoline(
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let task = async move {
-        let stream = tokio::select! {
-            result = AssertUnwindSafe(future).catch_unwind() => match result {
-                Ok(result) => result,
-                Err(_) => Err("typed native stream future panicked".into()),
-            },
-            () = wait_for_stream_cancellation(&output) => return,
-        };
-        let mut stream = match stream {
-            Ok(stream) => ScopedStream::new(stream, stream_binding),
-            Err(error) => {
-                output.reject(&error).await;
-                return;
-            }
-        };
-        loop {
-            let item = tokio::select! {
-                result = AssertUnwindSafe(futures::StreamExt::next(&mut stream)).catch_unwind() => {
-                    match result {
-                        Ok(item) => item,
-                        Err(_) => {
-                            output.reject("typed native stream panicked while polling").await;
-                            return;
-                        }
-                    }
+        async {
+            let stream = tokio::select! {
+                result = AssertUnwindSafe(future).catch_unwind() => match result {
+                    Ok(result) => result,
+                    Err(_) => Err("typed native stream future panicked".into()),
                 },
                 () = wait_for_stream_cancellation(&output) => return,
             };
-            let Some(item) = item else {
-                break;
-            };
-            match item {
-                Ok(chunk) => {
-                    if let Err(error) = output.push(&chunk).await {
-                        if !output.cancelled() {
-                            output.reject(&error).await;
-                        }
-                        return;
-                    }
-                }
+            let mut stream = match stream {
+                Ok(stream) => ScopedStream::new(stream, stream_binding),
                 Err(error) => {
                     output.reject(&error).await;
                     return;
                 }
+            };
+            loop {
+                let item = tokio::select! {
+                    result = AssertUnwindSafe(futures::StreamExt::next(&mut stream)).catch_unwind() => {
+                        match result {
+                            Ok(item) => item,
+                            Err(_) => {
+                                output.reject("typed native stream panicked while polling").await;
+                                return;
+                            }
+                        }
+                    },
+                    () = wait_for_stream_cancellation(&output) => return,
+                };
+                let Some(item) = item else {
+                    break;
+                };
+                match item {
+                    Ok(chunk) => {
+                        if let Err(error) = output.push(&chunk).await {
+                            if !output.cancelled() {
+                                output.reject(&error).await;
+                            }
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        output.reject(&error).await;
+                        return;
+                    }
+                }
+            }
+            if !output.cancelled() {
+                let _ = output.finish();
             }
         }
-        if !output.cancelled() {
-            let _ = output.finish();
-        }
+        .await;
+        // Release the host capability only after all producer-owned state is dropped.
+        drop(output);
     };
     if let Err(error) = state.executor.spawn(task) {
         set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);

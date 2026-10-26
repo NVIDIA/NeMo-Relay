@@ -12,6 +12,10 @@ LAN or VPN. The server runs the daemon. Each client runs its own harness, MCP
 process, and worker. Install system plugin configuration on **every client**;
 putting it only on the server does not configure remote workers.
 
+Prefer a local daemon when it meets your needs. To decide whether you need a
+daemon pod and plan its setup, refer to
+[Kubernetes Deployment Guidance](/daemon/kubernetes).
+
 On narrow screens, scroll diagrams horizontally to read every label.
 
 ## Plan Addresses and Connections
@@ -84,6 +88,17 @@ Provision `/etc/nemo-relay/config.toml` as described in
 [Configuration](/daemon/configuration#system-configuration). Keep provider
 routing consistent with the clients so pass-through reaches the intended
 providers. Do not put users' route credentials on the server.
+
+With `--bind 0.0.0.0`, pass-through requests need a bound route to use the
+daemon's provider credentials. Anonymous requests use only provider credentials
+sent by the client. This rule also applies to requests sent to `127.0.0.1`.
+With `--pass-through --bind 127.0.0.1`, anonymous requests can use the daemon's
+provider credentials.
+
+Use TLS on the daemon or a trusted reverse proxy to protect remote traffic.
+Setting `--advertise-address` to an `https://` URL does not turn on TLS.
+If the proxy connects to the daemon over plain HTTP, restrict access to the
+daemon's HTTP port.
 
 ## Provision the HTTPS Certificate
 

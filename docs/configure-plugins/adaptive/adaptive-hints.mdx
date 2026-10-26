@@ -56,7 +56,7 @@ and activate Adaptive Hints through each supported language binding.
 loading plugin code or acquiring the activation lease. Use Python/Rust
 `validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
 the supplied static configuration should be checked. For complete
-layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+layering rules, refer to [Configure](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -257,7 +257,7 @@ The following table describes Adaptive Hints settings:
 | `priority` | `100` | Request intercept priority. Lower values run earlier. |
 | `break_chain` | `false` | Whether this intercept stops later request intercepts. |
 | `inject_header` | `true` | Whether to add adaptive hints as request header metadata. |
-| `inject_body_path` | `nvext.agent_hints` | JSON body path for request-body hint injection. |
+| `inject_body_path` | `nvext.agent_hints` | Dot-separated JSON body path for request-body hint injection. Missing objects along the path are created. The body is left unchanged if a parent value is not an object. |
 
 Disable `break_chain` unless the adaptive hint should be the final request
 transform. Adjust `priority` only when adaptive hints need to run before or

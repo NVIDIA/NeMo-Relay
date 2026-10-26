@@ -46,6 +46,8 @@ dev = [
     # Transitive dependency of optional integrations; keep it at a patched release.
     "anyio>=4.14.2",
     "beautifulsoup4>=4.14,<5",
+    # Transitive dependency of optional integrations; keep it at a patched release.
+    "certifi>=2026.10.19",
     "ipython~=8.20",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
     "maturin>=1.0,<2.0; sys_platform != 'linux'",
@@ -55,12 +57,12 @@ dev = [
     "ruff~=0.11",
     # Transitive dependency of beautifulsoup4; keep it at a patched release.
     "soupsieve>=2.9.0",
-    "ty>=0.0.1a7",
+    "ty>=0.0.91",
     # Transitive dependency of optional integrations; keep it at a patched release.
     "urllib3>=2.8.0",
-    "uv~=0.11.0",
+    "uv>=0.13.4",
     # Transitive dependency of pre-commit; keep it at a patched release.
-    "virtualenv>=21.7.13",
+    "virtualenv>=21.14.7",
 ]
 
 test = [
@@ -72,6 +74,13 @@ test = [
     "pytest>=8",
     "pytest-asyncio>=0.26",
     "pytest-cov~=7.0",
+]
+
+# Provider dependencies for Google ADK integration tests.
+google-adk-test = [
+    "anthropic>=0.78",
+    "google-adk[openai]>=2.12.0,<3.0.0",
+    "litellm>=1.106.2",
 ]
 
 [project.optional-dependencies]
@@ -87,6 +96,7 @@ langchain = [
     "langgraph-checkpoint>=4.1.1",
     "langgraph-sdk>=0.4.4",
     "langsmith>=0.9.4",
+    "pydantic>=2.11,<3",
 ]
 
 langgraph = [
@@ -104,9 +114,14 @@ deepagents = [
 langchain-nvidia = [
     "nemo-relay[langchain]",
     "langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0",
-    "aiohttp>=3.14.3",
+    "aiohttp>=3.14.4",
     "idna>=3.19",
     "multidict>=6.9.1",
+]
+
+google-adk = [
+    "google-adk>=2.12.0,<3.0.0",
+    "typing-extensions>=4.10.0",
 ]
 
 [tool.maturin]
@@ -121,8 +136,16 @@ rust = true
 auditwheel = true
 
 [tool.uv]
+managed = true
 default-groups = ["dev", "test"]
 package = true
+override-dependencies = [
+    "opentelemetry-api>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
+    # LiteLLM caps filelock below 4; GHSA-v4x8-3wr5-3wq8 requires >=4.2.1.
+    # Remove this override when LiteLLM permits the patched release.
+    "filelock>=4.2.1,<5",
+]
 
 [tool.uv.sources]
 nemo-relay-cli-bin = { path = "python/cli-bin" }
@@ -150,9 +173,9 @@ omit = [
 [tool.ty.analysis]
 # nemo_relay._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-# LangChain, LangGraph, and Deep Agents are optional integration dependencies
-# which aren't installed by default.
-allowed-unresolved-imports = ["deepagents.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
+# LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
+# dependencies which aren't installed by default.
+allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "httpx", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "openai.**", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]
@@ -163,6 +186,23 @@ include = ["python/tests/**"]
 invalid-argument-type = "ignore"
 not-subscriptable = "ignore"
 unsupported-operator = "ignore"
+
+[[tool.ty.overrides]]
+include = [
+    "python/tests/integrations/google_adk_tests/test_scopes.py",
+    "python/tests/integrations/langchain_tests/test_tool_codec.py",
+]
+
+[tool.ty.overrides.rules]
+# These tests intentionally suppress diagnostics from optional framework types.
+# The suppressions are unused when those frameworks are not installed.
+unused-ignore-comment = "ignore"
+
+[[tool.ty.overrides]]
+include = ["skills/**"]
+
+[tool.ty.overrides.rules]
+deprecated = "ignore"
 
 [tool.ruff]
 line-length = 120
@@ -203,4 +243,6 @@ safe_licenses = [
 unsafe_packages = [
     "certifi", # Mozilla Public License 2.0 (MPL 2.0)
     "matplotlib-inline", # unknown derived
+    "tiktoken", # MIT license text in package metadata
+    "tqdm", # MPL-2.0 AND MIT
 ]

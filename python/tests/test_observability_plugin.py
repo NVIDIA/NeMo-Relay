@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import threading
 import time
 import typing
@@ -17,14 +18,17 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from plugin_host_test_helper import validate_plugin_config
 
 from nemo_relay import (
+    LLMRequest,
     PropagationContext,
     ScopeType,
     create_scope_stack_from_propagation,
+    llm,
     plugin,
     scope,
     subscribers,
     use_scope_stack,
 )
+from nemo_relay.codecs import AnthropicMessagesCodec
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -37,6 +41,7 @@ from nemo_relay.observability import (
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
+    OpenTelemetryFileSinkConfig,
     OpenTelemetryLogSectionConfig,
     OpenTelemetryMetricSectionConfig,
     OpenTelemetrySectionConfig,
@@ -110,6 +115,76 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    def test_file_sink_defaults_and_strict_validation(self, tmp_path: Path) -> None:
+        sink = OpenTelemetryFileSinkConfig(output_directory=str(tmp_path))
+        assert sink.to_dict() == {
+            "output_directory": str(tmp_path),
+            "type": "full",
+            "format": "json_lines",
+            "mode": "overwrite",
+            "mark_projection": "inherit",
+            "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
+            "promote_metadata_prefixes": [],
+            "promote_resource_metadata_prefixes": [],
+            "resource_attributes": {},
+            "service_name": "unknown_service",
+            "instrumentation_scope": "opentelemetry",
+        }
+        other = OpenTelemetryFileSinkConfig(output_directory=str(tmp_path))
+        sink.mark_exclude_names.append("custom.mark")
+        assert other.mark_exclude_names == ["llm.chunk"]
+        section = OpenTelemetrySectionConfig(enabled=True, file_sinks=[sink])
+        assert OpenTelemetrySectionConfig().file_sinks == []
+        config = ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error"))
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert report["diagnostics"] == []
+
+    @pytest.mark.parametrize("projection", ["full", "gen_ai", "openinference"])
+    async def test_typed_file_sink_writes_spans(
+        self, tmp_path: Path, projection: typing.Literal["full", "gen_ai", "openinference"]
+    ) -> None:
+        sink = OpenTelemetryFileSinkConfig(
+            output_directory=str(tmp_path),
+            type=projection,
+            filename="traces.jsonl",
+            mode="append",
+            mark_projection="event",
+            mark_exclude_names=[],
+            attribute_mappings=[{"key": "nemo_relay.scope.name", "alias": "scope_name"}],
+            promote_metadata_prefixes=["custom."],
+            promote_resource_metadata_prefixes=["deployment."],
+            resource_attributes={"environment": "test"},
+            service_name="python-file-sink",
+            service_namespace="tests",
+            service_version="1.0",
+            instrumentation_scope="python-test",
+            max_queue_size=32,
+            max_export_batch_size=16,
+            scheduled_delay_millis=60_000,
+            completed_span_context_ttl_millis=60_000,
+        )
+        config = ObservabilityConfig(
+            opentelemetry=OpenTelemetrySectionConfig(enabled=True, file_sinks=[sink]),
+            policy=ConfigPolicy(unknown_field="error"),
+        )
+        activation = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        try:
+            with scope.scope("python-file-agent", ScopeType.Agent):
+                pass
+        finally:
+            await activation.close()
+        records = [json.loads(line) for line in (tmp_path / "traces.jsonl").read_text().splitlines()]
+        spans = [
+            span
+            for record in records
+            for resource in record["resourceSpans"]
+            for instrumentation in resource["scopeSpans"]
+            for span in instrumentation["spans"]
+        ]
+        expected_name = "invoke_agent python-file-agent" if projection == "gen_ai" else "python-file-agent"
+        assert any(span["name"] == expected_name for span in spans)
+
     async def test_otlp_queue_overflow_is_accounted_per_endpoint_after_close(self) -> None:
         burst_size = 300
         projected_spans = burst_size + 2  # The seed child, burst children, and enclosing Agent.
@@ -225,6 +300,38 @@ class TestObservabilityConfigHelpers:
             "https://example.com/v1/logs", header_file={"authorization": path}
         ).to_dict()["header_file"] == {"authorization": path}
 
+    def test_insecure_http_hosts_serialize_at_top_level_and_pass_strict_validation(self) -> None:
+        hosts = ["host.docker.internal", "collector.ns.svc.cluster.local"]
+        section = OpenTelemetrySectionConfig(
+            enabled=True,
+            endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://host.docker.internal:8082/v1/traces")],
+        )
+        config = ObservabilityConfig(
+            opentelemetry=section, policy=ConfigPolicy(unknown_field="error"), insecure_http_hosts=hosts
+        )
+        assert config.to_dict()["insecure_http_hosts"] == hosts
+        assert "insecure_http_hosts" not in ObservabilityConfig().to_dict()
+        assert ObservabilityConfig(insecure_http_hosts=[]).to_dict()["insecure_http_hosts"] == []
+
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert report["diagnostics"] == []
+
+    async def test_insecure_http_hosts_activate_a_listed_plain_http_trace_endpoint(self) -> None:
+        def config(hosts: list[str] | None) -> plugin.PluginConfig:
+            section = OpenTelemetrySectionConfig(
+                enabled=True,
+                endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://collector.invalid:4318/v1/traces")],
+            )
+            return plugin.PluginConfig(
+                components=[ComponentSpec(ObservabilityConfig(opentelemetry=section, insecure_http_hosts=hosts))]
+            )
+
+        with pytest.raises(ValueError, match="insecure_http_hosts"):
+            await plugin.initialize(config(None))
+        activation = await plugin.initialize(config(["collector.invalid"]))
+        assert activation.is_active
+        await activation.close()
+
     def test_defaults_and_component_wrapper(self) -> None:
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
@@ -232,10 +339,16 @@ class TestObservabilityConfigHelpers:
             "agent_name": "NeMo Relay",
             "model_name": "unknown",
             "filename_template": "nemo-relay-atif-{session_id}.json",
+            "include_observed_events": True,
+            "include_llm_requests": True,
         }
+        reduced = AtifConfig(include_observed_events=False, include_llm_requests=False).to_dict()
+        assert reduced["include_observed_events"] is False
+        assert reduced["include_llm_requests"] is False
         assert OpenTelemetrySectionConfig().to_dict() == {
             "enabled": False,
             "endpoints": [],
+            "file_sinks": [],
         }
         assert OpenTelemetryEndpointConfig(
             "gen_ai",
@@ -499,6 +612,81 @@ class TestObservabilityConfigHelpers:
         }
         atif = AtifConfig(enabled=True, storage=[s3, http])
         assert atif.to_dict()["storage"] == [s3.to_dict(), http.to_dict()]
+
+    @pytest.mark.parametrize("texts", [[], ["inspect this image from the medical chatbot"], ["first", "second"]])
+    @pytest.mark.parametrize("use_codec", [True, False])
+    async def test_atif_inline_image_preserves_model_request(
+        self, tmp_path: Path, texts: list[str], use_codec: bool
+    ) -> None:
+        png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        body = {
+            "model": "claude-sonnet-test",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        *({"type": "text", "text": text} for text in texts),
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": png_base64,
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+        request = LLMRequest({}, body)
+        received = []
+
+        async def model_callback(model_request: LLMRequest):
+            received.append(model_request.content)
+            return {
+                "id": "msg-image",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-test",
+                "content": [{"type": "text", "text": "The image is available."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 4},
+            }
+
+        config = plugin.PluginConfig(
+            components=[
+                ComponentSpec(
+                    ObservabilityConfig(
+                        atif=AtifConfig(enabled=True, output_directory=str(tmp_path)),
+                    )
+                )
+            ]
+        )
+        codec = AnthropicMessagesCodec() if use_codec else None
+        activation = await plugin.initialize(config)
+        try:
+            with scope.scope("image-turn", ScopeType.Agent) as handle:
+                await llm.execute(
+                    "vision-model",
+                    request,
+                    model_callback,
+                    handle=handle,
+                    codec=codec,
+                    response_codec=codec,
+                )
+            await subscribers.flush_async()
+        finally:
+            await activation.close()
+
+        assert received == [body]
+        assert request.content == body
+        [trajectory_file] = list(tmp_path.glob("nemo-relay-atif-*.json"))
+        trajectory = json.loads(trajectory_file.read_text())
+        user = next(step for step in trajectory["steps"] if step["source"] == "user")
+        assert user["message"] == "\n".join(texts)
+        assert png_base64 not in user["message"]
+        assert user["extra"]["llm_request"] == body
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
     async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool) -> None:
@@ -799,3 +987,173 @@ class TestObservabilityConfigHelpers:
         assert "python-second-agent" in second_payload
         assert "python-first-agent" not in second_payload
         assert "python-nested-agent" not in second_payload
+
+
+def test_otlp_tls_helpers_and_direct_configs_share_schema():
+    from nemo_relay import (
+        OpenTelemetryConfig,
+        OpenTelemetryLogConfig,
+        OpenTelemetryLogSubscriber,
+        OpenTelemetryMetricConfig,
+        OpenTelemetryMetricSubscriber,
+        OpenTelemetrySubscriber,
+        OpenTelemetryTlsConfig,
+    )
+
+    tls = OpenTelemetryTlsConfig(certificate="ca.pem", client_certificate="client.pem", private_key="key.pem")
+    expected = {"certificate": "ca.pem", "client_certificate": "client.pem", "private_key": "key.pem"}
+    trace = OpenTelemetryEndpointConfig(type="full", endpoint="https://collector.example", tls=tls)
+    signal = OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example", tls=tls)
+    assert trace.to_dict()["tls"] == expected
+    assert signal.to_dict()["tls"] == expected
+    assert "tls" not in OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example").to_dict()
+    for config, subscriber in [
+        (OpenTelemetryConfig("full", "http://127.0.0.1:4318"), OpenTelemetrySubscriber),
+        (OpenTelemetryLogConfig("http://127.0.0.1:4318"), OpenTelemetryLogSubscriber),
+        (OpenTelemetryMetricConfig("http://127.0.0.1:4318"), OpenTelemetryMetricSubscriber),
+    ]:
+        assert config.tls is None
+        config.tls = tls
+        assert config.tls.private_key == "key.pem"
+        with pytest.raises(Exception, match="TLS settings require an HTTPS endpoint"):
+            subscriber(config)
+        config.tls = OpenTelemetryTlsConfig(client_certificate="client.pem")
+        with pytest.raises(Exception, match="must be supplied together"):
+            subscriber(config)
+
+
+class TestPlaintextPreflight:
+    @pytest.fixture(autouse=True)
+    def isolate_plaintext_preflight_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for variable_name in list(os.environ):
+            if variable_name.startswith("OTEL_"):
+                monkeypatch.delenv(variable_name)
+        monkeypatch.setenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+
+    @staticmethod
+    def configuration(
+        signal: str,
+        endpoints: list[str],
+        *,
+        headers: dict[str, str] | None = None,
+        insecure_http_hosts: list[str] | None = None,
+    ) -> plugin.PluginConfig:
+        observability = ObservabilityConfig(version=4, insecure_http_hosts=insecure_http_hosts)
+        configured_headers = headers if headers is not None else {"authorization": "synthetic-header-secret"}
+        if signal == "atof":
+            observability.atof = AtofConfig(
+                enabled=True,
+                sinks=[AtofStreamSinkConfig(url=endpoint, headers=configured_headers) for endpoint in endpoints],
+            )
+        elif signal == "atif":
+            observability.atif = AtifConfig(
+                enabled=True,
+                storage=[HttpStorageConfig(endpoint=endpoint, headers=configured_headers) for endpoint in endpoints],
+            )
+        else:
+            section = OpenTelemetrySectionConfig(enabled=True)
+            if signal == "traces":
+                section.endpoints = [
+                    OpenTelemetryEndpointConfig("full", endpoint, headers=configured_headers) for endpoint in endpoints
+                ]
+            elif signal == "logs":
+                section.logs = OpenTelemetryLogSectionConfig(
+                    enabled=True,
+                    endpoints=[
+                        OpenTelemetrySignalEndpointConfig(endpoint, headers=configured_headers)
+                        for endpoint in endpoints
+                    ],
+                )
+            else:
+                assert signal == "metrics"
+                section.metrics = OpenTelemetryMetricSectionConfig(
+                    enabled=True,
+                    endpoints=[
+                        OpenTelemetrySignalEndpointConfig(endpoint, headers=configured_headers)
+                        for endpoint in endpoints
+                    ],
+                )
+            observability.opentelemetry = section
+        return plugin.PluginConfig(components=[ComponentSpec(observability)])
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    async def test_plaintext_preflight_and_activation_reject_reported_cases(self, signal: str) -> None:
+        configuration = self.configuration(
+            signal,
+            ["http://collector.example:4318/telemetry"],
+            headers={} if signal == "traces" else None,
+        )
+        for validate in (plugin.validate, plugin.validate_exact):
+            diagnostics = validate(configuration)["config"]["diagnostics"]
+            assert len(diagnostics) == 1
+            assert diagnostics[0]["level"] == "error"
+            assert diagnostics[0]["code"] == "observability.unsafe_plaintext_destination"
+        expected_exception = RuntimeError if signal in ("atof", "atif") else ValueError
+        with pytest.raises(expected_exception, match="insecure_http_hosts"):
+            await plugin.initialize(configuration)
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    def test_plaintext_preflight_identifies_endpoint_and_redacts_sensitive_values(self, signal: str) -> None:
+        configuration = self.configuration(
+            signal,
+            [
+                "https://collector.example:4318/safe",
+                "http://synthetic-user:synthetic-password@collector.example:4318/private-path?token=synthetic-query",
+            ],
+        )
+        component = signal if signal in ("atof", "atif") else f"opentelemetry.{signal}"
+        field = {"atof": "sinks[1].url", "atif": "storage[1].endpoint"}.get(signal, "endpoints[1].endpoint")
+        for validate in (plugin.validate, plugin.validate_exact):
+            diagnostics = validate(configuration)["config"]["diagnostics"]
+            assert len(diagnostics) == 1
+            diagnostic = diagnostics[0]
+            assert diagnostic["component"] == component
+            assert diagnostic["field"] == field
+            assert "collector.example:4318" in diagnostic["message"]
+            serialized_diagnostics = json.dumps(diagnostics)
+            for sensitive_value in (
+                "synthetic-header-secret",
+                "synthetic-user",
+                "synthetic-password",
+                "private-path",
+                "synthetic-query",
+            ):
+                assert sensitive_value not in serialized_diagnostics
+
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics", "atof", "atif"])
+    @pytest.mark.parametrize("permitted_transport", ["https", "loopback", "allowlist"])
+    def test_plaintext_preflight_permits_existing_transport_controls(
+        self, signal: str, permitted_transport: str
+    ) -> None:
+        endpoint = {
+            "https": "https://collector.example:4318/telemetry",
+            "loopback": "http://127.0.0.1:4318/telemetry",
+            "allowlist": "http://collector.example:4318/telemetry",
+        }[permitted_transport]
+        configuration = self.configuration(
+            signal,
+            [endpoint],
+            insecure_http_hosts=["collector.example"] if permitted_transport == "allowlist" else None,
+        )
+        for validate in (plugin.validate, plugin.validate_exact):
+            assert validate(configuration)["config"]["diagnostics"] == []
+
+    @pytest.mark.parametrize("signal", ["logs", "metrics", "atof", "atif"])
+    def test_plaintext_preflight_permits_headerless_http(self, signal: str) -> None:
+        configuration = self.configuration(signal, ["http://collector.example:4318/telemetry"], headers={})
+        for validate in (plugin.validate, plugin.validate_exact):
+            assert validate(configuration)["config"]["diagnostics"] == []
+
+    async def test_plaintext_preflight_error_preserves_partial_trace_activation(self) -> None:
+        configuration = self.configuration(
+            "traces", ["http://127.0.0.1:4318/v1/traces", "http://collector.example:4318/v1/traces"], headers={}
+        )
+        diagnostics = plugin.validate(configuration)["config"]["diagnostics"]
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["level"] == "error"
+        assert diagnostics[0]["field"] == "endpoints[1].endpoint"
+        activation = await plugin.initialize(configuration)
+        try:
+            assert activation.is_active
+        finally:
+            await activation.close()

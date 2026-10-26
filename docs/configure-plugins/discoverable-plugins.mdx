@@ -1,12 +1,14 @@
 ---
-title: "Configure Discoverable Plugins"
-description: "Install, validate, trust, and configure manifest-backed NeMo Relay plugins."
+title: "Manage"
+description: "Use CLI commands to install, inspect, validate, enable, disable, and remove discoverable NeMo Relay plugins."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
-Use this guide to add a manifest-backed plugin that another author has
-packaged. Discoverable plugins are separate from built-in `[[components]]`:
+Use this guide to install and manage discoverable plugins with the
+`nemo-relay plugins` CLI commands. For settings in `plugins.toml` and the
+interactive editor, see [Configure](/configure-plugins/plugin-configuration-files).
+For activation through a language SDK, see [Initialize](/configure-plugins/initialize-plugins). Discoverable plugins are separate from built-in `[[components]]`:
 their `relay-plugin.toml` manifest describes a native shared library or a
 `grpc-v1` worker, while `plugins.toml` records where Relay can find it and
 stores its component configuration.
@@ -150,6 +152,16 @@ persists its result for a registered plugin; `add`, `enable`, `disable`, and
 `remove` persist their explicit lifecycle changes. Gateway startup also checks
 plugin status without writing shared lifecycle state.
 
+`plugins inspect` and `plugins validate` also report
+`native_diagnostics_read_context` in text and JSON output. This boolean is the
+whole-context read permission resolved from the current host policy: defaults,
+ordered matching rules, then plugin-ID overrides. Omission defaults to false.
+An explicit false overrides an earlier grant. Workers always report false.
+The value describes permission, independently of service enablement, plugin
+activation, or handle availability. Configuration values remain redacted, and
+policy details are not included in this field. For grant configuration and the
+SDK reader, refer to [canonical native diagnostics](/build-plugins/native/runtime-events-and-scopes#inspect-canonical-diagnostics).
+
 To share a Python worker across users, register it in the system scope with
 `nemo-relay plugins add --global <manifest>` from an account that can write the
 system configuration directory. Ensure the system `plugins.toml`, lifecycle
@@ -214,11 +226,12 @@ still stops gateway startup; correct or disable the plugin to start without it.
 `signature_required`; integrity verification always checks the declared
 artifact digest.
 
-Use `startup = "required"` when failed integrity or signature verification must
-prevent worker startup. An optional trust failure records failed lifecycle
-state, but does not itself prevent an enabled worker from launching. The native
-loader also verifies `load.library`; the worker loader relies on lifecycle trust
-evaluation.
+Failed integrity or signature verification always prevents plugin activation.
+With `startup = "optional"`, the host skips the failed plugin and continues;
+with `startup = "required"`, the failure stops host startup. The embedding host
+retains the validated manifest and host policy and rechecks trust before loading
+native libraries or launching workers. The native loader also verifies
+`load.library` against the validated digest.
 
 Use `[[plugins.policy.rules]]` to apply an effect by `match_kind` or
 `match_plugin_id`, and `[plugins.policy.overrides."plugin.id"]` for one

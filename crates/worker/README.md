@@ -48,6 +48,19 @@ This model keeps plugin dependencies and crashes outside the Relay process, whil
 SDK retains the shared runtime contract and manages authentication, cancellation, and
 shutdown.
 
+## Propagating Continuation Errors
+
+Propagate an unchanged `ToolNext`, `LlmNext`, or `LlmStreamNext` error with `?`
+to preserve its downstream origin. `WorkerSdkError::Downstream` carries the
+original SDK error and the host-issued continuation identity. Its display and
+existing wire error text remain unchanged. Construct a new callback error only
+when reporting a distinct plugin failure.
+
+The host uses this identity to exclude forwarded errors from plugin callback
+failure counts. The same contract covers stream-opening errors and error chunks.
+It adds no retained error ledger. Older SDKs may discard the additive provenance;
+missing or mismatched identity retains the existing attribution behavior.
+
 ## Installation
 
 Add the SDK and Tokio to the worker project:
@@ -56,6 +69,16 @@ Add the SDK and Tokio to the worker project:
 cargo add nemo-relay-worker
 cargo add tokio --features macros,rt-multi-thread
 ```
+
+## Configuration
+
+Use `[load.max_message_bytes]` in `relay-plugin.toml` with `default_bytes` and
+`by_name` overrides for exact callback registration names, just like callback
+timeouts. A callback's limit also applies to its continuations; unrelated
+callbacks and control RPCs retain their fallback. Host environment overrides
+take precedence; the fallback defaults to 4 MiB. Restart
+the host and workers after changes and upgrade both sides together. See
+[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
 
 ## Getting Started
 

@@ -368,6 +368,27 @@ async fn gateway_hook_transport_waits_for_slow_responses_with_either_failure_pol
 }
 
 #[test]
+fn hook_forward_headers_carry_the_launcher_trace_context() {
+    let command = hook_request(CodingAgent::Codex);
+    let operational = crate::operational::OperationalContext::new();
+    let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+    let headers =
+        super::delivery::hook_forward_headers(&command, &operational, |name| match name {
+            crate::hooks::TRACEPARENT_ENV => Some(traceparent.to_owned()),
+            crate::hooks::TRACESTATE_ENV => Some("vendor=value".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(headers["traceparent"], traceparent);
+    assert_eq!(headers["tracestate"], "vendor=value");
+
+    let headers = super::delivery::hook_forward_headers(&command, &operational, |_| None).unwrap();
+    assert!(!headers.contains_key("traceparent"));
+    assert!(!headers.contains_key("tracestate"));
+}
+
+#[test]
 fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
     assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
     assert_eq!(
@@ -572,7 +593,7 @@ fn merge_hooks_rejects_malformed_shapes() {
 
 #[test]
 fn helper_formatting_and_headers_cover_optional_paths() {
-    assert!(event_matches_tools("PermissionRequest"));
+    assert!(event_requires_fail_closed("PreToolUse"));
     assert!(!event_matches_tools("SessionStart"));
 
     let headers = gateway_headers(
@@ -684,7 +705,6 @@ fn codex_generation_uses_exactly_the_supported_hook_schema() {
     assert_eq!(
         events,
         std::collections::BTreeSet::from([
-            "PermissionRequest",
             "PostCompact",
             "PostToolUse",
             "PreCompact",
@@ -1080,4 +1100,41 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
             );
         }
     }
+}
+
+#[test]
+fn forwarded_hook_http_errors_preserve_status_and_failure_policy() {
+    use axum::response::IntoResponse;
+    for status in 400..=599 {
+        let status = reqwest::StatusCode::from_u16(status).unwrap();
+        let error = handle_hook_forward_status(status, "backend error".into(), true).unwrap_err();
+        assert_eq!(error.log_kind(), "hook_http");
+        assert!(error.to_string().contains("hook gateway returned HTTP"));
+        assert_eq!(error.into_response().status(), status);
+        handle_hook_forward_status(status, "backend error".into(), false).unwrap();
+    }
+}
+
+#[test]
+fn hook_http_failures_keep_plugin_reporting_context_from_relay_responses() {
+    let message = "upstream provider returned HTTP 403 (Other): Reported by plugin 'nvidia.switchyard': denied";
+    let body =
+        serde_json::json!({"error": {"type": "nemo_relay_gateway_error", "message": message}})
+            .to_string();
+    let error = handle_hook_forward_status(reqwest::StatusCode::FORBIDDEN, body, true).unwrap_err();
+    assert_eq!(error.log_kind(), "hook_http");
+    assert!(error.to_string().contains(message));
+    use axum::response::IntoResponse;
+    assert_eq!(
+        error.into_response().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+
+    let error = handle_hook_forward_status(
+        reqwest::StatusCode::FORBIDDEN,
+        r#"{"error":{"type":"unknown","message":"do not expose an arbitrary response"}}"#.into(),
+        true,
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("do not expose"));
 }

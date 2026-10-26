@@ -1,12 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod http_model_hosts;
 mod logging;
+mod runtime_diagnostics;
+pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
+pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
 pub(crate) use types::*;
 
-use std::collections::{HashMap, HashSet};
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::CliFailureCode;
+
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -60,26 +67,66 @@ struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
     logging: Option<logging::FileLoggingConfig>,
+    diagnostics: Option<RuntimeDiagnosticsConfig>,
 }
 
+impl FileConfig {
+    /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
+    fn unknown_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
+            keys.extend(unknown.keys().map(|key| format!("{section}.{key}")));
+        };
+        if let Some(gateway) = &self.gateway {
+            collect("gateway", &gateway.unknown);
+        }
+        if let Some(upstream) = &self.upstream {
+            collect("upstream", &upstream.unknown);
+        }
+        if let Some(agents) = &self.agents {
+            collect("agents", &agents.unknown);
+            for (name, agent) in [
+                ("claude", &agents.claude),
+                ("codex", &agents.codex),
+                ("pi", &agents.pi),
+            ] {
+                if let Some(agent) = agent {
+                    collect(&format!("agents.{name}"), &agent.unknown);
+                }
+            }
+        }
+        keys
+    }
+}
+
+// Configuration is fail-open: unknown keys in these sections are collected in `unknown` and
+// reported as warnings instead of rejecting the file.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
     max_passthrough_body_bytes: Option<usize>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
+    insecure_http_model_hosts: Option<Vec<String>>,
     response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
+    openai_api_key: Option<String>,
+    openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    anthropic_api_key: Option<String>,
+    anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    chatgpt_codex_base_url: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct FileAgentsConfig {
     // Keys match the agent's CLI invocation name (`claude`, `codex`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal
@@ -87,11 +134,15 @@ struct FileAgentsConfig {
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
     pi: Option<FileAgentCommandConfig>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentCommandConfig {
     command: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 /// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
@@ -99,7 +150,22 @@ struct FileAgentCommandConfig {
 /// File discovery and merge behavior live in `load_shared_config`; this function only applies the
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
-    let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
+    let result = resolve_server_config_inner(args);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_server_config_inner(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
+    let mut resolved = load_shared_config_prepared(
+        args.config.as_ref(),
+        args.plugin_config_path.as_ref(),
+        args.prepared.as_deref(),
+    )?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     let explicit_plugin_config =
         explicit_plugin_config_path(args.config.as_ref(), args.plugin_config_path.as_ref());
@@ -111,38 +177,86 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Runtime configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
-/// Administrator-controlled configuration for a daemon-managed worker.
+/// Loads routing settings for the daemon without reading plugin files.
+/// Gateways and daemon workers check the plugins they run.
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+    let explicit = args.config.as_ref();
+    let paths = config_paths(explicit)
+        .into_iter()
+        .map(|path| {
+            let required = explicit == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let mut resolved = match args
+        .prepared
+        .as_deref()
+        .and_then(PreparedConfig::take_document)
+    {
+        Some(document) => finish_shared_config(document, Vec::new(), apply_env_config)?,
+        None => load_config_from_paths(paths, Vec::new(), apply_env_config)?,
+    };
+    apply_server_overrides(&mut resolved.gateway, args)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "daemon";
+        "Daemon configuration resolved"
+    );
+    Ok(resolved.gateway)
+}
+
+/// Layered configuration for a daemon-managed, machine-user worker.
 ///
-/// The worker must be identical for every user routed through the same managed deployment, so it
-/// cannot consult the per-user configuration layer. `plugin_config_path` is retained so dynamic
-/// plugin lifecycle state is loaded from the same system scope as the resolved plugin document.
+/// System configuration retains precedence over the user's configuration. `plugin_config_path`
+/// selects the user layer for dynamic plugin lifecycle loading; the system layer still applies.
 #[derive(Debug, Clone)]
 pub(crate) struct ManagedWorkerConfig {
     pub(crate) resolved: ResolvedConfig,
     pub(crate) plugin_config_path: PathBuf,
 }
 
-/// Resolves daemon-worker configuration exclusively from the platform system configuration.
-pub(crate) fn resolve_managed_worker_config() -> Result<ManagedWorkerConfig, CliError> {
+/// Resolves daemon-worker configuration from user and system layers.
+pub(crate) fn resolve_managed_worker_config(
+    prepared: Option<&PreparedConfig>,
+) -> Result<ManagedWorkerConfig, CliError> {
     let system_directory = system_config_dir();
     resolve_managed_worker_config_from_paths(
         system_directory.join("config.toml"),
         system_directory.join(PLUGINS_TOML),
+        prepared,
     )
 }
 
 fn resolve_managed_worker_config_from_paths(
     config_path: PathBuf,
     plugin_config_path: PathBuf,
+    prepared: Option<&PreparedConfig>,
 ) -> Result<ManagedWorkerConfig, CliError> {
-    let resolved = load_config_from_paths(
-        vec![(config_path, false)],
-        vec![plugin_config_path.clone()],
-        apply_managed_worker_env_config,
-    )?;
+    let mut config_paths = Vec::new();
+    if let Some(user_path) = user_config_path() {
+        config_paths.push((user_path, false));
+    }
+    config_paths.push((config_path, false));
+    let mut plugin_paths = Vec::new();
+    let selected_plugin_path = user_plugin_config_path().unwrap_or(plugin_config_path.clone());
+    if selected_plugin_path != plugin_config_path {
+        plugin_paths.push(selected_plugin_path.clone());
+    }
+    plugin_paths.push(plugin_config_path);
+    let plugin_config_path = selected_plugin_path;
+    let resolved = match prepared.and_then(PreparedConfig::take_document) {
+        Some(document) => {
+            finish_shared_config(document, plugin_paths, apply_managed_worker_env_config)?
+        }
+        None => {
+            load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?
+        }
+    };
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
@@ -151,6 +265,7 @@ fn resolve_managed_worker_config_from_paths(
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Managed worker configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(ManagedWorkerConfig {
         resolved,
         plugin_config_path,
@@ -195,7 +310,14 @@ fn resolve_logging_config_section(
         merge_gateway_config_toml(&mut merged, parsed);
     }
 
-    let Some(logging) = toml_value_at_path(&merged, section).cloned() else {
+    resolve_logging_from_document(&merged, section)
+}
+
+fn resolve_logging_from_document(
+    document: &toml::Value,
+    section: &[&str],
+) -> Result<LoggingConfig, CliError> {
+    let Some(logging) = toml_value_at_path(document, section).cloned() else {
         return Ok(LoggingConfig::default());
     };
     let mut document = toml::map::Map::new();
@@ -217,19 +339,33 @@ fn toml_value_at_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a t
 pub(crate) fn resolve_persistent_server_config(
     args: &GatewayOverrides,
 ) -> Result<ResolvedConfig, CliError> {
+    let result = resolve_persistent_server_config_inner(args);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_persistent_server_config_inner(
+    args: &GatewayOverrides,
+) -> Result<ResolvedConfig, CliError> {
     if args.config.is_some() || args.plugin_config_path.is_some() || args.ready_file.is_some() {
         return Err(CliError::Config(
             "nemo-relay mcp uses system and user configuration only; use `nemo-relay run` for explicit configuration"
                 .into(),
         ));
     }
-    let mut resolved = load_shared_config(None, None)?;
+    let mut resolved = load_shared_config_prepared(None, None, args.prepared.as_deref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     let active_dynamic_plugins = active_dynamic_plugin_components_for_identity(None, &resolved)?;
     resolved.bootstrap_fingerprint = Some(persistent_bootstrap_fingerprint(
         &resolved,
         &active_dynamic_plugins,
     )?);
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
@@ -318,9 +454,15 @@ fn persistent_bootstrap_fingerprint(
         "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
+        "insecure_http_model_hosts": gateway.insecure_http_model_hosts,
         "openai_auth_header": gateway.openai_auth_header,
+        "openai_api_key": gateway.openai_api_key,
+        "openai_api_key_helper": gateway.openai_api_key_helper,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "anthropic_api_key": gateway.anthropic_api_key,
+        "anthropic_api_key_helper": gateway.anthropic_api_key_helper,
+        "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
@@ -339,7 +481,11 @@ fn persistent_bootstrap_fingerprint(
     let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
     for name in crate::mcp_environment::forwarded_names(environment, gateway.plugin_config.as_ref())
     {
-        if name == PLUGIN_IDLE_TIMEOUT_ENV || name == PLUGIN_HEARTBEAT_INTERVAL_ENV {
+        if name == PLUGIN_IDLE_TIMEOUT_ENV
+            || name == PLUGIN_HEARTBEAT_INTERVAL_ENV
+            || name.eq_ignore_ascii_case("NEMO_RELAY_DIAGNOSTICS")
+            || name.eq_ignore_ascii_case("NEMO_RELAY_DIAGNOSTICS_HTTP")
+        {
             continue;
         }
         digest.update(&[0]);
@@ -543,7 +689,7 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
 
 const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
-const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
+const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v2\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
 const HOOK_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/hook-client/v1\0";
 const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";
@@ -623,9 +769,20 @@ impl BootstrapChallengeKey {
         hmac::verify(&self.0, &message, &tag).is_ok()
     }
 
-    /// Returns a stable, per-user proof that authorizes use of credentials forwarded to a
-    /// managed sidecar. The HMAC key remains in Relay's private bootstrap state; coding-agent
-    /// configuration stores only this domain-separated proof.
+    /// Domain-separated read capability; provider and shutdown credentials cannot authorize it.
+    pub(crate) fn diagnostics_token(&self) -> String {
+        encode_hmac_tag(hmac::sign(&self.0, b"nemo-relay/diagnostics-read/v1"))
+    }
+    pub(crate) fn verify_diagnostics_token(&self, token: &str) -> bool {
+        token
+            .strip_prefix("hmac-sha256:")
+            .and_then(decode_fixed_hex::<32>)
+            .is_some_and(|tag| {
+                hmac::verify(&self.0, b"nemo-relay/diagnostics-read/v1", &tag).is_ok()
+            })
+    }
+
+    /// Stable per-user provider proof; coding-agent configuration receives no read authority.
     pub(crate) fn client_token(&self) -> String {
         encode_hmac_tag(hmac::sign(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN))
     }
@@ -1287,6 +1444,20 @@ pub(crate) fn resolve_run_config(
     command: &RunOverrides,
     inherited: Option<&GatewayOverrides>,
 ) -> Result<ResolvedConfig, CliError> {
+    let result = resolve_run_config_inner(command, inherited);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_run_config_inner(
+    command: &RunOverrides,
+    inherited: Option<&GatewayOverrides>,
+) -> Result<ResolvedConfig, CliError> {
     let config = command
         .config
         .as_ref()
@@ -1295,7 +1466,11 @@ pub(crate) fn resolve_run_config(
         .plugin_config_path
         .as_ref()
         .or_else(|| inherited.and_then(|args| args.plugin_config_path.as_ref()));
-    let mut resolved = load_shared_config(config, plugin_config_path)?;
+    let mut resolved = load_shared_config_prepared(
+        config,
+        plugin_config_path,
+        inherited.and_then(|args| args.prepared.as_deref()),
+    )?;
     if let Some(args) = inherited {
         apply_server_overrides(&mut resolved.gateway, args)?;
     }
@@ -1314,34 +1489,61 @@ pub(crate) fn resolve_run_config(
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Runtime configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
 // Applies subcommand-specific `run` overrides after inherited top-level flags. JSON-bearing fields
 // are parsed here so invalid metadata or plugin config fails before the gateway binds a port.
 fn apply_run_overrides(config: &mut GatewayConfig, command: &RunOverrides) -> Result<(), CliError> {
-    apply_run_url_overrides(config, command);
+    apply_run_url_overrides(config, command)?;
     apply_run_json_overrides(config, command)?;
     Ok(())
 }
 
-// Applies plain string/path run overrides. These fields do not need parsing, so they stay separate
-// from JSON options whose errors should include field context.
-fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
+// Applies upstream URL overrides before parsing JSON-bearing options.
+fn apply_run_url_overrides(
+    config: &mut GatewayConfig,
+    command: &RunOverrides,
+) -> Result<(), CliError> {
     if let Some(value) = &command.openai_base_url {
+        if config.openai_base_url != *value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value.clone(),
+            validate_upstream_base_url_with_hosts(
+                "--openai-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &command.anthropic_base_url {
+        if config.anthropic_base_url != *value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value.clone(),
+            validate_upstream_base_url_with_hosts(
+                "--anthropic-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
+    if let Some(value) = &command.chatgpt_codex_base_url {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "--chatgpt-codex-base-url",
+            value.clone(),
+        )?);
+    }
+    crate::upstream_auth::validate_config(config)?;
+    Ok(())
 }
 
 // Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
@@ -1366,18 +1568,40 @@ fn apply_server_overrides(
         config.bind = value;
     }
     if let Some(value) = &args.openai_base_url {
+        if config.openai_base_url != *value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value.clone(),
+            validate_upstream_base_url_with_hosts(
+                "--openai-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &args.anthropic_base_url {
+        if config.anthropic_base_url != *value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value.clone(),
+            validate_upstream_base_url_with_hosts(
+                "--anthropic-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
+    }
+    if let Some(value) = &args.chatgpt_codex_base_url {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "--chatgpt-codex-base-url",
+            value.clone(),
+        )?);
     }
     if let Some(value) = args.max_hook_payload_bytes {
         config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
@@ -1386,6 +1610,7 @@ fn apply_server_overrides(
         config.max_passthrough_body_bytes =
             validate_body_limit("max passthrough body bytes", value)?;
     }
+    crate::upstream_auth::validate_config(config)?;
     Ok(())
 }
 
@@ -1413,12 +1638,53 @@ fn load_shared_config(
     )
 }
 
+fn load_shared_config_prepared(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+    prepared: Option<&PreparedConfig>,
+) -> Result<ResolvedConfig, CliError> {
+    match prepared.and_then(PreparedConfig::take_document) {
+        Some(document) => finish_shared_config(
+            document,
+            plugin_config_paths(explicit, plugin_config_path),
+            apply_env_config,
+        ),
+        None => load_shared_config(explicit, plugin_config_path),
+    }
+}
+
 fn load_config_from_paths(
     config_paths: Vec<(PathBuf, bool)>,
     plugin_config_paths: Vec<PathBuf>,
     apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
 ) -> Result<ResolvedConfig, CliError> {
+    let document = read_shared_documents_for_startup(config_paths, true)?;
+    finish_shared_config(document, plugin_config_paths, apply_environment)
+}
+
+#[cfg(test)]
+fn read_shared_documents(config_paths: Vec<(PathBuf, bool)>) -> Result<toml::Value, CliError> {
+    read_shared_documents_for_startup(config_paths, true).map(|document| document.merged)
+}
+
+#[derive(Debug)]
+struct LegacyConfigSource {
+    path: PathBuf,
+    sections: Vec<&'static str>,
+}
+
+#[derive(Debug)]
+struct PreparedSharedDocument {
+    merged: toml::Value,
+    legacy_sources: Vec<LegacyConfigSource>,
+}
+
+fn read_shared_documents_for_startup(
+    config_paths: Vec<(PathBuf, bool)>,
+    validate_runtime: bool,
+) -> Result<PreparedSharedDocument, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut legacy_sources = Vec::new();
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
@@ -1430,7 +1696,7 @@ fn load_config_from_paths(
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
         let legacy_observability = legacy_observability_sections(&parsed);
-        if !legacy_observability.is_empty() {
+        if validate_runtime && !legacy_observability.is_empty() {
             return Err(CliError::Config(format!(
                 "legacy observability config in {} is no longer supported: {}; configure \
                  observability in plugins.toml with `nemo-relay plugins edit`",
@@ -1438,20 +1704,60 @@ fn load_config_from_paths(
                 legacy_observability.join(", ")
             )));
         }
-        if parsed.get("plugins").is_some() {
+        if validate_runtime && parsed.get("plugins").is_some() {
             return Err(CliError::Config(format!(
                 "plugin configuration in {} is no longer supported; move it to plugins.toml",
                 path.display()
             )));
         }
+        if !validate_runtime {
+            let mut sections = legacy_observability;
+            if parsed.get("plugins").is_some() {
+                sections.push("plugins");
+            }
+            if !sections.is_empty() {
+                legacy_sources.push(LegacyConfigSource { path, sections });
+            }
+        }
         merge_gateway_config_toml(&mut merged, parsed);
+    }
+    Ok(PreparedSharedDocument {
+        merged,
+        legacy_sources,
+    })
+}
+
+fn finish_shared_config(
+    shared: PreparedSharedDocument,
+    plugin_config_paths: Vec<PathBuf>,
+    apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
+) -> Result<ResolvedConfig, CliError> {
+    let mut sections = legacy_observability_sections(&shared.merged);
+    if shared.merged.get("plugins").is_some() && !sections.contains(&"plugins") {
+        sections.push("plugins");
+    }
+    if !sections.is_empty() {
+        let sources = shared
+            .legacy_sources
+            .iter()
+            .map(|source| format!("{} ({})", source.path.display(), source.sections.join(", ")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let context = if sources.is_empty() {
+            sections.join(", ")
+        } else {
+            sources
+        };
+        return Err(CliError::Config(format!(
+            "legacy observability/plugin sections in config.toml ({context}) are unsupported; configure them in plugins.toml with `nemo-relay plugins edit`"
+        )));
     }
     let plugin_toml = load_plugin_toml_config_from_paths(plugin_config_paths)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
-    apply_file_config(&mut resolved, merged)?;
+    apply_file_config(&mut resolved, shared.merged)?;
     apply_plugin_toml_config(&mut resolved, plugin_toml);
     apply_environment(&mut resolved.gateway)?;
     Ok(resolved)
@@ -1602,6 +1908,18 @@ pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBu
 // are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config = parse_file_config(value)?;
+    for key in config.unknown_keys() {
+        log::warn!(
+            target: "nemo_relay.configuration",
+            event = "configuration_unknown_key",
+            key = key.as_str();
+            "Unknown configuration key ignored"
+        );
+    }
+    if let Some(diagnostics) = config.diagnostics {
+        diagnostics.validate()?;
+        resolved.diagnostics = diagnostics;
+    }
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
@@ -1609,9 +1927,35 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     Ok(())
 }
 
-pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<(), CliError> {
-    let _ = parse_file_config(value)?;
-    Ok(())
+/// Checks the shared config shape and returns the unknown keys it would ignore.
+pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<Vec<String>, CliError> {
+    Ok(parse_file_config(value)?.unknown_keys())
+}
+
+/// Validate one editor target with runtime rules, without loading other files or credentials.
+pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliError> {
+    if value.get("plugins").is_some() || !legacy_observability_sections(&value).is_empty() {
+        return Err(CliError::Config(
+            "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
+                .into(),
+        ));
+    }
+    if let Some(logging) = value.get("daemon").and_then(|daemon| daemon.get("logging")) {
+        let logging = logging.clone().try_into().map_err(|error| {
+            CliError::Config(format!(
+                "invalid daemon logging configuration shape: {error}"
+            ))
+        })?;
+        logging::apply_file_logging_config(&mut LoggingConfig::default(), Some(logging))?;
+    }
+    // Deserialization diagnostics can include secret field values. Report shape errors without
+    // their payload, then use the runtime's semantic checks for actionable validation errors.
+    validate_shared_config_shape(value.clone()).map_err(|_| {
+        CliError::Config(
+            "invalid configuration shape; check field names and types in gateway, upstream, agents, and logging".into(),
+        )
+    })?;
+    apply_file_config(&mut ResolvedConfig::default(), value)
 }
 
 fn parse_file_config(value: toml::Value) -> Result<FileConfig, CliError> {
@@ -1649,16 +1993,34 @@ fn apply_file_upstream_config(
     };
     let FileUpstreamConfig {
         response_timeout_secs,
+        insecure_http_model_hosts,
         openai_base_url,
         openai_auth_header,
+        openai_api_key,
+        openai_api_key_helper,
         anthropic_base_url,
         anthropic_auth_header,
+        anthropic_api_key,
+        anthropic_api_key_helper,
+        chatgpt_codex_base_url,
+        unknown: _,
     } = upstream;
+    if let Some(hosts) = insecure_http_model_hosts {
+        gateway.insecure_http_model_hosts = HttpModelHosts::parse(hosts)?;
+    }
     if let Some(value) = response_timeout_secs {
         gateway.response_timeout_secs = value;
     }
     if let Some(value) = openai_base_url {
-        gateway.openai_base_url = value;
+        if gateway.openai_base_url != value {
+            gateway.openai_api_key = None;
+            gateway.openai_api_key_helper = None;
+        }
+        gateway.openai_base_url = validate_upstream_base_url_with_hosts(
+            "upstream.openai_base_url",
+            value,
+            &gateway.insecure_http_model_hosts,
+        )?;
         if openai_auth_header.is_none() {
             gateway.openai_auth_header = None;
         }
@@ -1668,7 +2030,15 @@ fn apply_file_upstream_config(
             Some(validate_auth_header("upstream.openai_auth_header", value)?);
     }
     if let Some(value) = anthropic_base_url {
-        gateway.anthropic_base_url = value;
+        if gateway.anthropic_base_url != value {
+            gateway.anthropic_api_key = None;
+            gateway.anthropic_api_key_helper = None;
+        }
+        gateway.anthropic_base_url = validate_upstream_base_url_with_hosts(
+            "upstream.anthropic_base_url",
+            value,
+            &gateway.insecure_http_model_hosts,
+        )?;
         if anthropic_auth_header.is_none() {
             gateway.anthropic_auth_header = None;
         }
@@ -1679,6 +2049,31 @@ fn apply_file_upstream_config(
             value,
         )?);
     }
+    if let Some(value) = openai_api_key {
+        gateway.openai_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.openai_api_key",
+            value,
+        )?);
+    }
+    if let Some(value) = openai_api_key_helper {
+        gateway.openai_api_key_helper = Some(value);
+    }
+    if let Some(value) = anthropic_api_key {
+        gateway.anthropic_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.anthropic_api_key",
+            value,
+        )?);
+    }
+    if let Some(value) = anthropic_api_key_helper {
+        gateway.anthropic_api_key_helper = Some(value);
+    }
+    if let Some(value) = chatgpt_codex_base_url {
+        gateway.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "upstream.chatgpt_codex_base_url",
+            value,
+        )?);
+    }
+    crate::upstream_auth::validate_config(gateway)?;
     Ok(())
 }
 
@@ -1955,31 +2350,51 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     {
         config.bind = value;
     }
-    let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
+        if config.openai_base_url != value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value,
+            validate_upstream_base_url_with_hosts(
+                "NEMO_RELAY_OPENAI_BASE_URL",
+                value,
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
-    if let Some(value) = openai_auth_header {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
+        if config.anthropic_base_url != value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value,
+            validate_upstream_base_url_with_hosts(
+                "NEMO_RELAY_ANTHROPIC_BASE_URL",
+                value,
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
-    if let Some(value) = anthropic_auth_header {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
+    if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
             value,
         )?);
     }
@@ -1991,24 +2406,40 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         config.max_passthrough_body_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
+    crate::upstream_auth::validate_config(config)?;
     Ok(())
 }
 
 // Managed workers accept provider secrets from their inherited environment but never allow a
 // user's environment to change administrator-selected endpoints, limits, or listener settings.
-// `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are intentionally read later at request forwarding time.
+// Provider environment credentials are ignored when that provider has an API key helper.
 fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
-    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
-            value,
-        )?);
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
+    crate::upstream_auth::validate_config(config)?;
+    Ok(())
+}
+
+/// Helpers own provider authentication. Otherwise an environment header replaces a file key.
+fn apply_environment_auth_header(
+    name: &str,
+    header: &mut Option<String>,
+    key: &mut Option<String>,
+    helper_enabled: bool,
+) -> Result<(), CliError> {
+    if !helper_enabled && let Ok(value) = std::env::var(name) {
+        *header = Some(validate_auth_header(name, value)?);
+        *key = None;
     }
     Ok(())
 }
@@ -2022,6 +2453,68 @@ fn replace_upstream_base_url(
         *auth_header = None;
     }
     *base_url = replacement;
+}
+
+// Preserve Codex's normalized URL serialization, including a bare host's trailing slash.
+fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, CliError> {
+    Ok(parse_upstream_base_url(name, &value)?.to_string())
+}
+
+// Preserve the trimmed spelling used to compare OpenAI and Anthropic credential destinations.
+#[cfg(test)]
+fn validate_upstream_base_url(name: &str, value: String) -> Result<String, CliError> {
+    validate_upstream_base_url_with_hosts(name, value, &HttpModelHosts::default())
+}
+fn validate_upstream_base_url_with_hosts(
+    name: &str,
+    value: String,
+    hosts: &HttpModelHosts,
+) -> Result<String, CliError> {
+    parse_upstream_base_url_with_hosts(name, &value, hosts)?;
+    Ok(value.trim().to_string())
+}
+
+// Provider credentials may only travel over TLS, except to a loopback proxy. Reject URL
+// components that would change the meaning of the request path appended by the gateway.
+fn parse_upstream_base_url(name: &str, value: &str) -> Result<reqwest::Url, CliError> {
+    parse_upstream_base_url_with_hosts(name, value, &HttpModelHosts::default())
+}
+fn parse_upstream_base_url_with_hosts(
+    name: &str,
+    value: &str,
+    hosts: &HttpModelHosts,
+) -> Result<reqwest::Url, CliError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{name} must not be empty")));
+    }
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| CliError::Config(format!("{name} must be a valid URL")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| CliError::Config(format!("{name} must include a host")))?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() != "https"
+        && !(url.scheme() == "http" && (loopback || hosts.allows_base_url(value, &url)))
+    {
+        return Err(CliError::Config(format!(
+            "{name} must use https unless the host is loopback"
+        )));
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(CliError::Config(format!(
+            "{name} must not include user information, a query, or a fragment"
+        )));
+    }
+    Ok(url)
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
@@ -2081,15 +2574,47 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
         left.get_mut("upstream").and_then(toml::Value::as_table_mut),
         right.get("upstream").and_then(toml::Value::as_table),
     ) {
-        for (base_url, auth_header) in [
-            ("openai_base_url", "openai_auth_header"),
-            ("anthropic_base_url", "anthropic_auth_header"),
+        let defaults = GatewayConfig::default();
+        for (base_url, default_url, credentials) in [
+            (
+                "openai_base_url",
+                defaults.openai_base_url.as_str(),
+                [
+                    "openai_auth_header",
+                    "openai_api_key",
+                    "openai_api_key_helper",
+                ],
+            ),
+            (
+                "anthropic_base_url",
+                defaults.anthropic_base_url.as_str(),
+                [
+                    "anthropic_auth_header",
+                    "anthropic_api_key",
+                    "anthropic_api_key_helper",
+                ],
+            ),
         ] {
-            let endpoint_changed = override_upstream
-                .get(base_url)
-                .is_some_and(|value| existing.get(base_url) != Some(value));
-            if endpoint_changed && !override_upstream.contains_key(auth_header) {
-                existing.remove(auth_header);
+            let endpoint_changed = override_upstream.get(base_url).is_some_and(|value| {
+                value.as_str()
+                    != Some(
+                        existing
+                            .get(base_url)
+                            .and_then(toml::Value::as_str)
+                            .unwrap_or(default_url),
+                    )
+            });
+            for credential in credentials {
+                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
+                let helper = credential.ends_with("_api_key_helper");
+                let clear = if helper {
+                    endpoint_changed || override_upstream.contains_key(credential)
+                } else {
+                    endpoint_changed && !override_upstream.contains_key(credential)
+                };
+                if clear {
+                    existing.remove(credential);
+                }
             }
         }
     }

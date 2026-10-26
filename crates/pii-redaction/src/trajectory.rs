@@ -219,7 +219,9 @@ impl TrajectorySanitizer {
         } else {
             fields.data = fields.data.map(|_| empty_object());
         }
-        fields.metadata = fields.metadata.map(|_| empty_object());
+        fields.metadata = fields
+            .metadata
+            .map(|metadata| sanitize_scope_status_metadata(event, metadata));
 
         let provider = (category == Some("llm"))
             .then(|| provider_name(event))
@@ -927,12 +929,14 @@ fn sanitize_api_specific_response(
         },
         ApiSpecificResponse::GeminiGenerateContent {
             thoughts_tokens,
+            tool_use_prompt_tokens,
             safety_ratings,
             grounding_metadata,
             citation_metadata,
             extra: _,
         } => ApiSpecificResponse::GeminiGenerateContent {
             thoughts_tokens,
+            tool_use_prompt_tokens,
             safety_ratings: opaque_option(safety_ratings),
             grounding_metadata: opaque_option(grounding_metadata),
             citation_metadata: opaque_option(citation_metadata),
@@ -987,6 +991,65 @@ fn sanitize_native_kind(kind: String, replacement: &str) -> String {
         ],
         replacement,
     )
+}
+
+/// Keep only known status and tool completion fields in scope metadata.
+fn sanitize_scope_status_metadata(event: &Event, metadata: Json) -> Json {
+    let mut sanitized = Map::new();
+    if !matches!(event, Event::Scope(_)) {
+        return Json::Object(sanitized);
+    }
+    if event.category().map(|category| category.as_str()) == Some("tool") {
+        for (key, allowed) in [
+            (
+                "tool_completion_source",
+                &["gateway_request", "lifecycle"][..],
+            ),
+            (
+                "tool_completion_outcome",
+                &["unknown", "incomplete", "interrupted"][..],
+            ),
+            ("tool_completion_timing", &["upper_bound"][..]),
+        ] {
+            if let Some(value) = metadata.get(key).and_then(Json::as_str)
+                && allowed.contains(&value)
+            {
+                sanitized.insert(key.into(), Json::String(value.into()));
+            }
+        }
+    }
+    let Some(status @ ("OK" | "ERROR" | "UNSET")) =
+        metadata.get("otel.status_code").and_then(Json::as_str)
+    else {
+        return Json::Object(sanitized);
+    };
+    sanitized.insert("otel.status_code".into(), Json::String(status.into()));
+    if status == "ERROR" {
+        // Keep only known error types and the OpenTelemetry fallback.
+        // Other values can contain private data.
+        if let Some(
+            error_type @ ("already_exists"
+            | "not_found"
+            | "invalid_argument"
+            | "scope_stack_empty"
+            | "guardrail_rejected"
+            | "connection_error"
+            | "timeout"
+            | "retryable_status"
+            | "context_window"
+            | "model_unavailable"
+            | "authentication"
+            | "invalid_request"
+            | "upstream_error"
+            | "internal_error"
+            | "tool_execution_failed"
+            | "_OTHER"),
+        ) = metadata.get("error.type").and_then(Json::as_str)
+        {
+            sanitized.insert("error.type".into(), Json::String(error_type.into()));
+        }
+    }
+    Json::Object(sanitized)
 }
 
 fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<LogSeverity> {

@@ -12,6 +12,36 @@ without linking the host runtime crate. The example's `runtime` group emits a co
 mark, opens and closes a child scope, and optionally creates an isolated
 [scope stack](/about-nemo-relay/concepts/scopes).
 
+## Inspect Scope Identities
+
+The application process loads the native plugin library and supplies its host
+function table. Within a callback, `ctx.runtime()` reads that callback's restored
+scope binding. Retrieve a detached snapshot and select the nearest Agent:
+
+```rust
+use nemo_relay_plugin::ScopeType;
+
+let snapshot = ctx.runtime().current_scope_stack_snapshot()?;
+let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
+    snapshot.scopes.iter().rev()
+        .find(|entry| entry.scope_type == ScopeType::Agent)
+        .map(|entry| entry.scope_id)
+});
+// Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+
+The list runs from the implicit root to the current top and retains actual
+scope UUIDs. Later push/pop operations do not change earlier snapshots.
+No explicit binding returns `None` without creating a stack; an explicitly
+bound root-only stack returns its root. Synthetic propagated entries retain
+stored types, so a synthetic Agent root is not evidence of a known upstream
+Agent. See the [visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
+
+The getter requires the additive ABI v8 extension. A compatible v7 host
+returns an explicit unsupported error. The SDK validates the table's version
+and size, copies the result, and releases the host's buffer even if decoding
+fails. Async callbacks inspect their restored binding on each read.
+
 ## Preserve Stack Ownership
 
 A scope stack determines visible scope-local middleware, event parentage, and cleanup.
@@ -112,6 +142,10 @@ if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
 The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
 does not identify the plugin that recorded a diagnostic. These operations require the
 native host ABI v4 extensions.
+
+`runtime_diagnostics()` reads the legacy host report. For canonical recording and
+authorized reads, use `runtime.diagnostics()` as described in
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics).
 
 ## Control Global Runtime Registrations
 
@@ -224,3 +258,28 @@ failure cleanup:
 Success means event parentage is intentional, no scope or isolated stack leaks on
 failure, later work regains its original context, and unload begins only after callback
 ownership has ended.
+
+## Record Internal Diagnostics
+
+Use `ctx.runtime().diagnostics()` to obtain the canonical SDK facade. Register a
+stable component during setup and retain it in callbacks that perform internal
+work. Disabled or unsupported facades skip lazy declaration and observation
+factories. The host still owns recording load, validation, registration, and
+callback failures.
+
+The [native SDK diagnostics guide](/build-plugins/native/diagnostics#record-internal-observations)
+provides a complete recording example. The
+[shared plugin guide](/build-plugins/diagnostics) compares the same example across
+Rust native, Rust gRPC, and Python gRPC.
+
+### Inspect Canonical Diagnostics
+
+Call `runtime.diagnostics().reader()` only when host policy grants
+`native_diagnostics_read_context`. This permission covers the whole selected
+context, including other components' restricted detail. It defaults to false and
+does not grant read access to workers. Recording needs no read grant.
+
+Refer to [Read Host Evidence](/build-plugins/native/diagnostics#read-host-evidence)
+for host-policy configuration and examples of discovery, snapshot, and memory
+reads. Each call checks live authority. Reader results are caller-owned and
+never automatically feed logs or exporters.

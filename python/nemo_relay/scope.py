@@ -17,9 +17,10 @@ Example::
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterator, Sequence
+from typing import Sequence
 
 from nemo_relay import DataSchema, Json
 from nemo_relay._context import ensure_scope_stack as _ensure_scope_stack
@@ -231,7 +232,7 @@ def scope(
     input: Json | None = None,
     timestamp: datetime | None = None,
     end_timestamp: datetime | None = None,
-) -> Iterator[ScopeHandle]:
+) -> Generator[ScopeHandle]:
     """Create a scope for the duration of a ``with`` block.
 
     OTEL status codes will be automatically recorded in the scope's metadata.

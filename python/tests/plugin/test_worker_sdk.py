@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 from unittest import mock
+from uuid import UUID
 
 import pytest
 
@@ -1046,7 +1047,7 @@ async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() ->
     class CallablePluginId(WorkerPlugin):
         allows_multiple_components = True
 
-        def plugin_id(self) -> str:
+        def plugin_id(self) -> str:  # ty: ignore[invalid-attribute-override]
             return "tests.callable_id"
 
         def register(self, ctx: PluginContext, config: Json) -> None:
@@ -2954,27 +2955,35 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
     invoke_task = asyncio.create_task(service.Invoke(request, AbortContext()))
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    first = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-unary",
-            auth_token=AUTH_TOKEN,
-            reason="test timeout",
-        ),
-        AbortContext(),
+    first_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-unary",
+                auth_token=AUTH_TOKEN,
+                reason="test timeout",
+            ),
+            AbortContext(),
+        )
     )
     await asyncio.wait_for(cancelled.wait(), timeout=1)
-    second = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-unary",
-            auth_token=AUTH_TOKEN,
-            reason="repeat",
-        ),
-        AbortContext(),
+    second_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-unary",
+                auth_token=AUTH_TOKEN,
+                reason="repeat",
+            ),
+            AbortContext(),
+        )
     )
+    await asyncio.sleep(0)
+    assert not first_task.done()
+    assert not second_task.done()
     reused = await asyncio.wait_for(service.Invoke(request, AbortContext()), timeout=1)
     release.set()
+    first, second = await asyncio.wait_for(asyncio.gather(first_task, second_task), timeout=1)
     response = await asyncio.wait_for(invoke_task, timeout=1)
 
     assert first.accepted
@@ -2989,6 +2998,8 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
 async def test_cancel_invocation_stops_active_async_stream() -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
 
     class CancelStreamPlugin(WorkerPlugin):
         plugin_id = "tests.cancel_stream"
@@ -3001,9 +3012,10 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
                 started.set()
                 try:
                     await asyncio.Event().wait()
-                except asyncio.CancelledError:
+                finally:
+                    cleanup_started.set()
+                    await finish_cleanup.wait()
                     cancelled.set()
-                    raise
                 if False:
                     yield {}
 
@@ -3023,15 +3035,22 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
 
     consume_task = asyncio.create_task(consume())
     await asyncio.wait_for(started.wait(), timeout=1)
-    ack = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
-            invocation_id="cancel-stream",
-            auth_token=AUTH_TOKEN,
-            reason="stream abandoned",
-        ),
-        AbortContext(),
+    cancel_task = asyncio.create_task(
+        service.CancelInvocation(
+            pb.CancelInvocationRequest(
+                activation_id=ACTIVATION_ID,
+                invocation_id="cancel-stream",
+                auth_token=AUTH_TOKEN,
+                reason="stream abandoned",
+            ),
+            AbortContext(),
+        )
     )
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    assert not cancel_task.done()
+    finish_cleanup.set()
+    ack = await asyncio.wait_for(cancel_task, timeout=1)
+    assert cancelled.is_set()
     chunks = await asyncio.wait_for(consume_task, timeout=1)
 
     assert ack.accepted
@@ -3136,24 +3155,34 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
 
 
 def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    """Retain Unix authority while configuring send/receive limits for both transports."""
+    calls: list[tuple[str, tuple[tuple[str, str | int], ...]]] = []
 
     def insecure_channel(
         target: str,
         *,
-        options: tuple[tuple[str, str], ...] = (),
+        options: tuple[tuple[str, str | int], ...] = (),
     ) -> object:
+        """Capture channel options without opening a network connection."""
         calls.append((target, options))
         return object()
 
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", insecure_channel)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", "8388608")
 
     _open_host_channel("unix:///tmp/relay-host.sock")
     _open_host_channel("http://127.0.0.1:50051")
 
     assert calls == [
-        ("unix:/tmp/relay-host.sock", (("grpc.default_authority", "localhost"),)),
-        ("127.0.0.1:50051", ()),
+        (
+            "unix:/tmp/relay-host.sock",
+            (
+                ("grpc.max_receive_message_length", 8388608),
+                ("grpc.max_send_message_length", 8388608),
+                ("grpc.default_authority", "localhost"),
+            ),
+        ),
+        ("127.0.0.1:50051", (("grpc.max_receive_message_length", 8388608), ("grpc.max_send_message_length", 8388608))),
     ]
 
 
@@ -3339,30 +3368,36 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Do not publish the bound endpoint until the gRPC server accepts requests."""
     endpoint_file = tmp_path / "endpoint.txt"
     start_entered = asyncio.Event()
     allow_start = asyncio.Event()
 
     class FakeChannel:
         async def close(self) -> None:
+            """Allow startup-cancellation cleanup without opening a real channel."""
             pass
 
     class FakeServer:
         def add_insecure_port(self, target: str) -> int:
+            """Return a resolved loopback port without publishing it yet."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Pause startup so the test can inspect endpoint publication ordering."""
             start_entered.set()
             await allow_start.wait()
 
         async def stop(self, grace: int) -> None:
+            """Check the configured grace period during cancellation cleanup."""
             assert grace == 2
 
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: FakeChannel())
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: FakeChannel())
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3387,31 +3422,39 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
 
 
 async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close both channels and the server when the gRPC server cannot start."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that startup failure closed the host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Bind successfully so this test isolates the later startup failure."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Simulate a startup failure after resource allocation."""
             raise RuntimeError("start failed")
 
         async def stop(self, grace: int) -> None:
+            """Record server cleanup while checking its grace period."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3422,32 +3465,39 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     with pytest.raises(RuntimeError, match="start failed"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Release both channels and the server when endpoint binding returns no port."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that bind failure closed the allocated host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Simulate gRPC reporting that no loopback port could be bound."""
             assert target == "127.0.0.1:0"
             return 0
 
         async def stop(self, grace: int) -> None:
+            """Record cleanup even though the server never started listening."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3458,7 +3508,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     with pytest.raises(WorkerSdkError, match="failed to bind worker endpoint"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
@@ -3774,3 +3824,241 @@ async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> No
     )
 
     assert seen["tool_call_id"] is None
+
+
+@pytest.mark.parametrize("status", range(400, 600))
+def test_http_error_prefix_survives_worker_and_next_round_trip(status: int) -> None:
+    from nemo_relay_plugin import http_error_message
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    message = http_error_message(status, "provider failure")
+    wire = _sdk_error_to_worker(WorkerSdkError(message))
+    assert wire.message == message
+    assert not wire.retryable
+    assert _sdk_error_to_worker(_worker_error_to_sdk(wire)).message == message
+
+
+@pytest.mark.parametrize("message", ["plain failure", "http 403: denied", "HTTP 200: success", "HTTP ４０３: denied"])
+def test_unrecognized_http_error_prefix_keeps_worker_error_code(message: str) -> None:
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    wire = _sdk_error_to_worker(WorkerSdkError(message))
+    assert str(_worker_error_to_sdk(wire)) == f"{wire.code}: {message}"
+
+
+@pytest.mark.parametrize("status", [0, 200, 399, 600, 403.0, True])
+def test_http_error_message_rejects_invalid_status(status: Any) -> None:
+    from nemo_relay_plugin import http_error_message
+
+    with pytest.raises(ValueError, match="between 400 and 599"):
+        http_error_message(status, "invalid")
+
+
+def test_worker_cancellation_keeps_code_even_with_http_prefix() -> None:
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    wire = _sdk_error_to_worker(WorkerSdkError("HTTP 403: denied"))
+    wire.code = "worker.cancelled"
+    assert str(_worker_error_to_sdk(wire)) == "worker.cancelled: HTTP 403: denied"
+
+
+async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh() -> None:
+    identifiers = [str(UUID(int=number)) for number in range(1, 14)]
+    snapshot = pb.ScopeStackSnapshot(
+        scopes=[
+            pb.ScopeStackEntry(scope_id=identifier, scope_type=category)
+            for identifier, category in zip(identifiers, list(range(1, 12)) + [0, 999], strict=True)
+        ]
+    )
+    snapshot_response = pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot)
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        side_effect=[
+            pb.GetCurrentScopeStackSnapshotResponse(),
+            snapshot_response,
+            pb.GetCurrentScopeStackSnapshotResponse(snapshot=pb.ScopeStackSnapshot(scopes=snapshot.scopes[:1])),
+            pb.GetCurrentScopeStackSnapshotResponse(),
+        ]
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    assert await runtime.current_scope_stack_snapshot() is None
+    with runtime.bind_scope_stack("first", parent_scope_id=identifiers[1]):
+        retained = await runtime.current_scope_stack_snapshot()
+        assert retained is not None
+        assert [entry.scope_id for entry in retained.scopes] == identifiers
+        assert [entry.scope_type for entry in retained.scopes] == list(ScopeType) + [ScopeType.UNKNOWN] * 2
+        retained.scopes.pop()
+        with runtime.bind_scope_stack("second", parent_scope_id=identifiers[0]):
+            current = await runtime.current_scope_stack_snapshot()
+            assert current is not None
+            assert len(current.scopes) == 1
+            current.scopes.clear()
+        assert [entry.scope_id for entry in retained.scopes] == identifiers[:-1]
+        assert [entry.scope_id for entry in snapshot_response.snapshot.scopes] == identifiers
+        assert [entry.scope_id for entry in snapshot.scopes] == identifiers
+    assert await runtime.current_scope_stack_snapshot() is None
+    requests = [call.args[0] for call in host.GetCurrentScopeStackSnapshot.await_args_list]
+    assert [request.scope.scope_stack_id for request in requests] == ["", "first", "second", ""]
+    assert [request.scope.parent_scope_id for request in requests] == ["", identifiers[1], identifiers[0], ""]
+    assert all(request.activation_id == ACTIVATION_ID and request.auth_token == AUTH_TOKEN for request in requests)
+
+
+async def test_scope_stack_snapshot_distinguishes_host_error_and_unsupported_rpc() -> None:
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        return_value=pb.GetCurrentScopeStackSnapshotResponse(error=_worker_error("expired binding"))
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    with pytest.raises(WorkerSdkError, match="expired binding"):
+        await runtime.current_scope_stack_snapshot()
+    for status, message in [
+        (grpc.StatusCode.UNIMPLEMENTED, "grpc-v1 snapshot extension"),
+        (grpc.StatusCode.PERMISSION_DENIED, "GetCurrentScopeStackSnapshot failed: denied"),
+    ]:
+        host.GetCurrentScopeStackSnapshot.side_effect = grpc.aio.AioRpcError(
+            status, initial_metadata=(), trailing_metadata=(), details="denied"
+        )
+        with pytest.raises(WorkerSdkError, match=message):
+            await runtime.current_scope_stack_snapshot()
+
+
+async def test_scope_stack_snapshot_matches_shared_fixture() -> None:
+    fixture_path = Path(__file__).resolve().parents[3] / "crates/types/tests/fixtures/scope_stack_snapshot.json"
+    entries = json.loads(fixture_path.read_text())["scopes"]
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        return_value=pb.GetCurrentScopeStackSnapshotResponse(
+            snapshot=pb.ScopeStackSnapshot(
+                scopes=[
+                    pb.ScopeStackEntry(
+                        scope_id=entry["scope_id"], scope_type=plugin_api._proto_scope_type(entry["scope_type"])
+                    )
+                    for entry in entries
+                ]
+            )
+        )
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    snapshot = await runtime.current_scope_stack_snapshot()
+    assert snapshot is not None
+    assert [{"scope_id": entry.scope_id, "scope_type": entry.scope_type.value} for entry in snapshot.scopes] == entries
+
+
+@pytest.mark.parametrize("message", ["provider failed", "HTTP 503: provider unavailable"])
+def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: str) -> None:
+    legacy = plugin_api._sdk_error_to_worker(
+        plugin_api._worker_error_to_sdk(pb.WorkerError(code="host.runtime_error", message=message))
+    )
+    wire = pb.WorkerError(code="host.runtime_error", message=message, downstream_continuation_id="next-owned")
+    wire = pb.WorkerError.FromString(wire.SerializeToString())
+    first = plugin_api._worker_error_to_sdk(wire)
+    second = plugin_api._worker_error_to_sdk(
+        pb.WorkerError(code="host.runtime_error", message="another call", downstream_continuation_id="next-other")
+    )
+    # A caught failure followed by success or another failure does not overwrite origin.
+    assert plugin_api._json_result_to_value(pb.JsonResult(value=_json_envelope(JSON_SCHEMA, None))) is None
+    for error, expected in [(second, "next-other"), (first, "next-owned")]:
+        assert isinstance(error, WorkerSdkError)
+        forwarded = plugin_api._sdk_error_to_worker(error)
+        assert forwarded.downstream_continuation_id == expected
+    forwarded = plugin_api._sdk_error_to_worker(first)
+    forwarded.ClearField("downstream_continuation_id")
+    assert forwarded == legacy
+    assert not plugin_api._sdk_error_to_worker(WorkerSdkError(str(first))).HasField("downstream_continuation_id")
+
+
+class ProvenanceHost(RecordingHostStub):
+    def __init__(self, surface: str) -> None:
+        super().__init__()
+        self.surface = surface
+
+    def failure(self, request: Any) -> Any:
+        return pb.WorkerError(
+            code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
+        )
+
+    async def ToolNext(self, request: Any) -> Any:
+        return pb.ToolExecutionResultResponse(error=self.failure(request))
+
+    async def LlmNext(self, request: Any) -> Any:
+        return pb.JsonResult(error=self.failure(request))
+
+    async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
+        if self.surface == "stream_setup":
+            raise grpc.aio.AioRpcError(
+                grpc.StatusCode.INTERNAL,
+                grpc.aio.Metadata(),
+                grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
+                "provider failed",
+            )
+        yield pb.StreamChunk(error=self.failure(request))
+
+
+class ProvenancePlugin(WorkerPlugin):
+    def __init__(self, replace_error: bool) -> None:
+        self.replace_error = replace_error
+
+    plugin_id = "provenance"
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        async def tool(context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(context.args)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(request)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                async for value in next_call.call(request):
+                    yield value
+            except (WorkerSdkError, grpc.RpcError):
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        ctx.register_tool_execution_intercept("tool", tool)
+        ctx.register_llm_execution_intercept("llm", llm)
+        ctx.register_llm_stream_execution_intercept("stream", stream)
+
+
+@pytest.mark.parametrize("surface", ["tool", "llm", "stream", "stream_setup"])
+@pytest.mark.parametrize("replace_error", [False, True])
+async def test_continuation_provenance_survives_worker_callbacks(surface: str, replace_error: bool) -> None:
+    service = _service(ProvenancePlugin(replace_error), ProvenanceHost(surface))
+    await _register(service)
+
+    async def invoke(index: int) -> Any:
+        if surface == "tool":
+            request = _tool_request("tool", pb.TOOL_EXECUTION_INTERCEPT, {})
+        else:
+            request = _invoke_request(
+                "llm" if surface == "llm" else "stream",
+                pb.LLM_EXECUTION_INTERCEPT if surface == "llm" else pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                llm=_llm_payload(),
+            )
+        request.invocation_id = f"invoke-{index}"
+        request.continuation_id = f"next-{index}"
+        if surface.startswith("stream"):
+            chunks = [chunk async for chunk in service.InvokeStream(request, AbortContext())]
+            return chunks[0].error
+        return (await service.Invoke(request, AbortContext())).error
+
+    # Concurrent invocations retain independent provenance, without a shared last-error flag.
+    errors = await asyncio.gather(invoke(1), invoke(2))
+    for index, error in enumerate(errors, 1):
+        if replace_error:
+            assert not error.HasField("downstream_continuation_id")
+            assert error.message == "independent plugin failure"
+        else:
+            assert error.downstream_continuation_id == f"next-{index}"
+            assert "provider failed" in error.message

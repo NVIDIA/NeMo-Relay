@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -117,8 +118,18 @@ def nemo_relay_middleware_fixture() -> NemoRelayMiddleware:
 
 class RecordingMiddleware(Protocol):
     calls: list[dict[str, Any]]
-    wrap_model_call: Callable
-    awrap_model_call: Callable
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]: ...
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]: ...
 
 
 @pytest.fixture(name="recording_middleware")
@@ -242,6 +253,205 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     round_tripped = payload_to_model_request(model_request, encoded)
 
     assert round_tripped.messages[0].content == "hello from intercept"
+
+
+def test_langchain_model_request_exposes_tools_without_replacing_unchanged_definitions() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    built_in_tool = {"type": "web_search_preview"}
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="hello")],
+        tools=[get_weather, built_in_tool],
+    )
+
+    payload = model_request_to_payload("mock-model", original)
+    assert payload["tools"][0]["function"]["name"] == "get_weather"
+    assert payload["tools"][1] == {
+        "type": "provider_native",
+        "provider": "langchain",
+        "kind": "tool",
+        "value": built_in_tool,
+    }
+    assert LangChainCodec().decode(nemo_relay.LLMRequest({}, payload)).tools[1] == payload["tools"][1]
+
+    returned = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert returned.tools[0] is get_weather
+    assert returned.tools[1] is built_in_tool
+
+    payload["tools"][1]["value"]["search_context_size"] = "low"
+    assert built_in_tool == {"type": "web_search_preview"}
+    edited = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert edited.tools[0] is get_weather
+    assert edited.tools[1] == {"type": "web_search_preview", "search_context_size": "low"}
+    assert edited.tools[1] is not built_in_tool
+
+
+def test_langchain_model_request_preserves_gemini_native_tool_definition() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    gemini_search = {"google_search": {}}
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="Search the web")],
+        tools=[gemini_search],
+    )
+    payload = model_request_to_payload("mock-model", original)
+    assert payload["tools"][0]["value"] == gemini_search
+    assert LangChainCodec().decode(nemo_relay.LLMRequest({}, payload)).tools[0] == payload["tools"][0]
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert restored.tools[0] is gemini_search
+
+    payload["tools"][0]["value"] = {"google_maps": {}}
+    with pytest.raises(ValueError, match="cannot change a LangChain provider tool's identity"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+
+
+def test_langchain_model_request_applies_provider_definition_edit_to_tool_copy() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import BaseTool, tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    @tool
+    def search(query: str) -> str:
+        """Search for information."""
+        return query
+
+    provider_definition = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    provider_tool = search.model_copy(update={"extras": {"provider_tool_definition": provider_definition}})
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="Search the web")],
+        tools=[provider_tool],
+    )
+    payload = model_request_to_payload("mock-model", original)
+    payload["tools"][0]["value"]["max_uses"] = 2
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    restored_tool = restored.tools[0]
+    assert isinstance(restored_tool, BaseTool)
+    assert restored_tool is not provider_tool
+    assert restored_tool.extras["provider_tool_definition"]["max_uses"] == 2
+    assert provider_tool.extras["provider_tool_definition"]["max_uses"] == 5
+
+    payload["tools"][0]["value"]["type"] = "computer_20250124"
+    with pytest.raises(ValueError, match="cannot change a LangChain provider tool's identity"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+
+
+def test_langchain_anthropic_adapter_receives_mixed_edited_tools() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables import RunnableBinding
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    ChatAnthropic = pytest.importorskip("langchain_anthropic").ChatAnthropic
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    provider_definition = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    provider_tool = get_weather.model_copy(update={"extras": {"provider_tool_definition": provider_definition}})
+    original = ModelRequest(
+        model=ChatAnthropic.model_construct(model="claude-test"),
+        messages=[HumanMessage(content="Check the weather")],
+        tools=[get_weather, provider_tool],
+    )
+    payload = model_request_to_payload("claude-test", original)
+    payload["tools"][0]["function"]["description"] = "Return a brief forecast."
+    payload["tools"][1]["value"]["max_uses"] = 2
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    bound_model = original.model.bind_tools(restored.tools)
+    assert isinstance(bound_model, RunnableBinding)
+    prepared_tools = bound_model.kwargs["tools"]
+
+    assert prepared_tools[0]["name"] == "get_weather"
+    assert prepared_tools[0]["description"] == "Return a brief forecast."
+    assert prepared_tools[1] == {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
+    assert get_weather.description == "Get weather for a location."
+    assert provider_definition["max_uses"] == 5
+
+
+def test_langchain_gemini_adapter_receives_mixed_edited_tools() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables import RunnableBinding
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    ChatGoogleGenerativeAI = pytest.importorskip("langchain_google_genai").ChatGoogleGenerativeAI
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    google_search = {"google_search": {"exclude_domains": ["example.com"]}}
+    original = ModelRequest(
+        model=ChatGoogleGenerativeAI.model_construct(model="gemini-test"),
+        messages=[HumanMessage(content="Check the weather")],
+        tools=[get_weather, google_search],
+    )
+    payload = model_request_to_payload("gemini-test", original)
+    payload["tools"][0]["function"]["description"] = "Return a brief forecast."
+    payload["tools"][1]["value"]["google_search"]["exclude_domains"].append("example.org")
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    bound_model = original.model.bind_tools(restored.tools)
+    assert isinstance(bound_model, RunnableBinding)
+    prepared_tools = bound_model.kwargs["tools"]
+    function_declarations = [
+        function for prepared_tool in prepared_tools for function in prepared_tool.get("function_declarations") or []
+    ]
+    search_tools = [
+        prepared_tool["google_search"] for prepared_tool in prepared_tools if prepared_tool.get("google_search")
+    ]
+
+    assert function_declarations[0]["name"] == "get_weather"
+    assert function_declarations[0]["description"] == "Return a brief forecast."
+    assert search_tools[0]["exclude_domains"] == ["example.com", "example.org"]
+    assert get_weather.description == "Get weather for a location."
+    assert google_search == {"google_search": {"exclude_domains": ["example.com"]}}
+
+
+def test_langchain_model_request_rejects_malformed_tool_schemas() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+
+    from nemo_relay.integrations.langchain._serialization import payload_to_model_request
+
+    original = ModelRequest(model=_mk_mock_model(), messages=[HumanMessage(content="hello")])
+    with pytest.raises(ValueError, match="tools must be a list of tool schema objects"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, {"tools": ["invalid"]}))
 
 
 def test_langchain_request_codec_preserves_provider_tool_calls() -> None:
@@ -585,7 +795,7 @@ def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content
     message = dict(annotated.messages[0])
     content = [dict(part) for part in cast(list[dict[str, Any]], message["content"])]
     content[0]["text"] = "first from intercept"
-    message["content"] = content
+    message["content"] = [*content]
     annotated.messages = [message]
     rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
 
@@ -714,7 +924,7 @@ def test_model_call_applies_edit_to_one_system_content_block(
         system_message = dict(messages[0])
         system_content = [dict(part) for part in cast(list[dict[str, Any]], system_message["content"])]
         system_content[1]["text"] = "second from intercept"
-        system_message["content"] = system_content
+        system_message["content"] = [*system_content]
         annotated.messages = [system_message, *messages[1:]]
         return nemo_relay.LLMRequestInterceptOutcome(llm_request, annotated)
 
@@ -940,7 +1150,7 @@ def test_wrap_model_call_does_not_inject_extra_headers_for_models_that_reject_th
     from langchain_core.outputs import ChatGeneration, ChatResult
 
     class StrictKwargsChatModel(BaseChatModel):
-        """Provider whose SDK rejects unknown request fields, like langchain-oci."""
+        """Provider whose SDK rejects unknown request fields."""
 
         model: str = "strict-model"
 
@@ -1105,8 +1315,10 @@ def test_wrap_tool_call_routes_through_tool_execute(
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
     assert kwargs["tool_call_id"] == "call-1"
-    assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
-    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["args_codec"], nemo_relay.typed.JsonPassthrough)
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    assert isinstance(kwargs["result_codec"], LangChainToolResultCodec)
 
 
 def test_awrap_tool_call_routes_through_tool_execute(
@@ -1133,8 +1345,10 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
     assert kwargs["tool_call_id"] == "call-1"
-    assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
-    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["args_codec"], nemo_relay.typed.JsonPassthrough)
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    assert isinstance(kwargs["result_codec"], LangChainToolResultCodec)
 
 
 def test_complete_skill_read_emits_mark_through_langchain_middleware(
@@ -1251,8 +1465,58 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
         message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]
     )
     assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+    assert mock_model.bind_tools.call_args.args[0][0] is get_weather
 
     assert events == expected_events
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_agent_model_call_uses_relay_edited_tool_schema(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+) -> None:
+    from langchain.agents import create_agent
+    from langchain_core.tools import BaseTool, tool
+
+    model = _mk_mock_model("done")
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    def edit_tool_schema(
+        _name: str,
+        request: nemo_relay.LLMRequest,
+        annotated: nemo_relay.AnnotatedLLMRequest | None,
+    ) -> nemo_relay.LLMRequestInterceptOutcome:
+        assert annotated is not None
+        assert annotated.tools is not None
+        tool_schema = cast(dict[str, Any], copy.deepcopy(annotated.tools[0]))
+        tool_schema["function"]["description"] = "Return a brief forecast."
+        tool_schema["function"]["parameters"]["properties"]["location"]["description"] = "City name"
+        annotated.tools = [tool_schema]
+        return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+
+    agent = create_agent(model=model, tools=[get_weather], middleware=[nemo_relay_middleware])
+    nemo_relay.intercepts.register_llm_request("edit_weather_schema", 1, False, edit_tool_schema)
+    try:
+        with nemo_relay.scope.scope("langchain-tool-schema", nemo_relay.ScopeType.Agent):
+            if use_async:
+                result = asyncio.run(agent.ainvoke({"messages": [{"role": "user", "content": "Weather?"}]}))
+            else:
+                result = agent.invoke({"messages": [{"role": "user", "content": "Weather?"}]})
+    finally:
+        nemo_relay.intercepts.deregister_llm_request("edit_weather_schema")
+
+    assert result["messages"][-1].content == "done"
+    bound_tool = model.bind_tools.call_args.args[0][0]
+    assert isinstance(bound_tool, BaseTool)
+    assert bound_tool is not get_weather
+    assert bound_tool.description == "Return a brief forecast."
+    assert bound_tool.tool_call_schema["properties"]["location"]["description"] == "City name"
+    assert get_weather.description == "Get weather for a location."
+    assert "description" not in get_weather.args["location"]
 
 
 @pytest.mark.parametrize("use_async", [False, True])
@@ -1384,3 +1648,210 @@ def test_tool_call_propagates_ordinary_errors(
             asyncio.run(nemo_relay_middleware.awrap_tool_call(tool_call_request, async_handler))
         else:
             nemo_relay_middleware.wrap_tool_call(tool_call_request, handler)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tag", ["__nv_dataclass__", "__nv_pydantic__"])
+def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
+    import dataclasses
+
+    from langchain.agents.middleware import ToolCallRequest
+    from langchain_core.messages import ToolMessage
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    middleware = NemoRelayMiddleware()
+    wrap, awrap = middleware.wrap_tool_call, middleware.awrap_tool_call
+
+    @dataclasses.dataclass
+    class Payload:
+        value: str
+
+        @classmethod
+        def model_validate(cls, data):
+            pytest.fail("model-controlled arguments must remain JSON")
+
+    codec = nemo_relay.typed.BestEffortAnyCodec()
+    registered = codec.to_json(Payload("original"))
+    args = {
+        tag: registered["__nv_dataclass__"],
+        "__nv_runtime_type__": f"{Payload.__module__}.{Payload.__qualname__}:{id(Payload)}",
+        "data": {"value": "model-controlled"},
+    }
+    request = ToolCallRequest(
+        tool_call={"name": "lookup", "args": args, "id": "call-json"},
+        tool=None,
+        state={},
+        runtime=MagicMock(),
+    )
+    seen = []
+
+    def execute(req):
+        seen.append(req.tool_call["args"])
+        return ToolMessage(content="done", tool_call_id="call-json")
+
+    async def aexecute(req):
+        return execute(req)
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        if use_async:
+            result = asyncio.run(awrap(request, aexecute))
+        else:
+            result = wrap(request, execute)
+
+    assert seen == [args]
+    assert isinstance(result, ToolMessage)
+    assert result.content == "done"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "schema",
+        "auto",
+        "provider",
+        "tool",
+        "union",
+        "raw_union",
+        "auto_union",
+        "raw_typing_union",
+        "auto_typing_union",
+        "none",
+    ],
+)
+@pytest.mark.parametrize("answer_kind", ["first", "second"])
+def test_structured_response_uses_declared_schema(
+    use_async: bool, strategy: str, answer_kind: str, model_request: ModelRequest[Any]
+) -> None:
+    from typing import Union
+
+    from langchain.agents.middleware import ModelResponse
+    from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel, ValidationError
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class Answer(BaseModel):
+        value: str
+
+    class OtherAnswer(BaseModel):
+        count: int
+
+    formats = {
+        "schema": Answer,
+        "auto": AutoStrategy(Answer),
+        "provider": ProviderStrategy(Answer),
+        "tool": ToolStrategy(Answer),
+        "union": ToolStrategy(Answer | OtherAnswer),
+        "raw_union": Answer | OtherAnswer,
+        "auto_union": AutoStrategy(Answer | OtherAnswer),
+        "raw_typing_union": Union[Answer, OtherAnswer],
+        "auto_typing_union": AutoStrategy(Union[Answer, OtherAnswer]),
+        "none": None,
+    }
+    request = model_request.override(response_format=formats[strategy])
+    answer = Answer(value="done") if answer_kind == "first" else OtherAnswer(count=1)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(req):
+        return handler(req)
+
+    middleware = NemoRelayMiddleware()
+
+    def invoke():
+        return (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        if strategy == "none" or ("union" not in strategy and answer_kind == "second"):
+            with pytest.raises(ValidationError):
+                invoke()
+        else:
+            result = invoke()
+            assert isinstance(result.structured_response, type(answer))
+            assert result.structured_response == answer
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_declared_structured_response_decode_error_reaches_caller(use_async, model_request):
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel, ValidationError, field_serializer
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class Answer(BaseModel):
+        value: int
+
+        @field_serializer("value")
+        def encode_value(self, _value):
+            return "invalid integer"
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=Answer(value=42))
+
+    async def ahandler(request):
+        return handler(request)
+
+    request = model_request.override(response_format=Answer)
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        with pytest.raises(ValidationError, match="valid integer"):
+            if use_async:
+                asyncio.run(middleware.awrap_model_call(request, ahandler))
+            else:
+                middleware.wrap_model_call(request, handler)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("kind", ["alias", "json", "distinct_aliases", "alias_path"])
+def test_structured_response_round_trip_serialization(use_async, kind, model_request):
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+    from pydantic import AliasPath, BaseModel, Field, Json, TypeAdapter
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class AliasedAnswer(BaseModel):
+        value: int = Field(alias="answer")
+
+    class JsonAnswer(BaseModel):
+        items: Json[list[int]]
+
+    class DistinctAliasesAnswer(BaseModel):
+        value: int = Field(validation_alias="answer", serialization_alias="output")
+
+    class AliasPathAnswer(BaseModel):
+        value: int = Field(validation_alias=AliasPath("input", "answer"), serialization_alias="output")
+
+    schema, data = {
+        "alias": (AliasedAnswer, {"answer": 42}),
+        "json": (JsonAnswer, {"items": "[1,2]"}),
+        "distinct_aliases": (DistinctAliasesAnswer, {"answer": 42}),
+        "alias_path": (AliasPathAnswer, {"input": {"answer": 42}}),
+    }[kind]
+    answer = TypeAdapter(schema).validate_python(data)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(request):
+        return handler(request)
+
+    request = model_request.override(response_format=schema)
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+    assert type(result.structured_response) is schema
+    assert result.structured_response == answer

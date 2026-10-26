@@ -268,7 +268,6 @@ fn generated_codex_hook_metadata(
         "user_prompt_submit",
         "pre_tool_use",
         "post_tool_use",
-        "permission_request",
         "subagent_start",
         "subagent_stop",
         "stop",
@@ -639,7 +638,7 @@ fn codex_auto_trusts_only_exact_generated_plugin_hooks_and_verifies_them() {
     assert_eq!(
         client.trusted,
         vec![
-            (0..10)
+            (0..9)
                 .map(|index| format!("relay-hook-{index}"))
                 .collect::<Vec<_>>()
         ]
@@ -714,7 +713,6 @@ fn every_generated_codex_hook_is_required_exactly_once_and_trusted() {
         ("user_prompt_submit", "UserPromptSubmit"),
         ("pre_tool_use", "PreToolUse"),
         ("post_tool_use", "PostToolUse"),
-        ("permission_request", "PermissionRequest"),
         ("subagent_start", "SubagentStart"),
         ("subagent_stop", "SubagentStop"),
         ("stop", "Stop"),
@@ -798,7 +796,6 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
         "user_prompt_submit",
         "pre_tool_use",
         "post_tool_use",
-        "permission_request",
         "subagent_start",
         "subagent_stop",
         "stop",
@@ -850,7 +847,7 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
                 "{event} {condition}: {error}"
             );
             assert_eq!(client.restored.len(), 1, "{event} {condition}");
-            assert_eq!(client.restored[0].len(), 10, "{event} {condition}");
+            assert_eq!(client.restored[0].len(), 9, "{event} {condition}");
         }
     }
 }
@@ -883,7 +880,7 @@ fn codex_auto_trust_rejects_targeted_hook_that_disappears_after_write() {
     .unwrap_err();
 
     assert!(
-        error.contains("unverified targeted hooks=relay-hook-9"),
+        error.contains("unverified targeted hooks=relay-hook-8"),
         "{error}"
     );
     assert_eq!(client.restored.len(), 1);
@@ -918,7 +915,7 @@ fn codex_auto_trust_rejects_targeted_hook_that_changes_key_after_write() {
     .unwrap_err();
 
     assert!(
-        error.contains("unverified targeted hooks=relay-hook-9"),
+        error.contains("unverified targeted hooks=relay-hook-8"),
         "{error}"
     );
     assert_eq!(client.restored.len(), 1);
@@ -943,7 +940,7 @@ custom = "preserve"
     .unwrap();
     let initial = generated_codex_hook_metadata(dir.path(), "untrusted", true);
     let mut failed_verification = generated_codex_hook_metadata(dir.path(), "trusted", true);
-    failed_verification[9].enabled = false;
+    failed_verification[8].enabled = false;
     let mut client = FakeCodexHooksClient {
         hook_lists: VecDeque::from([Ok(initial.clone()), Ok(failed_verification), Ok(initial)]),
         ..FakeCodexHooksClient::default()
@@ -959,7 +956,7 @@ custom = "preserve"
 
     assert!(error.contains("did not enable and trust"), "{error}");
     assert_eq!(client.restored.len(), 1);
-    assert_eq!(client.restored[0].len(), 10);
+    assert_eq!(client.restored[0].len(), 9);
     assert_eq!(
         client.restored[0]
             .iter()
@@ -1033,7 +1030,7 @@ fn codex_auto_trust_does_not_depend_on_reported_plugin_source_path() {
     )
     .unwrap();
 
-    assert_eq!(client.trusted[0].len(), 10);
+    assert_eq!(client.trusted[0].len(), 9);
 }
 
 #[test]
@@ -1120,7 +1117,6 @@ fn codex_hook_trust_report_distinguishes_modified_disabled_and_missing_hooks() {
         json!([
             "PreToolUse",
             "PostToolUse",
-            "PermissionRequest",
             "SubagentStart",
             "SubagentStop",
             "Stop",
@@ -2655,7 +2651,7 @@ fn codex_doctor_requires_app_server_reported_trust_but_allows_stopped_sidecar() 
     assert_eq!(
         report["codex_hook_trust"]["trusted"],
         json!(
-            (0..10)
+            (0..9)
                 .map(|index| format!("relay-hook-{index}"))
                 .collect::<Vec<_>>()
         )
@@ -2837,7 +2833,7 @@ fn codex_uninstall_clears_all_trust_for_the_exact_relay_plugin() {
     assert_eq!(
         client.cleared,
         vec![
-            (0..10)
+            (0..9)
                 .map(|index| format!("relay-hook-{index}"))
                 .chain(["unrelated-hook".into()])
                 .collect::<Vec<_>>()

@@ -34,6 +34,7 @@ pub mod py_api;
 mod py_async;
 mod py_callable;
 mod py_context;
+mod py_diagnostics;
 #[doc(hidden)]
 pub mod py_plugin;
 mod py_storage;
@@ -67,8 +68,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ))
     })?;
     py_types::register(m)?;
+    m.add_class::<py_types::PyScopeStackEntry>()?;
+    m.add_class::<py_types::PyScopeStackSnapshot>()?;
     py_api::register(m)?;
     py_plugin::register(m)?;
+    py_diagnostics::register(m)?;
     py_adaptive::register(m)?;
     Ok(())
 }

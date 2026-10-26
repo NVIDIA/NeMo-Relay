@@ -145,6 +145,9 @@ from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
 )
 from nemo_relay._native import (
+    OpenTelemetryTlsConfig as OpenTelemetryTlsConfig,
+)
+from nemo_relay._native import (
     PendingMarkSpec as PendingMarkSpec,
 )
 from nemo_relay._native import (
@@ -506,3 +509,17 @@ def _native_scope_stack_active() -> bool: ...
 def _sync_thread_scope_stack(stack: ScopeStack) -> None: ...
 
 __all__: list[str]
+
+class ScopeStackEntry:
+    """Immutable UUID and canonical type of one visible scope."""
+    @property
+    def scope_id(self) -> str: ...
+    @property
+    def scope_type(self) -> ScopeType: ...
+
+class ScopeStackSnapshot:
+    """Detached root-to-top scope identities."""
+    @property
+    def scopes(self) -> list[ScopeStackEntry]: ...
+
+def current_scope_stack_snapshot() -> ScopeStackSnapshot | None: ...

@@ -555,6 +555,33 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
 }
 
 #[test]
+fn test_ffi_plugin_exact_rejects_host_diagnostics() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    for diagnostics in [
+        Json::Null,
+        json!(true),
+        json!({}),
+        json!({"enabled": true}),
+        json!({"enabled": "invalid"}),
+    ] {
+        let config = cstring(
+            &json!({"version": 1, "components": [], "diagnostics": diagnostics}).to_string(),
+        );
+        let mut out_json = ptr::null_mut();
+        assert_status!(
+            unsafe { nemo_relay_plugin_validate_exact(config.as_ptr(), &mut out_json) },
+            NemoRelayStatus::InvalidJson
+        );
+        assert!(out_json.is_null());
+        assert!(
+            unsafe { read_last_error() }
+                .unwrap_or_default()
+                .contains("diagnostics is a host-only setting; use layered validation")
+        );
+    }
+}
+
+#[test]
 fn test_ffi_plugin_top_level_null_and_invalid_paths() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

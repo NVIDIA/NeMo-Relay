@@ -1034,6 +1034,7 @@ fn trust_evaluation_short_circuits_when_policy_is_blocked() {
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
     let blocked_policy = crate::plugins::policy::EvaluatedDynamicPluginHostPolicy {
+        native_diagnostics_read_context: false,
         policy_satisfied: false,
         startup_class: nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required,
         attestation_mode:
@@ -2601,6 +2602,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         &manifest,
         &manifest_ref,
         None,
+        &evaluate_dynamic_plugin_host_policy(&Default::default(), &manifest),
     ))
     .unwrap();
     assert_eq!(
@@ -3491,6 +3493,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         manifest: &manifest,
         manifest_ref: &manifest_ref,
         host_config: host_config_by_id.get("acme.guardrail"),
+        policy: &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     }
     .to_string();
     let inspect_value: serde_json::Value = serde_saphyr::from_str(&inspect).unwrap();
@@ -4659,6 +4662,7 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         &manifest,
         &manifest_ref,
         host_config_by_id.get("acme.json"),
+        &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     ))
     .unwrap();
     assert_eq!(inspect_value["data"]["id"], serde_json::json!("acme.json"));
@@ -4918,6 +4922,7 @@ fn inspect_redacts_host_config_values() {
         manifest: &manifest,
         manifest_ref: &manifest_ref,
         host_config: host_config_by_id.get("acme.redacted"),
+        policy: &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     }
     .to_string();
     assert!(!inspect_output.contains("secret-token"));
@@ -4938,6 +4943,7 @@ fn inspect_redacts_host_config_values() {
         &manifest,
         &manifest_ref,
         host_config_by_id.get("acme.redacted"),
+        &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     ))
     .unwrap();
     assert_eq!(
@@ -4949,6 +4955,136 @@ fn inspect_redacts_host_config_values() {
         serde_json::json!("<redacted>")
     );
     assert_eq!(inspect_value["data"]["host_config_status"], "present");
+}
+
+#[test]
+fn inspect_and_validate_report_current_native_read_grant_without_config_values() {
+    for native in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let _env = EnvScope::hermetic(&temp);
+        let _cwd = CurrentDirGuard::enter(temp.path());
+        let plugin_dir = temp.path().join("plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let id = "acme.read-grant";
+        let manifest_path = if native {
+            write_native_dynamic_manifest(&plugin_dir, id)
+        } else {
+            write_dynamic_manifest(&plugin_dir, id)
+        };
+        let (manifest, manifest_ref) =
+            DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+        let config_path = temp.path().join("plugins.toml");
+        let mut original_entry = None;
+        for (policy_toml, granted) in [
+            ("", false),
+            (
+                "[plugins.policy.defaults]\nnative_diagnostics_read_context = true",
+                true,
+            ),
+            (
+                concat!(
+                    "[plugins.policy.defaults]\nnative_diagnostics_read_context = true\n",
+                    "[plugins.policy.overrides.\"acme.read-grant\"]\nnative_diagnostics_read_context = false"
+                ),
+                false,
+            ),
+        ] {
+            std::fs::write(
+                &config_path,
+                format!(
+                    "[[plugins.dynamic]]\nmanifest = {:?}\nconfig = {{ api_key = \"secret-token\", native_diagnostics_read_context = true }}\n{policy_toml}\n",
+                    manifest_path.to_string_lossy()
+                ),
+            )
+            .unwrap();
+            let resolved = resolve_plugins_config_with_path(None, Some(&config_path)).unwrap();
+            // Keep the originally discovered record: permission must come from current policy.
+            if original_entry.is_none() {
+                let scopes = load_and_hydrate_scopes(Some(&config_path), &resolved).unwrap();
+                original_entry = find_record_by_id(&scopes, id).unwrap();
+            }
+            let entry = original_entry.as_ref().expect("discovered plugin");
+            let host_configs = host_config_by_id(&resolved);
+            let host_config = host_configs.get(id);
+            let policy =
+                evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+            let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+            let expected = native && granted;
+            let inspect_json = serde_json::to_value(responses::inspect_success(
+                "plugins inspect",
+                id,
+                entry,
+                &manifest,
+                &manifest_ref,
+                host_config,
+                &policy,
+            ))
+            .unwrap();
+            let inspect_text = PluginInspectView {
+                entry,
+                manifest: &manifest,
+                manifest_ref: &manifest_ref,
+                host_config,
+                policy: &policy,
+            }
+            .to_string();
+            let inspect_yaml: serde_json::Value = serde_saphyr::from_str(&inspect_text).unwrap();
+            assert_eq!(inspect_json["data"], inspect_yaml);
+            assert_eq!(inspect_yaml["native_diagnostics_read_context"], expected);
+            assert_eq!(inspect_yaml["host_config"]["api_key"], "<redacted>");
+            assert_eq!(
+                inspect_yaml["host_config"]["native_diagnostics_read_context"],
+                "<redacted>"
+            );
+            // Validation supports both an installed ID and a standalone manifest path.
+            for registered_entry in [Some(entry), None] {
+                let validate_json = serde_json::to_value(responses::validate_success(
+                    responses::ValidateResponseInput {
+                        command: "plugins validate",
+                        target: Some(id),
+                        target_kind: if registered_entry.is_some() {
+                            "id"
+                        } else {
+                            "path"
+                        },
+                        resolved_plugin_id: Some(id),
+                        manifest: &manifest,
+                        manifest_ref: &manifest_ref,
+                        entry: registered_entry,
+                        host_config,
+                        policy: &policy,
+                        trust: &trust,
+                    },
+                ))
+                .unwrap();
+                let validate_text = PluginValidationSummaryView {
+                    manifest: &manifest,
+                    manifest_ref: &manifest_ref,
+                    entry: registered_entry,
+                    host_config,
+                    policy: &policy,
+                    trust: &trust,
+                }
+                .to_string();
+                assert_eq!(
+                    validate_json["data"]["native_diagnostics_read_context"],
+                    expected
+                );
+                assert!(
+                    validate_text.contains(&format!("native_diagnostics_read_context: {expected}"))
+                );
+                for output in [
+                    &inspect_text,
+                    &inspect_json.to_string(),
+                    &validate_text,
+                    &validate_json.to_string(),
+                ] {
+                    assert!(!output.contains("secret-token"));
+                    assert!(!output.contains("trusted_public_keys"));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -4999,6 +5135,7 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
         manifest: &manifest,
         manifest_ref: &manifest_ref,
         host_config: host_config_by_id.get("acme.empty-config"),
+        policy: &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     }
     .to_string();
     let inspect_output: serde_json::Value = serde_saphyr::from_str(&inspect_output).unwrap();
@@ -5021,6 +5158,7 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
         &manifest,
         &manifest_ref,
         host_config_by_id.get("acme.empty-config"),
+        &evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest),
     ))
     .unwrap();
     assert_eq!(inspect_value["data"]["host_config_status"], "present");
@@ -5358,4 +5496,114 @@ fn python_environment_snapshot_preserves_launchers_and_lib_alias_without_copying
         std::fs::read_to_string(external_python).unwrap(),
         "external interpreter"
     );
+}
+
+#[test]
+fn gateway_skips_optional_plugins_with_failed_integrity_or_attestation() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let server = GatewayOverrides::default();
+    for (plugin_id, native) in [("acme.trust-native", true), ("acme.trust-worker", false)] {
+        let plugin_dir = temp.path().join(plugin_id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        if native {
+            write_native_dynamic_manifest(&plugin_dir, plugin_id);
+        } else {
+            write_dynamic_manifest(&plugin_dir, plugin_id);
+        }
+        add(
+            PluginsAddRequest {
+                scope: ConfigurationScope::User,
+                path: plugin_dir.clone(),
+            },
+            &server,
+        )
+        .unwrap();
+        enable(
+            PluginsEnableRequest {
+                id: plugin_id.into(),
+            },
+            &server,
+        )
+        .unwrap();
+        let mut resolved = resolve_plugins_config(None).unwrap();
+        allow_unsigned_test_plugins(&mut resolved);
+        assert_eq!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        resolved.dynamic_plugin_policy.defaults.attestation =
+            Some(nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::SignatureRequired);
+        assert!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_ok());
+
+        allow_unsigned_test_plugins(&mut resolved);
+        let artifact = if native {
+            "libfixture_native.so"
+        } else {
+            "plugin.py"
+        };
+        std::fs::write(plugin_dir.join(artifact), b"modified artifact").unwrap();
+        assert!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_ok());
+
+        resolved.dynamic_plugin_policy.defaults.startup =
+            Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_err());
+    }
+}
+
+#[test]
+fn streamed_integrity_hashes_preserve_existing_digest_formats_and_snapshot_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("empty.bin"), []).unwrap();
+    let payload = vec![b'Z'; 3 * 64 * 1024 + 17];
+    let source = root.join("large.bin");
+    std::fs::write(&source, &payload).unwrap();
+    // These hashes use the old format. Empty files and files larger than one
+    // chunk must keep the same hashes so existing attestations stay valid.
+    let snapshot_digest = "1a09783296332b227ef7ed966085d214181f136f56bb59f8c937efa13c9ffd6b";
+    assert_eq!(snapshot_tree_digest(&root, false).unwrap(), snapshot_digest);
+    assert_eq!(
+        environment::environment_tree_digest(&root).unwrap(),
+        if cfg!(windows) {
+            "f67f5b5c51f9750b11b746c8a72a1aacc9d6785b91bb7c52ebcce13d91caab01"
+        } else {
+            "2db2539838ba8aff0a6f03268048dd9a0051b1902dd368f57f447f2155f2d092"
+        }
+    );
+
+    let mut closure = RuntimeClosureSources::default();
+    for name in ["empty.bin", "large.bin"] {
+        closure.files.insert(
+            PathBuf::from(name),
+            RuntimeClosureSource::File(root.join(name)),
+        );
+    }
+    assert_eq!(closure.digest().unwrap(), snapshot_digest);
+
+    let destination = temp.path().join("copied.bin");
+    copy_snapshot_regular_file(
+        &source,
+        &destination,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        "test payload",
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), payload);
 }

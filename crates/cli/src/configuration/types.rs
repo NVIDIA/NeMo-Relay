@@ -31,9 +31,17 @@ pub(crate) struct LaunchedAgent {
 pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
+    pub(crate) insecure_http_model_hosts: super::HttpModelHosts,
     pub(crate) openai_auth_header: Option<String>,
+    pub(crate) openai_api_key: Option<String>,
+    pub(crate) openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
+    pub(crate) anthropic_api_key: Option<String>,
+    pub(crate) anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    /// Replaces the ChatGPT backend for Codex requests that carry ChatGPT auth and have no
+    /// replacement OpenAI credential. The caller's ChatGPT credential is forwarded to this endpoint.
+    pub(crate) chatgpt_codex_base_url: Option<String>,
     /// Provider response wait in seconds; zero leaves cancellation to the caller.
     pub(crate) response_timeout_secs: u64,
     pub(crate) metadata: Option<Value>,
@@ -51,6 +59,18 @@ pub(crate) struct SessionConfig {
     pub(crate) plugin_config: Option<Value>,
     pub(crate) profile: Option<String>,
     pub(crate) gateway_mode: Option<String>,
+    /// W3C trace context a hook request inherited from the process that launched the agent.
+    pub(crate) launcher_trace_context: Option<LauncherTraceContext>,
+}
+
+/// Unvalidated W3C `traceparent` and `tracestate` values carried by a hook request.
+///
+/// Sessions validate the pair when they open their scope stack, so invalid values fall back to a
+/// new trace instead of rejecting the hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LauncherTraceContext {
+    pub(crate) traceparent: String,
+    pub(crate) tracestate: Option<String>,
 }
 
 impl GatewayConfig {
@@ -81,12 +101,29 @@ impl GatewayConfig {
             plugin_config,
             profile,
             gateway_mode,
+            launcher_trace_context: None,
         }
+    }
+
+    /// Resolves session configuration for a hook request.
+    ///
+    /// Hook forwarders run in the coding agent's environment, so their `traceparent` and
+    /// `tracestate` headers identify the process that launched the agent. Provider requests carry
+    /// per-request agent context instead and must not parent a whole session.
+    pub(crate) fn hook_session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
+        let mut config = self.session_config_from_headers(headers);
+        config.launcher_trace_context = header_string(headers, crate::hooks::TRACEPARENT_HEADER)
+            .map(|traceparent| LauncherTraceContext {
+                traceparent,
+                tracestate: header_string(headers, crate::hooks::TRACESTATE_HEADER),
+            });
+        config
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
+    pub(crate) diagnostics: super::RuntimeDiagnosticsConfig,
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) logging: LoggingConfig,
@@ -141,9 +178,15 @@ impl Default for GatewayConfig {
                 .parse()
                 .expect("valid default bind address"),
             openai_base_url: "https://api.openai.com/v1".into(),
+            insecure_http_model_hosts: super::HttpModelHosts::default(),
             openai_auth_header: None,
+            openai_api_key: None,
+            openai_api_key_helper: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
+            anthropic_api_key: None,
+            anthropic_api_key_helper: None,
+            chatgpt_codex_base_url: None,
             response_timeout_secs: 0,
             metadata: None,
             launched_agent: None,

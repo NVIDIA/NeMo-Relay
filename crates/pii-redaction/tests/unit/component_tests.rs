@@ -62,6 +62,9 @@ use std::time::Duration;
 
 static TEST_LOGGING: Once = Once::new();
 
+#[path = "trajectory_status_tests.rs"]
+mod trajectory_status_tests;
+
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
@@ -682,7 +685,7 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
         json!({"api": "openai_responses", "output_items": [{"text": "SECRET"}], "status": "completed", "previous_response_id": "SECRET", "store": true}),
         json!({"api": "anthropic_messages", "object_type": "message", "role": "assistant", "stop_reason": "end_turn", "stop_sequence": "SECRET", "content_blocks": [{"text": "SECRET"}]}),
         json!({"api": "oci_genai", "api_format": "GENERIC", "model_version": "oci-model-v1"}),
-        json!({"api": "gemini_generate_content", "thoughts_tokens": 9, "safety_ratings": {"secret": "SECRET"}, "future": "SECRET"}),
+        json!({"api": "gemini_generate_content", "thoughts_tokens": 9, "tool_use_prompt_tokens": 4, "safety_ratings": {"secret": "SECRET"}, "future": "SECRET"}),
         json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
     ];
     for api_specific in response_cases {
@@ -697,7 +700,24 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
             .unwrap();
         let serialized = serde_json::to_string(&sanitized).unwrap();
         assert!(!serialized.contains("SECRET"), "{serialized}");
-        assert!(serde_json::to_value(&sanitized).unwrap()["finish_reason"].is_null());
+        let value = serde_json::to_value(&sanitized).unwrap();
+        assert!(value["finish_reason"].is_null());
+        match value["api_specific"]["api"].as_str() {
+            Some("openai_chat") => {
+                assert_eq!(value["api_specific"]["system_fingerprint"], "[REDACTED]");
+            }
+            Some("openai_responses") => assert_eq!(value["api_specific"]["status"], "completed"),
+            Some("anthropic_messages") => {
+                assert_eq!(value["api_specific"]["stop_reason"], "end_turn");
+            }
+            Some("oci_genai") => assert_eq!(value["api_specific"]["model_version"], "oci-model-v1"),
+            Some("gemini_generate_content") => {
+                assert_eq!(value["api_specific"]["thoughts_tokens"], 9);
+                assert_eq!(value["api_specific"]["tool_use_prompt_tokens"], 4);
+            }
+            Some("custom") => assert_eq!(value["api_specific"]["data"], json!({})),
+            other => panic!("unexpected API-specific response variant: {other:?}"),
+        }
     }
 }
 
@@ -1575,7 +1595,7 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
 }
 
 #[tokio::test]
-async fn trajectory_preset_empties_untyped_scope_metadata() {
+async fn trajectory_preset_preserves_only_bounded_scope_status_metadata() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let metadata = json!({
         "nemo_relay_scope_role": "turn",
@@ -1623,7 +1643,7 @@ async fn trajectory_preset_empties_untyped_scope_metadata() {
         )
         .await
         .unwrap();
-        assert_eq!(sanitized.metadata, Some(json!({})));
+        assert_eq!(sanitized.metadata, Some(json!({"otel.status_code": "OK"})));
     }
 
     let malformed = Event::Scope(ScopeEvent::new(
@@ -1666,6 +1686,57 @@ async fn trajectory_preset_empties_untyped_scope_metadata() {
     .await
     .unwrap();
     assert_eq!(sanitized.metadata, Some(json!({})));
+}
+
+/// Tool completion fields survive sanitization only when their values are allowed.
+#[tokio::test]
+async fn trajectory_preset_preserves_bounded_tool_completion_semantics() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    for (category, expected) in [
+        (
+            EventCategory::tool(),
+            json!({
+                "tool_completion_source": "gateway_request", "tool_completion_outcome": "unknown",
+                "tool_completion_timing": "upper_bound",
+            }),
+        ),
+        (EventCategory::agent(), json!({})),
+    ] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("tool-completion").build(),
+            ScopeCategory::End,
+            Vec::new(),
+            category,
+            None,
+        ));
+        let fields = EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({
+                "tool_completion_source": "gateway_request", "tool_completion_outcome": "unknown",
+                "tool_completion_timing": "upper_bound", "private_note": "private context",
+            })),
+        };
+        assert_eq!(
+            callback(Arc::new(event.clone()), fields.clone())
+                .await
+                .unwrap()
+                .metadata,
+            Some(expected)
+        );
+        let mut invalid = fields;
+        invalid.metadata = Some(json!({
+            "tool_completion_source": "private source", "tool_completion_outcome": "private outcome",
+            "tool_completion_timing": "private time", "otel.status_code": "ERROR",
+            "error.type": "tool_execution_failed", "otel.status_description": "private failure",
+        }));
+        assert_eq!(
+            callback(Arc::new(event), invalid).await.unwrap().metadata,
+            Some(json!({
+                "otel.status_code": "ERROR", "error.type": "tool_execution_failed",
+            }))
+        );
+    }
 }
 
 #[tokio::test]
@@ -4144,7 +4215,10 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         .unwrap();
     assert_eq!(agent_start.uuid(), agent_end.uuid());
     assert_eq!(agent_start.data(), Some(&json!({})));
-    assert_eq!(agent_start.metadata(), Some(&json!({})));
+    assert_eq!(
+        agent_start.metadata(),
+        Some(&json!({"otel.status_code": "OK"}))
+    );
     let custom_mark = captured
         .iter()
         .find(|event| event.name() == "hermes.checkpoint")

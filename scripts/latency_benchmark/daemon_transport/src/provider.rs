@@ -143,9 +143,21 @@ async fn serve(listener: TcpListener, shutdown: impl Future<Output = ()>) -> Res
 }
 
 async fn handle(
-    request: Request<Incoming>,
+    mut request: Request<Incoming>,
     stats: Arc<ProviderStats>,
 ) -> Result<Response<ResponseBody>, Infallible> {
+    // Dropping an unread HTTP/2 request body emits a reset. Sustained traffic
+    // can then trip the peer's reset limit even though responses are valid.
+    // Drain frames without retaining the request body.
+    while let Some(frame) = request.body_mut().frame().await {
+        if frame.is_err() {
+            return Ok(full_response(
+                StatusCode::BAD_REQUEST,
+                Bytes::from_static(b"request body failed"),
+                "text/plain",
+            ));
+        }
+    }
     let response = match (request.method(), request.uri().path()) {
         (&Method::GET, "/healthz") => {
             full_response(StatusCode::OK, Bytes::from_static(b"ok"), "text/plain")

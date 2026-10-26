@@ -45,8 +45,8 @@ coding-agent turn scope.
 
 ATIF contains agent interaction steps, tool calls, and observations. Relay mark
 events are point-in-time telemetry rather than trajectory steps, so the ATIF
-exporter omits them from `steps`. Plugin-managed files retain raw events that
-were associated with the trajectory under `extra.observed_events`.
+exporter omits them from `steps`. By default, files managed by the plugin keep the raw events for each trajectory
+in `extra.observed_events`. Set `include_observed_events = false` to omit them.
 
 Plugin-managed files also expose selected correlation fields under
 `extra.nemo_relay`: `session_id` is the logical harness session ID,
@@ -71,6 +71,40 @@ The following table describes the top-level ATIF settings:
 | `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain the historical `{session_id}` placeholder, which expands to the trajectory scope UUID. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
 | `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
+| `include_observed_events` | `true` | Keep raw events in `extra.observed_events`. |
+| `include_llm_requests` | `true` | Keep full provider requests in each step's `extra.llm_request` field. This setting also applies to embedded subagent trajectories. |
+
+### Reduce Output Size
+
+Relay sends compact JSON to HTTP and S3 destinations. Compact JSON removes
+extra spaces and line breaks. Local exports use indented JSON when no remote
+storage is configured. If every remote destination fails, Relay saves the
+compact payload in a local recovery file.
+
+To reduce repeated conversation history, set both options to `false`:
+
+```toml
+[components.config.atif]
+enabled = true
+include_observed_events = false
+include_llm_requests = false
+```
+
+These settings apply to exports managed by the plugin. They apply to local
+files, remote uploads, and shutdown exports. Relay keeps step messages, tool
+calls, tool results, and metrics. It also keeps lineage and correlation fields
+and raw LLM responses.
+
+If you disable only `include_llm_requests`, full requests remain in
+`extra.observed_events`. Set both options to `false` to remove both copies.
+
+Full requests can include data that step messages omit. This data can include
+conversation history, tool definitions, system instructions, and images.
+Keep `include_llm_requests = true` if you need to rebuild the original requests.
+
+These settings reduce file and upload sizes. Relay still keeps full events in
+memory while it builds each trajectory. These settings do not affect standalone
+`AtifExporter` instances.
 
 ### Run-Scoped Session IDs
 
@@ -195,6 +229,33 @@ also sets `x-nemo-relay-atif-filename` and
 `x-nemo-relay-atif-session-id` headers so receivers can keep the same object
 identity that local files and S3 uploads use.
 
+`timeout_millis` sets the time limit for each HTTP request. This time includes
+the upload and the wait for the receiver's response. Set it high enough for the
+receiver to process the whole trajectory. The default is `3000` milliseconds
+(3 seconds).
+
+Receivers such as NeMo Helix Intake can take tens of seconds or longer to
+process a trajectory. Measure how long your receiver takes to process large
+trajectories. Allow extra time for network delays and heavy load. For example,
+`timeout_millis = 60000` allows 60 seconds per request. Use a larger value if
+your receiver needs more time. Relay waits for uploads during subscriber flush
+and plugin teardown. A longer timeout can delay these steps if the receiver is
+slow or unavailable.
+
+When the timeout expires, Relay records `atif.remote_delivery_failed`. A
+timeout does not mean the receiver discarded the trajectory. The receiver can
+still store it after Relay stops waiting.
+
+If all remote destinations fail for that trajectory, Relay writes a local
+recovery copy under `output_directory`. Plugin teardown reports the delivery
+failure even if Relay saves this copy. `activation.close()` returns an error if
+the delivery failure is still pending.
+
+Relay sends later trajectories to the destination again. It does not
+automatically resend the failed trajectory. Before you resend a recovery copy,
+check the receiver for the `trajectory_id` to avoid storing the same trajectory
+twice.
+
 For an OIDC token-file flow, have the token writer produce the complete header
 value, such as `Bearer eyJ...`, at
 `/var/run/secrets/telemetry/token`; Relay does not add a `Bearer ` prefix.
@@ -213,11 +274,12 @@ The following table describes HTTP storage settings:
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. A header name cannot also appear in `headers` or `header_env`, even with different letter case. |
-| `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
+| `timeout_millis` | `3000` | Time limit for each HTTP request, in milliseconds. Includes the upload and the wait for the receiver's response. Must be greater than zero. Allow enough time to process the whole trajectory. |
 
 When you set any header source (`headers`, `header_env`, or `header_file`),
 remote HTTP storage must use HTTPS. HTTP is allowed only for localhost and
-loopback IP addresses. Relay does not follow redirects when headers are set.
+loopback IP addresses, unless the host is listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) setting. Relay does not follow redirects when headers are set.
 Use the final destination URL. A redirect fails that upload and Relay does not
 send headers to the new destination.
 
@@ -329,14 +391,64 @@ When present, a step's `metrics` can carry `prompt_tokens`, `completion_tokens`,
 for the full mapping, including how ATIF sources these values from the codec
 annotation and the raw payload.
 
+The following sections describe the default settings. If you set
+`include_llm_requests = false`, Relay omits `extra.llm_request` from user and
+agent steps.
+
 ATIF is a trajectory projection over NeMo Relay events. It should preserve the
 meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
 middleware ordering, or provider payload decoding.
 
+A step message whose content parts are all text is emitted as one string that
+joins them with newlines.
+
+For raw Gemini requests and OCI GENERIC requests, user step messages join the
+latest user message's text parts with newlines. Image-only messages emit an
+empty string. Gemini thought parts and nested tool-result content are excluded
+from this display. Complete provider payloads, including images, remain in
+`extra.llm_request` and continue to distinguish requests during matching.
+A paired raw Gemini call containing only function responses continues the
+existing turn; top-level user text or image parts start a new user step even
+when function responses are also present.
+
+When a step message or observation result is emitted as a content-part array,
+each part contains only ATIF fields: text parts keep `type` and `text`, and
+image parts keep `type` and a `source` with `media_type` and `path`. Fields
+that ATIF does not define, such as `cache_control`, are dropped from the parts
+but remain in the original payload under `extra.llm_request` or
+`extra.llm_response`, or under `extra.tool_result` for tool results. Arrays
+that contain a part ATIF cannot represent are not emitted as content parts
+for assistant messages or observations; the original payload remains in the
+same `extra` fields.
+
+For user messages in chat requests, the exporter keeps supported text and image
+parts in `message` and omits unsupported parts, such as inline base64 images.
+If only text remains, it joins the text with newlines. If no supported parts
+remain, `message` is an empty string. The complete original request, including
+inline image bytes, remains in `extra.llm_request`. This display projection
+does not change the request sent to the LLM. Consumers that reconstruct a
+multimodal request must use `extra.llm_request` rather than the display message.
+
+For OpenAI Responses input with no text, the exporter uses an empty display
+message when no image parts can be represented by ATIF. It preserves the full
+request in `extra.llm_request` and does not substitute an earlier user message.
+
+When an LLM request has a codec annotation, the exporter projects user messages
+from the annotation's text and ATIF-compatible image parts. This includes
+multimodal Gemini and OCI requests: text is joined with newlines, and image-only
+content without a supported image path produces an empty display message. The
+original provider payload remains in `extra.llm_request`.
+
 When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.
+
+For integrations that use
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results),
+ATIF reads observation text and image parts from `content`. A failed tool result
+adds `extra.is_error: true`. Successful results omit this flag. The full JSON
+wrapper stays in `extra.tool_result`.
 
 ## Plugin Configuration
 
@@ -348,7 +460,7 @@ exporter through each supported language binding.
 loading plugin code or acquiring the activation lease. Use Python/Rust
 `validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
 the supplied static configuration should be checked. For complete
-layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+layering rules, refer to [Configure](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">

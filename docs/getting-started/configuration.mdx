@@ -1,6 +1,6 @@
 ---
-title: "Configuration"
-sidebar-title: "Configuration / Setup"
+title: "Configuration / Setup Overview"
+sidebar-title: "Configuration / Setup Overview"
 description: "Configure NeMo Relay runtime behavior, plugins, observability, and adaptive features."
 position: 4
 ---
@@ -18,7 +18,7 @@ Most applications follow these steps to configure NeMo Relay:
 
 1. Create or reuse a scope stack.
 2. Register guardrails, intercepts, or subscribers.
-3. Call the managed tool or LLM helpers from the active scope.
+3. Call the managed tool or large language model (LLM) helpers from the active scope.
 4. Deregister global middleware that should not remain active for the lifetime
    of the process.
 
@@ -46,11 +46,10 @@ when you need reusable middleware, subscribers, or adaptive behavior.
 
 Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
 only to maintain or remove an existing NeMo Relay 0.8 `nemo_guardrails`
-component. The built-in plugin is deprecated and scheduled for removal in NeMo
-Relay 0.9; do not use it for a new deployment.
+component. The built-in plugin is deprecated; do not use it for a new deployment.
 
 The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. Refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+[Configure](/configure-plugins/plugin-configuration-files)
 for file locations, precedence, merge behavior, editor controls, and validation
 rules.
 

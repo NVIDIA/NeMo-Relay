@@ -11,8 +11,16 @@ gates tool calls on the gateway's verdict.
 pi has no native hook-configuration file, and its external stream is
 observation-only, so hook calls have to originate inside an extension. Unlike
 the Codex and Claude Code integrations — which install hook commands the host
-runs for them — this extension *is* the hook client. It is deliberately thin:
-all policy and all span construction happen in the gateway.
+runs for them — this extension invokes `nemo-relay hook-forward pi` for each hook.
+The command attaches the same bootstrap or launcher credentials used by those
+integrations. All policy and all span construction happen in the gateway.
+
+Standalone pi needs the updated `nemo-relay` executable on `PATH`, or its path
+in `NEMO_RELAY_PI_COMMAND`. The gateway URL must be a loopback HTTP URL. Hooks
+without valid credentials are rejected, and authenticated clients cannot mutate
+sessions owned by another client. Refresh older extension installations when
+upgrading the gateway (`nemo-relay install pi --force` for a Relay-managed copy).
+The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
@@ -133,13 +141,14 @@ Run it first whenever Relay does not seem to be doing anything.
 | Variable | Default | Meaning |
 |---|---|---|
 | `NEMO_RELAY_PI_EXTENSION` | unset | The first place the launcher looks for this extension. A path that exists **and** whose `package.json` names `nemo-relay-pi` is used; anything else is ignored and resolution falls through to a user-scope install. Set by the launcher from what it resolved |
-| `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
+| `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Loopback HTTP gateway base URL |
+| `NEMO_RELAY_PI_COMMAND` | `nemo-relay` | Relay executable for authenticated hook forwarding. The launcher sets its own executable path |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout. Posts are serialized, so a gating hook also waits out everything queued ahead of it — an unresponsive gateway costs this once per queued post, not once |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
 | `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by the launcher |
-| `NEMO_RELAY_PROXY_CREDENTIAL` | unset | This invocation's proxy credential, set by `nemo-relay run` for every agent it starts. Sent as `x-nemo-relay-proxy-token` on a redirected provider only — a gateway the launcher started rejects a provider call without it. A standalone `nemo-relay --bind` daemon sets none and needs none |
+| `NEMO_RELAY_PROXY_CREDENTIAL` | unset | This invocation's proxy credential, set by `nemo-relay run` for every agent it starts. Sent as `x-nemo-relay-proxy-token` on hooks and redirected providers — a gateway the launcher started rejects a provider call without it. A standalone `nemo-relay --bind` daemon sets none and needs none |
 
 ## How Tool Gating Works
 

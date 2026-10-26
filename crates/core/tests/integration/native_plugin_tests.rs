@@ -267,6 +267,22 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
                 .await
                 .expect("native request intercept should run");
+            let expected = serde_json::to_value(
+                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(rewritten["scope_stack_snapshot"], expected);
+            assert_eq!(rewritten["scope_stack_snapshot_after"], expected);
+            let retained = rewritten["scope_stack_snapshot"]["scopes"]
+                .as_array()
+                .unwrap();
+            let inside = rewritten["scope_stack_snapshot_inside"]["scopes"]
+                .as_array()
+                .unwrap();
+            assert_eq!(inside.len(), retained.len() + 1);
+            assert_eq!(&inside[..retained.len()], retained.as_slice());
+            assert_eq!(inside.last().unwrap()["scope_type"], "function");
+            assert_eq!(retained.last().unwrap()["scope_id"], outer_uuid.to_string());
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
                     .name("native-fixture-tool")
@@ -576,26 +592,54 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     }
 
     events.lock().unwrap().clear();
-    let llm_execute_response = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("native-fixture-llm-execute")
-            .request(LlmRequest {
-                headers: Map::new(),
-                content: json!({ "prompt": "managed" }),
-            })
-            .func(Arc::new(|request| {
-                Box::pin(async move {
-                    Ok(json!({
-                        "id": "managed-response",
-                        "request": request.content,
-                        "llm_callback": true
-                    }))
-                })
-            }))
-            .build(),
+    let managed_stack = create_scope_stack();
+    let managed_agent = TASK_SCOPE_STACK
+        .scope(managed_stack.clone(), async {
+            push_scope(
+                PushScopeParams::builder()
+                    .name("native-plugin-managed-agent")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap()
+        })
+        .await;
+    let managed_snapshot = serde_json::to_value(
+        nemo_relay::api::runtime::scope_stack_snapshot(&managed_stack).unwrap(),
     )
-    .await
-    .expect("native LLM middleware should run");
+    .unwrap();
+    assert_eq!(
+        managed_snapshot["scopes"][1]["scope_id"],
+        managed_agent.uuid.to_string()
+    );
+    let llm_execute_response = TASK_SCOPE_STACK
+        .scope(
+            managed_stack.clone(),
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name("native-fixture-llm-execute")
+                    .request(LlmRequest {
+                        headers: Map::new(),
+                        content: json!({ "prompt": "managed", "inspect_scope_stack": true }),
+                    })
+                    .func(Arc::new(|request| {
+                        Box::pin(async move {
+                            Ok(json!({
+                                "id": "managed-response",
+                                "request": request.content,
+                                "llm_callback": true
+                            }))
+                        })
+                    }))
+                    .build(),
+            ),
+        )
+        .await
+        .expect("native LLM middleware should run");
+    assert_eq!(
+        llm_execute_response["scope_stack_snapshot"],
+        managed_snapshot
+    );
     assert_eq!(llm_execute_response["llm_callback"], true);
     assert_eq!(llm_execute_response["native_plugin_llm_execution"], true);
     assert_eq!(
@@ -645,6 +689,76 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         true
     );
     assert!(llm_end.annotated_response().is_none());
+
+    for status in [403, 404, 429, 503] {
+        let error = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("native-fixture-http-error")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"prompt": "fail"}),
+                })
+                .func(Arc::new(move |_request| {
+                    Box::pin(async move {
+                        Err(nemo_relay::error::FlowError::Upstream(
+                            nemo_relay::error::UpstreamFailure {
+                                status: Some(status),
+                                body: "provider denied access".into(),
+                                headers: Default::default(),
+                                class: nemo_relay::error::UpstreamFailureClass::Other,
+                            },
+                        ))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_native': provider denied access" && !failure.is_retryable())
+        );
+    }
+    let callback_error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("native-fixture-originated-http-error")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"native_http_error": true}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { panic!("plugin failure must skip provider") })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(callback_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+    );
+    let stream_error = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("native-fixture-originated-stream-http-error")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"native_http_error": true}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { panic!("plugin failure must skip provider") })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("native async stream opens before its callback is polled")
+    .next()
+    .await
+    .expect("stream reports the callback failure")
+    .unwrap_err();
+    assert!(
+        matches!(stream_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+    );
+    flush_subscribers().expect("HTTP error events should flush");
 
     events.lock().unwrap().clear();
     let cancelled_unary = tokio::spawn(llm_call_execute(
@@ -703,39 +817,56 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     let collected_stream_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
     let collector_chunks = collected_stream_chunks.clone();
     let finalizer_chunks = collected_stream_chunks.clone();
-    let mut stream = llm_stream_call_execute(
-        LlmStreamCallExecuteParams::builder()
-            .name("native-fixture-llm-stream")
-            .request(LlmRequest {
-                headers: Map::new(),
-                content: json!({ "prompt": "stream" }),
-            })
-            .func(Arc::new(|request| {
-                Box::pin(async move {
-                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
-                        Ok(json!({
-                            "stream_chunk": 1,
-                            "request": request.content,
-                        })),
-                        Ok(json!({ "stream_chunk": 2 })),
-                    ])))
-                })
-            }))
-            .collector(Box::new(move |chunk| {
-                collector_chunks.lock().unwrap().push(chunk);
-                Ok(())
-            }))
-            .finalizer(Box::new(move || {
-                Json::Array(finalizer_chunks.lock().unwrap().clone())
-            }))
-            .build(),
-    )
-    .await
-    .expect("native LLM stream middleware should run");
+    let mut stream = TASK_SCOPE_STACK
+        .scope(
+            managed_stack.clone(),
+            llm_stream_call_execute(
+                LlmStreamCallExecuteParams::builder()
+                    .name("native-fixture-llm-stream")
+                    .request(LlmRequest {
+                        headers: Map::new(),
+                        content: json!({ "prompt": "stream", "inspect_scope_stack": true }),
+                    })
+                    .func(Arc::new(|request| {
+                        Box::pin(async move {
+                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                                Ok(json!({
+                                    "stream_chunk": 1,
+                                    "request": request.content,
+                                })),
+                                Ok(json!({ "stream_chunk": 2 })),
+                            ])))
+                        })
+                    }))
+                    .collector(Box::new(move |chunk| {
+                        collector_chunks.lock().unwrap().push(chunk);
+                        Ok(())
+                    }))
+                    .finalizer(Box::new(move || {
+                        Json::Array(finalizer_chunks.lock().unwrap().clone())
+                    }))
+                    .build(),
+            ),
+        )
+        .await
+        .expect("native LLM stream middleware should run");
     let mut stream_chunks = Vec::new();
     while let Some(chunk) = stream.next().await {
-        stream_chunks.push(chunk.expect("native stream chunk should succeed"));
+        let chunk = chunk.expect("native stream chunk should succeed");
+        assert_eq!(chunk["scope_stack_snapshot"], managed_snapshot);
+        assert_eq!(chunk["scope_stack_snapshot_polled"], managed_snapshot);
+        stream_chunks.push(chunk);
     }
+    TASK_SCOPE_STACK
+        .scope(managed_stack, async {
+            pop_scope(
+                PopScopeParams::builder()
+                    .handle_uuid(&managed_agent.uuid)
+                    .build(),
+            )
+            .unwrap();
+        })
+        .await;
     assert_eq!(stream_chunks.len(), 2);
     assert_eq!(
         stream_chunks[0]["request"]["native_plugin_llm_stream_execution_request"],
@@ -1148,7 +1279,7 @@ fn native_api_one_does_not_admit_a_stale_abi_v2_binary() {
         [load_spec("fixture_native", &manifest_ref)],
         "a native_api=1 manifest must not make an ABI-v2 binary compatible",
     );
-    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rejected native ABI 8"), "{error}");
     assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
@@ -1323,6 +1454,34 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     activation.clear();
 }
 
+#[tokio::test]
+async fn scope_stack_snapshot_host_preserves_native_abi_v7_loading() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_with_plugin_id_and_symbol(
+        &fixture,
+        "fixture_native_v7",
+        "nemo_relay_fixture_native_plugin_v7",
+    );
+    let activation = load_native_plugins([load_spec("fixture_native_v7", &manifest_ref)])
+        .expect("v8 host must negotiate the unchanged v7 table for existing plugins");
+    let mut cleanup = NativePluginTestCleanup::new();
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native_v7".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    test_initialize_plugin_host_exact(plugin_config)
+        .await
+        .expect("negotiated v7 descriptor must remain valid during registration");
+    cleanup.mark_plugin_configuration_active();
+    assert!(lookup_plugin("fixture_native_v7").is_some());
+    drop(cleanup);
+    activation.clear();
+    assert!(lookup_plugin("fixture_native_v7").is_none());
+}
+
 #[test]
 fn native_loader_rejects_abi_v3_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -1338,9 +1497,9 @@ fn native_loader_rejects_abi_v3_plugins() {
 
     let error = expect_native_load_error_from_specs(
         [load_spec("fixture_native_v3", &manifest_ref)],
-        "ABI-v3 plugins must be rebuilt for ABI v7",
+        "ABI-v3 plugins must be rebuilt for ABI v8",
     );
-    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rejected native ABI 8"), "{error}");
     assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
@@ -1366,9 +1525,9 @@ fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
 
         let error = expect_native_load_error_from_specs(
             [load_spec(plugin_id, &manifest_ref)],
-            "stale native plugins must be rebuilt for ABI v7",
+            "stale native plugins must be rebuilt for ABI v8",
         );
-        assert!(error.contains("rejected native ABI 7"), "{error}");
+        assert!(error.contains("rejected native ABI 8"), "{error}");
         assert!(error.contains("rebuild the plugin"), "{error}");
     }
 }
@@ -2753,5 +2912,156 @@ fn fixture_library_name() -> &'static str {
         "libnemo_relay_plugin_fixture.dylib"
     } else {
         "libnemo_relay_plugin_fixture.so"
+    }
+}
+
+#[tokio::test]
+async fn sdk_cdylib_native_diagnostics_records_reads_and_closes_selected_context() {
+    use nemo_relay::diagnostics::*;
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest = write_manifest_with_integrity(&fixture, &sha256(&fixture.library_path));
+    for (enabled, grant, failure) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let context = Diagnostics::from_settings(
+            SourceIdentity {
+                instance_id: Uuid::now_v7(),
+                process_id: None,
+                process_role: "native-integration".into(),
+                relay_version: "test".into(),
+            },
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let config = fixture.manifest_dir.path().join("diagnostics-plugins.toml");
+        std::fs::write(
+            &config,
+            format!(
+                r#"
+[plugins.policy.defaults]
+attestation = "integrity_only"
+[plugins.policy.overrides.fixture_native]
+native_diagnostics_read_context = {grant}
+[[plugins.dynamic]]
+manifest = {manifest}
+[plugins.dynamic.config]
+diagnostics_fixture = true
+expect_read = {grant}
+registration_failure = {failure}
+"#,
+                manifest = toml_string(&manifest.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        let activated = nemo_relay::plugin::dynamic::initialize_with_diagnostics(
+            PluginConfig::default(),
+            Some(config),
+            &context,
+        )
+        .await;
+        if failure {
+            assert!(
+                activated
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("fixture registration failure")
+            );
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert!(internal.closed_at.is_some());
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 5);
+            continue;
+        }
+        let mut host = activated.unwrap();
+        let args = json!({"input": "unchanged"});
+        assert_eq!(
+            tool_request_intercepts("fixture.lookup", args.clone())
+                .await
+                .unwrap(),
+            args
+        );
+        if enabled {
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 6);
+            assert_eq!(
+                internal.lifetime.totals.recorded_events_total.value.get(),
+                3
+            );
+            let evidence: Vec<_> = page
+                .events
+                .iter()
+                .filter(|e| e.message() == Some("native-private-sentinel"))
+                .collect();
+            assert_eq!(evidence.len(), 3);
+            for (event, session) in evidence[..2]
+                .iter()
+                .zip(["native-session-2", "native-session-3"])
+            {
+                assert_eq!(
+                    event.correlation.request_id.as_deref(),
+                    Some("native-request")
+                );
+                assert_eq!(event.correlation.session_id.as_deref(), Some(session));
+            }
+            assert_eq!(evidence[2].correlation, DiagnosticCorrelation::default());
+            assert_eq!(
+                evidence[0].context.phase.as_ref().unwrap().as_str(),
+                "activation"
+            );
+            assert_eq!(
+                evidence[2].context.phase.as_ref().unwrap().as_str(),
+                "runtime"
+            );
+            assert!(
+                !host
+                    .report()
+                    .config
+                    .runtime_diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("native-private-sentinel"))
+            );
+        } else {
+            assert_eq!(context.memory_usage().reserved_bytes, 0);
+        }
+        host.close().unwrap();
+        if enabled {
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert!(internal.closed_at.is_some());
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 6);
+        }
     }
 }

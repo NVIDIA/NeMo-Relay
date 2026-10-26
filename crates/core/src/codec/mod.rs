@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! LLM codec types, traits, and built-in implementations.
+//! LLM codecs and the shared JSON format for tool results.
 //!
 //! This module provides the type system and traits for bidirectional
 //! request codecs ([`traits::LlmCodec`] / [`request::AnnotatedLlmRequest`]),
@@ -13,6 +13,7 @@
 //!
 //! [`resolve`] is the detect-then-decode entry point for selecting a built-in
 //! provider codec from a raw payload when no codec annotation is present.
+//! [`tool`] defines the shared JSON format for tool results.
 
 pub mod anthropic;
 pub mod gemini_generate_content;
@@ -25,6 +26,7 @@ pub mod request;
 pub mod resolve;
 pub mod response;
 pub mod streaming;
+pub mod tool;
 pub mod traits;
 
 use nemo_relay_types::Json;
@@ -136,7 +138,7 @@ fn encode_changed_items<T, F>(
     encode: F,
 ) -> Result<Vec<Json>>
 where
-    T: PartialEq,
+    T: PartialEq + serde::Serialize,
     F: FnMut(&T) -> Result<Json>,
 {
     encode_changed_items_with_patch(
@@ -158,7 +160,7 @@ fn encode_changed_items_with_patch<T, F, P>(
     mut patch: P,
 ) -> Result<Vec<Json>>
 where
-    T: PartialEq,
+    T: PartialEq + serde::Serialize,
     F: FnMut(&T) -> Result<Json>,
     P: FnMut(&Json, &T, &T, &Json, &Json) -> Result<Json>,
 {
@@ -193,7 +195,10 @@ where
         .collect()
 }
 
-fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Result<Vec<Option<usize>>> {
+fn align_changed_items<T: PartialEq + serde::Serialize>(
+    edited: &[T],
+    baseline: &[T],
+) -> Result<Vec<Option<usize>>> {
     let mut alignment = vec![None; edited.len()];
     let mut used = vec![false; baseline.len()];
 
@@ -220,31 +225,93 @@ fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Result<Vec
         }
     }
 
-    let unmatched_edited = alignment
+    // Only provider-defined call identities establish correspondence. Arbitrary
+    // JSON objects are matched by equality, never by a guessed `id` field.
+    let identities = |items: &[T]| -> Result<Vec<Option<(String, String)>>> {
+        items
+            .iter()
+            .map(|item| {
+                let value = serde_json::to_value(item)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                Ok(tool_item_identity(&value))
+            })
+            .collect()
+    };
+    let edited_ids = identities(edited)?;
+    let baseline_ids = identities(baseline)?;
+    for (index, identity) in edited_ids.iter().enumerate() {
+        let Some(identity) = identity else { continue };
+        if alignment[index].is_some()
+            || edited_ids
+                .iter()
+                .filter(|id| id.as_ref() == Some(identity))
+                .count()
+                != 1
+            || baseline_ids
+                .iter()
+                .filter(|id| id.as_ref() == Some(identity))
+                .count()
+                != 1
+        {
+            continue;
+        }
+        if let Some(base_index) = baseline_ids
+            .iter()
+            .position(|id| id.as_ref() == Some(identity))
+            && !used[base_index]
+        {
+            alignment[index] = Some(base_index);
+            used[base_index] = true;
+            structurally_changed |= index != base_index;
+        }
+    }
+
+    // Preserve the existing single in-place edit behavior. Multiple unmatched
+    // entries are replacements and must not inherit unrelated provider fields.
+    let unmatched = alignment
         .iter()
         .enumerate()
         .filter_map(|(index, item)| item.is_none().then_some(index))
         .collect::<Vec<_>>();
-    let unmatched_baseline = used
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| (!item).then_some(index))
-        .collect::<Vec<_>>();
-
-    if unmatched_edited.len() > 1 && unmatched_baseline.len() > 1 {
-        return Err(FlowError::InvalidArgument(
-            "cannot safely preserve provider fields for multiple edited array items without stable identities"
-                .into(),
-        ));
-    }
-
-    if !structurally_changed && edited.len() == baseline.len() {
-        for index in unmatched_edited {
+    if !structurally_changed && unmatched.len() == 1 {
+        let index = unmatched[0];
+        if !used[index] && edited_ids[index].is_none() && baseline_ids[index].is_none() {
             alignment[index] = Some(index);
         }
     }
 
     Ok(alignment)
+}
+
+// These discriminators belong to normalized messages/content parts and their
+// provider encodings. Call and result namespaces remain separate.
+fn tool_item_identity(value: &Json) -> Option<(String, String)> {
+    if value
+        .get("role")
+        .or_else(|| value.get("type"))
+        .and_then(Json::as_str)
+        == Some("provider_native")
+    {
+        return value.get("value").and_then(tool_item_identity);
+    }
+    let kind = value.get("role").or_else(|| value.get("type"))?.as_str()?;
+    let (namespace, key) = match kind {
+        "tool" => ("result", "tool_call_id"),
+        "tool_result" => (
+            "result",
+            if value.get("tool_use_id").is_some() {
+                "tool_use_id"
+            } else {
+                "call_id"
+            },
+        ),
+        "function_call_output" => ("result", "call_id"),
+        "tool_call" | "function_call" => ("call", "call_id"),
+        "tool_use" | "function" | "FUNCTION" => ("call", "id"),
+        _ => return None,
+    };
+    let id = value.get(key)?.as_str()?;
+    (!id.is_empty()).then(|| (namespace.to_string(), id.to_string()))
 }
 
 fn patch_changed_array(original: &[Json], baseline: &[Json], edited: &[Json]) -> Result<Vec<Json>> {

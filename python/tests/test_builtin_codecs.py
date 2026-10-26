@@ -13,6 +13,8 @@ Covers:
 
 from typing import cast
 
+import pytest
+
 import nemo_relay
 from nemo_relay import (
     AnnotatedLLMRequest,
@@ -138,7 +140,7 @@ class TestBuiltinCodecDecodeEncode:
             {"role": "assistant", "content": "hello"},
         ]
         encoded = codec.encode(annotated, original)
-        encoded_content = cast(JsonObject, encoded.content)
+        encoded_content = encoded.content
         assert isinstance(encoded, LLMRequest)
         assert encoded.headers == {"Authorization": "Bearer test"}
         assert cast(float, encoded_content["temperature"]) == 0.7
@@ -200,7 +202,7 @@ class TestBuiltinCodecDecodeEncode:
         instructions[0]["text"] = "Edited safely."
         annotated.instructions = instructions
         encoded = codec.encode(annotated, original)
-        expected = dict(cast(JsonObject, original.content))
+        expected = dict(original.content)
         expected["system"] = [
             {
                 "type": "text",
@@ -330,7 +332,7 @@ class TestBuiltinCodecDecodeResponse:
             {"role": "user", "content": "My SSN is [REDACTED]."},
         ]
         encoded = codec.encode(annotated, original)
-        encoded_content = cast(JsonObject, encoded.content)
+        encoded_content = encoded.content
         chat_request = cast(JsonObject, encoded_content["chatRequest"])
         messages = cast(list[JsonObject], chat_request["messages"])
         assert messages[0]["content"] == [{"type": "TEXT", "text": "My SSN is [REDACTED]."}]
@@ -425,6 +427,16 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "gemini-2.0-flash"
         assert annotated.usage is not None
         assert annotated.usage["prompt_tokens"] == 8
+
+    @pytest.mark.parametrize("prompt", [2**32, 2**53, 9_000_000_000_000_000_000, 9e18])
+    def test_gemini_codec_large_token_counts(self, prompt: int | float) -> None:
+        """Large integral token counts retain exact totals across bindings."""
+        annotated = GeminiGenerateContentCodec().decode_response(
+            {"usageMetadata": {"promptTokenCount": prompt, "candidatesTokenCount": 25}}
+        )
+        assert annotated.usage is not None
+        assert annotated.usage["prompt_tokens"] == int(prompt)
+        assert annotated.usage["total_tokens"] == int(prompt) + 25
 
     def test_gemini_codec_decode_response_safety_finish_reason(self) -> None:
         """GeminiGenerateContentCodec maps SAFETY finish reason to 'content_filter', not 'unknown'."""
@@ -788,3 +800,28 @@ class TestBuiltinCodecImports:
         assert not hasattr(nemo_relay, "OpenAIResponsesCodec")
         assert not hasattr(nemo_relay, "AnthropicMessagesCodec")
         assert not hasattr(nemo_relay, "GeminiGenerateContentCodec")
+
+
+def test_multiple_tool_result_edits_and_insertion() -> None:
+    codec = OpenAIChatCodec()
+    original = LLMRequest(
+        {},
+        {
+            "messages": [
+                {"role": "tool", "tool_call_id": "a", "content": "old"},
+                {"role": "tool", "tool_call_id": "b", "content": "old"},
+            ]
+        },
+    )
+    annotated = codec.decode(original)
+    annotated.messages = [
+        {"role": "tool", "tool_call_id": "b", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "c", "content": "inserted"},
+    ]
+    encoded = codec.encode(annotated, original)
+    assert encoded.content["messages"] == [
+        {"role": "tool", "tool_call_id": "b", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "c", "content": "inserted"},
+    ]

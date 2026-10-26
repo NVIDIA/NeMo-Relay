@@ -129,6 +129,104 @@ fn conventional_tool_error_detection_is_deliberately_narrow() {
 }
 
 #[tokio::test]
+async fn framework_tool_results_require_an_explicit_replay_guarantee() {
+    for replayable in [None, Some(false), Some(true)] {
+        let store = Arc::new(InMemoryCacheStore::new(1 << 20));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut result = serde_json::json!({
+            "schema": TOOL_RESULT_SCHEMA,
+            "content": "answer",
+            "is_error": false,
+            "result": {"framework": "payload"},
+        });
+        if let Some(replayable) = replayable {
+            result["cache"] = serde_json::json!({"replayable": replayable});
+        }
+        let next = counting_next(Arc::clone(&calls), result.clone());
+        let tools = versioned_tools("v1", None);
+        for _ in 0..2 {
+            let outcome = run_tool_cache(
+                "docs_lookup".into(),
+                serde_json::json!({"query": "relay"}),
+                Arc::clone(&next),
+                store.clone(),
+                cache_config(),
+                Arc::clone(&tools),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.result, result);
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if replayable == Some(true) { 1 } else { 2 }
+        );
+        assert_eq!(store.len(), usize::from(replayable == Some(true)));
+    }
+}
+
+#[tokio::test]
+async fn stale_framework_entries_run_live_and_can_be_replaced() {
+    for replayable in [None, Some(false)] {
+        let store = Arc::new(InMemoryCacheStore::new(1 << 20));
+        let response_cache = cache_config();
+        let tools = versioned_tools("v1", None);
+        let args = serde_json::json!({"query": "relay"});
+        let KeyOutcome::Key(key) = build_tool_cache_key(
+            &response_cache.namespace,
+            "docs_lookup",
+            Some("v1"),
+            &args,
+            &[],
+            false,
+        ) else {
+            panic!("expected a tool cache key")
+        };
+        let mut stale = serde_json::json!({
+            "schema": TOOL_RESULT_SCHEMA,
+            "content": "old answer",
+            "is_error": false,
+            "result": {"kind": "opaque", "value": "expired-object"},
+        });
+        if let Some(replayable) = replayable {
+            stale["cache"] = serde_json::json!({"replayable": replayable});
+        }
+        let ttl = Duration::from_secs(60);
+        store
+            .set(
+                &key,
+                CacheEntry::new(
+                    encode_tool_result(&stale.into()),
+                    ttl,
+                    key.clone(),
+                    None,
+                    None,
+                ),
+                ttl,
+            )
+            .await
+            .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fresh = serde_json::json!({"answer": "fresh"});
+        let next = counting_next(Arc::clone(&calls), fresh.clone());
+        for _ in 0..2 {
+            let outcome = run_tool_cache(
+                "docs_lookup".into(),
+                args.clone(),
+                Arc::clone(&next),
+                store.clone(),
+                Arc::clone(&response_cache),
+                Arc::clone(&tools),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.result, fresh);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
 async fn tool_cache_read_error_fails_open_without_writing() {
     let store = Arc::new(FailingGetStore::default());
     let calls = Arc::new(AtomicUsize::new(0));

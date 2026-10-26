@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 
 use serde::de::{self, Deserializer};
@@ -128,6 +129,39 @@ pub struct DynamicPluginManifestWorkerLoad {
     /// Worker entrypoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Per-RPC byte limits for this plugin; host environment settings override them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_message_bytes: Option<WorkerMessageLimits>,
+    /// Optional deadlines for short callbacks in this plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_timeouts: Option<WorkerCallbackTimeouts>,
+}
+
+/// Time limits for short worker callbacks, in milliseconds, enforced by the host.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkerCallbackTimeouts {
+    /// Default deadline for this plugin. If omitted, the host uses 30 seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_ms: Option<NonZeroU64>,
+    /// Deadline overrides for exact callback registration names.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_name: BTreeMap<String, NonZeroU64>,
+}
+
+/// Finite worker message limits, in bytes, keyed by callback registration name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkerMessageLimits {
+    /// Fallback for this plugin. If omitted, the host uses 4 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
+    pub default_bytes: Option<NonZeroU32>,
+    /// Overrides for exact callback registration names, like callback timeouts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_name: BTreeMap<String, NonZeroU32>,
 }
 
 /// Native shared-library authored load block.
@@ -161,24 +195,34 @@ struct RawDynamicPluginManifestLoad {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_message_bytes: Option<WorkerMessageLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    callback_timeouts: Option<WorkerCallbackTimeouts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     library: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     symbol: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
+    /// Reads a load block and rejects mixed native and worker settings.
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let raw = RawDynamicPluginManifestLoad::deserialize(deserializer)?;
-        let has_worker_fields = raw.runtime.is_some() || raw.entrypoint.is_some();
+        let has_worker_fields = raw.runtime.is_some()
+            || raw.entrypoint.is_some()
+            || raw.max_message_bytes.is_some()
+            || raw.callback_timeouts.is_some();
         let has_native_fields = raw.library.is_some() || raw.symbol.is_some();
 
         match (has_worker_fields, has_native_fields) {
             (true, false) => Ok(Self::Worker(DynamicPluginManifestWorkerLoad {
                 runtime: raw.runtime,
                 entrypoint: raw.entrypoint,
+                max_message_bytes: raw.max_message_bytes,
+                callback_timeouts: raw.callback_timeouts,
             })),
             (false, true) => Ok(Self::RustDynamic(DynamicPluginManifestRustDynamicLoad {
                 library: raw.library,
@@ -195,6 +239,7 @@ impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
 }
 
 impl Serialize for DynamicPluginManifestLoad {
+    /// Writes the load settings for the selected plugin type.
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -203,12 +248,16 @@ impl Serialize for DynamicPluginManifestLoad {
             Self::Worker(load) => RawDynamicPluginManifestLoad {
                 runtime: load.runtime,
                 entrypoint: load.entrypoint.clone(),
+                max_message_bytes: load.max_message_bytes.clone(),
+                callback_timeouts: load.callback_timeouts.clone(),
                 library: None,
                 symbol: None,
             },
             Self::RustDynamic(load) => RawDynamicPluginManifestLoad {
                 runtime: None,
                 entrypoint: None,
+                max_message_bytes: None,
+                callback_timeouts: None,
                 library: load.library.clone(),
                 symbol: load.symbol.clone(),
             },
@@ -602,6 +651,18 @@ fn validate_capability_shape(
     Ok(())
 }
 
+fn validate_callback_names<'a>(names: impl Iterator<Item = &'a String>, field: &str) -> Result<()> {
+    for name in names {
+        if name.trim().is_empty() || name != name.trim() {
+            return Err(PluginError::InvalidConfig(format!(
+                "{field}.by_name keys must be non-empty callback names without surrounding whitespace"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Checks required load fields and worker callback names.
 fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad) -> Result<()> {
     match (kind, load) {
         (DynamicPluginKind::RustDynamic, DynamicPluginManifestLoad::Worker(_)) => {
@@ -620,6 +681,22 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
+            if let Some(limits) = &load.max_message_bytes {
+                if limits
+                    .default_bytes
+                    .iter()
+                    .chain(limits.by_name.values())
+                    .any(|value| value.get() > i32::MAX as u32)
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "load.max_message_bytes values must be integers in 1..=2147483647".into(),
+                    ));
+                }
+                validate_callback_names(limits.by_name.keys(), "load.max_message_bytes")?;
+            }
+            if let Some(timeouts) = &load.callback_timeouts {
+                validate_callback_names(timeouts.by_name.keys(), "load.callback_timeouts")?;
+            }
             match load.runtime {
                 Some(WorkerRuntime::Python | WorkerRuntime::Rust | WorkerRuntime::Command) => {}
                 None => {
@@ -634,10 +711,13 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
 }
 
 impl DynamicPluginManifestLoad {
+    /// Copies validated load settings into the stored plugin record.
     fn into_record_load_contract(self) -> DynamicPluginLoadContract {
         match self {
             Self::Worker(load) => {
                 DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                    max_message_bytes: load.max_message_bytes,
+                    callback_timeouts: load.callback_timeouts,
                     runtime: load
                         .runtime
                         .expect("validated worker manifest must carry load.runtime"),

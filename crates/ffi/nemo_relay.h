@@ -158,6 +158,11 @@ typedef struct FfiAtofExporter FfiAtofExporter;
 typedef struct FfiCodecHandle FfiCodecHandle;
 
 /**
+ * Opaque inspection authority. Caller must not copy, free, or forge the allocation.
+ */
+typedef struct FfiDiagnosticsReader FfiDiagnosticsReader;
+
+/**
  * Opaque wrapper around a lifecycle event emitted by the runtime.
  */
 typedef struct FfiEvent FfiEvent;
@@ -989,6 +994,61 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
  * Set manual latency sensitivity on the current scope.
  */
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
+
+/**
+ * Return the core's maximum encoded embedded diagnostics query size.
+ */
+uint32_t nemo_relay_diagnostics_query_max_bytes(void);
+
+/**
+ * Obtain an embedded reader without starting or enabling diagnostics.
+ * Errors set a stable machine-readable reason in nemo_relay_last_error.
+ * # Safety
+ * `out` must be writable pointer storage. Success transfers one reader allocation.
+ */
+NemoRelayStatus nemo_relay_diagnostics_reader(struct FfiDiagnosticsReader **out);
+
+/**
+ * Free a reader once and clear its slot. Null slots are harmless.
+ * # Safety
+ * `reader` must be null or writable storage containing null or one live reader
+ * returned by nemo_relay_diagnostics_reader. No concurrent read may use it.
+ */
+void nemo_relay_diagnostics_reader_free(struct FfiDiagnosticsReader **reader);
+
+/**
+ * Capture a canonical page. Release successful output with nemo_relay_string_free.
+ * The optional query is bounded by the core's encoded query byte limit and
+ * uses canonical query fields.
+ * Failure always leaves `*out` null. A reader/filter does not restrict authority.
+ * # Safety
+ * Reader must be live; out must be writable and non-aliasing. Query must be null
+ * or readable through its NUL terminator (up to 4097 bytes). Freed/forged pointers
+ * cannot be detected. Native library must remain loaded while handles are live.
+ */
+NemoRelayStatus nemo_relay_diagnostics_snapshot_json(const struct FfiDiagnosticsReader *reader,
+                                                     const char *query,
+                                                     char **out);
+
+/**
+ * Inspect canonical diagnostic backing and independently copied resource memory.
+ * Free successful output with nemo_relay_string_free. Never initiates collection.
+ * # Safety
+ * Same live-reader, bounded UTF-8 query and writable output requirements as
+ * nemo_relay_diagnostics_snapshot_json. Output is null on failure.
+ */
+NemoRelayStatus nemo_relay_diagnostics_memory_json(const struct FfiDiagnosticsReader *reader,
+                                                   const char *query,
+                                                   char **out);
+
+/**
+ * Inspect core and adapter capacities, occupancy, and logging coverage as JSON.
+ * # Safety
+ * Reader must be live; out must be writable and non-aliasing. Free successful
+ * output using nemo_relay_string_free. Failure always leaves `*out` null.
+ */
+NemoRelayStatus nemo_relay_diagnostics_info_json(const struct FfiDiagnosticsReader *reader,
+                                                 char **out);
 
 /**
  * Register a global event metadata injector.
@@ -2261,6 +2321,94 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const
 NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenTelemetryMetricSubscriber *subscriber);
 
 /**
+ * Creates an OTLP subscriber with optional TLS file settings.
+ *
+ * `tls_json` accepts a JSON object or a null pointer. The object has three
+ * optional file paths: `certificate`, `client_certificate`, and `private_key`.
+ * Set the client certificate and private key together.
+ * Refer to [`nemo_relay_otel_subscriber_create_with_projection_options_v5`] for the other options.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_with_tls(const char *otel_type,
+                                                                                   const char *transport,
+                                                                                   const char *endpoint,
+                                                                                   const char *headers_json,
+                                                                                   const char *header_env_json,
+                                                                                   const char *resource_attributes_json,
+                                                                                   const char *service_name,
+                                                                                   const char *service_namespace,
+                                                                                   const char *service_version,
+                                                                                   const char *instrumentation_scope,
+                                                                                   uint64_t timeout_millis,
+                                                                                   const char *mark_projection,
+                                                                                   const char *mark_exclude_names_json,
+                                                                                   const char *attribute_mappings_json,
+                                                                                   const char *promote_metadata_prefixes_json,
+                                                                                   const char *promote_resource_metadata_prefixes_json,
+                                                                                   uint64_t completed_span_context_ttl_millis,
+                                                                                   const char *tls_json,
+                                                                                   struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Creates an OTLP subscriber with optional TLS file settings.
+ *
+ * `tls_json` accepts a JSON object or a null pointer. The object has three
+ * optional file paths: `certificate`, `client_certificate`, and `private_key`.
+ * Set the client certificate and private key together.
+ * Refer to [`nemo_relay_otel_log_subscriber_create_v2`] for the other options.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_create_with_tls(const char *transport,
+                                                               const char *endpoint,
+                                                               const char *headers_json,
+                                                               const char *header_env_json,
+                                                               const char *resource_attributes_json,
+                                                               const char *service_name,
+                                                               const char *service_namespace,
+                                                               const char *service_version,
+                                                               const char *instrumentation_scope,
+                                                               uint64_t timeout_millis,
+                                                               const char *minimum_severity,
+                                                               uint64_t max_queue_size,
+                                                               uint64_t max_export_batch_size,
+                                                               uint64_t scheduled_delay_millis,
+                                                               uint64_t completed_span_context_ttl_millis,
+                                                               const char *tls_json,
+                                                               struct FfiOpenTelemetryLogSubscriber **out);
+
+/**
+ * Creates an OTLP subscriber with optional TLS file settings.
+ *
+ * `tls_json` accepts a JSON object or a null pointer. The object has three
+ * optional file paths: `certificate`, `client_certificate`, and `private_key`.
+ * Set the client certificate and private key together.
+ * Refer to [`nemo_relay_otel_metric_subscriber_create_v2`] for the other options.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_create_with_tls(const char *transport,
+                                                                  const char *endpoint,
+                                                                  const char *headers_json,
+                                                                  const char *header_env_json,
+                                                                  const char *resource_attributes_json,
+                                                                  const char *service_name,
+                                                                  const char *service_namespace,
+                                                                  const char *service_version,
+                                                                  const char *instrumentation_scope,
+                                                                  uint64_t timeout_millis,
+                                                                  uint64_t export_interval_millis,
+                                                                  const char *temporality,
+                                                                  uint64_t max_instruments,
+                                                                  uint64_t cardinality_limit,
+                                                                  const char *tls_json,
+                                                                  struct FfiOpenTelemetryMetricSubscriber **out);
+
+/**
  * Initialize the unified static and dynamic plugin host from core-owned
  * `plugins.toml` discovery.
  *
@@ -2324,7 +2472,8 @@ NemoRelayStatus nemo_relay_plugin_validate(const char *config_json,
  * Validate only the supplied static plugin configuration.
  *
  * This entry point does not discover or merge `plugins.toml` layers. The
- * returned host report therefore has no dynamic-plugin reports.
+ * returned host report therefore has no dynamic-plugin reports. Host-only
+ * `diagnostics` settings are rejected; use `nemo_relay_plugin_validate` instead.
  *
  * # Safety
  * `config_json` must be a valid C string and `out_report_json` must be a valid
@@ -3105,6 +3254,17 @@ NemoRelayStatus nemo_relay_scope_register_subscriber(const char *scope_uuid,
  * `scope_uuid` and `name` must be valid C strings.
  */
 NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, const char *name);
+
+/**
+ * Return the explicit calling context's root-to-top scope identities as JSON.
+ *
+ * Success with a null output means no active binding. A non-null result must
+ * be released with nemo_relay_string_free. No stack is created or activated.
+ *
+ * # Safety
+ * out must point to valid writable C-string pointer storage.
+ */
+NemoRelayStatus nemo_relay_current_scope_stack_snapshot_json(char **out);
 
 /**
  * Create a new isolated scope stack with its own root scope.

@@ -22,10 +22,11 @@
 //!
 //! [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
 
-use crate::api::runtime::{LlmCollectorFn, LlmFinalizerFn};
+use crate::api::runtime::{LlmBorrowedCollectorFn, LlmCollectorFn, LlmFinalizerFn, LlmJsonStream};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Provider-neutral incremental stream item used by cross-protocol transcoders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,8 +78,24 @@ pub enum NormalizedStreamEvent {
 /// construct a fresh instance per managed-lifecycle call and discard it after the stream
 /// completes.
 pub trait StreamingCodec: Send + Sync {
+    /// Wraps the source stream to check provider completion rules.
+    ///
+    /// Feed the returned stream to this instance's collector and finalizer. The default
+    /// leaves the stream unchanged. An override must forward close and cleanup operations.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        stream
+    }
+
     /// Returns a closure that consumes one decoded provider event per call.
     fn collector(&self) -> LlmCollectorFn;
+
+    /// Returns an optional collector that reads decoded events by reference.
+    ///
+    /// Pass this to `LlmStreamCallExecuteParams::borrowed_collector` to avoid copying
+    /// each whole JSON chunk. The default keeps the owned callback for custom codecs.
+    fn borrowed_collector(&self) -> Option<LlmBorrowedCollectorFn> {
+        None
+    }
 
     /// Returns a closure that, when called once at end of stream, produces the assembled response
     /// payload in the shape the matching [`crate::codec::traits::LlmResponseCodec`] can decode.
@@ -98,7 +115,7 @@ pub trait StreamingCodec: Send + Sync {
 /// terminator are retained for the next call.
 #[derive(Default)]
 pub struct SseEventDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
     // Start the next delimiter search near the only position where a newly
     // appended chunk can complete an unfinished `\n\n` terminator. Completed
     // frames are compacted once after each push instead of shifting the buffer
@@ -124,8 +141,8 @@ impl SseEventDecoder {
     /// Appends `bytes` to the internal buffer and returns every now-complete SSE event.
     ///
     /// Bytes are interpreted as UTF-8 with replacement characters for invalid sequences; provider
-    /// SSE streams are well-formed UTF-8 in practice, but lossy decoding keeps the decoder honest
-    /// rather than failing on a single corrupt chunk.
+    /// SSE streams are well-formed UTF-8 in practice. Decoding happens only after a complete
+    /// frame is buffered, preserving valid characters split across incoming chunks.
     ///
     /// Returns `Ok(events)` containing zero or more events whose `data:` payloads parsed
     /// successfully. Frames whose `data:` line is non-empty but does not parse as JSON are
@@ -146,27 +163,32 @@ impl SseEventDecoder {
         // providers emit mixed line endings on the wire; normalizing once here keeps the inner
         // loop cheap. If CRLF is split across chunks, retain the trailing CR until the next append
         // and remove it only when the next byte completes the sequence.
-        if self.buffer.ends_with('\r') && bytes.first() == Some(&b'\n') {
-            self.buffer.pop();
-            // Removing the trailing CR means the preceding LF can now pair with the incoming LF.
-            self.scan_from = self.buffer.len() - usize::from(self.buffer.ends_with('\n'));
-        }
-        let chunk = String::from_utf8_lossy(bytes);
-        if chunk.contains("\r\n") {
-            self.buffer.push_str(&chunk.replace("\r\n", "\n"));
+        let append_from = self.buffer.len();
+        if bytes.contains(&b'\r') || self.buffer.last() == Some(&b'\r') {
+            for &byte in bytes {
+                if byte == b'\n' && self.buffer.last() == Some(&b'\r') {
+                    self.buffer.pop();
+                }
+                self.buffer.push(byte);
+            }
+            // Normalization can complete a terminator immediately before the append.
+            self.scan_from = self.scan_from.min(append_from.saturating_sub(2));
         } else {
-            self.buffer.push_str(&chunk);
+            self.buffer.extend_from_slice(bytes);
         }
         let mut results = Vec::new();
         let mut consumed = 0;
         let mut search_from = self.scan_from.min(self.buffer.len());
-        while let Some(relative_cut) = self.buffer[search_from..].find("\n\n") {
+        while let Some(relative_cut) = self.buffer[search_from..]
+            .windows(2)
+            .position(|pair| pair == b"\n\n")
+        {
             let cut = search_from + relative_cut;
             // `consumed` marks the start of the unparsed frame. Borrowing the
             // frame avoids allocating a string for every SSE event.
-            let frame = &self.buffer[consumed..cut];
+            let frame = String::from_utf8_lossy(&self.buffer[consumed..cut]);
             consumed = cut + 2;
-            match parse_sse_frame(frame) {
+            match parse_sse_frame(&frame) {
                 Ok(Some(event)) => results.push(Ok(event)),
                 Ok(None) => {}
                 Err(error) => {
@@ -183,7 +205,7 @@ impl SseEventDecoder {
         if results.last().is_none_or(Result::is_ok) {
             // The next terminator can only start at the prior final byte; do
             // not rescan an incomplete frame from its beginning on every chunk.
-            self.scan_from = self.buffer.len() - usize::from(self.buffer.ends_with('\n'));
+            self.scan_from = self.buffer.len() - usize::from(self.buffer.ends_with(b"\n"));
         }
         results
     }
@@ -194,7 +216,8 @@ impl SseEventDecoder {
     /// `Ok(None)`. Stops with no terminator are surfaced as a final partial frame so observability
     /// captures the last bytes the upstream sent before disconnect.
     pub fn finish(mut self) -> Result<Option<SseEvent>> {
-        let trailing = std::mem::take(&mut self.buffer);
+        let bytes = std::mem::take(&mut self.buffer);
+        let trailing = String::from_utf8_lossy(&bytes);
         if trailing.trim().is_empty() {
             Ok(None)
         } else {
@@ -207,20 +230,35 @@ impl SseEventDecoder {
 // frames whose `data:` JSON parsed successfully.
 fn parse_sse_frame(frame: &str) -> Result<Option<SseEvent>> {
     let mut event_name: Option<String> = None;
-    let mut data_parts: Vec<&str> = Vec::new();
+    // Provider frames usually have one data line; borrow it until a second line needs joining.
+    let mut payload: Option<Cow<'_, str>> = None;
     for line in frame.split('\n') {
         if let Some(rest) = line.strip_prefix("event:") {
             event_name = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("data:") {
             // SSE allows a single space after the colon by convention; strip it lazily.
-            data_parts.push(rest.strip_prefix(' ').unwrap_or(rest));
+            let data = rest.strip_prefix(' ').unwrap_or(rest);
+            match &mut payload {
+                None => payload = Some(Cow::Borrowed(data)),
+                Some(Cow::Borrowed(first)) => {
+                    // The complete frame bounds the joined payload, including later data lines.
+                    let mut joined = String::with_capacity(frame.len());
+                    joined.push_str(first);
+                    joined.push('\n');
+                    joined.push_str(data);
+                    payload = Some(Cow::Owned(joined));
+                }
+                Some(Cow::Owned(joined)) => {
+                    joined.push('\n');
+                    joined.push_str(data);
+                }
+            }
         }
         // Other lines (`id:`, `retry:`, comments starting with `:`) are ignored.
     }
-    if data_parts.is_empty() {
+    let Some(payload) = payload else {
         return Ok(None);
-    }
-    let payload = data_parts.join("\n");
+    };
     let trimmed = payload.trim();
     // OpenAI Chat Completions emits a `data: [DONE]` terminator as a wire-level end-of-stream
     // sentinel. It's not a JSON payload — drop it like a heartbeat. Other providers (Anthropic,

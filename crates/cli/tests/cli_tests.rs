@@ -24,7 +24,7 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
-const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
+const BOOTSTRAP_PROTOCOL_VERSION: u64 = 4;
 const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -370,6 +370,43 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
         records
             .iter()
             .all(|record| { record["level"] != "debug" && record["level"] != "trace" })
+    );
+}
+
+#[test]
+fn cli_logging_environment_overrides_keep_configured_file_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_LOG", "info")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "jsonl")
+        .env("NEMO_RELAY_LOG_STDERR", "false")
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .arg("--config")
+        .arg(&config_path)
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{:?}", output);
+    assert!(output.stderr.is_empty());
+    let records = read_jsonl_records(&log_path);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "command_started")
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "command_completed")
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record["level"] != "debug" && record["level"] != "trace")
     );
 }
 
@@ -1094,6 +1131,7 @@ enum FakeBootstrapProof {
     Missing,
     Wrong,
     Valid,
+    ValidWithWrongUpgrade,
 }
 
 fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
@@ -1106,7 +1144,7 @@ fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str>
 fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
     let mut context = hmac::Context::with_key(&key);
-    context.update(b"nemo-relay/bootstrap-health/v1\0");
+    context.update(b"nemo-relay/bootstrap-health/v2\0");
     context.update(fingerprint.as_bytes());
     context.update(&[0]);
     context.update(nonce.as_bytes());
@@ -1148,24 +1186,25 @@ fn write_test_tls_identity(bootstrap_dir: &Path) -> Arc<rustls::ServerConfig> {
 }
 
 fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, None, false)
+    run_fake_bootstrap_listener_with_options(proof, None, false, false)
 }
 
 fn run_fake_bootstrap_listener_with_hook_delay(
     proof: FakeBootstrapProof,
     hook_delay: Option<Duration>,
 ) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, hook_delay, false)
+    run_fake_bootstrap_listener_with_options(proof, hook_delay, false, false)
 }
 
 fn run_forward_only_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, None, true)
+    run_fake_bootstrap_listener_with_options(proof, None, true, false)
 }
 
 fn run_fake_bootstrap_listener_with_options(
     proof: FakeBootstrapProof,
     hook_delay: Option<Duration>,
     forward_only: bool,
+    refuse_first_tunnel: bool,
 ) -> (Output, Vec<String>) {
     let temp = tempfile::tempdir().unwrap();
     let generation = write_active_generation(temp.path());
@@ -1184,6 +1223,7 @@ fn run_fake_bootstrap_listener_with_options(
         .join("fingerprint-hmac.key");
     let tls = write_test_tls_identity(key_path.parent().unwrap());
     let server = thread::spawn(move || {
+        let mut refuse_tunnel = refuse_first_tunnel;
         while !server_stopped.load(Ordering::Relaxed) {
             let (mut stream, _) = match listener.accept() {
                 Ok(connection) => connection,
@@ -1199,6 +1239,11 @@ fn run_fake_bootstrap_listener_with_options(
                 .unwrap();
             let request = read_http_request(&mut stream);
             server_requests.lock().unwrap().push(request.clone());
+            if refuse_tunnel && request.starts_with("GET /bootstrap/tunnel ") {
+                refuse_tunnel = false;
+                stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                continue;
+            }
             if request.starts_with("GET /healthz ") {
                 write_fake_bootstrap_health(&mut stream, &request, proof, &key_path);
                 continue;
@@ -1266,17 +1311,18 @@ fn fake_bootstrap_proof_header(
     key_path: &Path,
     fingerprint: &str,
     nonce: &str,
+    address: std::net::SocketAddr,
 ) -> String {
     match proof {
         FakeBootstrapProof::Missing => String::new(),
         FakeBootstrapProof::Wrong => {
             "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
         }
-        FakeBootstrapProof::Valid => format!(
+        FakeBootstrapProof::Valid | FakeBootstrapProof::ValidWithWrongUpgrade => format!(
             "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
             fake_bootstrap_proof(
                 &std::fs::read(key_path).unwrap(),
-                fingerprint,
+                &format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0test-instance"),
                 nonce
             )
         ),
@@ -1292,7 +1338,13 @@ fn write_fake_bootstrap_health(
     let fingerprint =
         bootstrap_request_header(request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
-    let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
+    let proof_header = fake_bootstrap_proof_header(
+        proof,
+        key_path,
+        fingerprint,
+        nonce,
+        stream.local_addr().unwrap(),
+    );
     let body = format!(
         r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
         env!("CARGO_PKG_VERSION"),
@@ -1322,11 +1374,22 @@ fn handle_fake_bootstrap_tunnel(
     let fingerprint =
         bootstrap_request_header(request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
-    let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
+    let proof_header = fake_bootstrap_proof_header(
+        proof,
+        key_path,
+        fingerprint,
+        nonce,
+        stream.local_addr().unwrap(),
+    );
+    let upgrade = if matches!(proof, FakeBootstrapProof::ValidWithWrongUpgrade) {
+        "unexpected-protocol"
+    } else {
+        "nemo-relay-tls"
+    };
     stream
         .write_all(
             format!(
-                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}Connection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: {upgrade}\r\nContent-Length: 0\r\n\r\n"
             )
             .as_bytes(),
         )
@@ -1349,7 +1412,7 @@ fn handle_fake_bootstrap_tunnel(
                 "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
                 fake_bootstrap_proof(
                     &std::fs::read(key_path).unwrap(),
-                    fingerprint,
+                    &format!("nemo-relay/listener/v2\0{fingerprint}\0{}\0test-instance", stream.sock.local_addr().unwrap()),
                     nonce
                 ),
                 body.len()
@@ -1500,7 +1563,7 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
     for fail_closed in [false, true] {
         let output =
             run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}", true);
-        assert_eq!(output.status.code(), Some(if fail_closed { 2 } else { 0 }));
+        assert_eq!(output.status.code(), Some(2));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
         assert!(output.stdout.is_empty());
@@ -1571,7 +1634,7 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
         let output =
             run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, &payload, false);
 
-        assert_eq!(output.status.success(), !fail_closed);
+        assert_eq!(output.status.code(), Some(2));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("hook payload exceeds the 20971520-byte limit"));
         assert!(!stderr.contains("sidecar recovery"));
@@ -3974,9 +4037,9 @@ fn cli_doctor_json_reports_effective_upstream_auth_presence() {
         &user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -3986,7 +4049,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["doctor", "--json"])
         .output()
         .unwrap();
@@ -4241,8 +4304,8 @@ fn cli_run_dry_run_resolves_config_and_command() {
         &config,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
-anthropic_base_url = "http://file-anthropic"
+openai_base_url = "https://file-openai"
+anthropic_base_url = "https://file-anthropic"
 
 [agents.codex]
 command = "codex exec"
@@ -4268,7 +4331,7 @@ command = "codex exec"
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("agent = codex"));
-    assert!(stdout.contains("openai_base_url = http://file-openai"));
+    assert!(stdout.contains("openai_base_url = https://file-openai"));
     let argv = stdout
         .lines()
         .find(|line| line.starts_with("argv = "))
@@ -4488,6 +4551,7 @@ command = "nemo-relay-test-agent-that-does-not-exist"
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
+        .args(["--log-stderr-format", "human"])
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -4641,7 +4705,7 @@ fn cli_run_dry_run_ignores_project_and_uses_user_and_env_config() {
         project.join(".nemo-relay/config.toml"),
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 "#,
     )
     .unwrap();
@@ -4649,7 +4713,7 @@ openai_base_url = "http://project-openai"
         xdg.join("config.toml"),
         r#"
 [upstream]
-anthropic_base_url = "http://user-anthropic"
+anthropic_base_url = "https://user-anthropic"
 
 [agents.codex]
 command = "codex --full-auto"
@@ -4686,8 +4750,8 @@ mode = "append"
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
-        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
+        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "https://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
         .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
@@ -4697,8 +4761,8 @@ mode = "append"
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
-    assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
+    assert!(stdout.contains("anthropic_base_url = https://env-anthropic"));
     assert!(stdout.contains("max_hook_payload_bytes = 444"));
     assert!(stdout.contains("max_passthrough_body_bytes = 555"));
     assert!(!stdout.contains("atif_dir"));
@@ -4721,9 +4785,9 @@ fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
         user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -4733,7 +4797,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -4742,7 +4806,7 @@ anthropic_auth_header = "Basic project-anthropic"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("Bearer project-openai"));
     assert!(!stdout.contains("Basic project-anthropic"));
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
     assert!(stdout.contains("openai_auth = unset"));
     assert!(stdout.contains("anthropic_auth = configured"));
 }
@@ -5166,7 +5230,9 @@ fn assert_process_exits(pid: i32, signal_name: &str) {
 
 #[test]
 fn cli_hook_forward_posts_payload_headers_and_prints_response() {
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
@@ -5180,6 +5246,8 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "--fail-closed",
         ])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5206,10 +5274,48 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
 }
 
 #[test]
+fn cli_hook_forward_preserves_large_utf8_payload_through_verified_tls() {
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
+    let payload = serde_json::json!({
+        "hook_event_name": "sessionStart",
+        "context": "\u{03c0}".repeat(32 * 1024),
+    })
+    .to_string();
+    let mut child = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let output = wait_child_with_output(child);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(request.split_once("\r\n\r\n").unwrap().1, payload);
+    assert_eq!(output.stdout, b"{\"continue\":true}\n");
+}
+
+#[test]
 fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
     let temp = tempfile::tempdir().unwrap();
     let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let sentinels = [
         "NEMO_RELAY_TOOL_SENTINEL",
         "NEMO_RELAY_ARGUMENT_SENTINEL",
@@ -5244,6 +5350,8 @@ fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
             "--fail-closed",
         ])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5296,15 +5404,50 @@ fn cli_forward_only_unfenced_hook_posts_to_an_authenticated_gateway_without_reco
             .iter()
             .any(|request| request.starts_with("POST /hooks/codex "))
     );
+    assert_eq!(requests.len(), 3, "healthy forwarding uses one connection");
+    assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[1].starts_with("GET /healthz "));
+    assert!(requests[2].starts_with("POST /hooks/codex "));
 }
 
 #[test]
-fn cli_forward_only_unfenced_hook_rejects_a_foreign_listener_before_posting() {
-    let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Missing);
+fn cli_forward_only_preserves_readiness_fallback_before_authentication() {
+    let (output, requests) =
+        run_fake_bootstrap_listener_with_options(FakeBootstrapProof::Valid, None, true, true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests.len(), 5);
+    assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[1].starts_with("GET /healthz "));
+    assert!(requests[2].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[3].starts_with("GET /healthz "));
+    assert!(requests[4].starts_with("POST /hooks/codex "));
+}
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not a compatible"));
-    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+#[test]
+fn cli_forward_only_rejects_invalid_tunnel_responses_without_readiness_fallback() {
+    for proof in [
+        FakeBootstrapProof::Missing,
+        FakeBootstrapProof::Wrong,
+        FakeBootstrapProof::ValidWithWrongUpgrade,
+    ] {
+        let (output, requests) = run_forward_only_fake_bootstrap_listener(proof);
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("gateway did not establish an authenticated Relay TLS tunnel")
+        );
+        assert_eq!(
+            requests.len(),
+            1,
+            "invalid tunnel must not retry: {requests:#?}"
+        );
+        assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    }
 }
 
 #[test]
@@ -5353,11 +5496,18 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
             .ok_or_else(|| "tunnel omitted its fingerprint".to_string())?;
         let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
             .ok_or_else(|| "tunnel omitted its nonce".to_string())?;
-        let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
+        let proof = fake_bootstrap_proof(
+            &key,
+            &format!(
+                "nemo-relay/listener/v2\0{fingerprint}\0{}\0test-instance",
+                stream.local_addr().unwrap()
+            ),
+            nonce,
+        );
         stream
             .write_all(
                 format!(
-                    "HTTP/1.1 101 Switching Protocols\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                    "HTTP/1.1 101 Switching Protocols\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nX-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -5401,6 +5551,11 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
     assert_eq!(authenticated_phases, 2);
     assert!(!output.status.success());
     assert_eq!(
+        requests.len(),
+        1,
+        "authenticated failure must not reconnect: {requests:#?}"
+    );
+    assert_eq!(
         requests
             .iter()
             .filter(|request| request.starts_with("POST "))
@@ -5441,7 +5596,14 @@ fn write_phase_health_response(
         .ok_or_else(|| "health probe omitted its fingerprint".to_string())?;
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce")
         .ok_or_else(|| "health probe omitted its nonce".to_string())?;
-    let proof = fake_bootstrap_proof(key, fingerprint, nonce);
+    let proof = fake_bootstrap_proof(
+        key,
+        &format!(
+            "nemo-relay/listener/v2\0{fingerprint}\0{}\0phase-health",
+            stream.local_addr().unwrap()
+        ),
+        nonce,
+    );
     let body = format!(
         r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"phase-health"}}"#,
         env!("CARGO_PKG_VERSION"),
@@ -5513,6 +5675,8 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
     assert!(persistent.stdout.is_empty());
     assert!(persistent.stderr.is_empty());
 
+    let temp = tempfile::tempdir().unwrap();
+    write_test_tls_identity(&temp.path().join("xdg/nemo-relay/bootstrap"));
     let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
     let owned = Command::new(gateway_bin())
         .args([
@@ -5524,6 +5688,8 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
         .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .env("NEMO_RELAY_PROXY_CREDENTIAL", "nrp_foreign-test-credential")
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5546,14 +5712,20 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
     let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(request.starts_with("GET /bootstrap/tunnel "));
     assert!(!request.contains(r#"{"session_id":"owned"}"#));
+    assert!(!request.to_lowercase().contains("x-nemo-relay-client-token"));
+    assert!(!request.contains("nrp_foreign-test-credential"));
 }
 
 #[test]
 fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex", "--fail-closed"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .env("HTTPS_PROXY", "http://127.0.0.1:1")
         .env("ALL_PROXY", "http://127.0.0.1:1")
@@ -5577,10 +5749,13 @@ fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
 
 #[test]
 fn cli_hook_forward_reports_http_failure_when_fail_closed() {
-    let (server_url, received) = spawn_single_request_server(503, "unavailable");
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) = spawn_verified_hook_server(temp.path(), 503, "unavailable");
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex", "--fail-closed"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5597,13 +5772,17 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
 
 #[test]
 fn cli_hook_forward_exits_two_for_guardrail_rejection() {
-    let (server_url, received) = spawn_single_request_server(
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) = spawn_verified_hook_server(
+        temp.path(),
         403,
         r#"{"error":{"message":"guardrail rejected: blocked by policy","type":"nemo_relay_guardrail_rejected","reason":"blocked by policy"}}"#,
     );
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5668,19 +5847,24 @@ fn cli_hook_delivery_transport_failures_respect_policy_in_gateway_and_daemon_mod
 
 #[test]
 fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
+    let temp = tempfile::tempdir().unwrap();
     const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
     for fail_closed in [false, true] {
         let (server_url, received) =
-            spawn_single_request_server(200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
+            spawn_verified_hook_server(temp.path(), 200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
         let mut command = Command::new(gateway_bin());
         command
             .args(["hook-forward", "codex"])
             .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if fail_closed {
             command.arg("--fail-closed");
+        } else {
+            command.arg("--fail-open");
         }
         let mut child = command.spawn().unwrap();
         child.stdin.take().unwrap().write_all(b"{}").unwrap();
@@ -5690,10 +5874,56 @@ fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
         assert!(output.stdout.is_empty());
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .contains("hook forward response exceeds the 1048576-byte limit")
+                .contains("HTTP response exceeds the 1048576-byte Relay limit")
         );
         assert!(received.recv_timeout(Duration::from_secs(2)).is_ok());
     }
+}
+
+fn spawn_verified_hook_server(
+    temp: &Path,
+    status: u16,
+    body: impl Into<String>,
+) -> (String, mpsc::Receiver<String>) {
+    let body = body.into();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = temp.join("xdg/nemo-relay/bootstrap");
+    let tls = write_test_tls_identity(&state);
+    let key = [0x5a_u8; 32];
+    std::fs::write(state.join("fingerprint-hmac.key"), key).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let request = read_http_request(&mut socket);
+        assert!(request.starts_with("GET /bootstrap/tunnel "));
+        assert!(bootstrap_request_header(&request, "x-nemo-relay-client-token").is_none());
+        let fingerprint =
+            bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
+        let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce").unwrap();
+        let proof = fake_bootstrap_proof(
+            &key,
+            &format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0test-instance"),
+            nonce,
+        );
+        write!(socket, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nX-NeMo-Relay-Instance-Id: test-instance\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let connection = rustls::ServerConnection::new(tls).unwrap();
+        let mut stream = rustls::StreamOwned::new(connection, socket);
+        let _health = read_http_request(&mut stream);
+        let health_body = serde_json::json!({"status":"ok", "service":"nemo-relay", "bootstrap_protocol":BOOTSTRAP_PROTOCOL_VERSION, "instance_id":"test-instance"}).to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\n\r\n{health_body}", health_body.len()).unwrap();
+        let request = read_http_request(&mut stream);
+        sender.send(request).unwrap();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} Response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+    });
+    (format!("http://{address}"), receiver)
 }
 
 fn spawn_single_request_server(
@@ -6511,4 +6741,235 @@ fn daemon_token_ensure_creates_once_and_never_prints_the_token() {
     assert!(stderr.contains("does not contain"), "{stderr}");
     assert!(!stderr.contains("corrupt"), "{stderr}");
     assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "corrupt");
+}
+
+/// Verifies standalone CLI delivery authenticates pi clients and preserves HTTP verdicts.
+#[test]
+fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verdicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let mut server = Command::new(gateway_bin());
+    server
+        .args(["--bind", &address.to_string()])
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let _server = ChildGuard::new(server.spawn().unwrap());
+    wait_for_port_open(address);
+    assert_eq!(relay_health(address)["status"], "ok");
+    let gateway_url = format!("http://{address}");
+    let forward = |client: &str, event: &str| {
+        let mut child = Command::new(gateway_bin())
+            .args([
+                "hook-forward",
+                "pi",
+                "--gateway-url",
+                &gateway_url,
+                "--pi-extension-client",
+                client,
+                "--fail-closed",
+            ])
+            .current_dir(temp.path())
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let payload = serde_json::json!({"session_id": "pi-wire-victim", "hook_event_name": event});
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = wait_child_with_output(child);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let started = forward("victim", "session_start");
+    assert_eq!(started["status"], 200);
+    assert_eq!(started["body"], "{}");
+    assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
+    assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn configured_api_key_helpers_warn_about_ignored_environment_without_executing() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream.openai_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n\n[upstream.anthropic_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n",
+    ).unwrap();
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .env(
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            temp.path().join("system"),
+        )
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .env("NEMO_RELAY_LOG", "warn")
+        .env("NEMO_RELAY_LOG_STDERR", "true")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "json")
+        .env("OPENAI_API_KEY", "private-openai-env-sentinel")
+        .env("ANTHROPIC_API_KEY", "private-anthropic-key-sentinel")
+        .env("ANTHROPIC_AUTH_TOKEN", "private-anthropic-token-sentinel")
+        .env(
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            "private-openai-header-sentinel\ninvalid",
+        )
+        .env(
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            "private-anthropic-header-sentinel\ninvalid",
+        )
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    for name in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+    ] {
+        assert!(stderr.contains(name), "{stderr}");
+    }
+    assert!(
+        stderr.contains("provider_environment_auth_ignored"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private-"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["configuration"]["upstream_auth"]["checks"]
+        .as_array()
+        .unwrap();
+    assert_eq!(checks.len(), 2);
+    for check in checks {
+        assert_eq!(check["status"], "warn");
+        assert!(
+            check["details"]
+                .as_str()
+                .unwrap()
+                .contains("API key helper configured")
+        );
+        assert!(
+            check["details"]
+                .as_str()
+                .unwrap()
+                .contains("Doctor does not run the helper")
+        );
+    }
+}
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn overridden_api_key_helpers_do_not_warn_about_environment_authentication() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream.openai_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n\n[upstream.anthropic_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n",
+    ).unwrap();
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .env(
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            temp.path().join("system"),
+        )
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .env("NEMO_RELAY_LOG", "warn")
+        .env("NEMO_RELAY_LOG_STDERR", "true")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "json")
+        .env("OPENAI_API_KEY", "private-openai-env-sentinel")
+        .env("ANTHROPIC_API_KEY", "private-anthropic-key-sentinel")
+        .env("ANTHROPIC_AUTH_TOKEN", "private-anthropic-token-sentinel")
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--openai-base-url",
+            "https://replacement-openai.example/v1",
+            "--anthropic-base-url",
+            "https://replacement-anthropic.example",
+            "doctor",
+            "--json",
+            "--offline",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("provider_environment_auth_ignored"),
+        "{stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["openai"],
+        "configured"
+    );
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "configured"
+    );
+    assert!(!stderr.contains("private-"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-"));
+}
+
+#[test]
+fn cli_legacy_hook_default_blocks_permission_delivery_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let (gateway, requests) = spawn_single_request_server(200, "{}");
+    let mut child = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "claude",
+            "--forward-only",
+            "--gateway-url",
+            &gateway,
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_FAIL_CLOSED")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"hook_event_name":"PreToolUse"}"#)
+        .unwrap();
+    let output = wait_child_with_output(child);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.starts_with("GET /healthz "));
+    assert!(!request.to_lowercase().contains("x-nemo-relay-client-token"));
 }

@@ -17,7 +17,7 @@ before they validate or initialize a `pii_redaction` component.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
 gateway conflict rules, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+[Configure](/configure-plugins/plugin-configuration-files).
 
 <Note>
 NeMo Relay plugin configuration uses the generic plugin document shape, so
@@ -162,7 +162,7 @@ To use `mode = "builtin"`:
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
 precedence, merge behavior, and editor controls, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+[Configure](/configure-plugins/plugin-configuration-files).
 
 ```toml
 version = 1
@@ -260,6 +260,14 @@ provider-native values, generic event data and metadata, category-profile extras
 and unknown custom-mark payloads cannot pass through those projections. Present
 opaque typed JSON values become `{}`. A valid `nemo_relay.log.severity` value is
 restored for marks.
+
+Scope metadata retains only recognized `otel.status_code` values (`OK`, `ERROR`,
+`UNSET`) and, for `ERROR`, Relay's fixed `error.type` classifications or `_OTHER`.
+Unrecognized error types are discarded; the `full` and `gen_ai` OpenTelemetry
+projections use `_OTHER` for errors without a classification. Free-form status
+descriptions, exception types, and other metadata remain discarded, so redaction
+preserves success/error reporting without exporting error messages or application
+exception names.
 
 Typed LLM annotations retain message roles and content-part kinds; provider,
 model, and tool names; request tuning settings; finish reasons; token and cache

@@ -28,7 +28,8 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc"] }
+nemo-relay-types.workspace = true
+nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc", "__internal-gateway"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 async-stream = "0.3"
@@ -66,14 +67,15 @@ strum = { version = "0.27", features = ["derive"] }
 subtle = "2"
 tar = "0.4"
 thiserror = "2"
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, default-features = true, features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 toml = "0.9"
 toml_edit = "0.23"
+tower-service = "0.3"
 uuid = { workspace = true, features = ["serde", "v7"] }
-zstd = "0.13"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.14.3"
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -91,5 +93,5 @@ opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 shell-words = "1"
 syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, default-features = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

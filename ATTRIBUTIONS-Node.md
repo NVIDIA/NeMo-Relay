@@ -5325,7 +5325,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## body-parser - 2.3.0
+## body-parser - 2.4.0
 **Repository URL**: https://github.com/expressjs/body-parser
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -7399,7 +7399,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.```
 
-## fast-uri - 3.1.8
+## fast-uri - 3.1.9
 **Repository URL**: https://github.com/fastify/fast-uri
 **License Type(s)**: BSD-3-Clause
 ### License: https://spdx.org/licenses/BSD-3-Clause.html
@@ -7464,7 +7464,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## fern-api - 5.57.0
+## fern-api - 5.168.0
 **Repository URL**: https://github.com/fern-api/fern
 **License Type(s)**: Apache*
 ### License: https://opensource.org/licenses/
@@ -9067,7 +9067,7 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.```
 
-## hono - 4.13.7
+## hono - 4.13.13
 **Repository URL**: https://github.com/honojs/hono
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -9600,7 +9600,7 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.```
 
-## ip-address - 10.7.2
+## ip-address - 10.7.4
 **Repository URL**: https://github.com/beaugunderson/ip-address
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -11356,7 +11356,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
-## markdown-it - 14.3.2
+## markdown-it - 14.3.3
 **Repository URL**: https://github.com/markdown-it/markdown-it
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -13156,7 +13156,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
-## qs - 6.16.0
+## qs - 6.16.1
 **Repository URL**: https://github.com/ljharb/qs
 **License Type(s)**: BSD-3-Clause
 ### License: https://spdx.org/licenses/BSD-3-Clause.html
@@ -15781,7 +15781,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## undici - 8.10.2
+## undici - 8.12.2
 **Repository URL**: https://github.com/nodejs/undici
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -16470,7 +16470,7 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
 
-## zod - 4.4.3
+## zod - 4.6.6
 **Repository URL**: https://github.com/colinhacks/zod
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html

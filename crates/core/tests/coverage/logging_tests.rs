@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::diagnostics::{
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentRegistration,
+    DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics,
+    DiagnosticsSettings, FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
+};
 use crate::logging::{
-    FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
-    LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
-    format_event_for_test, init_logging, initialize_default_logging, shutdown_default_logging,
+    FileLogRotationConfig, FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel,
+    LogSinkConfig, LoggingConfig, LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES,
+    MAX_FILE_SINK_RETAINED_FILES, build_logger, format_event_for_test, init_logging,
+    initialize_default_logging, shutdown_default_logging,
 };
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_sdk::error::OTelSdkResult;
@@ -14,6 +20,7 @@ use opentelemetry_sdk::trace::{
 use serde_json::Value;
 use spdlog::Level;
 use std::ffi::{OsStr, OsString};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -136,8 +143,308 @@ impl Drop for LoggingEnvScope {
     }
 }
 
+fn enabled_diagnostics(limits: DiagnosticLimits) -> Diagnostics {
+    Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits,
+        },
+    )
+    .unwrap()
+}
+
 fn default_config() -> LoggingConfig {
     LoggingConfig::default()
+}
+
+#[test]
+fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists() {
+    let _guard = lock_logging_tests();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let temp = tempfile::tempdir().unwrap();
+    let blocked_parent = temp.path().join("not-a-directory");
+    std::fs::write(&blocked_parent, "file").unwrap();
+    let config = LoggingConfig {
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: blocked_parent.join("relay.jsonl"),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    assert!(LoggingRuntime::configure_with_diagnostics(config, &diagnostics).is_err());
+
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.source, *diagnostics.source());
+    let sink = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "logging.file.0")
+        .unwrap();
+    assert!(sink.closed_at.is_some());
+    assert!(snapshot.events.iter().any(|event| {
+        event.component == sink.identity
+            && event.code() == "logging.sink.initialize_failed"
+            && event.outcome == DiagnosticOutcome::Failure
+    }));
+    let failures = sink
+        .counters
+        .iter()
+        .find(|counter| counter.code == "logging.sink.initialize_failed")
+        .unwrap();
+    assert_eq!(failures.occurrences.value.get(), 1);
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("not-a-directory")
+    );
+}
+
+#[test]
+fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_logging() {
+    let _guard = lock_logging_tests();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let filtered = Classification::notice(NoticeCode::ConfigurationInherited);
+    let failure = Classification::failure(
+        FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
+        FailureClass::Internal,
+    )
+    .unwrap();
+    let after_shutdown = Classification::failure(
+        FailureCode::Plugin(PluginFailureCode::Common(
+            CommonPluginFailureCode::ResourceNotFound,
+        )),
+        FailureClass::NotFound,
+    )
+    .unwrap();
+    let codes = [filtered.code(), failure.code(), after_shutdown.code()]
+        .map(|name| BuiltinDiagnosticCode::from_canonical_name(name).unwrap());
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new("test.exporter", &codes))
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("diagnostics.jsonl");
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Warn,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                level: LogLevel::Trace,
+                ..Default::default()
+            })],
+            ..default_config()
+        },
+        &diagnostics,
+    )
+    .unwrap();
+    producer
+        .record_lazy(|| {
+            Observation::new(filtered, "Filtered from log output", NonZeroU64::MIN)
+                .with_severity(DiagnosticSeverity::Debug)
+        })
+        .unwrap();
+    producer
+        .record_lazy(|| Observation::new(failure, "Exporter delivery failed", NonZeroU64::MIN))
+        .unwrap();
+    runtime.shutdown();
+    let output = std::fs::read_to_string(&path).unwrap();
+    let records = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["event"] == "plugin.internal")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["root_relay_id"],
+        diagnostics.source().instance_id.to_string()
+    );
+    assert_eq!(
+        records[0]["fields"]["diagnostic"]["component_instance_id"],
+        producer.identity().unwrap().instance_id.to_string()
+    );
+    assert!(!output.contains("plugin.configuration_inherited"));
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("test.exporter".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.code() == "plugin.configuration_inherited")
+    );
+    producer
+        .record_lazy(|| {
+            Observation::new(
+                after_shutdown,
+                "Recorded after logging shutdown",
+                NonZeroU64::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), output);
+    let final_snapshot = producer
+        .reader()
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("test.exporter".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(
+        final_snapshot.components[0]
+            .counters
+            .iter()
+            .find(|counter| counter.code == "plugin.resource_not_found")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        1
+    );
+}
+
+#[test]
+fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
+    let _guard = lock_logging_tests();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let current = Classification::failure(
+        FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
+        FailureClass::Internal,
+    )
+    .unwrap();
+    let still_current = Classification::failure(
+        FailureCode::Plugin(PluginFailureCode::Common(
+            CommonPluginFailureCode::ResourceNotFound,
+        )),
+        FailureClass::NotFound,
+    )
+    .unwrap();
+    let codes = [current.code(), still_current.code()]
+        .map(|name| BuiltinDiagnosticCode::from_canonical_name(name).unwrap());
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new("test.producer", &codes))
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let first_path = temp.path().join("first.jsonl");
+    let second_path = temp.path().join("second.jsonl");
+    let configure = |path: PathBuf| {
+        LoggingRuntime::configure_with_diagnostics(
+            LoggingConfig {
+                level: LogLevel::Info,
+                stderr_enabled: false,
+                flush_interval_millis: 0,
+                sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                    path,
+                    ..Default::default()
+                })],
+                ..default_config()
+            },
+            &diagnostics,
+        )
+        .unwrap()
+    };
+    let first = configure(first_path.clone());
+    let second = configure(second_path.clone());
+    producer
+        .record_lazy(|| Observation::new(current, "Current runtime only", NonZeroU64::MIN))
+        .unwrap();
+    first.shutdown();
+    producer
+        .record_lazy(|| {
+            Observation::new(
+                still_current,
+                "New runtime remains attached",
+                NonZeroU64::MIN,
+            )
+        })
+        .unwrap();
+    second.shutdown();
+    let first = std::fs::read_to_string(first_path).unwrap();
+    let second = std::fs::read_to_string(second_path).unwrap();
+    for code in ["plugin.internal", "plugin.resource_not_found"] {
+        assert!(!first.contains(code));
+        assert_eq!(
+            second
+                .lines()
+                .filter(|line| serde_json::from_str::<Value>(line).unwrap()["event"] == code)
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
+    let _guard = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    for (case, max_components, max_projections) in [("components", 1, 16), ("projections", 64, 0)] {
+        let diagnostics = enabled_diagnostics(DiagnosticLimits {
+            max_components,
+            max_projections,
+            ..Default::default()
+        });
+        // Keep one real registration active: zero component capacity is now an invalid profile.
+        let _occupied = (case == "components").then(|| {
+            diagnostics
+                .register_component(ComponentRegistration::new("test.occupied", &[]))
+                .unwrap()
+        });
+        let path = temp.path().join(format!("{case}.jsonl"));
+        let runtime = LoggingRuntime::configure_with_diagnostics(
+            LoggingConfig {
+                level: LogLevel::Info,
+                stderr_enabled: false,
+                flush_interval_millis: 0,
+                sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                    path: path.clone(),
+                    ..Default::default()
+                })],
+                ..default_config()
+            },
+            &diagnostics,
+        )
+        .unwrap();
+        log::info!(target: "nemo_relay.test", event = "logging_despite_budget"; "Operational logging remains available");
+        runtime.shutdown();
+        let records = std::fs::read_to_string(path).unwrap();
+        assert!(
+            records
+                .lines()
+                .any(|line| serde_json::from_str::<Value>(line).unwrap()["event"]
+                    == "logging_despite_budget")
+        );
+        let snapshot = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        if case == "components" {
+            assert!(snapshot.coverage.loss.components_rejected.value.get() > 0);
+        } else {
+            assert!(
+                snapshot
+                    .events
+                    .iter()
+                    .any(|event| event.component.key == "logging"
+                        && event.code() == "logging.projection_unavailable"
+                        && event.outcome == DiagnosticOutcome::Failure)
+            );
+        }
+    }
 }
 
 fn toml_basic_string(value: &str) -> String {
@@ -418,6 +725,7 @@ queue_capacity = 7
                 format: LogFormat::Human,
                 queue_capacity: 7,
                 rotation: None,
+                failure_policy: FileLogSinkFailurePolicy::Required,
             })]
         );
     }
@@ -1313,6 +1621,127 @@ fn global_level_filter_drops_events_below_process_minimum() {
 }
 
 #[test]
+fn structured_emit_respects_facade_filter_independently_of_backend() {
+    let _lock = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("facade-filter.log.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    })
+    .unwrap();
+    assert!(runtime.logger.should_log(Level::Trace));
+    // Keep the backend permissive while independently tightening the facade.
+    log::set_max_level(log::LevelFilter::Warn);
+    let fields = |event: &str| {
+        serde_json::Map::from_iter([("event".into(), Value::String(event.to_owned()))])
+    };
+    const TARGET: &str = "nemo_relay.facade_filter_test";
+    for (name, level) in [
+        ("error", log::Level::Error),
+        ("warn", log::Level::Warn),
+        ("info", log::Level::Info),
+        ("debug", log::Level::Debug),
+        ("trace", log::Level::Trace),
+    ] {
+        super::emit(level, TARGET, "direct", fields(&format!("emit_{name}")));
+        super::emit_str(name, TARGET, "binding", fields(&format!("emit_str_{name}"))).unwrap();
+    }
+    log::set_max_level(log::LevelFilter::Off);
+    super::emit(log::Level::Error, TARGET, "disabled", fields("emit_off"));
+    super::emit_str("error", TARGET, "disabled", fields("emit_str_off")).unwrap();
+    runtime.shutdown();
+
+    let mut events = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["target"] == TARGET)
+        .map(|record| {
+            (
+                record["event"].as_str().unwrap().to_owned(),
+                record["level"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    events.sort();
+    assert_eq!(
+        events,
+        [
+            ("emit_error".to_owned(), "error".to_owned()),
+            ("emit_str_error".to_owned(), "error".to_owned()),
+            ("emit_str_warn".to_owned(), "warn".to_owned()),
+            ("emit_warn".to_owned(), "warn".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn binding_level_names_follow_config_level_parsing() {
+    let _lock = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("binding-levels.log.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    })
+    .unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    const TARGET: &str = "nemo_relay.binding_level_names_test";
+    // Spellings the logging config accepts, as Python's logging module names levels.
+    let spellings = ["ERROR", "WARNING", "Warn", " INFO ", "Debug", "TRACE"];
+    for name in spellings {
+        let fields = serde_json::Map::from_iter([("event".into(), Value::String(name.into()))]);
+        super::emit_str(name, TARGET, "binding", fields).unwrap();
+    }
+    let error = super::emit_str(" Verbose ", TARGET, "binding", serde_json::Map::new())
+        .unwrap_err()
+        .to_string();
+    runtime.shutdown();
+
+    let levels = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["target"] == TARGET)
+        .map(|record| record["level"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(levels, ["error", "warn", "warn", "info", "debug", "trace"]);
+    // The error reports the value the caller passed, not its normalized form.
+    assert!(error.contains("' Verbose '"), "{error}");
+}
+
+#[test]
 fn relative_sink_path_resolves_against_process_cwd() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
@@ -1728,5 +2157,408 @@ fn configure_rejects_preinstalled_foreign_logger() {
         "foreign logger child test failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn typed_projection_respects_facade_filter_before_serializing_and_keeps_recording() {
+    let _guard = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let failure = FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal));
+    let code = BuiltinDiagnosticCode::Failure(failure);
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new(
+            "test.facade_projection",
+            &[code],
+        ))
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("diagnostic-facade-filter.jsonl");
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Trace,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                level: LogLevel::Trace,
+                ..Default::default()
+            })],
+            ..default_config()
+        },
+        &diagnostics,
+    )
+    .unwrap();
+    assert!(runtime.logger.should_log(Level::Trace));
+    log::set_max_level(log::LevelFilter::Warn);
+    for severity in [
+        DiagnosticSeverity::Trace,
+        DiagnosticSeverity::Debug,
+        DiagnosticSeverity::Info,
+        DiagnosticSeverity::Warning,
+        DiagnosticSeverity::Error,
+    ] {
+        producer
+            .record_lazy(|| {
+                Observation::new(
+                    Classification::failure(failure, FailureClass::Internal).unwrap(),
+                    "facade threshold observation",
+                    NonZeroU64::MIN,
+                )
+                .with_severity(severity)
+            })
+            .unwrap();
+    }
+    log::set_max_level(log::LevelFilter::Off);
+    // Escaping this admitted detail exceeds the projection JSON cap. Filtering
+    // must happen before serialization, so it must not report projection loss.
+    let oversized_json_detail = "\0".repeat(4096);
+    producer
+        .record_lazy(|| {
+            Observation::new(
+                Classification::failure(failure, FailureClass::Internal).unwrap(),
+                oversized_json_detail.as_str(),
+                NonZeroU64::MIN,
+            )
+        })
+        .unwrap();
+    runtime.shutdown();
+    let output = std::fs::read_to_string(path).unwrap();
+    let levels = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["target"] == "nemo_relay.diagnostics")
+        .map(|row| row["level"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(levels, ["warn", "error"]);
+    let page = diagnostics
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("test.facade_projection".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 6);
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        6
+    );
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .occurrences_total
+            .value
+            .get(),
+        6
+    );
+    assert_eq!(
+        page.coverage.loss.projection_deliveries_omitted.value.get(),
+        0
+    );
+}
+
+#[test]
+fn optional_file_sinks_preserve_healthy_outputs_and_record_one_safe_failure() {
+    let _guard = lock_logging_tests();
+    for rotation in [None, Some(FileLogRotationConfig::new(4096, 1).unwrap())] {
+        let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("private-path-sentinel");
+        std::fs::write(&blocked, "file").unwrap();
+        let paths = [
+            temp.path().join("before.jsonl"),
+            temp.path().join("after.jsonl"),
+        ];
+        let config = LoggingConfig {
+            level: LogLevel::Info,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: paths[0].clone(),
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: blocked.join("relay.jsonl"),
+                    rotation,
+                    failure_policy: FileLogSinkFailurePolicy::Optional,
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: paths[1].clone(),
+                    ..Default::default()
+                }),
+            ],
+            ..default_config()
+        };
+        let runtime = LoggingRuntime::configure_with_diagnostics(config, &diagnostics).unwrap();
+        log::info!("healthy destinations still receive this record");
+        runtime.shutdown();
+        for path in paths {
+            let output = std::fs::read_to_string(path).unwrap();
+            assert!(output.contains("healthy destinations still receive this record"));
+            assert!(!output.contains("private-path-sentinel"));
+            // Sink failures stay out of the projection back into operational logging.
+            assert!(!output.contains("logging.sink.initialize_failed"));
+        }
+        let page = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let failures: Vec<_> = page
+            .events
+            .iter()
+            .filter(|event| event.code() == "logging.sink.initialize_failed")
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].component.key, "logging.file.1");
+        assert_eq!(failures[0].classification.failure_class(), Some("io"));
+        assert!(
+            !serde_json::to_string(&page)
+                .unwrap()
+                .contains("private-path-sentinel")
+        );
+        for key in ["logging.file.0", "logging.file.2"] {
+            assert!(
+                page.events.iter().any(|event| event.component.key == key
+                    && event.code() == "logging.sink.initialized")
+            );
+        }
+        assert!(
+            !page
+                .events
+                .iter()
+                .any(|event| event.code() == "logging.initialize_failed")
+        );
+    }
+}
+
+#[test]
+fn optional_file_sink_is_not_retried_until_logging_is_reinitialized() {
+    let _guard = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, "file").unwrap();
+    let path = blocked.join("relay.jsonl");
+    let config = LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            failure_policy: FileLogSinkFailurePolicy::Optional,
+            ..Default::default()
+        })],
+        ..default_config()
+    };
+    // No diagnostics or output sinks are required for startup to succeed.
+    let runtime =
+        LoggingRuntime::configure_with_diagnostics(config.clone(), &Diagnostics::default())
+            .unwrap();
+    assert!(runtime.logger.sinks().is_empty());
+    std::fs::remove_file(&blocked).unwrap();
+    std::fs::create_dir(&blocked).unwrap();
+    log::info!("not buffered for replay");
+    runtime.shutdown();
+    assert!(!path.exists());
+    let runtime = LoggingRuntime::configure(config).unwrap();
+    log::info!("delivered after reinitialization");
+    runtime.shutdown();
+    let output = std::fs::read_to_string(path).unwrap();
+    assert!(!output.contains("not buffered for replay"));
+    assert!(output.contains("delivered after reinitialization"));
+}
+
+#[test]
+fn optional_file_sinks_cannot_hide_invalid_configuration_or_reserved_paths() {
+    let _guard = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, "file").unwrap();
+    let optional = FileLogSinkConfig {
+        path: blocked.join("relay.jsonl"),
+        failure_policy: FileLogSinkFailurePolicy::Optional,
+        ..Default::default()
+    };
+    let healthy = temp.path().join("must-not-be-opened.jsonl");
+    for invalid in [
+        FileLogSinkConfig {
+            queue_capacity: 0,
+            ..optional.clone()
+        },
+        FileLogSinkConfig {
+            queue_capacity: MAX_FILE_SINK_QUEUE_ENTRIES + 1,
+            ..optional.clone()
+        },
+        FileLogSinkConfig {
+            path: PathBuf::new(),
+            ..optional.clone()
+        },
+    ] {
+        let config = LoggingConfig {
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: healthy.clone(),
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(invalid),
+            ],
+            ..default_config()
+        };
+        let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+        assert!(LoggingRuntime::configure_with_diagnostics(config, &diagnostics).is_err());
+        let snapshot = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert!(
+            snapshot
+                .events
+                .iter()
+                .any(|event| event.component.key == "logging.file.1"
+                    && event.code() == "logging.sink.initialize_failed")
+        );
+        assert!(!healthy.exists(), "validate all sinks before opening any");
+    }
+    for (first, second, reason) in [
+        (
+            optional.clone(),
+            optional.clone(),
+            "duplicate logging sink path",
+        ),
+        (
+            FileLogSinkConfig {
+                rotation: Some(FileLogRotationConfig::new(4096, 1).unwrap()),
+                ..optional.clone()
+            },
+            FileLogSinkConfig {
+                path: blocked.join("relay.1.jsonl"),
+                ..optional
+            },
+            "conflicts with another active or rotated file",
+        ),
+    ] {
+        let config = LoggingConfig {
+            sinks: vec![LogSinkConfig::File(first), LogSinkConfig::File(second)],
+            ..default_config()
+        };
+        let error = build_logger(&config, "root".into())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains(reason), "{error}");
+    }
+}
+
+#[test]
+fn file_sink_failure_policy_defaults_to_required_and_rejects_unknown_values() {
+    for (field, expected) in [
+        ("", FileLogSinkFailurePolicy::Required),
+        (
+            "failure_policy = 'required'",
+            FileLogSinkFailurePolicy::Required,
+        ),
+        (
+            "failure_policy = 'optional'",
+            FileLogSinkFailurePolicy::Optional,
+        ),
+    ] {
+        let config = LoggingConfig::from_toml_document(&format!(
+            "[logging]\n[[logging.sinks]]\npath = 'relay.jsonl'\n{field}\n"
+        ))
+        .unwrap();
+        let LogSinkConfig::File(sink) = &config.sinks[0];
+        assert_eq!(sink.failure_policy, expected);
+    }
+    assert!(
+        LoggingConfig::from_toml_document(
+            "[logging]\n[[logging.sinks]]\npath = 'relay.jsonl'\nfailure_policy = 'ignore'\n"
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn optional_file_sinks_keep_identity_and_format_when_diagnostics_attach_later() {
+    let _guard = lock_logging_tests();
+    shutdown_default_logging().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("private-path-sentinel");
+    std::fs::write(&blocked, "file").unwrap();
+    let path = temp.path().join("healthy.jsonl");
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Info,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: blocked.join("relay.log"),
+                    format: LogFormat::Human,
+                    failure_policy: FileLogSinkFailurePolicy::Optional,
+                    ..Default::default()
+                }),
+                LogSinkConfig::File(FileLogSinkConfig {
+                    path: path.clone(),
+                    format: LogFormat::Jsonl,
+                    ..Default::default()
+                }),
+            ],
+            ..default_config()
+        },
+        &Diagnostics::default(),
+    )
+    .unwrap();
+    *super::DEFAULT_LOGGING_RUNTIME.lock().unwrap() = Some(runtime);
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    super::attach_default_diagnostics(&diagnostics).unwrap();
+    super::attach_default_diagnostics(&diagnostics).unwrap();
+    log::info!("after diagnostics attach");
+    shutdown_default_logging().unwrap();
+    let records: Vec<Value> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let row = records
+        .iter()
+        .find(|row| row["message"] == "after diagnostics attach")
+        .unwrap();
+    assert_eq!(
+        row["root_relay_id"],
+        diagnostics.source().instance_id.to_string()
+    );
+    let page = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let failures: Vec<_> = page
+        .events
+        .iter()
+        .filter(|event| event.code() == "logging.sink.initialize_failed")
+        .collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].component.key, "logging.file.0");
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private-path-sentinel")
     );
 }

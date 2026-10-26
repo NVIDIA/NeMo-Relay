@@ -236,3 +236,27 @@ describe('Codec pipeline integration', () => {
     }
   });
 });
+
+it('built-in codec accepts multiple result edits and insertion', () => {
+  const codec = new lib.OpenAIChatCodec();
+  const original = {
+    headers: {},
+    content: {
+      messages: [
+        { role: 'tool', tool_call_id: 'a', content: 'old' },
+        { role: 'tool', tool_call_id: 'b', content: 'old' },
+      ],
+    },
+  };
+  const annotated = codec.decode(original);
+  annotated.messages = [
+    { role: 'tool', tool_call_id: 'b', content: 'blocked' },
+    { role: 'tool', tool_call_id: 'a', content: 'blocked' },
+    { role: 'tool', tool_call_id: 'c', content: 'inserted' },
+  ];
+  assert.deepEqual(codec.encode(annotated, original).content.messages, [
+    { role: 'tool', tool_call_id: 'b', content: 'blocked' },
+    { role: 'tool', tool_call_id: 'a', content: 'blocked' },
+    { role: 'tool', tool_call_id: 'c', content: 'inserted' },
+  ]);
+});

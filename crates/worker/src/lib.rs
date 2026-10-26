@@ -10,13 +10,16 @@
 //! The `grpc-v1` service tracks active unary and streaming callbacks by the
 //! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
 //! caller is cancelled, an invocation times out, or a host stream is abandoned.
-//! The SDK aborts the matching async callback task and reports
-//! `worker.cancelled`; cancellation of an unknown, completed, or already
+//! The SDK aborts the matching async callback task, waits for callback-owned
+//! cleanup, and reports `worker.cancelled`; cancellation of an unknown, completed, or already
 //! cancelled ID returns a negative acknowledgment.
 //!
 //! Cancellation is cooperative. Dropping an async callback future releases its
 //! Rust-owned resources, but an accepted acknowledgment does not prove that
 //! arbitrary blocking work started by the callback has stopped.
+
+/// Negotiated, bounded plugin diagnostic submission and delivery controls.
+pub mod diagnostics;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -45,7 +48,7 @@ pub use nemo_relay_types::api::registry::{
     RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
     RuntimeRegistrationOwnerKind,
 };
-pub use nemo_relay_types::api::scope::ScopeType;
+pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
 pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
@@ -56,6 +59,7 @@ pub use nemo_relay_types::codec::optimization::{
 };
 pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+pub use nemo_relay_types::plugin::http_error_message;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
@@ -76,7 +80,9 @@ use nemo_relay_worker_proto::v1::{
     WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+    CallbackMessageLimitService, DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1,
+    WorkerCallbackMessageLimits, decode_json_envelope, decode_json_value, json_envelope,
+    json_value,
 };
 use serde_json::Map;
 use tokio::net::TcpListener;
@@ -144,10 +150,12 @@ const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
+    static TASK_CALLBACK_NAME: Option<String>;
 }
 
 thread_local! {
     static THREAD_SCOPE_CONTEXT: RefCell<Option<ScopeContext>> = const { RefCell::new(None) };
+    static THREAD_CALLBACK_NAME: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Error returned by worker SDK callbacks and runtime helpers.
@@ -162,6 +170,16 @@ pub enum WorkerSdkError {
     /// Worker transport failed.
     #[error("transport failed: {0}")]
     Transport(String),
+    /// An unchanged downstream continuation failure, preserving its original display.
+    /// Propagate this error to retain provenance; constructing a new error represents
+    /// a distinct plugin failure. The host checks the invocation's continuation ID.
+    #[error("{source}")]
+    Downstream {
+        /// Original SDK error, with unchanged execution/reporting semantics.
+        source: Box<WorkerSdkError>,
+        /// Host-issued continuation that returned the failure.
+        continuation_id: String,
+    },
     /// JSON serialization failed.
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -946,14 +964,36 @@ impl Default for PluginContext {
 /// Cloneable handle for calling the Relay host runtime from worker callbacks.
 #[derive(Clone)]
 pub struct PluginRuntime {
+    diagnostics: Arc<OnceCell<diagnostics::WorkerDiagnostics>>,
     activation_id: String,
     auth_token: String,
     host_endpoint: String,
     host_channel: Arc<OnceCell<Channel>>,
+    max_message_bytes: WorkerCallbackMessageLimits,
+    callback_name: Option<String>,
     conditional_middleware_callbacks: Arc<Mutex<HashMap<String, ConditionalMiddlewareFn>>>,
 }
 
 impl PluginRuntime {
+    /// Negotiate once per activation. Disabled/unsupported facades skip lazy
+    /// diagnostic factories and leave execution and operational logging intact.
+    pub async fn diagnostics(&self) -> &diagnostics::WorkerDiagnostics {
+        self.diagnostics
+            .get_or_init(|| async {
+                let channel = self
+                    .host_channel
+                    .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
+                    .await
+                    .cloned();
+                diagnostics::WorkerDiagnostics::connect(
+                    channel,
+                    self.activation_id.clone(),
+                    self.auth_token.clone(),
+                )
+                .await
+            })
+            .await
+    }
     /// Emits one operational log record through the Relay host's configured sinks.
     ///
     /// The host authenticates the activation and applies its own log-level filter.
@@ -1353,6 +1393,59 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
+    /// Read owned root-to-top scope identities from the exact current binding.
+    /// Returns None without a binding, and an explicit error on older hosts or
+    /// invalid/expired bindings. Never caches an invocation-entry snapshot.
+    pub async fn current_scope_stack_snapshot(&self) -> Result<Option<ScopeStackSnapshot>> {
+        let scope = self.current_scope_context();
+        let mut client = self.host_client().await?;
+        let response = client
+            .get_current_scope_stack_snapshot(Request::new(
+                nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
+                    activation_id: self.activation_id.clone(),
+                    auth_token: self.auth_token.clone(),
+                    scope,
+                },
+            ))
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    WorkerSdkError::Callback(
+                        "scope stack snapshots are unsupported by this host; \
+                         require the grpc-v1 snapshot extension"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
+        if let Some(error) = response.error {
+            return Err(worker_error_to_sdk(error));
+        }
+        response
+            .snapshot
+            .map(|snapshot| {
+                let scopes = snapshot
+                    .scopes
+                    .into_iter()
+                    .map(|scope| {
+                        let scope_id = scope.scope_id.parse().map_err(|error| {
+                            WorkerSdkError::InvalidInput(format!(
+                                "invalid snapshot scope UUID: {error}"
+                            ))
+                        })?;
+                        Ok(ScopeStackEntry {
+                            scope_id,
+                            scope_type: snapshot_scope_type_from_proto(scope.scope_type),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ScopeStackSnapshot { scopes })
+            })
+            .transpose()
+    }
+
     /// Return a bounded snapshot of active host runtime diagnostics.
     pub async fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
         let mut client = self.host_client().await?;
@@ -1618,12 +1711,33 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
-    async fn host_client(&self) -> Result<RelayHostRuntimeClient<Channel>> {
+    /// Reuses the host connection while applying this activation's execution caps.
+    async fn host_client(
+        &self,
+    ) -> Result<
+        RelayHostRuntimeClient<
+            tonic::service::interceptor::InterceptedService<
+                Channel,
+                nemo_relay_worker_proto::WorkerCallbackMetadata,
+            >,
+        >,
+    > {
+        let callback = self.callback_name.clone().or_else(current_callback_name);
+        let limit = self
+            .max_message_bytes
+            .for_callback(callback.as_deref().unwrap_or_default());
         self.host_channel
             .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
             .await
             .cloned()
-            .map(RelayHostRuntimeClient::new)
+            .map(|channel| {
+                RelayHostRuntimeClient::with_interceptor(
+                    channel,
+                    nemo_relay_worker_proto::WorkerCallbackMetadata(callback),
+                )
+                .max_decoding_message_size(limit)
+                .max_encoding_message_size(limit)
+            })
     }
 
     fn current_scope_context(&self) -> Option<ScopeContext> {
@@ -1688,7 +1802,7 @@ impl ToolNext {
                 scope: self.runtime.current_scope_context(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .map_err(continuation_status_to_sdk)?
             .into_inner();
         tool_execution_result_to_sdk(response)
     }
@@ -1718,7 +1832,7 @@ impl LlmNext {
                 scope: self.runtime.current_scope_context(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .map_err(continuation_status_to_sdk)?
             .into_inner();
         json_result_to_sdk(response)
     }
@@ -1750,10 +1864,10 @@ impl LlmStreamNext {
                 scope: scope.clone(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+            .map_err(continuation_status_to_sdk)?;
         let stream = response.into_inner().map(|chunk| match chunk {
             Ok(chunk) => stream_chunk_to_json(chunk),
-            Err(err) => Err(WorkerSdkError::Transport(err.to_string())),
+            Err(err) => Err(continuation_status_to_sdk(err)),
         });
         Ok(Box::pin(ScopedJsonStream::new(Box::pin(stream), scope)))
     }
@@ -1762,8 +1876,8 @@ impl LlmStreamNext {
 /// Serves a worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
     serve_plugin_arc(Arc::new(plugin)).await
 }
@@ -1771,8 +1885,8 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 /// Serves a shared worker plugin using environment variables supplied by the Relay host.
 ///
 /// # Errors
-/// Returns an error when required worker environment variables are missing or
-/// the gRPC server fails.
+/// Returns an error when required worker environment variables are missing,
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
     let config = WorkerServerConfig {
         worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
@@ -1794,8 +1908,8 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
 /// workers should normally use [`serve_plugin`] or [`serve_plugin_arc`].
 ///
 /// # Errors
-/// Returns an error when the endpoint configuration is invalid or the gRPC
-/// server fails.
+/// Returns an error when the endpoint configuration or
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
 pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
@@ -1803,16 +1917,23 @@ pub async fn serve_plugin_arc_with_config(
     serve_plugin_arc_with_endpoint_file(plugin, config, None).await
 }
 
+/// Validates the transport limit before constructing and serving the worker runtime.
 async fn serve_plugin_arc_with_endpoint_file(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
+    let max_message_bytes = WorkerCallbackMessageLimits::default()
+        .from_env_with_defaults()
+        .map_err(WorkerSdkError::InvalidInput)?;
     let runtime = PluginRuntime {
+        callback_name: None,
+        diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
         host_channel: Arc::new(OnceCell::new()),
+        max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let service = WorkerService {
@@ -1826,6 +1947,7 @@ async fn serve_plugin_arc_with_endpoint_file(
 }
 
 #[cfg(unix)]
+/// Binds a bounded worker service to a Unix socket or delegates to loopback TCP.
 async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1838,7 +1960,7 @@ async fn serve_worker_service(
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
         return Server::builder()
-            .add_service(PluginWorkerServer::new(service))
+            .add_service(worker_grpc_service(service))
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
@@ -1860,6 +1982,7 @@ async fn serve_worker_service(
     serve_tcp_worker_service(service, endpoint, endpoint_file).await
 }
 
+/// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
 async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
@@ -1876,10 +1999,22 @@ async fn serve_tcp_worker_service(
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
     }
     Server::builder()
-        .add_service(PluginWorkerServer::new(service))
+        .add_service(worker_grpc_service(service))
         .serve_with_incoming(TcpListenerStream::new(listener))
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+}
+
+/// Applies the runtime's execution limit to both sides of the worker service.
+fn worker_grpc_service(
+    service: WorkerService,
+) -> CallbackMessageLimitService<PluginWorkerServer<WorkerService>> {
+    let limits = service.runtime.max_message_bytes.clone();
+    CallbackMessageLimitService::new(PluginWorkerServer::new(service), limits, |server, limit| {
+        server
+            .max_decoding_message_size(limit)
+            .max_encoding_message_size(limit)
+    })
 }
 
 #[derive(Clone)]
@@ -1895,25 +2030,71 @@ struct ActiveInvocation {
     generation: u64,
     abort_handle: tokio::task::AbortHandle,
     stream_cancel: Option<watch::Sender<bool>>,
+    completion: watch::Receiver<bool>,
+    cancel_requested: bool,
+}
+
+// Shared across stream setup and production so cancellation also waits for
+// cleanup during the handoff between those tasks.
+struct InvocationCompletion {
+    completed: watch::Sender<bool>,
+    registration: Mutex<Option<ActiveInvocationGuard>>,
+}
+
+impl InvocationCompletion {
+    fn new(completed: watch::Sender<bool>) -> Arc<Self> {
+        Arc::new(Self {
+            completed,
+            registration: Mutex::new(None),
+        })
+    }
+
+    fn track(&self, service: &WorkerService, invocation_id: &str, generation: u64) {
+        *self
+            .registration
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(ActiveInvocationGuard {
+            active_invocations: service.active_invocations.clone(),
+            invocation_id: invocation_id.to_owned(),
+            generation,
+        });
+    }
+}
+
+impl Drop for InvocationCompletion {
+    fn drop(&mut self) {
+        self.registration
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        self.completed.send_replace(true);
+    }
+}
+
+struct InvocationFuture<F> {
+    // Field order keeps completion pending until the task's captured state drops,
+    // including when cancellation happens before the task is first polled.
+    future: Pin<Box<F>>,
+    _completion: Arc<InvocationCompletion>,
+}
+
+impl<F: Future> Future for InvocationFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
+    }
 }
 
 struct ActiveInvocationGuard {
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     invocation_id: String,
     generation: u64,
-    armed: bool,
-}
-
-impl ActiveInvocationGuard {
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
 }
 
 impl Drop for ActiveInvocationGuard {
     fn drop(&mut self) {
-        if self.armed
-            && let Ok(mut active) = self.active_invocations.lock()
+        if let Ok(mut active) = self.active_invocations.lock()
             && active
                 .get(&self.invocation_id)
                 .is_some_and(|entry| entry.generation == self.generation)
@@ -2102,25 +2283,36 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<InvokeResponse>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
-        let service = self.clone();
-        let task = tokio::spawn(async move { service.invoke_inner(request).await });
+        let mut service = self.clone();
+        service.runtime.callback_name = Some(request.registration_name.clone());
+        let (completion_tx, completion_rx) = watch::channel(false);
+        let completion = InvocationCompletion::new(completion_tx);
+        let task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move { service.invoke_inner(request).await }),
+            _completion: Arc::clone(&completion),
+        });
         let abort_handle = task.abort_handle();
-        let generation = match self.track_invocation(&invocation_id, abort_handle.clone(), None) {
+        let generation = match self.track_invocation(
+            &invocation_id,
+            abort_handle.clone(),
+            None,
+            completion_rx,
+        ) {
             Ok(generation) => generation,
             Err(err) => {
                 task.abort();
                 return Err(err);
             }
         };
-        let _active_guard = ActiveInvocationGuard {
-            active_invocations: self.active_invocations.clone(),
-            invocation_id,
-            generation,
-            armed: true,
-        };
+        completion.track(self, &invocation_id, generation);
         let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
         let response = match task.await {
             Ok(response) => response,
@@ -2131,6 +2323,7 @@ impl PluginWorker for WorkerService {
                         code: "worker.error".into(),
                         message: format!("worker invocation task failed: {err}"),
                         retryable: false,
+                        downstream_continuation_id: None,
                     },
                 )),
             },
@@ -2146,7 +2339,15 @@ impl PluginWorker for WorkerService {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
+        nemo_relay_worker_proto::validate_callback_request(
+            &request,
+            &request.get_ref().registration_name,
+            &self.runtime.max_message_bytes,
+        )?;
         let request = request.into_inner();
+        let callback_name = request.registration_name.clone();
+        let mut runtime = self.runtime.clone();
+        runtime.callback_name = Some(callback_name.clone());
         self.authorize(&request.activation_id, &request.auth_token)?;
         let invocation_id = request.invocation_id.clone();
         let scope = invocation_scope_context(request.scope.as_ref());
@@ -2167,33 +2368,44 @@ impl PluginWorker for WorkerService {
             .ok_or_else(|| Status::not_found("stream execution handler not registered"))?;
         let payload = llm_payload(request.payload).map_err(status_from_sdk)?;
         let execution_context = payload
-            .execution_context(&self.runtime, &invocation_id, false)
+            .execution_context(&runtime, &invocation_id, false)
             .map_err(status_from_sdk)?;
         let request_value =
             required_json::<LlmRequest>(payload.request, "llm request").map_err(status_from_sdk)?;
         let next = LlmStreamNext {
-            runtime: self.runtime.clone(),
+            runtime,
             continuation_id: request.continuation_id,
         };
         let model_name = payload.model_name;
         let (tx, rx) = mpsc::channel(16);
         let (stream_cancel_tx, stream_cancel_rx) = watch::channel(false);
+        let (completion_tx, completion_rx) = watch::channel(false);
+        let completion = InvocationCompletion::new(completion_tx);
+        let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
-        let open_task = tokio::spawn(async move {
-            TASK_SCOPE_CONTEXT
-                .scope(open_scope.clone(), async {
-                    let future = with_thread_scope(&open_scope, || {
-                        handler(&model_name, request_value, execution_context, next)
-                    });
-                    future.await
-                })
-                .await
+        let open_callback = callback_name.clone();
+        let open_task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move {
+                TASK_CALLBACK_NAME
+                    .scope(
+                        Some(open_callback),
+                        TASK_SCOPE_CONTEXT.scope(open_scope.clone(), async {
+                            let future = with_thread_scope(&open_scope, || {
+                                handler(&model_name, request_value, execution_context, next)
+                            });
+                            future.await
+                        }),
+                    )
+                    .await
+            }),
+            _completion: open_completion,
         });
         let open_abort_handle = open_task.abort_handle();
         let generation = match self.track_invocation(
             &invocation_id,
             open_abort_handle.clone(),
             Some(stream_cancel_tx.clone()),
+            completion_rx.clone(),
         ) {
             Ok(generation) => generation,
             Err(err) => {
@@ -2201,18 +2413,13 @@ impl PluginWorker for WorkerService {
                 return Err(err);
             }
         };
-        let mut active_guard = ActiveInvocationGuard {
-            active_invocations: self.active_invocations.clone(),
-            invocation_id: invocation_id.clone(),
-            generation,
-            armed: true,
-        };
+        completion.track(self, &invocation_id, generation);
         let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
         let stream = match open_task.await {
             Ok(Ok(stream)) => stream,
             Ok(Err(err)) => {
                 abort_on_drop.disarm();
-                return Err(Status::internal(err.to_string()));
+                return Err(status_from_sdk(err));
             }
             Err(err) if err.is_cancelled() => {
                 abort_on_drop.disarm();
@@ -2233,58 +2440,59 @@ impl PluginWorker for WorkerService {
             }
         };
         abort_on_drop.disarm();
-        let active_invocations = self.active_invocations.clone();
-        let task_invocation_id = invocation_id.clone();
         let task_tx = tx;
-        let task = tokio::spawn(async move {
-            let _active_guard = ActiveInvocationGuard {
-                active_invocations,
-                invocation_id: task_invocation_id,
-                generation,
-                armed: true,
-            };
-            let mut stream = ScopedJsonStream::new(stream, scope);
-            loop {
-                let item = tokio::select! {
-                    item = stream.next() => item,
-                    _ = task_tx.closed() => return,
-                };
-                let Some(item) = item else {
-                    return;
-                };
-                let (chunk, terminal) = match item {
-                    Ok(value) => (
-                        StreamChunk {
-                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                                match json_envelope(JSON_SCHEMA, &value) {
-                                    Ok(value) => value,
-                                    Err(err) => {
-                                        let _ = task_tx
-                                            .send(Err(Status::internal(err.to_string())))
-                                            .await;
-                                        return;
-                                    }
-                                },
-                            )),
-                        },
-                        false,
-                    ),
-                    Err(err) => (
-                        StreamChunk {
-                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                                sdk_error_to_worker(err),
-                            )),
-                        },
-                        true,
-                    ),
-                };
-                if task_tx.send(Ok(chunk)).await.is_err() {
+        let mut stream = ScopedJsonStream::new(stream, scope);
+        stream.callback_name = Some(callback_name);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(InvocationFuture {
+            future: Box::pin(async move {
+                let mut stream = stream;
+                if start_rx.await.is_err() {
                     return;
                 }
-                if terminal {
-                    return;
+                loop {
+                    let item = tokio::select! {
+                        item = stream.next() => item,
+                        _ = task_tx.closed() => return,
+                    };
+                    let Some(item) = item else {
+                        return;
+                    };
+                    let (chunk, terminal) = match item {
+                        Ok(value) => (
+                            StreamChunk {
+                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
+                                    match json_envelope(JSON_SCHEMA, &value) {
+                                        Ok(value) => value,
+                                        Err(err) => {
+                                            let _ = task_tx
+                                                .send(Err(Status::internal(err.to_string())))
+                                                .await;
+                                            return;
+                                        }
+                                    },
+                                )),
+                            },
+                            false,
+                        ),
+                        Err(err) => (
+                            StreamChunk {
+                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                                    sdk_error_to_worker(err),
+                                )),
+                            },
+                            true,
+                        ),
+                    };
+                    if task_tx.send(Ok(chunk)).await.is_err() {
+                        return;
+                    }
+                    if terminal {
+                        return;
+                    }
                 }
-            }
+            }),
+            _completion: completion,
         });
         let replaced = self.replace_invocation(
             &invocation_id,
@@ -2293,10 +2501,14 @@ impl PluginWorker for WorkerService {
                 generation,
                 abort_handle: task.abort_handle(),
                 stream_cancel: Some(stream_cancel_tx),
+                completion: completion_rx,
+                cancel_requested: false,
             },
         );
         match replaced {
-            Ok(true) => active_guard.disarm(),
+            Ok(true) => {
+                let _ = start_tx.send(());
+            }
             Ok(false) => {
                 task.abort();
                 return Ok(Response::new(cancellation_aware_worker_stream(
@@ -2326,21 +2538,37 @@ impl PluginWorker for WorkerService {
                 .active_invocations
                 .lock()
                 .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
-            invocations.remove(&request.invocation_id)
+            invocations.get_mut(&request.invocation_id).map(|active| {
+                let accepted = !active.cancel_requested;
+                active.cancel_requested = true;
+                (
+                    active.abort_handle.clone(),
+                    active.stream_cancel.clone(),
+                    active.completion.clone(),
+                    accepted,
+                )
+            })
         };
-        let Some(active) = active else {
+        let Some((abort_handle, stream_cancel, mut completion, accepted)) = active else {
             return Ok(Response::new(WorkerAck {
                 accepted: false,
                 message: "invocation is not active".into(),
             }));
         };
-        if let Some(cancel) = active.stream_cancel {
+        if let Some(cancel) = stream_cancel {
             let _ = cancel.send(true);
         }
-        active.abort_handle.abort();
+        abort_handle.abort();
+        while !*completion.borrow_and_update() {
+            if completion.changed().await.is_err() {
+                break;
+            }
+        }
         Ok(Response::new(WorkerAck {
-            accepted: true,
-            message: if request.reason.is_empty() {
+            accepted,
+            message: if !accepted {
+                "invocation is not active".into()
+            } else if request.reason.is_empty() {
                 "cancellation accepted".into()
             } else {
                 format!("cancellation accepted: {}", request.reason)
@@ -2354,6 +2582,9 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<WorkerAck>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
+        if let Some(diagnostics) = self.runtime.diagnostics.get() {
+            let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
+        }
         Ok(Response::new(WorkerAck {
             accepted: false,
             message: "shutdown is not implemented by the Rust worker SDK yet".into(),
@@ -2416,6 +2647,7 @@ impl WorkerService {
         invocation_id: &str,
         abort_handle: tokio::task::AbortHandle,
         stream_cancel: Option<watch::Sender<bool>>,
+        completion: watch::Receiver<bool>,
     ) -> std::result::Result<u64, Status> {
         let generation = self
             .next_invocation_generation
@@ -2426,6 +2658,8 @@ impl WorkerService {
                 generation,
                 abort_handle,
                 stream_cancel,
+                completion,
+                cancel_requested: false,
             },
         )?;
         Ok(generation)
@@ -2464,7 +2698,7 @@ impl WorkerService {
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
         if active
             .get(invocation_id)
-            .is_none_or(|entry| entry.generation != generation)
+            .is_none_or(|entry| entry.generation != generation || entry.cancel_requested)
         {
             return Ok(false);
         }
@@ -2485,8 +2719,11 @@ impl WorkerService {
 
     async fn invoke_result(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         let scope = invocation_scope_context(request.scope.as_ref());
-        TASK_SCOPE_CONTEXT
-            .scope(scope.clone(), self.invoke_result_scoped(request, scope))
+        TASK_CALLBACK_NAME
+            .scope(
+                Some(request.registration_name.clone()),
+                TASK_SCOPE_CONTEXT.scope(scope.clone(), self.invoke_result_scoped(request, scope)),
+            )
             .await
     }
 
@@ -3354,10 +3591,27 @@ fn infallible_json_envelope<T: serde::Serialize>(schema: &str, value: &T) -> Jso
 }
 
 fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
+    if let WorkerSdkError::Downstream {
+        source,
+        continuation_id,
+    } = error
+    {
+        let mut wire = sdk_error_to_worker(*source);
+        wire.downstream_continuation_id = Some(continuation_id);
+        return wire;
+    }
     WorkerError {
         code: "worker.error".into(),
-        message: error.to_string(),
+        message: match &error {
+            WorkerSdkError::Callback(message)
+                if nemo_relay_types::plugin::parse_http_error_message(message).is_some() =>
+            {
+                message.clone()
+            }
+            _ => error.to_string(),
+        },
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -3366,6 +3620,7 @@ fn cancelled_worker_error() -> WorkerError {
         code: "worker.cancelled".into(),
         message: "worker invocation was cancelled".into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -3433,11 +3688,53 @@ fn cancellation_aware_worker_stream(
 }
 
 fn worker_error_to_sdk(error: WorkerError) -> WorkerSdkError {
-    WorkerSdkError::Callback(format!("{}: {}", error.code, error.message))
+    let source = if error.code != "worker.cancelled"
+        && nemo_relay_types::plugin::parse_http_error_message(&error.message).is_some()
+    {
+        WorkerSdkError::Callback(error.message)
+    } else {
+        WorkerSdkError::Callback(format!("{}: {}", error.code, error.message))
+    };
+    with_downstream_provenance(source, error.downstream_continuation_id)
+}
+
+fn with_downstream_provenance(
+    source: WorkerSdkError,
+    continuation_id: Option<String>,
+) -> WorkerSdkError {
+    match continuation_id.filter(|id| !id.is_empty()) {
+        Some(continuation_id) => WorkerSdkError::Downstream {
+            source: Box::new(source),
+            continuation_id,
+        },
+        None => source,
+    }
+}
+
+fn continuation_status_to_sdk(error: Status) -> WorkerSdkError {
+    let continuation_id = error
+        .metadata()
+        .get(DOWNSTREAM_CONTINUATION_METADATA)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    with_downstream_provenance(
+        WorkerSdkError::Transport(error.to_string()),
+        continuation_id,
+    )
 }
 
 fn status_from_sdk(error: WorkerSdkError) -> Status {
-    Status::internal(error.to_string())
+    let mut status = Status::internal(error.to_string());
+    if let WorkerSdkError::Downstream {
+        continuation_id, ..
+    } = error
+        && let Ok(value) = continuation_id.parse()
+    {
+        status
+            .metadata_mut()
+            .insert(DOWNSTREAM_CONTINUATION_METADATA, value);
+    }
+    status
 }
 
 fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
@@ -3453,11 +3750,16 @@ fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
 struct ScopedJsonStream {
     inner: JsonStream,
     scope: Option<ScopeContext>,
+    callback_name: Option<String>,
 }
 
 impl ScopedJsonStream {
     fn new(inner: JsonStream, scope: Option<ScopeContext>) -> Self {
-        Self { inner, scope }
+        Self {
+            inner,
+            scope,
+            callback_name: current_callback_name(),
+        }
     }
 }
 
@@ -3467,8 +3769,10 @@ impl Stream for ScopedJsonStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let scope = this.scope.clone();
-        TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
-            with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+        TASK_CALLBACK_NAME.sync_scope(this.callback_name.clone(), || {
+            TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
+                with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+            })
         })
     }
 }
@@ -3489,7 +3793,25 @@ fn current_scope_context() -> Option<ScopeContext> {
 
 fn with_thread_scope<T>(scope: &Option<ScopeContext>, f: impl FnOnce() -> T) -> T {
     let _guard = ThreadScopeBinding::new(scope.clone());
+    let previous = THREAD_CALLBACK_NAME.with(|current| current.replace(current_callback_name()));
+    let _callback = ThreadCallbackBinding(previous);
     f()
+}
+
+fn current_callback_name() -> Option<String> {
+    TASK_CALLBACK_NAME
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
+        .or_else(|| THREAD_CALLBACK_NAME.with(|name| name.borrow().clone()))
+}
+
+struct ThreadCallbackBinding(Option<String>);
+
+impl Drop for ThreadCallbackBinding {
+    fn drop(&mut self) {
+        THREAD_CALLBACK_NAME.with(|name| name.replace(self.0.take()));
+    }
 }
 
 struct ThreadScopeBinding {
@@ -3619,6 +3941,23 @@ fn runtime_registration_kind(surface: RegistrationSurface) -> Result<RuntimeRegi
                 "surface is not a runtime registration kind".into(),
             ))
         }
+    }
+}
+
+fn snapshot_scope_type_from_proto(scope_type: i32) -> ScopeType {
+    use nemo_relay_worker_proto::v1::ScopeType as ProtoScopeType;
+    match ProtoScopeType::try_from(scope_type) {
+        Ok(ProtoScopeType::Agent) => ScopeType::Agent,
+        Ok(ProtoScopeType::Function) => ScopeType::Function,
+        Ok(ProtoScopeType::Tool) => ScopeType::Tool,
+        Ok(ProtoScopeType::Llm) => ScopeType::Llm,
+        Ok(ProtoScopeType::Retriever) => ScopeType::Retriever,
+        Ok(ProtoScopeType::Embedder) => ScopeType::Embedder,
+        Ok(ProtoScopeType::Reranker) => ScopeType::Reranker,
+        Ok(ProtoScopeType::Guardrail) => ScopeType::Guardrail,
+        Ok(ProtoScopeType::Evaluator) => ScopeType::Evaluator,
+        Ok(ProtoScopeType::Custom) => ScopeType::Custom,
+        _ => ScopeType::Unknown,
     }
 }
 
@@ -3804,6 +4143,9 @@ fn rustc_version_runtime() -> String {
 #[cfg(test)]
 #[path = "../tests/unit/codec_identity_tests.rs"]
 mod codec_identity_tests;
+#[cfg(test)]
+#[path = "../tests/unit/error_provenance_tests.rs"]
+mod error_provenance_tests;
 #[cfg(test)]
 #[path = "../tests/unit/execution_context_tests.rs"]
 mod execution_context_tests;

@@ -88,6 +88,20 @@ final_message = result["messages"][-1]
 print(f"Final response: {final_message.content}")
 ```
 
+Managed model calls expose available tools to NeMo Relay request intercepts.
+Function tools have editable descriptions and input schemas. Provider-specific
+definitions travel as opaque JSON values. After an edit, `NemoRelayMiddleware`
+passes a copy of the original LangChain tool or provider-specific definition to
+the model call, where the selected LangChain model adapter prepares it for its
+provider. Tool count, order, and function-tool names must remain unchanged.
+
+Relay uses Pydantic's `TypeAdapter` for structured responses, as LangChain does.
+It uses field names for encoding and decoding, so different input and output
+aliases work together. The `langchain` extra includes Pydantic 2.11 or later.
+It restores objects only when their types match a declared schema. Plain JSON
+values pass through. Other Python objects cause a validation error. Encoding
+and validation errors reach the caller.
+
 When the agent uses `ChatNVIDIA`, NeMo Relay forwards request headers, including
 Dynamo session lineage, as HTTP headers. They are not added to the NIM request
 body. For chat models built on the OpenAI or Anthropic Python SDKs, such as
@@ -124,5 +138,22 @@ The integration works correctly when:
 - Tool activity appears under the same request when the agent decides to use `get_weather`.
 
 ## Observability
+
+Relay chooses the LangChain result codec for managed tool calls. No extra
+codec setup is needed. The codec writes display text or content parts to
+`content`. It sets `is_error` from the returned `ToolMessage.status`.
+Refer to
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+for the JSON format.
+
+For a LangGraph `Command`, the codec uses the `ToolMessage` whose `tool_call_id`
+matches the tool call. It keeps other messages and graph state in the returned
+command. If no message matches, it records `content: null`.
+
+ATIF uses supported text and image content for observations. If a tool returns
+a `ToolMessage` with `status="error"`, ATIF adds `extra.is_error: true`. Relay
+also sets the tool span status to `ERROR`. It still returns the message to
+LangChain, so the framework can handle the failure as usual. Deep Agents uses
+the same middleware and codec.
 
 Refer to [Observability](/configure-plugins/observability/about) for details on exporting NeMo Relay observability data to third-party systems.

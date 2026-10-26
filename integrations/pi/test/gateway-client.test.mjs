@@ -13,9 +13,12 @@
  *
  * Run: node --test integrations/pi/test/*.test.mjs
  */
+import './harness.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 const { postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
 
@@ -58,6 +61,54 @@ const baseConfig = (url, overrides = {}) => ({
 });
 
 describe('gateway client wire contract', () => {
+  it('classifies oversized stdout and stderr as response faults', async () => {
+    for (const stream of ['stdout', 'stderr']) {
+      const config = baseConfig('http://127.0.0.1:4040');
+      const outcome = await postHook(config, { hook_event_name: 'fixture_output_overflow', stream });
+      assert.equal(outcome.kind, 'fault');
+      assert.equal(outcome.origin, 'response', stream);
+      assert.equal(outcome.detail, 'hook forward output exceeded the output limit');
+      assert.equal(resolveFault(config, outcome, 'read').kind, 'allow');
+      const blocked = resolveFault({ ...config, onFault: 'closed' }, outcome, 'read');
+      assert.equal(blocked.kind, 'block');
+      assert.match(blocked.reason, /gateway answered/);
+    }
+  });
+
+  it('prioritizes an output overflow over process-kill timeout fields', async () => {
+    const previousExecFile = childProcess.execFile;
+    const decorated = mock.method(childProcess, 'execFile', (command, args, options, callback) =>
+      previousExecFile(command, args, options, (error, stdout, stderr) => {
+        if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          error.killed = true;
+          error.signal = 'SIGKILL';
+        }
+        callback(error, stdout, stderr);
+      }),
+    );
+    syncBuiltinESMExports();
+    try {
+      const outcome = await postHook(baseConfig('http://127.0.0.1:4040'), {
+        hook_event_name: 'fixture_output_overflow', stream: 'stdout',
+      });
+      assert.equal(outcome.kind, 'fault');
+      assert.equal(outcome.origin, 'response');
+      assert.equal(outcome.detail, 'hook forward output exceeded the output limit');
+    } finally {
+      decorated.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('reports a missing Relay executable through the existing fault policy', async () => {
+    const config = baseConfig('http://127.0.0.1:4040', { relayCommand: 'missing-nemo-relay-executable-for-test' });
+    const outcome = await postHook(config, { hook_event_name: 'tool_call' });
+    assert.equal(outcome.kind, 'fault');
+    assert.equal(outcome.origin, 'transport');
+    assert.equal(resolveFault(config, outcome, 'read').kind, 'allow');
+    assert.equal(resolveFault({ ...config, onFault: 'closed' }, outcome, 'read').kind, 'block');
+  });
+
   let ctx;
   let url;
 
@@ -170,13 +221,10 @@ describe('gateway client wire contract', () => {
     assert.equal(outcome.origin, 'transport');
   });
 
-  it('sends the session id in both the header and the payload', async () => {
+  it('forwards the session id in the payload', async () => {
     await postHook(baseConfig(url, { sessionId: 'sess-42' }), { hook_event_name: 'session_start' });
     const last = ctx.received.at(-1);
     assert.equal(last.url, '/hooks/pi');
-    assert.equal(last.headers['x-nemo-relay-session-id'], 'sess-42');
-    // The gateway strips inbound routing-identity headers, so the payload copy
-    // is what actually survives.
     assert.equal(last.body.session_id, 'sess-42');
   });
 });
@@ -242,6 +290,12 @@ describe('failure policy', () => {
 });
 
 describe('configFromEnv', () => {
+  it('preserves the authenticated owner when pi reloads its extension modules', async () => {
+    const before = configFromEnv('continuing-session');
+    const reloaded = await import('../src/gateway-client.ts?reload-owner-test');
+    assert.equal(reloaded.configFromEnv('continuing-session').clientId, before.clientId);
+  });
+
   const saved = { ...process.env };
   after(() => {
     process.env = saved;

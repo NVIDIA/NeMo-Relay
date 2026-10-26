@@ -26,6 +26,8 @@ atof-streaming = [
     "tokio/time",
 ]
 schema = ["dep:schemars", "nemo-relay-types/schema"]
+# Internal CLI gateway support; no compatibility guarantee.
+__internal-gateway = []
 # Private test hook for suppressing implicit user/system plugin discovery.
 __skip-implicit-config = []
 # Private compatibility-free test harness for migrating legacy lifecycle tests.
@@ -52,6 +54,8 @@ worker-grpc = [
 ]
 
 [dependencies]
+enumset = { version = "1", default-features = false }
+arrayvec = { version = "0.7", default-features = false }
 nemo-relay-types.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }
@@ -64,7 +68,7 @@ chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
 strum = { version = "0.27", features = ["derive"] }
-tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio = { workspace = true, default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
 futures-util = "0.3"
@@ -73,6 +77,7 @@ opentelemetry-semantic-conventions.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
 libloading = "0.8"
+tempfile = "3"
 semver = "1"
 sha2 = "0.11"
 base64 = "0.22"
@@ -83,7 +88,10 @@ opentelemetry-proto = { version = "0.32", default-features = false, features = [
 prost = "0.14"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
 opentelemetry-http = "0.32"
+http = "1"
+http-body = "1"
 async-trait = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "rustls", "stream"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system", "network"] }
 tonic = { version = "0.14.1", default-features = false }
@@ -95,6 +103,7 @@ shell-words = "1"
 log = { version = "0.4", features = ["kv", "kv_serde"] }
 spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 unicode-general-category = "1.1"
+circular-buffer = "2.0.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "param"] }
@@ -103,7 +112,9 @@ rustix = { version = "1.1.4", features = ["fs", "param"] }
 windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+rcgen = "0.13"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
 futures = "0.3"
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "logs", "metrics"] }
@@ -111,7 +122,6 @@ tonic = { version = "0.14.1", features = ["transport"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 serde_json = "1"
 object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
-tempfile = "3"
 
 [[test]]
 name = "codec_integration"
@@ -162,3 +172,7 @@ path = "tests/integration/api_surface_tests.rs"
 name = "atif_storage_integration"
 path = "tests/integration/atif_storage_tests.rs"
 required-features = ["object-store"]
+
+[[test]]
+name = "embedded_diagnostics_startup"
+path = "tests/embedded_diagnostics_startup.rs"

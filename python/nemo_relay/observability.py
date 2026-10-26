@@ -10,6 +10,8 @@ from typing import Literal, Protocol, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
 
+from ._native import OpenTelemetryTlsConfig
+
 
 class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
@@ -196,6 +198,8 @@ class AtifConfig:
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
     storage: list[S3StorageConfig | HttpStorageConfig] | None = None
+    include_observed_events: bool = True
+    include_llm_requests: bool = True
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -209,6 +213,8 @@ class AtifConfig:
             "output_directory": self.output_directory,
             "filename_template": self.filename_template,
             "storage": self.storage,
+            "include_observed_events": self.include_observed_events,
+            "include_llm_requests": self.include_llm_requests,
         }
         if value["agent_version"] is None:
             value.pop("agent_version")
@@ -240,6 +246,7 @@ class OpenTelemetryEndpointConfig:
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
     header_file: dict[str, str] = field(default_factory=dict)
+    tls: OpenTelemetryTlsConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -247,6 +254,7 @@ class OpenTelemetryEndpointConfig:
             {
                 "type": self.type,
                 "endpoint": self.endpoint,
+                "tls": _tls_dict(self.tls),
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
                 "attribute_mappings": self.attribute_mappings,
@@ -271,6 +279,57 @@ class OpenTelemetryEndpointConfig:
 
 
 @dataclass(slots=True)
+class OpenTelemetryFileSinkConfig:
+    """One local file destination for projected OTLP spans."""
+
+    output_directory: str
+    type: Literal["full", "gen_ai", "openinference"] = "full"
+    filename: str | None = None
+    format: Literal["json_lines", "proto"] = "json_lines"
+    mode: Literal["append", "overwrite"] = "overwrite"
+    mark_projection: Literal["inherit", "event", "tool"] = "inherit"
+    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
+    service_name: str = "unknown_service"
+    service_namespace: str | None = None
+    service_version: str | None = None
+    instrumentation_scope: str = "opentelemetry"
+    resource_attributes: dict[str, str] = field(default_factory=dict)
+    max_queue_size: int | None = None
+    max_export_batch_size: int | None = None
+    scheduled_delay_millis: int | None = None
+    completed_span_context_ttl_millis: int | None = None
+    promote_metadata_prefixes: list[str] = field(default_factory=list)
+    promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this file sink to the canonical plugin shape."""
+        return _normalize_object(
+            {
+                "type": self.type,
+                "output_directory": self.output_directory,
+                "filename": self.filename,
+                "format": self.format,
+                "mode": self.mode,
+                "mark_projection": self.mark_projection,
+                "mark_exclude_names": self.mark_exclude_names,
+                "attribute_mappings": self.attribute_mappings,
+                "promote_metadata_prefixes": self.promote_metadata_prefixes,
+                "promote_resource_metadata_prefixes": self.promote_resource_metadata_prefixes,
+                "service_name": self.service_name,
+                "service_namespace": self.service_namespace,
+                "service_version": self.service_version,
+                "instrumentation_scope": self.instrumentation_scope,
+                "max_queue_size": self.max_queue_size,
+                "max_export_batch_size": self.max_export_batch_size,
+                "scheduled_delay_millis": self.scheduled_delay_millis,
+                "completed_span_context_ttl_millis": self.completed_span_context_ttl_millis,
+                "resource_attributes": self.resource_attributes,
+            }
+        )
+
+
+@dataclass(slots=True)
 class OpenTelemetrySignalEndpointConfig:
     """One signal-specific OTLP destination for logs or metrics."""
 
@@ -286,12 +345,14 @@ class OpenTelemetrySignalEndpointConfig:
     timeout_millis: int = 3000
     header_file: dict[str, str] = field(default_factory=dict)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    tls: OpenTelemetryTlsConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
         return _normalize_object(
             {
                 "endpoint": self.endpoint,
+                "tls": _tls_dict(self.tls),
                 "transport": self.transport,
                 "headers": self.headers,
                 "header_env": self.header_env,
@@ -366,6 +427,7 @@ class OpenTelemetrySectionConfig:
     endpoints: list[OpenTelemetryEndpointConfig] = field(default_factory=list)
     logs: OpenTelemetryLogSectionConfig | None = None
     metrics: OpenTelemetryMetricSectionConfig | None = None
+    file_sinks: list[OpenTelemetryFileSinkConfig] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this section to the canonical plugin shape."""
@@ -375,6 +437,7 @@ class OpenTelemetrySectionConfig:
                 "endpoints": self.endpoints,
                 "logs": self.logs,
                 "metrics": self.metrics,
+                "file_sinks": self.file_sinks,
             }
         )
 
@@ -384,7 +447,8 @@ class ObservabilityConfig:
     """Canonical config document for the top-level observability component.
 
     ``enable_full_payloads`` retains complete sanitized request data on every
-    LLM start event.
+    LLM start event. ``insecure_http_hosts`` lists non-loopback hosts that may
+    receive exports and configured headers over unencrypted HTTP or WebSocket.
     """
 
     version: int = 4
@@ -393,6 +457,7 @@ class ObservabilityConfig:
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     enable_full_payloads: bool = False
+    insecure_http_hosts: list[str] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -404,6 +469,7 @@ class ObservabilityConfig:
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
                 "enable_full_payloads": self.enable_full_payloads,
+                "insecure_http_hosts": self.insecure_http_hosts,
             }
         )
 
@@ -436,7 +502,9 @@ __all__ = [
     "AtifConfig",
     "HttpStorageConfig",
     "S3StorageConfig",
+    "OpenTelemetryTlsConfig",
     "OpenTelemetryEndpointConfig",
+    "OpenTelemetryFileSinkConfig",
     "OpenTelemetrySignalEndpointConfig",
     "OpenTelemetryLogSectionConfig",
     "OpenTelemetryMetricSectionConfig",
@@ -445,3 +513,15 @@ __all__ = [
     "OBSERVABILITY_PLUGIN_KIND",
     "ComponentSpec",
 ]
+
+
+def _tls_dict(tls: OpenTelemetryTlsConfig | None) -> JsonObject | None:
+    if tls is None:
+        return None
+    return _normalize_object(
+        {
+            "certificate": tls.certificate,
+            "client_certificate": tls.client_certificate,
+            "private_key": tls.private_key,
+        }
+    )

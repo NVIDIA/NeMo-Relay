@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   nightly-alpha-config:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Load nightly alpha branches
     runs-on: ubuntu-latest
     permissions:
@@ -35,6 +36,7 @@ jobs:
           printf 'branches=%s\n' "$branches_json" >> "$GITHUB_OUTPUT"
 
   tag-nightly-alpha:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
     name: Tag nightly alpha
     needs: nightly-alpha-config
     runs-on: ubuntu-latest
@@ -100,3 +102,34 @@ jobs:
           git remote set-url origin "https://x-access-token:${NEMO_RELAY_NIGHTLY_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "refs/tags/${tag}"
           echo "Created nightly alpha tag for ${NEMO_RELAY_NIGHTLY_BRANCH}: ${tag}"
+
+  delete-old-nightly-tags:
+    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' }}
+    name: Delete nightly alpha tags older than 30 days
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete old nightly alpha tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          cutoff_date="$(date -u -d '30 days ago' +%Y%m%d)"
+          # Collect every page before deleting tags so pagination stays stable.
+          tags="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/tags?per_page=100" --jq '.[].name')"
+          while IFS= read -r tag; do
+            if [[ ! "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.([0-9]{4})([0-9]{2})([0-9]{2})$ ]]; then
+              continue
+            fi
+            tag_date="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+            if ! date -u -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%Y%m%d >/dev/null 2>&1; then
+              echo "Skipping nightly alpha tag with invalid date: ${tag}"
+              continue
+            fi
+            if [[ "$tag_date" < "$cutoff_date" ]]; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}"
+              echo "Deleted nightly alpha tag: ${tag}"
+            fi
+          done <<< "$tags"

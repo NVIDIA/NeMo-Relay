@@ -160,30 +160,101 @@ impl EvaluatedDynamicPluginTrust {
     }
 }
 
+/// Trust context retained by the host from resolution through runtime loading.
+#[derive(Debug, Clone)]
+pub(super) struct DynamicPluginLoadTrust {
+    pub(super) manifest: DynamicPluginManifest,
+    pub(super) policy: EvaluatedDynamicPluginHostPolicy,
+}
+
+impl DynamicPluginLoadTrust {
+    fn validation_report(&self, manifest_ref: &str) -> super::DynamicPluginValidationReport {
+        let plugin_id = self.manifest.plugin.id.trim();
+        let trust = evaluate_dynamic_plugin_trust(&self.manifest, manifest_ref, &self.policy);
+        let failure = self
+            .policy
+            .last_error(plugin_id)
+            .or_else(|| trust.last_error(plugin_id));
+        super::DynamicPluginValidationReport {
+            plugin_id: plugin_id.to_owned(),
+            manifest_ref: manifest_ref.to_owned(),
+            kind: self.manifest.plugin.kind,
+            selected: failure.is_none(),
+            status: super::DynamicPluginValidationStatus {
+                manifest: DynamicPluginCheckState::Valid,
+                compatibility: DynamicPluginCheckState::Valid,
+                integrity: trust.integrity,
+                authenticity: trust.authenticity,
+                policy_satisfied: self.policy.check_state(),
+                environment: DynamicPluginCheckState::Unknown,
+                checked_at: None,
+                message: Some("verified before runtime load".into()),
+            },
+            failure,
+        }
+    }
+
+    pub(super) fn manifest_for_load(
+        &self,
+        manifest_ref: &str,
+        skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    ) -> crate::plugin::Result<Option<DynamicPluginManifest>> {
+        let report = self.validation_report(manifest_ref);
+        if let Some(failure) = &report.failure {
+            if self.policy.startup_class == super::DynamicPluginStartupClass::Optional {
+                skipped.push(report);
+                return Ok(None);
+            }
+            return Err(crate::plugin::PluginError::InvalidConfig(
+                failure.message.clone(),
+            ));
+        }
+        // Load the validated contract, never a replacement manifest whose digest,
+        // signature, or entrypoint may have changed since configuration resolution.
+        Ok(Some(self.manifest.clone()))
+    }
+}
+
 /// Validates the manifest artifact under the already-evaluated host policy.
 pub fn evaluate_dynamic_plugin_trust(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
     policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> EvaluatedDynamicPluginTrust {
+    evaluate_dynamic_plugin_trust_with_artifact(manifest, manifest_ref, policy).0
+}
+
+// Keep the exact integrity-checked bytes for native activation without changing
+// the public trust report or any public load-spec struct.
+pub(super) fn evaluate_dynamic_plugin_trust_with_artifact(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    policy: &EvaluatedDynamicPluginHostPolicy,
+) -> (EvaluatedDynamicPluginTrust, Option<Vec<u8>>) {
     if !policy.policy_satisfied {
-        return EvaluatedDynamicPluginTrust {
-            integrity: DynamicPluginCheckState::Unknown,
-            authenticity: DynamicPluginCheckState::Unknown,
-            failure: None,
-        };
+        return (
+            EvaluatedDynamicPluginTrust {
+                integrity: DynamicPluginCheckState::Unknown,
+                authenticity: DynamicPluginCheckState::Unknown,
+                failure: None,
+            },
+            None,
+        );
     }
     let artifact_bytes = match verify_integrity(manifest, manifest_ref) {
         Ok(artifact) => artifact,
         Err(failure) => {
-            return EvaluatedDynamicPluginTrust {
-                integrity: DynamicPluginCheckState::Invalid,
-                authenticity: DynamicPluginCheckState::Unknown,
-                failure: Some(failure),
-            };
+            return (
+                EvaluatedDynamicPluginTrust {
+                    integrity: DynamicPluginCheckState::Invalid,
+                    authenticity: DynamicPluginCheckState::Unknown,
+                    failure: Some(failure),
+                },
+                None,
+            );
         }
     };
-    match verify_authenticity(manifest, manifest_ref, &artifact_bytes, policy) {
+    let trust = match verify_authenticity(manifest, manifest_ref, &artifact_bytes, policy) {
         Ok(authenticity) => EvaluatedDynamicPluginTrust {
             integrity: DynamicPluginCheckState::Valid,
             authenticity,
@@ -194,7 +265,8 @@ pub fn evaluate_dynamic_plugin_trust(
             authenticity: DynamicPluginCheckState::Invalid,
             failure: Some(failure),
         },
-    }
+    };
+    (trust, Some(artifact_bytes))
 }
 
 /// Resolves an artifact or signature reference relative to its manifest.

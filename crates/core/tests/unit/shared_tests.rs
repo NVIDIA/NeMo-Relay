@@ -611,3 +611,120 @@ async fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     .unwrap();
     reset_global();
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+async fn request_intercept_can_block_two_tool_results() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_llm_request_intercept(
+        "shared-multiple-results",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move {
+                let mut annotated = annotated.unwrap();
+                for message in &mut annotated.messages {
+                    if let Message::Tool { content, .. } = message {
+                        *content = MessageContent::Text("blocked".into());
+                    }
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
+        }),
+    )
+    .unwrap();
+    let original = LlmRequest {
+        headers: Map::new(),
+        content: json!({"messages": [
+            {"role": "tool", "tool_call_id": "a", "content": "old"},
+            {"role": "tool", "tool_call_id": "b", "content": "old"}
+        ]}),
+    };
+    let (encoded, _, _, _) = run_request_intercepts_with_codec(
+        "shared",
+        original,
+        Some(Arc::new(crate::codec::openai_chat::OpenAIChatCodec)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        encoded.content["messages"],
+        json!([
+            {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+            {"role": "tool", "tool_call_id": "b", "content": "blocked"}
+        ])
+    );
+    deregister_llm_request_intercept("shared-multiple-results").unwrap();
+    reset_global();
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn request_encoding_reuses_the_original_decoded_baseline() {
+    use crate::codec::openai_chat::OpenAIChatCodec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingCodec(Arc<AtomicUsize>);
+    impl LlmCodec for CountingCodec {
+        fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            OpenAIChatCodec.decode(request)
+        }
+        fn encode(&self, _: &AnnotatedLlmRequest, _: &LlmRequest) -> Result<LlmRequest> {
+            panic!("managed execution should supply its decoded baseline")
+        }
+        fn encode_with_baseline(
+            &self,
+            annotated: &AnnotatedLlmRequest,
+            original: &LlmRequest,
+            baseline: &AnnotatedLlmRequest,
+        ) -> Result<LlmRequest> {
+            assert_eq!(baseline.model.as_deref(), Some("source-model"));
+            OpenAIChatCodec.encode_with_baseline(annotated, original, baseline)
+        }
+    }
+
+    let _guard = lock_runtime_owner();
+    reset_global();
+    for intercept in [false, true] {
+        if intercept {
+            register_llm_request_intercept(
+                "baseline-edit",
+                1,
+                false,
+                Arc::new(|_, mut request, annotated| {
+                    Box::pin(async move {
+                        let mut annotated = annotated.unwrap();
+                        annotated.model = Some("edited-model".into());
+                        request.headers.insert("x-edited".into(), json!(true));
+                        Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+                    })
+                }),
+            )
+            .unwrap();
+        }
+        let count = Arc::new(AtomicUsize::new(0));
+        let (request, annotated, _, _) = run_request_intercepts_with_codec(
+            "baseline-test",
+            LlmRequest { headers: Map::new(), content: json!({
+                "model": "source-model", "messages": [{"role": "user", "content": "hello"}], "unknown": {"preserved": true}
+            }) },
+            Some(Arc::new(CountingCodec(Arc::clone(&count)))),
+        ).await.unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        let expected_model = if intercept {
+            "edited-model"
+        } else {
+            "source-model"
+        };
+        assert_eq!(request.content["model"], expected_model);
+        assert_eq!(annotated.unwrap().model.as_deref(), Some(expected_model));
+        assert_eq!(request.content["unknown"], json!({"preserved": true}));
+        if intercept {
+            assert_eq!(request.headers["x-edited"], true);
+            deregister_llm_request_intercept("baseline-edit").unwrap();
+        }
+    }
+    reset_global();
+}

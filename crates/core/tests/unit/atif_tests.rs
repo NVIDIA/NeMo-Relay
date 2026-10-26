@@ -12,7 +12,9 @@ use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
 use crate::codec::model_pricing::pricing_test_mutex;
+use crate::codec::oci_genai::OCIGenAIChatCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
@@ -551,11 +553,8 @@ fn is_atif_content_part(part: &serde_json::Value) -> bool {
         return false;
     };
     match object.get("type").and_then(serde_json::Value::as_str) {
-        Some("text") => object
-            .get("text")
-            .and_then(serde_json::Value::as_str)
-            .is_some(),
-        Some("image") => is_atif_image_source(object.get("source")),
+        Some("text") => object.len() == 2 && object.get("text").is_some_and(Json::is_string),
+        Some("image") => object.len() == 2 && is_atif_image_source(object.get("source")),
         _ => false,
     }
 }
@@ -567,10 +566,11 @@ fn is_atif_image_source(value: Option<&serde_json::Value>) -> bool {
     matches!(
         source.get("media_type").and_then(serde_json::Value::as_str),
         Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
-    ) && source
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .is_some()
+    ) && source.len() == 2
+        && source
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
 }
 
 #[test]
@@ -668,6 +668,72 @@ fn test_exporter_omits_null_tool_observation_content() {
 }
 
 #[test]
+fn test_exporter_projects_versioned_tool_results_without_framework_knowledge() {
+    let exporter = AtifExporter::new("tool-results".to_string(), make_agent_info());
+    let outputs = [
+        json!({"schema": "nemo.relay.tool_result@1", "content": "answer", "is_error": false, "result": {"opaque": 1}}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": [{"type": "text", "text": "failed"}], "is_error": true, "result": {"opaque": 2}}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": null, "is_error": false, "result": {"opaque": 3}}),
+        // A lookalike application object and an unknown version remain opaque.
+        json!({"content": "do not infer", "is_error": true}),
+        json!({"schema": "nemo.relay.tool_result@2", "content": "unknown", "is_error": true, "result": null}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": "malformed", "is_error": "true", "result": null}),
+    ];
+    {
+        let mut state = exporter.state.lock().unwrap();
+        for (index, output) in outputs.iter().enumerate() {
+            state.events.push(
+                event_builder(Uuid::now_v7(), EventType::End)
+                    .name(format!("tool-{index}"))
+                    .scope_type(ScopeType::Tool)
+                    .tool_call_id(format!("call-{index}"))
+                    .output(output.clone())
+                    .build(),
+            );
+        }
+        set_sequential_event_timestamps(
+            &mut state.events.iter_mut().collect::<Vec<_>>(),
+            base_timestamp(),
+            chrono::Duration::milliseconds(1),
+        );
+    }
+    let trajectory = exporter.export().unwrap();
+    let mut results: Vec<_> = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.observation.as_ref())
+        .flat_map(|observation| &observation.results)
+        .collect();
+    results.sort_by_key(|result| {
+        result.extra.as_ref().unwrap()["event_name"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    assert_eq!(results.len(), outputs.len());
+    for (index, (result, output)) in results.iter().zip(&outputs).enumerate() {
+        assert_eq!(
+            result.content,
+            if index < 2 {
+                Some(output["content"].clone())
+            } else {
+                None
+            }
+        );
+        let extra = result.extra.as_ref().unwrap();
+        assert_eq!(
+            extra.get("is_error"),
+            if index == 1 {
+                Some(&Json::Bool(true))
+            } else {
+                None
+            }
+        );
+        assert_eq!(&extra["tool_result"], output);
+    }
+}
+
+#[test]
 fn test_exporter_preserves_annotation_when_tool_result_is_null() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();
@@ -756,6 +822,157 @@ fn test_exporter_preserves_tool_content_part_array_observation_content() {
     let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
     assert_eq!(result.content, Some(content_parts));
     assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());
+}
+
+#[test]
+fn test_exporter_canonicalizes_content_parts() {
+    let parts = json!([
+        {"type": "text", "text": "first", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "second"},
+        {"type": "image", "source": {
+            "media_type": "image/png", "path": "shot.png", "detail": "high"
+        }, "provider_id": "image-1"},
+    ]);
+    let expected = json!([
+        {"type": "text", "text": "first"},
+        {"type": "text", "text": "second"},
+        {"type": "image", "source": {"media_type": "image/png", "path": "shot.png"}},
+    ]);
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    exporter.state.lock().unwrap().events.extend([
+        event_builder(llm_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(json!({"messages": [{"role": "user", "content": parts}]}))
+            .build(),
+        event_builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(json!({"assistant_message": {"content": parts}}))
+            .build(),
+        event_builder(Uuid::now_v7(), EventType::End)
+            .name("screenshot")
+            .scope_type(ScopeType::Tool)
+            .tool_call_id("call-1")
+            .output(parts.clone())
+            .build(),
+    ]);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps[0].message, expected);
+    assert_eq!(trajectory.steps[1].message, expected);
+    let observation = trajectory.steps.last().unwrap().observation.as_ref();
+    let result = &observation.unwrap().results[0];
+    assert_eq!(result.content, Some(expected));
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], parts);
+}
+
+#[test]
+fn test_exporter_collapses_text_only_content_parts() {
+    let parts = json!([
+        {"type": "text", "text": "first", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "second"},
+    ]);
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    exporter.state.lock().unwrap().events.extend([
+        event_builder(llm_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(json!({"messages": [{"role": "user", "content": parts}]}))
+            .build(),
+        event_builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(json!({"assistant_message": {"content": parts}}))
+            .build(),
+    ]);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps[0].message, json!("first\nsecond"));
+    assert_eq!(trajectory.steps[1].message, json!("first\nsecond"));
+}
+
+#[test]
+fn test_exporter_user_message_keeps_supported_parts_and_preserves_raw_images() {
+    let inline_image = json!({"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": "aW1hZ2U="
+    }});
+    let path_image = json!({"type": "image", "source": {
+        "media_type": "image/png", "path": "shot.png"
+    }});
+    for (parts, expected) in [
+        (
+            json!([{"type": "text", "text": "inspect"}, inline_image]),
+            json!("inspect"),
+        ),
+        (json!([inline_image]), json!("")),
+        (
+            json!([
+                {"type": "text", "text": "first"}, inline_image,
+                {"type": "text", "text": "second"}
+            ]),
+            json!("first\nsecond"),
+        ),
+        (
+            json!([{"type": "text", "text": "inspect"}, inline_image, path_image]),
+            json!([{"type": "text", "text": "inspect"}, path_image]),
+        ),
+    ] {
+        let request = json!({"messages": [{"role": "user", "content": parts}]});
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        exporter.state.lock().unwrap().events.push(
+            event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(request.clone())
+                .build(),
+        );
+
+        let trajectory = exporter.export().unwrap();
+        assert_atif_v17_shape(&trajectory);
+        let user = &trajectory.steps[0];
+        assert_eq!(user.source, "user");
+        assert_eq!(user.message, expected);
+        assert_eq!(user.extra.as_ref().unwrap()["llm_request"], request);
+    }
+}
+
+#[test]
+fn test_exporter_responses_image_only_keeps_empty_display_and_raw_request() {
+    for part in [
+        json!({"type": "input_image", "image_url": "data:image/png;base64,YQ=="}),
+        json!({"type": "input_image", "image_url": "https://example.com/image.png"}),
+        json!({"type": "input_image", "file_id": "file-image"}),
+        json!({"type": "input_file", "file_id": "file-document"}),
+    ] {
+        for use_annotation in [false, true] {
+            let request = json!({"input": [
+                {"role": "user", "content": "Earlier message"},
+                {"role": "user", "content": [part]}
+            ]});
+            let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+            let builder = event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(request.clone());
+            let start = if use_annotation {
+                let annotation = OpenAIResponsesCodec
+                    .decode(&LlmRequest {
+                        headers: Default::default(),
+                        content: request.clone(),
+                    })
+                    .unwrap();
+                builder.annotated_request(annotation).build()
+            } else {
+                builder.build()
+            };
+            exporter.state.lock().unwrap().events.push(start);
+
+            let trajectory = exporter.export().unwrap();
+            assert_atif_v17_shape(&trajectory);
+            let user = &trajectory.steps[0];
+            assert_eq!(user.message, json!(""));
+            assert_eq!(user.extra.as_ref().unwrap()["llm_request"], request);
+        }
+    }
 }
 
 #[test]
@@ -3148,9 +3365,102 @@ fn test_exporter_prefers_annotated_request_message() {
 }
 
 #[test]
-fn test_exporter_annotated_multimodal_request_falls_back_to_raw() {
-    // A multimodal (content-part) request message must not be flattened to text:
-    // the annotation adapter returns None and ATIF preserves the raw content.
+fn test_exporter_annotated_gemini_multimodal_display() {
+    for texts in [vec![], vec!["first"], vec!["first", "second"]] {
+        for image in [
+            json!({"inlineData": {"mimeType": "image/png", "data": "YQ=="}}),
+            json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/image.png"}}),
+        ] {
+            let mut parts: Vec<_> = texts.iter().map(|text| json!({"text": text})).collect();
+            parts.insert(usize::from(!parts.is_empty()), image);
+            assert_annotated_user_display(
+                &GeminiGenerateContentCodec,
+                json!({"contents": [{"role": "user", "parts": parts}]}),
+                json!(texts.join("\n")),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_exporter_annotated_oci_multimodal_display() {
+    for texts in [vec![], vec!["first"], vec!["first", "second"]] {
+        let mut parts: Vec<_> = texts
+            .iter()
+            .map(|text| json!({"type": "TEXT", "text": text}))
+            .collect();
+        parts.insert(
+            usize::from(!parts.is_empty()),
+            json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,YQ=="}}),
+        );
+        let body =
+            json!({"apiFormat": "GENERIC", "messages": [{"role": "USER", "content": parts}]});
+        for request in [
+            body.clone(),
+            json!({
+                "servingMode": {"servingType": "ON_DEMAND", "modelId": "vision-test"},
+                "compartmentId": "ocid1.compartment.oc1..example",
+                "chatRequest": body
+            }),
+        ] {
+            assert_annotated_user_display(&OCIGenAIChatCodec, request, json!(texts.join("\n")));
+        }
+    }
+}
+
+#[test]
+fn test_exporter_annotated_multimodal_display_keeps_supported_image_paths() {
+    let path_image = json!({"type": "image", "source": {
+        "media_type": "image/png", "path": "shot.png"
+    }});
+    let request = json!({"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "inspect", "cache_control": {"type": "ephemeral"}},
+        {"type": "image", "source": {
+            "type": "base64", "media_type": "image/png", "data": "YQ=="
+        }},
+        path_image
+    ]}]});
+    // Anthropic represents these images as Image; Chat retains them as ProviderNative.
+    for codec in [&AnthropicMessagesCodec as &dyn LlmCodec, &OpenAIChatCodec] {
+        assert_annotated_user_display(
+            codec,
+            request.clone(),
+            json!([{"type": "text", "text": "inspect"}, path_image]),
+        );
+    }
+}
+
+fn assert_annotated_user_display(codec: &dyn LlmCodec, request: Json, expected: Json) {
+    for wrapped in [false, true] {
+        let annotation = codec
+            .decode(&LlmRequest {
+                headers: Default::default(),
+                content: request.clone(),
+            })
+            .unwrap();
+        let input = if wrapped {
+            json!({"content": request, "headers": {}})
+        } else {
+            request.clone()
+        };
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        exporter.state.lock().unwrap().events.push(
+            event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(input)
+                .annotated_request(annotation)
+                .build(),
+        );
+        let trajectory = exporter.export().unwrap();
+        assert_atif_v17_shape(&trajectory);
+        let user = &trajectory.steps[0];
+        assert_eq!(user.message, expected);
+        assert_eq!(user.extra.as_ref().unwrap()["llm_request"], request);
+    }
+}
+
+#[test]
+fn test_exporter_annotated_multimodal_request_preserves_raw_content_in_extra() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let multimodal = json!({
         "model": "gpt-4",
@@ -3169,18 +3479,15 @@ fn test_exporter_annotated_multimodal_request_falls_back_to_raw() {
     let start = event_builder(Uuid::now_v7(), EventType::Start)
         .name("gpt-4")
         .scope_type(ScopeType::Llm)
-        .input(multimodal)
+        .input(multimodal.clone())
         .annotated_request(annotated)
         .build();
     exporter.state.lock().unwrap().events.push(start);
 
     let trajectory = exporter.export().unwrap();
-    let message = trajectory.steps[0].message.as_str().unwrap();
-    // Raw fallback preserves the image part rather than flattening to "describe".
-    assert!(
-        message.contains("image_url"),
-        "multimodal content preserved: {message}"
-    );
+    let user = &trajectory.steps[0];
+    assert_eq!(user.message, json!("describe"));
+    assert_eq!(user.extra.as_ref().unwrap()["llm_request"], multimodal);
 }
 
 #[test]
@@ -4317,6 +4624,99 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
     assert_eq!(metrics.prompt_tokens, Some(7));
     assert_eq!(metrics.completion_tokens, Some(3));
     assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(10));
+}
+
+#[test]
+fn test_exporter_distinguishes_images_when_matching_overlapping_llm_spans() {
+    assert_overlapping_image_requests(|data| {
+        json!({"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "inspect"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": data
+            }}
+        ]}]})
+    });
+}
+
+#[test]
+fn test_exporter_distinguishes_responses_images_when_matching_overlapping_llm_spans() {
+    assert_overlapping_image_requests(|data| {
+        json!({"input": [
+            {"role": "user", "content": "Earlier request"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "inspect"},
+                {"type": "input_image", "image_url": format!("data:image/png;base64,{data}")}
+            ]}
+        ]})
+    });
+}
+
+#[test]
+fn test_responses_text_only_request_signatures_keep_string_equivalence() {
+    let string_input = json!({"input": "inspect"});
+    for text_type in ["input_text", "text"] {
+        let parts_input = json!({"input": [{"role": "user", "content": [
+            {"type": text_type, "text": "inspect"}
+        ]}]});
+        assert_eq!(
+            llm_request_signature(&string_input),
+            llm_request_signature(&parts_input)
+        );
+    }
+}
+
+fn assert_overlapping_image_requests(request: fn(&str) -> Json) {
+    for same_image in [true, false] {
+        let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+        let parent_uuid = Uuid::now_v7();
+        for index in 0..2 {
+            let uuid = Uuid::now_v7();
+            let data = if same_image || index == 0 {
+                "YQ=="
+            } else {
+                "Yg=="
+            };
+            let mut start = event_builder(uuid, EventType::Start)
+                .parent_uuid(parent_uuid)
+                .scope_type(ScopeType::Llm)
+                .model_name("test-model")
+                .metadata(json!({"provider_payload_exact": index == 0}))
+                .input(request(data))
+                .build();
+            let mut end = event_builder(uuid, EventType::End)
+                .parent_uuid(parent_uuid)
+                .scope_type(ScopeType::Llm)
+                .model_name("test-model")
+                .metadata(json!({"provider_payload_exact": index == 0}))
+                .output(json!({"content": "An image."}))
+                .build();
+            set_event_timestamp(
+                &mut start,
+                base_timestamp() + chrono::Duration::milliseconds(index),
+            );
+            set_event_timestamp(
+                &mut end,
+                base_timestamp() + chrono::Duration::milliseconds(3 - index),
+            );
+            exporter.state.lock().unwrap().events.extend([start, end]);
+        }
+
+        let trajectory = exporter.export().unwrap();
+        let users: Vec<_> = trajectory
+            .steps
+            .iter()
+            .filter(|step| step.source == "user")
+            .collect();
+        assert_eq!(users.len(), if same_image { 1 } else { 2 });
+        assert!(users.iter().all(|step| step.message == json!("inspect")));
+        if !same_image {
+            assert_ne!(
+                users[0].extra.as_ref().unwrap()["llm_request"],
+                users[1].extra.as_ref().unwrap()["llm_request"]
+            );
+        }
+    }
 }
 
 #[test]
@@ -6652,9 +7052,13 @@ fn assert_provider_response_edge_shapes() {
         json!([false]),
         json!([{"type": "unknown"}]),
         json!([{"type": "text"}]),
-        json!([{"type": "image", "source": {"media_type": "text/plain"}}]),
+        json!([{"type": "image", "source": {"media_type": "text/plain", "path": "a.txt"}}]),
+        json!([
+            {"type": "text", "text": "partial"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+        ]),
     ] {
-        assert!(!is_atif_content_parts(&invalid_parts));
+        assert!(canonicalize_atif_content_parts(&invalid_parts).is_none());
     }
     assert_eq!(
         openai_responses_output_message(&json!({"output_text": "direct"})),
@@ -6724,6 +7128,12 @@ fn assert_request_turn_state_edge_shapes() {
             {"type": "text", "text": "second"}
         ])),
         Some(json!("first\nsecond"))
+    );
+    assert_eq!(
+        openai_responses_input_content_message(&json!([{"type": "image", "source": {
+            "media_type": "image/png", "path": "shot.png", "detail": "high"
+        }}])),
+        Some(json!([{"type": "image", "source": {"media_type": "image/png", "path": "shot.png"}}]))
     );
     assert_eq!(openai_responses_input_content_message(&json!(false)), None);
 }
@@ -7025,4 +7435,196 @@ fn atif_step_conversion_state_covers_tool_correlation_guard_paths() {
     assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
     empty_state.steps[0] = cleanup_test_agent_step(empty_message(), &["other"], &[]);
     assert!(!empty_state.attach_subagent_ref_to_agent_step(&child, &tool_start, "call-1"));
+}
+
+/// Exercise raw provider payloads through the exporter, including its wrapper handling.
+fn export_raw_provider_request(request: &Json, wrapped: bool) -> Json {
+    let exporter = AtifExporter::new("raw-provider".into(), make_agent_info());
+    let uuid = Uuid::now_v7();
+    let input = if wrapped {
+        json!({"headers": {}, "content": request})
+    } else {
+        request.clone()
+    };
+    let start = event_builder(uuid, EventType::Start)
+        .scope_type(ScopeType::Llm)
+        .input(input)
+        .build();
+    let end = event_builder(uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({"content": "answer"}))
+        .build();
+    exporter.state.lock().unwrap().events.extend([start, end]);
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    serde_json::to_value(trajectory).unwrap()
+}
+
+#[test]
+fn raw_provider_display_preserves_images_and_request_signatures() {
+    for image in [
+        json!({"inlineData": {"mimeType": "image/png", "data": "YQ=="}}),
+        json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/a.png"}}),
+    ] {
+        for (role, text) in [Some("user"), None]
+            .into_iter()
+            .flat_map(|role| [true, false].map(|text| (role, text)))
+        {
+            let mut content = json!({"parts": [image.clone()]});
+            if let Some(role) = role {
+                content["role"] = json!(role);
+            }
+            if text {
+                content["parts"].as_array_mut().unwrap().extend([
+                    json!({"text": "inspect"}),
+                    json!({"text": "hidden", "thought": true}),
+                    json!({"text": "carefully"}),
+                ]);
+            }
+            let request = json!({"contents": [
+                {"role": "user", "parts": [{"text": "older question"}]}, content
+            ]});
+            let mut different = request.clone();
+            different["contents"][1]["parts"][0] = json!({"inlineData": {
+                "mimeType": "image/png", "data": "Yg=="
+            }});
+            assert_ne!(
+                llm_request_signature(&request),
+                llm_request_signature(&different)
+            );
+            assert_raw_provider_projection(
+                &request,
+                if text {
+                    Some("inspect\ncarefully")
+                } else {
+                    Some("")
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_oci_provider_display_preserves_images_and_request_signatures() {
+    for text in [true, false] {
+        let mut parts =
+            vec![json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,YQ=="}})];
+        if text {
+            parts.extend([
+                json!({"type": "TEXT", "text": "inspect"}),
+                json!({"type": "TEXT", "text": "carefully"}),
+            ]);
+        }
+        let bare = json!({"apiFormat": "GENERIC", "messages": [
+            {"role": "USER", "content": [{"type": "TEXT", "text": "older question"}]},
+            {"role": "USER", "content": parts}
+        ]});
+        let mut different = bare.clone();
+        different["messages"][1]["content"][0]["imageUrl"]["url"] =
+            json!("data:image/png;base64,Yg==");
+        for envelope in [true, false] {
+            let (request, other) = if envelope {
+                (
+                    json!({"chatRequest": bare}),
+                    json!({"chatRequest": different}),
+                )
+            } else {
+                (bare.clone(), different.clone())
+            };
+            assert_ne!(
+                llm_request_signature(&request),
+                llm_request_signature(&other)
+            );
+            assert_raw_provider_projection(
+                &request,
+                if text {
+                    Some("inspect\ncarefully")
+                } else {
+                    Some("")
+                },
+            );
+        }
+    }
+}
+
+fn assert_raw_provider_projection(request: &Json, expected: Option<&str>) {
+    for wrapped in [false, true] {
+        let trajectory = export_raw_provider_request(request, wrapped);
+        let steps = trajectory["steps"].as_array().unwrap();
+        let messages: Vec<_> = steps
+            .iter()
+            .filter(|step| step["source"] == "user")
+            .map(|step| step["message"].clone())
+            .collect();
+        assert_eq!(
+            messages,
+            expected
+                .into_iter()
+                .map(|text| json!(text))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["extra"]["llm_request"] == *request)
+        );
+    }
+}
+
+#[test]
+fn raw_gemini_tool_continuations_distinguish_fresh_user_parts() {
+    let response = json!({"functionResponse": {"name": "screenshot", "response": {"text": "tool text"},
+        "parts": [{"inlineData": {"mimeType": "image/png", "data": "YQ=="}}]}});
+    for role in [Some("user"), None] {
+        for fresh in [
+            None,
+            Some(json!({"text": "next question"})),
+            Some(json!({"inlineData": {"mimeType": "image/png", "data": "Yg=="}})),
+            Some(json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/b.png"}})),
+        ] {
+            let mut content = json!({"parts": [response.clone()]});
+            if let Some(role) = role {
+                content["role"] = json!(role);
+            }
+            if let Some(part) = &fresh {
+                content["parts"].as_array_mut().unwrap().push(part.clone());
+            }
+            let request = json!({"contents": [
+                {"role": "user", "parts": [{"text": "inspect"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "screenshot", "args": {}}}]},
+                content
+            ]});
+            let expected = fresh
+                .as_ref()
+                .map(|part| part.get("text").and_then(Json::as_str).unwrap_or(""));
+            assert_raw_provider_projection(&request, expected);
+            // An unmatched start retains a user step even for a continuation.
+            let event = event_builder(Uuid::now_v7(), EventType::Start)
+                .scope_type(ScopeType::Llm)
+                .input(request.clone())
+                .build();
+            assert!(llm_start_user_step_message(&event, &request, false).is_some());
+        }
+    }
+}
+
+#[test]
+fn raw_provider_turn_detection_respects_assistant_and_system_roles() {
+    let gemini = json!({"contents": [
+        {"role": "user", "parts": [{"text": "question"}]},
+        {"role": "model", "parts": [{"text": "answer"}]}
+    ]});
+    assert_raw_provider_projection(&gemini, None);
+    for role in ["ASSISTANT", "TOOL"] {
+        let oci = json!({"apiFormat": "GENERIC", "messages": [
+            {"role": "USER", "content": [{"type": "TEXT", "text": "question"}]},
+            {"role": role, "content": [{"type": "TEXT", "text": "answer"}]},
+            {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "instructions"}]}
+        ]});
+        assert_raw_provider_projection(&oci, None);
+        assert_raw_provider_projection(&json!({"chatRequest": oci}), None);
+    }
+    let chat = json!({"messages": [{"role": "user", "content": "unchanged"}]});
+    assert_raw_provider_projection(&chat, Some("unchanged"));
+    assert_eq!(raw_provider_user_message(&chat), None);
 }

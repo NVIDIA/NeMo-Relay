@@ -38,6 +38,15 @@ These are the complete manifest shapes used by the checked examples. The path in
 same library; a worker loader either starts the compiled program or imports the Python
 entrypoint from the managed environment.
 
+For application embeddings, core initialization loads a private temporary copy of the
+native library bytes checked by the host trust policy. The copy remains available until
+the library unloads. Replacing the source manifest, library, or signature after validation
+does not change the library loaded by that activation. Native plugins used in embeddings
+must not depend on adjacent files being available relative to the loaded library's
+location. The CLI retains its activation snapshot, which includes adjacent native
+dependencies. Native library digest checks use bounded regular-file reads and reject
+symbolic links and special files.
+
 <Tabs>
 <Tab title="Python Worker" language="toml">
 ```toml
@@ -190,4 +199,61 @@ Relay can validate and activate:
 Success means package validation passes before activation, tampering causes integrity
 validation to fail, the runtime report identifies the dynamic component, and teardown
 removes its registrations before the library unloads or worker exits. The operator-side
-trust policy and file layout are documented in [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
+trust policy and file layout are documented in [Manage](/configure-plugins/discoverable-plugins).
+
+## Worker Message Limits
+
+Set `[load.max_message_bytes]` with an optional `default_bytes` and `by_name`
+overrides for exact callback registration names.
+
+For example, `by_name.input_guardrail = 16777216` raises the registered
+`input_guardrail` callback and its continuations to 16 MiB. Host environment
+settings override plugin settings. See the
+[execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
+for validation, compatibility, and memory considerations.
+
+## Callback Deadlines
+
+A deadline limits how long Relay waits for a callback to finish. Set deadlines
+for short worker callbacks in `relay-plugin.toml`. These settings work with
+Python, Rust, and workers that you start with a custom command.
+
+The following example sets a default deadline and an override for one callback:
+
+```toml
+[load.callback_timeouts]
+default_ms = 60000
+
+[load.callback_timeouts.by_name]
+check_request = 90000
+```
+
+Use positive whole numbers in milliseconds. In this example, most short callbacks
+have a limit of 60,000 milliseconds. The `check_request` callback has a limit of
+90,000 milliseconds.
+
+Relay chooses the deadline in this order:
+
+1. The value in `by_name` for the callback's exact registration name.
+2. The `default_ms` value, if set.
+3. The built-in default of 30,000 milliseconds.
+
+Names are case-sensitive. They cannot be empty or have spaces at the start or
+end. If several callbacks use the same name, they share the same override, even
+across components or callback types. Use distinct names when callbacks need
+different deadlines. Names that don't match a registered callback have no effect.
+For a conditional middleware guardrail, use the guardrail's callback name.
+
+Plugin authors and operators use the same manifest settings. Edit the manifest
+and reactivate the plugin to apply a change. Relay keeps the settings it read
+when the plugin started until you reactivate it.
+
+The deadline includes any time the callback spends waiting for calls back to
+Relay. When the deadline expires, Relay asks the worker to cancel the callback
+and clears the host state for that call. The callback follows its usual error or
+fallback behavior.
+
+Tool and LLM execution intercepts, including streams, ignore these settings.
+Their callers control cancellation. Other worker calls, such as validation and
+shutdown, keep their 30,000-millisecond timeout. Native plugins run inside Relay
+and don't use worker deadlines.

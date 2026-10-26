@@ -19,6 +19,7 @@ service PluginWorker {
 service RelayHostRuntime {
   rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest) returns (GetCurrentScopeStackSnapshotResponse);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
   rpc PopScope(PopScopeRequest) returns (HostAck);
@@ -36,6 +37,170 @@ service RelayHostRuntime {
       returns (RegisterConditionalMiddlewareGuardrailResponse);
   rpc DeregisterConditionalMiddlewareGuardrail(DeregisterConditionalMiddlewareGuardrailRequest)
       returns (DeregisterConditionalMiddlewareGuardrailResponse);
+}
+
+// Independently bounded, additive diagnostics service. Execution and legacy
+// RelayHostRuntime limits and semantics are unchanged. Older hosts return
+// UNIMPLEMENTED. Read permission is separate from submission permission.
+service RelayDiagnostics {
+  rpc GetDiagnosticCapabilities(DiagnosticCredentials) returns (DiagnosticCapabilities);
+  rpc OpenDiagnosticSession(DiagnosticOpenRequest) returns (DiagnosticSession);
+  rpc SubmitDiagnostic(DiagnosticSubmission) returns (DiagnosticReceipt);
+  rpc ReadDiagnosticPage(DiagnosticReadRequest) returns (DiagnosticReadResponse);
+}
+
+message DiagnosticCredentials {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message DiagnosticCapabilities {
+  uint32 protocol_version = 1;
+  uint32 snapshot_version = 2;
+  uint32 catalogue_version = 3;
+  bool enabled = 4;
+  bool can_read_context = 5;
+  uint32 max_components = 6;
+  uint32 max_extensions = 7;
+  uint32 max_metadata_bytes = 8;
+  // Maximum encoded DiagnosticSubmission size, including credentials/session/sequence fields.
+  uint32 max_request_bytes = 9;
+  uint32 max_detail_bytes = 10;
+  uint32 max_correlation_bytes = 11;
+  // Maximum encoded diagnostic response size for this session.
+  uint32 max_response_bytes = 12;
+  // SDK queue slots; the single in-flight request and host session capacity are separate.
+  uint32 max_pending_submissions = 13;
+  // Maximum SubmitDiagnostic attempts, including the initial attempt.
+  uint32 retry_attempts = 14;
+  // Per-attempt SubmitDiagnostic deadline; bootstrap and lifecycle drain use local bounds.
+  uint32 retry_timeout_millis = 15;
+  // Version 1 retains authenticated remote provenance in canonical event pages.
+  uint32 provenance_version = 16;
+}
+
+message DiagnosticOpenRequest {
+  DiagnosticCredentials credentials = 1;
+  uint32 protocol_version = 2;
+  uint32 snapshot_version = 3;
+  uint32 provenance_version = 4;
+}
+
+message DiagnosticSession {
+  // Host-issued UUID; also the producer source incarnation.
+  bytes session_id = 1;
+  DiagnosticCapabilities capabilities = 2;
+}
+
+enum DiagnosticObservationOutcome {
+  DIAGNOSTIC_OBSERVATION_OUTCOME_UNKNOWN = 0;
+  DIAGNOSTIC_OBSERVATION_OUTCOME_SUCCESS = 1;
+  DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE = 2;
+}
+
+enum DiagnosticObservationSeverity {
+  DIAGNOSTIC_OBSERVATION_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_OBSERVATION_SEVERITY_TRACE = 1;
+  DIAGNOSTIC_OBSERVATION_SEVERITY_DEBUG = 2;
+  DIAGNOSTIC_OBSERVATION_SEVERITY_INFO = 3;
+  DIAGNOSTIC_OBSERVATION_SEVERITY_WARNING = 4;
+  DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR = 5;
+}
+
+message DiagnosticExtensionDefinition {
+  string name = 1;
+  string description = 2;
+  DiagnosticObservationOutcome outcome = 3;
+  repeated string allowed_failure_classes = 4;
+}
+
+message DiagnosticCodeDefinition {
+  oneof definition {
+    string builtin_name = 1;
+    DiagnosticExtensionDefinition extension = 2;
+  }
+}
+
+message DiagnosticComponentRegistration {
+  string local_name = 1;
+  repeated DiagnosticCodeDefinition codes = 2;
+}
+
+message DiagnosticObservation {
+  uint32 component = 1;
+  uint32 code = 2;
+  optional string failure_class = 3;
+  DiagnosticObservationOutcome outcome = 4;
+  DiagnosticObservationSeverity severity = 5;
+  uint64 count = 6;
+  optional int64 observed_unix_micros = 7;
+  optional string detail = 8;
+  optional string session_id = 9;
+  optional string request_id = 10;
+}
+
+message DiagnosticComponentClose { uint32 component = 1; }
+message DiagnosticSessionClose {}
+
+// A single ordered stream serializes registration, recording, and closure.
+// Identical retries reuse sequence and payload. No execution error is retried.
+message DiagnosticSubmission {
+  DiagnosticCredentials credentials = 1;
+  bytes session_id = 2;
+  uint64 sequence = 3;
+  oneof operation {
+    DiagnosticComponentRegistration register_component = 4;
+    DiagnosticObservation record = 5;
+    DiagnosticComponentClose close_component = 6;
+    DiagnosticSessionClose close_session = 7;
+  }
+}
+
+enum DiagnosticReceiptStatus {
+  DIAGNOSTIC_RECEIPT_STATUS_UNSPECIFIED = 0;
+  DIAGNOSTIC_RECEIPT_STATUS_RECORDED = 1;
+  DIAGNOSTIC_RECEIPT_STATUS_DISABLED = 2;
+  DIAGNOSTIC_RECEIPT_STATUS_REJECTED = 3;
+  DIAGNOSTIC_RECEIPT_STATUS_REGISTERED = 4;
+  DIAGNOSTIC_RECEIPT_STATUS_CLOSED = 5;
+}
+
+enum DiagnosticEvidenceRetention {
+  DIAGNOSTIC_EVIDENCE_RETENTION_UNSPECIFIED = 0;
+  DIAGNOSTIC_EVIDENCE_RETENTION_RETAINED = 1;
+  DIAGNOSTIC_EVIDENCE_RETENTION_TRUNCATED = 2;
+  DIAGNOSTIC_EVIDENCE_RETENTION_DROPPED = 3;
+}
+
+message DiagnosticReceipt {
+  uint64 submission_sequence = 1;
+  DiagnosticReceiptStatus status = 2;
+  uint64 host_sequence = 3;
+  DiagnosticEvidenceRetention evidence = 4;
+  uint32 component = 5;
+  // Code handles are one-based positions in the admitted registration.
+  uint32 code_count = 6;
+  // Fixed safe reason, never source error text or request payload.
+  string reason = 7;
+}
+
+message DiagnosticReadRequest {
+  DiagnosticCredentials credentials = 1;
+  bytes session_id = 2;
+  // Canonical query is a closed transport structure; cursor is host-bound.
+  optional string component = 3;
+  optional string code = 4;
+  optional uint64 after_sequence = 5;
+  uint32 max_components = 6;
+  uint32 max_events = 7;
+  bytes continuation = 8;
+}
+
+message DiagnosticReadResponse {
+  // One bounded canonical snapshot page, with lossless decimal JSON counters.
+  bytes snapshot_json = 1;
+  // Session-bound transport continuation; not an authority grant.
+  bytes continuation = 2;
 }
 
 // Process-log levels accepted from an authenticated plugin. The host owns the
@@ -417,6 +582,30 @@ message WorkerError {
   string code = 1;
   string message = 2;
   bool retryable = 3;
+  // Host-issued continuation whose downstream failure is being propagated.
+  // SDKs preserve this on the same error, never on a newly created callback error.
+  // The host suppresses callback attribution only for the current invocation's
+  // nonempty continuation ID. Absent/unknown provenance retains legacy behavior.
+  optional string downstream_continuation_id = 4;
+}
+
+// Owned root-to-top identities; never opaque binding or invocation IDs.
+message ScopeStackEntry {
+  string scope_id = 1;
+  ScopeType scope_type = 2;
+}
+message ScopeStackSnapshot {
+  repeated ScopeStackEntry scopes = 1;
+}
+message GetCurrentScopeStackSnapshotRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  ScopeContext scope = 3;
+}
+message GetCurrentScopeStackSnapshotResponse {
+  // Absence means no bound context, not an empty/root-only stack.
+  ScopeStackSnapshot snapshot = 1;
+  WorkerError error = 2;
 }
 
 message ScopeContext {

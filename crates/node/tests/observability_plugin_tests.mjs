@@ -31,7 +31,12 @@ describe('observability plugin helpers', () => {
       agent_name: 'NeMo Relay',
       model_name: 'unknown',
       filename_template: 'nemo-relay-atif-{session_id}.json',
+      include_observed_events: true,
+      include_llm_requests: true,
     });
+    const reduced = observability.atifConfig({ include_observed_events: false, include_llm_requests: false });
+    assert.equal(reduced.include_observed_events, false);
+    assert.equal(reduced.include_llm_requests, false);
     assert.deepEqual(observability.openTelemetryConfig(), {
       enabled: false,
       endpoints: [],
@@ -439,4 +444,13 @@ describe('opentelemetry file sinks', () => {
       await pluginHost.close();
     }
   });
+});
+
+it('preserves the endpoint-owned TLS schema in plugin helpers', () => {
+  const tls = { certificate: 'ca.pem', client_certificate: 'client.pem', private_key: 'key.pem' };
+  assert.deepEqual(
+    observability.openTelemetryEndpoint({ type: 'full', endpoint: 'https://collector.example', tls }).tls,
+    tls,
+  );
+  assert.deepEqual(observability.openTelemetrySignalEndpoint({ endpoint: 'https://collector.example', tls }).tls, tls);
 });

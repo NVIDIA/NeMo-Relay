@@ -44,7 +44,7 @@ When a managed LLM call has a request codec:
 3. Intercepts edit provider-body fields through the annotated request and may
    edit transport headers through the raw request. Raw `request.content` is
    read-only while the codec is active.
-4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
+4. NeMo Relay uses the request codec to merge the annotated request into the original raw request.
 5. Execution intercepts and the provider callback receive the encoded provider request.
 
 If a codec-aware intercept changes raw `request.content` or omits the returned
@@ -59,6 +59,25 @@ provider.
 
 When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
+Manual lifecycle calls can also use a request codec. In Python, pass `codec`
+to `llm.call()`. In Node.js, pass both `codecDecode` and `codecEncode` to
+`llmCall()`, after the optional timestamp. The decode callback receives the
+request. The encode callback receives an object with `annotated` and `original`
+fields. In Rust, use `LlmCallParams::builder().codec(...)`.
+
+Manual calls record work that the application runs itself. They do not run
+request or execution intercepts. Set the response codec for manual Rust calls with
+`LlmCallEndParams::builder().response_codec(...)`.
+
+The request codec helps sanitizers redact private data. Relay also uses it to
+create or update the request annotation after sanitization. These changes affect
+only the copy saved in telemetry. The request sent to the provider stays the same.
+
+Rules for personally identifiable information (PII) need a codec when they target
+normalized fields. These fields use Relay's common request and response format.
+If the call has no codec and the PII settings have no matching fallback codec,
+Relay leaves the payload out of telemetry.
+
 The built-in codecs guarantee
 `encode(decode(original), original) == original` at the JSON-value level. Their
 encoders compare an edited annotation with a decoded baseline and patch only
@@ -66,6 +85,51 @@ changed fields. As a result, unchanged string-versus-block content, explicit
 nulls, legacy field names, ordered input items, metadata, and unknown fields
 remain untouched. Removing an unknown top-level key from `extra` removes it
 from the provider payload; adding or changing a key overlays it.
+
+During a managed Rust call, the runtime passes the decoded request to
+`LlmCodec::encode_with_baseline`. Built-in codecs use this baseline instead of
+decoding the same request again. Custom Rust codecs can also use this method.
+The default calls `encode`, so existing codecs still work.
+
+Use a baseline from the same codec and the same raw request body. Do not edit the
+baseline or change that raw body after decoding. Request headers can change
+while middleware runs.
+
+The runtime passes ownership of the request to `encode_owned_with_baseline`.
+The default calls `encode_with_baseline`. It then adds the original request
+headers to the result. If a header appears in both, it keeps the original
+request's value. An override can move the request body or keep it for later use.
+
+### Editing Arrays and Mappings
+
+Request intercepts can change several array entries at a time. You can add,
+remove, reorder, or replace entries. You can also replace the whole array.
+A mapping, such as a JSON object, stores values by key. You can add, remove,
+or change those values, including nested arrays and objects. You can also
+set a value to `null`. All edits must be valid for the annotated request and
+the target provider.
+
+Relay keeps provider fields on unchanged entries. It can also keep them on
+edited tool calls and results by matching their call IDs. Relay can match by
+ID only when that ID identifies one entry of the same kind in each version.
+For example, if you edit and reorder results `a` and `b`, each keeps its own
+provider fields.
+A new result `c` uses only the fields you supply.
+
+Gemini can attach provider data, such as `thoughtSignature`, to a call.
+Relay keeps that data on surviving calls with a clear ID match. This still
+works when you change the call list or move calls between assistant messages.
+New calls do not inherit fields from old calls.
+
+Relay treats entries with no match as replacements. They use only the values
+you return, without hidden fields from the original entries. For a single
+edit, Relay can keep fields from the same array position. This requires the
+array's size and order to stay the same. Relay does not match objects in
+arbitrary JSON arrays by a generic `id` field.
+
+For a mapping `{"a": 1, "b": 2}`, returning `{"a": 10, "c": null}` changes
+`a`, removes `b`, and adds `c`. Relay keeps provider fields that were missing
+from the original annotation.
 
 Use the annotated request surfaces according to their ownership:
 
@@ -457,32 +521,13 @@ contract.
 
 - Intercepts receive `annotated` only when the managed call supplies a request codec.
 - An unchanged annotation encodes to the exact original JSON value.
-- Portable edits preserve adjacent provider-native components and unknown fields.
+- Built-in codecs keep provider fields on unchanged entries and on calls or results with a clear ID match.
+- Built-in codecs treat entries with no match as replacements. These entries use only the fields you supply.
 - Provider-specific edits use `api_specific`; `extra` is limited to unknown future top-level fields.
 - Provider-mismatched native components fail before the provider callback.
 - Response codecs are used only for event annotations, not caller-visible response rewriting.
 - Codec implementations are pure data transforms and do not perform provider I/O.
 - Framework-owned clients, sockets, streams, callbacks, and file handles stay outside codec results.
-
-## Migrate Raw Gateway Body Mutation
-
-The 0.6 request annotation expansion uses
-`nemo.relay.AnnotatedLlmRequest@2` and
-`nemo.relay.LlmRequestInterceptOutcome@2` at dynamic plugin boundaries. Rebuild
-Rust native plugins and Rust `grpc-v1` workers against NeMo Relay 0.6, and
-update Python workers to the 0.6 worker SDK. That release required a Relay 0.6
-compatibility floor. Relay 0.8 dynamic plugins must instead use
-`compat.relay = ">=0.8.0,<1.0"`, or another range that excludes every earlier
-Relay version. Relay enforces the current floor during manifest and registry
-validation, before loading the plugin.
-
-Gateway interceptors that mutate provider request bodies must now edit the
-annotation on the three generation routes. For example, replace
-`request.content["messages"] = messages` with
-`annotated.messages = messages`, and return the edited annotation with the raw
-request. Keep transport-only changes in `request.headers`. Relay rejects a raw
-body edit while the route codec is active, so the provider never receives an
-ambiguous mix of raw and annotated changes.
 
 ## Next Steps
 

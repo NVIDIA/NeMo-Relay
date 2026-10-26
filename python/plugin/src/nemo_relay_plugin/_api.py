@@ -55,6 +55,7 @@ Public callback aliases used in registration annotations:
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
 Public functions:
+    http_error_message: Format an upstream HTTP error status for forwarding.
     serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
 """
 
@@ -74,7 +75,7 @@ import platform
 import stat
 import tempfile
 import tomllib
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -83,7 +84,11 @@ from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
+from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics, _open_diagnostic_channel
+from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
+
 grpc: Any = importlib.import_module("grpc")
+
 pb: Any = importlib.import_module("._proto.plugin_worker_pb2", __package__)
 pb_grpc: Any = importlib.import_module("._proto.plugin_worker_pb2_grpc", __package__)
 
@@ -348,6 +353,32 @@ def _llm_execution_context(
 
 
 WORKER_PROTOCOL = "grpc-v1"
+_WORKER_MAX_MESSAGE_BYTES_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
+_DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+
+
+def _worker_max_message_bytes() -> int:
+    """Read a finite host-owned byte limit, rejecting invalid overrides at startup."""
+    value = os.environ.get(_WORKER_MAX_MESSAGE_BYTES_ENV)
+    if value is None:
+        return _DEFAULT_WORKER_MAX_MESSAGE_BYTES
+    # Keep this grammar and ceiling aligned with nemo-relay-worker-proto.
+    if value.isascii() and value.isdecimal():
+        try:
+            limit = int(value)
+        except ValueError:
+            pass
+        else:
+            if 1 <= limit <= 2_147_483_647:
+                return limit
+    raise WorkerSdkError(f"{_WORKER_MAX_MESSAGE_BYTES_ENV} must be a decimal integer in 1..=2147483647")
+
+
+def _worker_grpc_options(limit: int) -> tuple[tuple[str, int], ...]:
+    """Apply the same finite cap to both directions of an execution RPC endpoint."""
+    return (("grpc.max_receive_message_length", limit), ("grpc.max_send_message_length", limit))
+
+
 JSON_SCHEMA = "nemo.relay.Json@1"
 DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
 METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
@@ -459,6 +490,19 @@ class WorkerSdkError(Exception):
     response is malformed, a required worker setting is missing, or a local
     operation violates the worker protocol.
     """
+
+
+# The host validates this marker against the current invocation's continuation.
+_DOWNSTREAM_CONTINUATION_METADATA = "nemo-relay-downstream-continuation"
+
+
+class _DownstreamError(WorkerSdkError):
+    """Preserve origin when an unchanged continuation error is re-raised."""
+
+    def __init__(self, original: WorkerSdkError, continuation_id: str) -> None:
+        super().__init__(str(original))
+        self.original = original
+        self.continuation_id = continuation_id
 
 
 def _optimization_object(value: Json, field_name: str) -> Mapping[str, Json]:
@@ -1005,6 +1049,21 @@ class ScopeType(str, Enum):
     EVALUATOR = "evaluator"
     CUSTOM = "custom"
     UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeStackEntry:
+    """Canonical scope UUID and semantic type from the visible stack."""
+
+    scope_id: str
+    scope_type: ScopeType
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeStackSnapshot:
+    """Detached root-to-top entries including implicit and synthetic roots."""
+
+    scopes: list[ScopeStackEntry]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1631,11 +1690,56 @@ class PluginRuntime:
         explicit or bound stack raises :class:`WorkerSdkError`.
     """
 
-    def __init__(self, *, activation_id: str, auth_token: str, host_stub: Any) -> None:
+    def __init__(self, *, activation_id: str, auth_token: str, host_stub: Any, diagnostic_stub: Any = None) -> None:
         self._activation_id = activation_id
         self._auth_token = auth_token
         self._host_stub = host_stub
+        self._diagnostic_stub = diagnostic_stub
+        self._diagnostics_task: asyncio.Future[WorkerDiagnostics] | None = None
         self._conditional_middleware_callbacks: dict[str, ConditionalMiddlewareCallback] = {}
+
+    def _callback_rpc(self, method: str, callback_name: str | None, request: Any) -> Any:
+        token = CALLBACK_NAME.set(callback_name)
+        try:
+            return getattr(self._host_stub, method)(request)
+        finally:
+            CALLBACK_NAME.reset(token)
+
+    async def diagnostics(self) -> WorkerDiagnostics:
+        """Negotiate once; disabled/unsupported facades skip diagnostic factories."""
+        if self._diagnostics_task is None:
+            self._diagnostics_task = asyncio.create_task(
+                WorkerDiagnostics.connect(
+                    self._diagnostic_stub,
+                    self._activation_id,
+                    self._auth_token,
+                )
+            )
+        return await asyncio.shield(self._diagnostics_task)
+
+    async def _close_diagnostics(self) -> None:
+        if self._diagnostics_task is not None:
+            if not self._diagnostics_task.done():
+                self._diagnostics_task.cancel()
+                try:
+                    await self._diagnostics_task
+                except asyncio.CancelledError:
+                    pass
+            if self._diagnostics_task.cancelled():
+                inert = asyncio.get_running_loop().create_future()
+                inert.set_result(
+                    WorkerDiagnostics.inert(
+                        self._diagnostic_stub,
+                        self._activation_id,
+                        self._auth_token,
+                    )
+                )
+                self._diagnostics_task = inert
+                return
+            try:
+                await self._diagnostics_task.result().close()
+            except DiagnosticDeliveryError:
+                pass  # Delivery cannot postpone or fail plugin termination.
 
     async def log(
         self,
@@ -1879,6 +1983,38 @@ class PluginRuntime:
         )
         _ack_to_result(response)
 
+    async def current_scope_stack_snapshot(self) -> ScopeStackSnapshot | None:
+        """Return owned scope UUIDs/types, or None when no context is bound.
+
+        Raises:
+            WorkerSdkError: Unsupported hosts or invalid/expired bindings.
+                Inspection never creates a stack.
+        """
+        try:
+            response = await self._host_stub.GetCurrentScopeStackSnapshot(
+                pb.GetCurrentScopeStackSnapshotRequest(
+                    activation_id=self._activation_id,
+                    auth_token=self._auth_token,
+                    scope=self._scope_context(),
+                )
+            )
+        except grpc.aio.AioRpcError as error:
+            if error.code() == grpc.StatusCode.UNIMPLEMENTED:
+                raise WorkerSdkError(
+                    "scope stack snapshots are unsupported by this host; require the grpc-v1 snapshot extension"
+                ) from error
+            raise WorkerSdkError(f"GetCurrentScopeStackSnapshot failed: {error.details()}") from error
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        if not response.HasField("snapshot"):
+            return None
+        categories = {_proto_scope_type(category): category for category in ScopeType}
+        entries = []
+        for entry in response.snapshot.scopes:
+            category = categories.get(entry.scope_type, ScopeType.UNKNOWN)
+            entries.append(ScopeStackEntry(entry.scope_id, category))
+        return ScopeStackSnapshot(entries)
+
     async def runtime_diagnostics(self) -> RuntimeDiagnostics:
         """Return a bounded snapshot of active host runtime diagnostics.
 
@@ -2075,7 +2211,7 @@ class PluginRuntime:
         _ack_to_result(response)
 
     @contextlib.contextmanager
-    def bind_scope_stack(self, scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Iterator[None]:
+    def bind_scope_stack(self, scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Generator[None]:
         """Temporarily bind host calls to a worker-selected scope stack.
 
         Args:
@@ -2104,7 +2240,7 @@ class PluginRuntime:
             _SCOPE_CONTEXT.reset(token)
 
     @contextlib.contextmanager
-    def clear_scope_stack(self) -> Iterator[None]:
+    def clear_scope_stack(self) -> Generator[None]:
         """Temporarily clear worker scope-stack correlation.
 
         Yields:
@@ -2171,9 +2307,10 @@ class ToolNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, value: Json) -> ToolExecutionResult:
         """Call the remaining tool execution chain with replacement arguments.
@@ -2196,14 +2333,16 @@ class ToolNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.ToolNext(
+        response = await self._runtime._callback_rpc(
+            "ToolNext",
+            self._callback_name,
             pb.ToolNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 value=_json_envelope(JSON_SCHEMA, value),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
@@ -2223,9 +2362,10 @@ class LlmNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     async def call(self, request: LlmRequest) -> Json:
         """Call the remaining LLM execution chain with a replacement request.
@@ -2247,14 +2387,16 @@ class LlmNext:
             isolated scope-stack branch. Finish every call before the
             interceptor returns; unfinished and later calls are rejected.
         """
-        response = await self._runtime._host_stub.LlmNext(
+        response = await self._runtime._callback_rpc(
+            "LlmNext",
+            self._callback_name,
             pb.LlmNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
         return _json_result_to_value(response)
 
@@ -2270,9 +2412,10 @@ class LlmStreamNext:
         continuation_id: Opaque host-issued continuation identifier.
     """
 
-    def __init__(self, runtime: PluginRuntime, continuation_id: str) -> None:
+    def __init__(self, runtime: PluginRuntime, continuation_id: str, *, callback_name: str | None = None) -> None:
         self._runtime = runtime
         self._continuation_id = continuation_id
+        self._callback_name = callback_name if callback_name is not None else CALLBACK_NAME.get()
 
     def call(self, request: LlmRequest) -> AsyncIterator[Json]:
         """Call the remaining LLM stream chain with a replacement request.
@@ -2299,14 +2442,16 @@ class LlmStreamNext:
             this method keeps its normal streaming lifetime.
         """
         scope_context = _SCOPE_CONTEXT.get()
-        stream = self._runtime._host_stub.LlmStreamNext(
+        stream = self._runtime._callback_rpc(
+            "LlmStreamNext",
+            self._callback_name,
             pb.LlmStreamNextRequest(
                 activation_id=self._runtime._activation_id,
                 auth_token=self._runtime._auth_token,
                 continuation_id=self._continuation_id,
                 request=_json_envelope(LLM_REQUEST_SCHEMA, request),
                 scope=self._runtime._scope_context(),
-            )
+            ),
         )
 
         async def values() -> AsyncIterator[Json]:
@@ -2341,6 +2486,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     Optional environment variables:
         ``NEMO_RELAY_WORKER_ENDPOINT_FILE``: File where the SDK writes the
         resolved worker endpoint after the gRPC server is accepting requests.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES``: Host-supplied positive decimal
+        fallback for each complete sent or received gRPC message. Defaults to
+        4194304 (4 MiB); maximum 2147483647.
+        ``NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME``: Host-resolved JSON map
+        from exact callback registration names to byte limits, overriding the
+        fallback for each callback and its continuations.
+        Restart the host and workers after changing either setting. These are
+        not model context or HTTP body limits.
 
     Callback concurrency:
         The gRPC AsyncIO server can keep multiple RPCs in flight. Asynchronous
@@ -2355,14 +2508,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         not enforce an application-level RPC admission limit.
 
     Raises:
-        WorkerSdkError: A required environment variable is empty or missing, or
-            the worker endpoint cannot be bound.
+        WorkerSdkError: A required environment variable is empty or missing,
+            the worker message limit is invalid, or the endpoint cannot be bound.
         OSError: Unix socket cleanup or endpoint-file creation fails.
         grpc.RpcError: gRPC server or host-channel startup fails.
         asyncio.CancelledError: The task running the worker is cancelled.
 
     Note:
-        The function closes the gRPC server and host channel during shutdown or
+        The function closes the gRPC server and both host channels during shutdown or
         cancellation. It returns only after the host accepts a shutdown request.
     """
     _plugin_id(plugin)
@@ -2371,18 +2524,29 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     activation_id = _required_env("NEMO_RELAY_WORKER_ID")
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
+    max_message_bytes = _worker_max_message_bytes()
+    try:
+        by_name = named_message_limits()
+    except ValueError as exc:
+        raise WorkerSdkError(str(exc)) from exc
 
     worker_target = _grpc_target(worker_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = _open_host_channel(host_endpoint)
+    host_channel = _open_host_channel(host_endpoint, max_message_bytes=max_message_bytes, by_name=by_name)
+    authority = (("grpc.default_authority", "localhost"),) if host_endpoint.startswith("unix://") else ()
+    diagnostic_channel = _open_diagnostic_channel(_grpc_target(host_endpoint), authority)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
         host_stub=pb_grpc.RelayHostRuntimeStub(host_channel),
+        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
-    server = grpc.aio.server()
+    server = grpc.aio.server(
+        options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
+        interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
+    )
     try:
         pb_grpc.add_PluginWorkerServicer_to_server(service, server)
         bound_port = server.add_insecure_port(worker_target)
@@ -2395,7 +2559,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         await shutdown_event.wait()
     finally:
         await server.stop(grace=2)
-        await host_channel.close()
+        try:
+            await runtime._close_diagnostics()
+        finally:
+            await asyncio.gather(host_channel.close(), diagnostic_channel.close())
 
 
 @dataclass(slots=True)
@@ -2554,9 +2721,10 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             if active.task.cancelled() and active.cancel_reason is None:
                 yield pb.StreamChunk(error=_cancelled_worker_error("stream callback cancelled without a host request"))
         finally:
-            if not active.task.done():
+            if not active.task.done() and not active.cancel_requested:
+                active.cancel_requested = True
                 active.task.cancel()
-            await asyncio.gather(active.task, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
             self._forget_invocation(request.invocation_id, active)
 
     async def _produce_stream(self, request: Any, queue: asyncio.Queue[Any]) -> None:
@@ -2572,11 +2740,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 request.invocation_id,
                 response_required=False,
             )
-            next_call = LlmStreamNext(self._runtime, request.continuation_id)
+            next_call = LlmStreamNext(self._runtime, request.continuation_id, callback_name=request.registration_name)
             with _bind_invocation_scope(request):
                 stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
-                async for value in _as_async_iter(stream):
-                    await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+                iterator = _as_async_iter(stream)
+                try:
+                    async for value in iterator:
+                        await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+                finally:
+                    await iterator.aclose()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
@@ -2585,7 +2757,10 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
     async def CancelInvocation(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
         active = self._active_invocations.get(request.invocation_id)
-        if active is None or active.cancel_requested:
+        if active is None:
+            return pb.WorkerAck(accepted=False, message="invocation is not active")
+        if active.cancel_requested:
+            await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
             return pb.WorkerAck(accepted=False, message="invocation is not active")
         if active.task.done() and active.cancel_callback is None:
             return pb.WorkerAck(accepted=False, message="invocation is not active")
@@ -2595,10 +2770,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             active.cancel_callback(active.cancel_reason)
         if not active.task.done():
             active.task.cancel()
+        await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
         return pb.WorkerAck(accepted=True, message=f"cancellation accepted: {active.cancel_reason}")
 
     async def Shutdown(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
+        await self._runtime._close_diagnostics()
         asyncio.get_running_loop().call_soon(self._shutdown_event.set)
         return pb.WorkerAck(accepted=True, message="shutdown accepted")
 
@@ -2684,7 +2861,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
                         context,
-                        ToolNext(self._runtime, request.continuation_id),
+                        ToolNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                     )
                 )
                 if not isinstance(result, ToolExecutionInterceptOutcome):
@@ -2753,7 +2930,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         request.invocation_id,
                         response_required=True,
                     ),
-                    LlmNext(self._runtime, request.continuation_id),
+                    LlmNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
                 )
             )
             return _json_response(result)
@@ -3023,14 +3200,29 @@ def _stream_chunk_to_value(chunk: Any) -> Json:
 
 
 def _worker_error_to_sdk(error: Any) -> WorkerSdkError:
-    return WorkerSdkError(f"{error.code}: {error.message}")
+    if error.code != "worker.cancelled" and _is_http_error_message(error.message):
+        original = WorkerSdkError(error.message)
+    else:
+        original = WorkerSdkError(f"{error.code}: {error.message}")
+    if error.downstream_continuation_id:
+        return _DownstreamError(original, error.downstream_continuation_id)
+    return original
 
 
 def _sdk_error_to_worker(error: BaseException) -> Any:
+    continuation_id = None
+    if isinstance(error, _DownstreamError):
+        continuation_id = error.continuation_id
+        error = error.original
+    elif isinstance(error, grpc.aio.AioRpcError):
+        continuation_id = dict(error.trailing_metadata() or ()).get(_DOWNSTREAM_CONTINUATION_METADATA)
     code = "worker.error"
     if isinstance(error, WorkerSdkError):
         code = "worker.sdk_error"
-    return pb.WorkerError(code=code, message=str(error), retryable=False)
+    result = pb.WorkerError(code=code, message=str(error), retryable=False)
+    if isinstance(continuation_id, str) and continuation_id:
+        result.downstream_continuation_id = continuation_id
+    return result
 
 
 def _cancelled_worker_error(reason: str) -> Any:
@@ -3056,7 +3248,7 @@ def _require_payload(request: Any, payload: str) -> Any:
 
 
 @contextlib.contextmanager
-def _bind_invocation_scope(request: Any) -> Iterator[None]:
+def _bind_invocation_scope(request: Any) -> Generator[None]:
     scope = None
     if request.HasField("scope"):
         scope_stack_id = request.scope.scope_stack_id
@@ -3070,9 +3262,11 @@ def _bind_invocation_scope(request: Any) -> Iterator[None]:
             parent_scope_id=parent_scope_id,
         )
     token = _SCOPE_CONTEXT.set(scope)
+    callback_token = CALLBACK_NAME.set(request.registration_name)
     try:
         yield
     finally:
+        CALLBACK_NAME.reset(callback_token)
         _SCOPE_CONTEXT.reset(token)
 
 
@@ -3082,17 +3276,28 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncIterator[Json]:
+async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncGenerator[Json, None]:
     if isinstance(value, AsyncIterator):
-        async for item in value:
-            yield item
+        try:
+            async for item in value:
+                yield item
+        finally:
+            close = getattr(value, "aclose", None)
+            if close is not None:
+                await close()
         return
     if isinstance(value, (str, bytes, bytearray, Mapping)):
         raise WorkerSdkError("stream callback must return an iterable of JSON chunks, not a scalar or mapping")
     if not isinstance(value, Iterable):
         raise WorkerSdkError("stream callback must return an iterable or async iterator of JSON chunks")
-    for item in value:
-        yield item
+    iterator = iter(value)
+    try:
+        for item in iterator:
+            yield item
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
 
 
 def _runtime_registration_surface(kind: RuntimeRegistrationKind | str) -> int:
@@ -3198,14 +3403,24 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
-def _open_host_channel(endpoint: str) -> Any:
+def _open_host_channel(
+    endpoint: str, *, max_message_bytes: int | None = None, by_name: dict[str, int] | None = None
+) -> Any:
+    """Open a bounded continuation channel while retaining Unix socket authority."""
     target = _grpc_target(endpoint)
+    limit = _worker_max_message_bytes() if max_message_bytes is None else max_message_bytes
+    if by_name is None:
+        by_name = named_message_limits()
+    if by_name:
+        authority = (("grpc.default_authority", "localhost"),) if endpoint.startswith("unix://") else ()
+        return RpcHostChannel(target, limit, by_name, authority)
+    options = _worker_grpc_options(limit)
     if endpoint.startswith("unix://"):
         return grpc.aio.insecure_channel(
             target,
-            options=(("grpc.default_authority", "localhost"),),
+            options=(*options, ("grpc.default_authority", "localhost")),
         )
-    return grpc.aio.insecure_channel(target)
+    return grpc.aio.insecure_channel(target, options=options)
 
 
 def _announced_worker_endpoint(worker_endpoint: str, bound_port: int) -> str:
@@ -3260,3 +3475,18 @@ async def _unlink_unix_socket(endpoint: str) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(writer.wait_closed(), timeout=1)
             raise WorkerSdkError(f"worker socket path {path} is already active")
+
+
+def http_error_message(status: int, message: str) -> str:
+    """Format an HTTP error status (400–599) for Relay plugin error forwarding."""
+    if not isinstance(status, int) or not 400 <= status <= 599:
+        raise ValueError("plugin HTTP error status must be between 400 and 599")
+    return f"HTTP {status}: {message}"
+
+
+def _is_http_error_message(message: str) -> bool:
+    prefix = "HTTP "
+    if not message.startswith(prefix):
+        return False
+    code, separator, _body = message[len(prefix) :].partition(": ")
+    return bool(separator) and len(code) == 3 and code.isascii() and code.isdigit() and 400 <= int(code) <= 599

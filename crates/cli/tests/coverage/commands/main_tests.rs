@@ -784,10 +784,7 @@ async fn daemon_execute_creates_an_immutable_managed_bundle() {
 #[test]
 fn cli_logging_options_override_environment_source() {
     let _environment = crate::test_support::EnvScope::set(&[
-        (
-            "NEMO_RELAY_LOG",
-            Some(std::ffi::OsStr::new("intentionally-invalid")),
-        ),
+        ("NEMO_RELAY_LOG", Some(std::ffi::OsStr::new("warn"))),
         ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
         ("NEMO_RELAY_LOG_CONFIG_PATH", None),
     ]);
@@ -801,11 +798,76 @@ fn cli_logging_options_override_environment_source() {
     ])
     .unwrap();
 
-    let config = cli.logging.resolve(None).unwrap();
+    let config = cli.logging.resolve_without_ambient_config().unwrap();
 
     assert_eq!(config.level, nemo_relay::logging::LogLevel::Trace);
     assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
     assert!(config.sinks.is_empty());
+}
+
+#[test]
+fn cli_logging_overlays_preserve_file_sinks_and_unspecified_fields() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(std::ffi::OsStr::new("info"))),
+        ("NEMO_RELAY_LOG_STDERR", Some(std::ffi::OsStr::new("true"))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"[logging]
+level = "debug"
+stderr_enabled = false
+stderr_format = "jsonl"
+flush_interval_millis = 73
+[[logging.sinks]]
+path = "worker.log"
+level = "warn"
+queue_capacity = 37
+max_file_size_bytes = 1024
+retained_files = 2
+
+[daemon.logging]
+level = "error"
+stderr_enabled = false
+stderr_format = "jsonl"
+flush_interval_millis = 91
+[[daemon.logging.sinks]]
+path = "daemon.log"
+"#,
+    )
+    .unwrap();
+    let cli = Cli::try_parse_from(["nemo-relay", "agents"]).unwrap();
+    for daemon in [false, true] {
+        let base = if daemon {
+            crate::configuration::resolve_daemon_logging_config(Some(&config_path))
+        } else {
+            crate::configuration::resolve_logging_config(Some(&config_path))
+        }
+        .unwrap();
+        let mut expected = base;
+        expected.level = nemo_relay::logging::LogLevel::Info;
+        expected.stderr_enabled = true;
+        let actual = if daemon {
+            cli.logging.resolve_daemon(Some(&config_path))
+        } else {
+            cli.logging.resolve(Some(&config_path))
+        }
+        .unwrap();
+        assert_eq!(actual, expected);
+
+        let cli = Cli::try_parse_from(["nemo-relay", "--log-level", "trace", "agents"]).unwrap();
+        expected.level = nemo_relay::logging::LogLevel::Trace;
+        let actual = if daemon {
+            cli.logging.resolve_daemon(Some(&config_path))
+        } else {
+            cli.logging.resolve(Some(&config_path))
+        }
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
 }
 
 #[test]
@@ -889,6 +951,51 @@ fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
         resolve_command_logging_config(&cli).unwrap().0.level,
         nemo_relay::logging::LogLevel::Debug
     );
+}
+
+#[test]
+fn cli_logging_file_selectors_bypass_ambient_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let ambient = temp.path().join("config.toml");
+    let logging = temp.path().join("logging.toml");
+    std::fs::write(&ambient, "[logging\n").unwrap();
+    std::fs::write(
+        &logging,
+        "[logging]\nlevel = \"warn\"\nstderr_enabled = false\n",
+    )
+    .unwrap();
+    for from_environment in [false, true] {
+        let _environment = crate::test_support::EnvScope::set(&[
+            ("NEMO_RELAY_LOG", None),
+            ("NEMO_RELAY_LOG_STDERR", None),
+            ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+            (
+                "NEMO_RELAY_LOG_CONFIG_PATH",
+                from_environment.then_some(logging.as_os_str()),
+            ),
+        ]);
+        let mut args = vec![OsString::from("nemo-relay")];
+        if from_environment {
+            args.extend([OsString::from("--log-level"), OsString::from("debug")]);
+        } else {
+            args.extend([
+                OsString::from("--log-config-path"),
+                logging.clone().into_os_string(),
+            ]);
+        }
+        args.push(OsString::from("agents"));
+        let cli = Cli::try_parse_from(args).unwrap();
+        let config = cli.logging.resolve(Some(&ambient)).unwrap();
+        assert_eq!(
+            config.level,
+            if from_environment {
+                nemo_relay::logging::LogLevel::Debug
+            } else {
+                nemo_relay::logging::LogLevel::Warn
+            }
+        );
+        assert!(!config.stderr_enabled);
+    }
 }
 
 #[test]
@@ -1432,4 +1539,45 @@ fn doctor_accepts_a_managed_bundle_without_changing_personal_install_flags() {
     ] {
         assert!(Cli::try_parse_from(arguments).is_err());
     }
+}
+
+#[test]
+fn chatgpt_codex_base_url_cli_accepts_flags_and_environment() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
+        Some(std::ffi::OsStr::new("https://env.example/codex")),
+    )]);
+    let cli = Cli::try_parse_from(["nemo-relay"]).unwrap();
+    assert_eq!(
+        cli.server.to_runtime().chatgpt_codex_base_url.as_deref(),
+        Some("https://env.example/codex")
+    );
+    assert!(cli.server.to_runtime().requested_daemon_mode());
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "--chatgpt-codex-base-url",
+        "https://flag.example/codex",
+    ])
+    .unwrap();
+    assert_eq!(
+        cli.server.to_runtime().chatgpt_codex_base_url.as_deref(),
+        Some("https://flag.example/codex")
+    );
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "run",
+        "--chatgpt-codex-base-url",
+        "https://run.example/codex",
+        "--dry-run",
+        "--",
+        "codex",
+    ])
+    .unwrap();
+    let Some(Command::Run(run)) = cli.command else {
+        panic!("expected run command")
+    };
+    assert_eq!(
+        run.chatgpt_codex_base_url.as_deref(),
+        Some("https://run.example/codex")
+    );
 }

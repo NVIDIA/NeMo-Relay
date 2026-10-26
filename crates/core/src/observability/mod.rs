@@ -50,6 +50,8 @@ mod otel_genai;
 pub mod otel_logs;
 pub mod otel_metrics;
 mod otel_signal;
+mod otel_tls;
+pub use otel_tls::OpenTelemetryTlsConfig;
 pub mod plugin_component;
 mod private_file;
 
@@ -93,19 +95,29 @@ pub(crate) fn total_tokens_including_cache(
     }
 }
 
+/// Return whether the usage reports cache tokens outside `prompt_tokens`, as Anthropic does.
+///
+/// A declared Anthropic Messages shape returns true, and any other declared API shape returns
+/// false, so the input total of an OpenAI-shaped response for a Claude model does not count its
+/// cache tokens twice. A custom or undeclared shape returns true only when the provider name
+/// starts with `anthropic` or `claude` in any case.
 fn uses_separate_anthropic_cache_tokens(
     provider: Option<&str>,
     response: Option<&AnnotatedLlmResponse>,
 ) -> bool {
-    response.is_some_and(|response| {
-        matches!(
-            response.api_specific.as_ref(),
-            Some(ApiSpecificResponse::AnthropicMessages { .. })
-        )
-    }) || provider.is_some_and(|provider| {
-        let provider = provider.to_ascii_lowercase();
-        provider.starts_with("anthropic") || provider.starts_with("claude")
-    })
+    match response.and_then(|response| response.api_specific.as_ref()) {
+        Some(ApiSpecificResponse::AnthropicMessages { .. }) => true,
+        Some(
+            ApiSpecificResponse::OpenAIChat { .. }
+            | ApiSpecificResponse::OpenAIResponses { .. }
+            | ApiSpecificResponse::OCIGenAI { .. }
+            | ApiSpecificResponse::GeminiGenerateContent { .. },
+        ) => false,
+        Some(ApiSpecificResponse::Custom { .. }) | None => provider.is_some_and(|provider| {
+            let provider = provider.to_ascii_lowercase();
+            provider.starts_with("anthropic") || provider.starts_with("claude")
+        }),
+    }
 }
 
 /// Export representation for point-in-time mark events.
@@ -852,17 +864,35 @@ pub(crate) fn merge_usage(
     match (primary, secondary) {
         (None, None) => None,
         (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
-        (Some(primary), Some(secondary)) => Some(crate::codec::response::Usage {
-            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
-            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
-            total_tokens: primary.total_tokens.or(secondary.total_tokens),
-            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
-            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
-            uncached_input_tokens: primary
-                .uncached_input_tokens
-                .or(secondary.uncached_input_tokens),
-            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
-        }),
+        (Some(primary), Some(secondary)) => {
+            let (prompt_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens) =
+                match [primary, secondary]
+                    .into_iter()
+                    .find(|usage| usage.uncached_input_tokens.is_some())
+                {
+                    Some(split) => (
+                        split.prompt_tokens,
+                        split.cache_read_tokens,
+                        split.cache_write_tokens,
+                        split.uncached_input_tokens,
+                    ),
+                    None => (
+                        primary.prompt_tokens.or(secondary.prompt_tokens),
+                        primary.cache_read_tokens.or(secondary.cache_read_tokens),
+                        primary.cache_write_tokens.or(secondary.cache_write_tokens),
+                        None,
+                    ),
+                };
+            Some(crate::codec::response::Usage {
+                prompt_tokens,
+                completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
+                total_tokens: primary.total_tokens.or(secondary.total_tokens),
+                cache_read_tokens,
+                cache_write_tokens,
+                uncached_input_tokens,
+                cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
+            })
+        }
     }
 }
 

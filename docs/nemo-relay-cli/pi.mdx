@@ -23,9 +23,18 @@ Redirection](#model-redirection) explains.
 pi has no native hook-configuration file, and its external event stream is
 observation-only, so hook calls cannot be injected from outside the process. They
 originate inside a pi *extension*, which Relay ships in this repository. The
-extension is a thin HTTP client: it forwards pi's lifecycle to `POST /hooks/pi`
-and gates tool calls on the gateway's verdict. All policy and all span
+extension invokes `nemo-relay hook-forward pi` to forward pi's lifecycle to
+`POST /hooks/pi` with the same authentication mechanism as Codex and Claude Code.
+It gates tool calls on the gateway's verdict. All policy and all span
 construction stay in the gateway.
+
+Standalone pi requires the updated `nemo-relay` executable on `PATH`, or its
+path in `NEMO_RELAY_PI_COMMAND`. The launcher sets that path automatically.
+Use a loopback HTTP gateway URL. Requests without valid credentials and requests
+for sessions owned by another client receive HTTP 401. Refresh an older
+Relay-managed extension with `nemo-relay install pi --force` after upgrading the
+gateway; refresh manually installed copies from the updated extension source.
+Delivery failures continue to use the configured fail-open or fail-closed policy.
 
 <Warning>
 pi ships breaking changes through *minor* releases and has no major-release
@@ -419,16 +428,30 @@ credential, which the launcher mints per run and gives only to the process it
 starts, and strips it before forwarding.
 
 **A named endpoint receives only the credential the request already carried.**
-Naming a destination does not obtain one: the gateway never attaches its own
-configured `Authorization` value, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to an
-endpoint the client chose — those belong to the upstream it was configured for.
-pi sends the provider's own key for the provider it named, and that key travels;
-nothing else does.
+The gateway forwards the provider key that pi sends for that endpoint.
+It does not add its own authorization header, API key, or helper token.
+Those credentials belong to the upstream configured for the gateway.
 
 **A named endpoint must use `https`, unless it is loopback.** Because that
 credential travels to it, plain `http` to anything reachable from off the machine
 is refused. A local model server — `http://127.0.0.1:11434/v1` and the like — is
 allowed, since its traffic never reaches a network.
+
+**A named endpoint must be public or loopback.** The gateway may reach networks
+the agent cannot, so a named endpoint that is, or resolves to, a private,
+link-local (such as a cloud metadata service), shared, multicast, or other
+special-use address is refused. The check applies to every address the hostname
+resolves to when the gateway connects, so a name cannot be re-pointed after it is
+validated. `localhost` always means loopback and is not looked up in DNS. A
+provider on a private network has to be configured as the gateway's upstream
+with `--openai-base-url` or `--anthropic-base-url` instead of being named, and a
+host configured as an HTTP proxy cannot be named at all. The gateway logs
+`named_upstream_used` the first time each origin is named, and
+`named_upstream_rejected` for each refusal.
+
+A hostname that passes validation but resolves only to refused addresses is
+caught when the gateway connects, so it fails as an upstream connection error
+rather than with the `400` described below.
 
 **A named endpoint that cannot be used fails the request**, with `400` and a
 reason, rather than falling back to the gateway's configured upstream. The
@@ -541,15 +564,40 @@ appears as an unrelated session rather than as a subagent.
 
 ## Smoke Test
 
-Check hook forwarding directly. A 200 is an allow; a 403 with the guardrail
-marker is a block:
+With a standalone gateway running, check hook forwarding through the updated
+Relay CLI. Run the command as the same local user as the gateway so it can load
+the bootstrap credentials. Direct hook requests without credentials receive
+HTTP 401.
 
 ```bash
 curl -f http://127.0.0.1:4040/healthz
-curl -s -w '\nHTTP:%{http_code}\n' -X POST http://127.0.0.1:4040/hooks/pi \
-  -H 'content-type: application/json' \
-  -d '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}'
+printf '%s\n' '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}' |
+  nemo-relay hook-forward pi \
+    --gateway-url http://127.0.0.1:4040 \
+    --pi-extension-client smoke-pi \
+    --fail-closed
 ```
+
+This pi forwarding mode prints an envelope containing the gateway's HTTP
+`status` and its response `body` as a string. An allow without rewritten
+arguments looks like this:
+
+```json
+{"status":200,"body":"{}"}
+```
+
+Decode `body` as JSON before inspecting its fields:
+
+- `status: 200` means allow. If the decoded body contains `tool_call`, it
+  carries the rewritten arguments.
+- `status: 403` with decoded `error.type: "nemo_relay_guardrail_rejected"`
+  means a policy block. `error.reason` contains the guardrail's explanation.
+- Other statuses, including 401 or 403 without the guardrail marker, indicate
+  a gateway or delivery fault rather than a policy decision.
+
+A successful CLI exit means the forwarder received an HTTP response; it can still
+carry a policy block. Inspect the envelope to determine the verdict. A nonzero
+exit means forwarding failed before a usable envelope was returned.
 
 ## Verify Export
 

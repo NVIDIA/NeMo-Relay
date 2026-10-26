@@ -14,23 +14,31 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path as AxumPath, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+// The coverage modules below rely on this import through `use super::*`.
+#[cfg(test)]
 use base64::Engine;
 use bytes::Bytes;
 use hyper::body::Body as HttpBody;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder as ConnectionBuilder;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::Connect;
+use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+
+use crate::daemon::diagnostics as diag;
+use nemo_relay::diagnostics::{DaemonFailureCode, FailureClass};
 
 use super::lifecycle::{McpSessionId, ResolvedTarget, WorkerRequest, WorkerTarget};
 use super::registry::{
@@ -63,7 +71,7 @@ use crate::daemon::common::state::{
 };
 use crate::daemon::common::transport::{
     PooledClient, RelayBody, box_body, hold_body, pooled_client, prepare_forward_request,
-    prepare_forward_response,
+    prepare_forward_response, prepare_provider_request, request_provider,
 };
 use crate::daemon::common::worker_tls::WorkerClientPool;
 use crate::error::CliError;
@@ -72,7 +80,6 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PENDING_CHALLENGES: usize = 512;
 const MAX_PENDING_MCP_CHALLENGES: usize = 384;
 const MAX_PENDING_WORKER_CHALLENGES: usize = 128;
-const MAX_STAGED_WORKER_SESSIONS: usize = 4_096;
 const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -110,6 +117,11 @@ struct McpControlSession {
 }
 
 struct WorkerControlSession {
+    diagnostic_offer: Option<diag::DiagnosticOffer>,
+    diagnostic_grant: Option<diag::DiagnosticReadGrant>,
+    diagnostic_connected: bool,
+    diagnostic_revoked: bool,
+    diagnostic_poll_stopped: bool,
     fingerprint: Fingerprint,
     worker_id: String,
     secret: SensitiveString,
@@ -134,15 +146,18 @@ enum WorkerPublication {
     },
 }
 
+mod diagnostic_collection;
 mod socket;
 
 struct DaemonState {
+    collector: Option<Arc<super::collection::Collector>>,
     sockets: socket::Hub,
     registry: Registry,
     identity: MachineIdentity,
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
     pass_through: bool,
+    loopback_listener: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -154,6 +169,7 @@ struct DaemonState {
     pending_directives: Mutex<HashMap<String, BrokerDirective>>,
     active_worker_generations: ActiveWorkerGenerations,
     worker_generation_publication: Mutex<()>,
+    diagnostics_http: Option<crate::diagnostics_http::DiagnosticsHttp>,
 }
 
 pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
@@ -164,12 +180,18 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     })?;
     let local = listener.local_addr()?;
     let public_origin = daemon_origin(&options, local)?;
-    let resolved = crate::configuration::resolve_server_config(&options.gateway)?;
+    let config = crate::configuration::resolve_daemon_config(&options.gateway)?;
     let active_worker_generations = ActiveWorkerGenerations::load()?;
     let restarting_workers = active_worker_generations.snapshot()?;
     let recovery_worker_count = restarting_workers.len();
     let sockets = socket::Hub::restarting(restarting_workers);
     let state = Arc::new(DaemonState {
+        collector: crate::runtime_diagnostics::runtime()
+            .filter(|r| r.collector.collect_workers)
+            .map(|r| super::collection::Collector::new(r.collector.max_owned_bytes))
+            .transpose()
+            .map_err(|_| CliError::Config("cannot allocate daemon diagnostics collector".into()))?
+            .map(Arc::new),
         sockets,
         registry: Registry::new(options.pass_through)
             .with_require_worker(options.require_worker)
@@ -178,8 +200,9 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
+        loopback_listener: local.ip().is_loopback(),
         public_origin,
-        config: resolved.gateway,
+        config,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
         worker_clients: WorkerClientPool::new()?,
         challenges: Mutex::new(HashMap::new()),
@@ -189,6 +212,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: local_diagnostics()?,
     });
     if recovery_worker_count != 0 {
         log::info!(
@@ -201,7 +225,29 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     }
     socket::recover_after_restart(Arc::clone(&state));
     spawn_maintenance(Arc::clone(&state));
-    let app = router(Arc::clone(&state));
+    let collector_task = state
+        .collector
+        .as_ref()
+        .map(|_| tokio::spawn(diagnostic_collection::run(Arc::downgrade(&state))));
+    let _diagnostic_lifetime =
+        diagnostic_collection::Lifetime::new(&state, collector_task.as_ref());
+    let mut app = router_with_diagnostics(Arc::clone(&state), options.tls_cert.is_some());
+    if options.tls_cert.is_none() {
+        let tls = crate::gateway::tls::RelayTlsIdentity::load_or_create()
+            .and_then(|identity| identity.server_config())
+            .map_err(CliError::Launch)?;
+        let inner = router_with_diagnostics(Arc::clone(&state), true);
+        let handshake_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES));
+        app = app.route(
+            "/bootstrap/tunnel",
+            get(move |request: Request<Body>| {
+                let tls = Arc::clone(&tls);
+                let inner = inner.clone();
+                let handshake_permits = Arc::clone(&handshake_permits);
+                async move { crate::gateway::tls::upgrade(request, tls, inner, handshake_permits) }
+            }),
+        );
+    }
     let address = local.to_string();
     log::info!(
         target: "nemo_relay.daemon",
@@ -224,18 +270,21 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
             let tls = load_tls_config(certificate, key)?;
             serve_tls(listener, app, tls).await
         }
-        (None, None) => axum::serve(
-            listener,
-            app.layer(axum::middleware::from_fn(socket::connection_info))
-                .into_make_service_with_connect_info::<socket::SocketInfo>(),
-        )
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(CliError::Io),
+        (None, None) => serve_plain(listener, app, shutdown_signal()).await,
         _ => Err(CliError::Config(
             "--tls-cert and --tls-key must be supplied together".into(),
         )),
     };
+    if let Some(task) = collector_task {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(collector) = &state.collector {
+        collector.close();
+    }
+    if let Some(adapter) = &state.diagnostics_http {
+        adapter.close();
+    }
     match &result {
         Ok(()) => log::info!(
             target: "nemo_relay.daemon",
@@ -252,7 +301,28 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     result
 }
 
+#[cfg(test)]
 fn router(state: Arc<DaemonState>) -> Router {
+    router_with_diagnostics(state, false)
+}
+
+fn local_diagnostics() -> Result<Option<crate::diagnostics_http::DiagnosticsHttp>, CliError> {
+    let Some(runtime) = crate::runtime_diagnostics::runtime().filter(|r| r.http_read) else {
+        return Ok(None);
+    };
+    let key = crate::configuration::BootstrapChallengeKey::load().map_err(|error| {
+        CliError::Config(format!("cannot load daemon diagnostics read key: {error}"))
+    })?;
+    crate::diagnostics_http::DiagnosticsHttp::new(runtime.context.reader(), key, runtime.coverage())
+        .map(Some)
+        .map_err(|error| {
+            CliError::Config(format!(
+                "cannot initialize daemon diagnostics reader: {error}"
+            ))
+        })
+}
+
+fn router_with_diagnostics(state: Arc<DaemonState>, encrypted: bool) -> Router {
     let peers: ChallengePeers = Arc::new(Mutex::new(HashMap::new()));
     let control = Router::new()
         .route(
@@ -264,7 +334,8 @@ fn router(state: Arc<DaemonState>) -> Router {
             get(socket::worker),
         )
         .route_layer(from_fn_with_state(peers, limit_challenges));
-    Router::new()
+    let diagnostics = state.diagnostics_http.clone();
+    let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/_nemo_relay/v1/workers", get(worker_ids))
         .route("/_nemo_relay/v1/workers/status", get(worker_statuses))
@@ -282,7 +353,24 @@ fn router(state: Arc<DaemonState>) -> Router {
                 StatusCode::METHOD_NOT_ALLOWED,
             )
         })
-        .with_state(state)
+        .with_state(state.clone());
+    const WORKER_DIAGNOSTICS: &str = "/_nemo_relay/v1/workers/{instance_uuid}/diagnostics";
+    app = if encrypted {
+        app.route(
+            WORKER_DIAGNOSTICS,
+            get(diagnostic_collection::read).with_state(state),
+        )
+    } else {
+        app.route(
+            WORKER_DIAGNOSTICS,
+            get(crate::diagnostics_http::authenticated_transport_required),
+        )
+    };
+    match diagnostics {
+        Some(adapter) if encrypted => app.merge(adapter.router()),
+        Some(adapter) => app.merge(adapter.unsecured_router()),
+        None => app,
+    }
 }
 
 async fn worker_ids(State(state): State<Arc<DaemonState>>) -> Response<Body> {
@@ -557,7 +645,7 @@ fn register_mcp_blocking(
     };
     let transcript = &request.proof.transcript;
     if transcript.initiator.role != ComponentRole::Mcp
-        || transcript.route_token_digest != Some(credential.digest())
+        || transcript.route_token_digest != Some(credential)
     {
         return control_message(StatusCode::UNAUTHORIZED, "route credential proof mismatch");
     }
@@ -610,7 +698,7 @@ fn register_mcp_blocking(
         &sessions,
         session_id.as_str(),
         transcript.initiator_fingerprint,
-        credential.digest(),
+        credential,
         request.worker_network.hint.clone(),
         now,
         fresh_session_token,
@@ -624,7 +712,7 @@ fn register_mcp_blocking(
     let directive = match state.registry.register_mcp(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
-            token_digest: credential.digest(),
+            token_digest: credential,
             session_id: session_id.clone(),
             lease_expires_at_unix_ms,
         },
@@ -655,7 +743,7 @@ fn register_mcp_blocking(
             session_id.as_str().to_owned(),
             McpControlSession {
                 fingerprint: transcript.initiator_fingerprint,
-                token_digest: credential.digest(),
+                token_digest: credential,
                 secret_digest: TokenDigest::from_token(session_token.expose().as_bytes()),
                 secret: session_token.clone(),
                 lease_expires_at_unix_ms,
@@ -849,6 +937,19 @@ fn activation_failed_blocking(
         Ok(()) => {
             revoke_activation(&state, &request.payload.activation_id);
             cancel_staged_activation(&state, &request.payload.activation_id, "activation_failed");
+            let class = if matches!(
+                request.payload.failure_reason,
+                crate::daemon::common::control::WorkerActivationFailureReason::WorkerReadinessTimeout
+            ) {
+                FailureClass::Timeout
+            } else {
+                FailureClass::Unknown
+            };
+            diag::record(
+                DaemonFailureCode::ActivationReported,
+                class,
+                request.payload.failure_reason.as_str(),
+            );
             let fingerprint = authenticated.fingerprint.to_string();
             log::error!(
                 target: "nemo_relay.daemon",
@@ -935,6 +1036,7 @@ fn register_worker_blocking(
             request.tls_root_certificate.as_deref(),
             Some(&request.activation_id),
             None,
+            request.diagnostics.as_ref(),
             daemon_proof,
         )
         .unwrap_or_else(|| {
@@ -956,6 +1058,7 @@ fn register_worker_blocking(
         request.tls_root_certificate,
         None,
         publication.clone(),
+        request.diagnostics,
         daemon_proof,
     );
     if !response.status().is_success() {
@@ -1013,6 +1116,7 @@ async fn recover_worker(
             request.tls_root_certificate.as_deref(),
             None,
             Some(&request.generation_grant.generation_id),
+            request.diagnostics.as_ref(),
             daemon_proof,
         )
         .unwrap_or_else(|| {
@@ -1058,6 +1162,7 @@ fn recover_worker_after_validation(
         request.tls_root_certificate.as_deref(),
         None,
         Some(&request.generation_grant.generation_id),
+        request.diagnostics.as_ref(),
         daemon_proof.clone(),
     ) {
         return response;
@@ -1090,6 +1195,7 @@ fn recover_worker_after_validation(
         request.tls_root_certificate,
         Some(request.generation_grant),
         publication.clone(),
+        request.diagnostics,
         daemon_proof,
     );
     if !response.status().is_success()
@@ -1119,10 +1225,11 @@ fn replay_worker_registration(
     tls_root_certificate: Option<&str>,
     activation_id: Option<&str>,
     generation_id: Option<&str>,
+    offer: Option<&diag::DiagnosticOffer>,
     daemon_proof: HandshakeProof,
 ) -> Option<Response<Body>> {
-    let sessions = lock(&state.worker_sessions);
-    let session = sessions.get(worker_id)?;
+    let mut sessions = lock(&state.worker_sessions);
+    let session = sessions.get_mut(worker_id)?;
     let publication_matches = match (&session.publication, activation_id, generation_id) {
         (
             WorkerPublication::Activation {
@@ -1150,10 +1257,20 @@ fn replay_worker_registration(
     {
         return None;
     }
+    // Replayed control replies keep authority stable; reconnect/source replacement rotates it.
+    if !session.diagnostic_revoked
+        && (!session.diagnostic_connected || session.diagnostic_offer.as_ref() != offer)
+    {
+        session.diagnostic_poll_stopped = false;
+        session.diagnostic_offer = offer.cloned();
+        session.diagnostic_grant =
+            diagnostic_collection::grant(state, offer, &session.generation_grant.generation_id);
+    }
     let data_token =
         SensitiveString::new(session.pending_target.session_token().to_owned()).ok()?;
     Some(
         Json(WorkerRegisterResponse {
+            diagnostics: session.diagnostic_grant.clone(),
             daemon_proof,
             session_token: session.secret.clone(),
             data_token,
@@ -1172,10 +1289,11 @@ fn stage_worker(
     tls_root_certificate: Option<String>,
     generation_grant: Option<WorkerGenerationGrant>,
     publication: WorkerPublication,
+    diagnostic_offer: Option<diag::DiagnosticOffer>,
     daemon_proof: HandshakeProof,
 ) -> Response<Body> {
     if worker_id.is_empty()
-        || worker_id.len() > 256
+        || worker_id.len() > super::collection::MAX_WORKER_ID_BYTES
         || endpoint.len() > 2_048
         || validate_worker_endpoint(&endpoint, tls_root_certificate.as_deref()).is_err()
     {
@@ -1217,7 +1335,7 @@ fn stage_worker(
         &mut worker_sessions,
         now_unix_ms(),
         &worker_id,
-        MAX_STAGED_WORKER_SESSIONS,
+        super::collection::MAX_STAGED_WORKER_SESSIONS,
     ) {
         return control_message(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1240,9 +1358,19 @@ fn stage_worker(
         Ok(target) => Arc::new(target.with_websocket_client(websocket_client)),
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
+    let diagnostic_grant = diagnostic_collection::grant(
+        state,
+        diagnostic_offer.as_ref(),
+        &generation_grant.generation_id,
+    );
     worker_sessions.insert(
         worker_id.clone(),
         WorkerControlSession {
+            diagnostic_offer,
+            diagnostic_grant: diagnostic_grant.clone(),
+            diagnostic_connected: false,
+            diagnostic_revoked: false,
+            diagnostic_poll_stopped: false,
             fingerprint,
             worker_id,
             secret_digest: TokenDigest::from_token(control_secret.expose().as_bytes()),
@@ -1268,6 +1396,7 @@ fn stage_worker(
         "Worker registered and is awaiting readiness"
     );
     Json(WorkerRegisterResponse {
+        diagnostics: diagnostic_grant,
         daemon_proof,
         session_token: control_secret,
         data_token: data_secret,
@@ -1343,6 +1472,11 @@ async fn finish_ready_worker(
         published,
     } = candidate;
     if let Err(error) = probe {
+        diag::record(
+            DaemonFailureCode::Readiness,
+            FailureClass::Unknown,
+            "Worker readiness attempt failed",
+        );
         if published {
             let fingerprint_text = fingerprint.to_string();
             log::error!(
@@ -1606,7 +1740,7 @@ async fn public_proxy_inner(
     State(state): State<Arc<DaemonState>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
-    let Some(route) = PublicRoute::from_path(request.uri().path()) else {
+    let Some(route) = PublicRoute::from_request(request.uri().path(), request.headers()) else {
         return crate::operational::unmatched_route(
             "daemon",
             request.method(),
@@ -1647,7 +1781,7 @@ async fn public_proxy_inner(
             log_anonymous_pass_through(route, AnonymousReason::MissingCredential);
             (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
         }
-        Some(credential) => match state.registry.resolve_target(&credential.digest()) {
+        Some(credential) => match state.registry.resolve_target(&credential) {
             Ok(target) => {
                 if matches!(target, ResolvedTarget::PassThrough) {
                     let route_kind = match route {
@@ -1687,7 +1821,7 @@ async fn public_proxy_inner(
             Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         },
     };
-    match (target, route) {
+    let mut response = match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
             let mut response = Response::new(Body::from(hook.pass_through_body()));
             response
@@ -1715,7 +1849,11 @@ async fn public_proxy_inner(
             }
             forward_to_worker(Arc::clone(&state), request, worker).await
         }
+    };
+    if matches!(route, PublicRoute::Provider(_)) {
+        crate::gateway::strip_redirect_location(&mut response);
     }
+    response
 }
 
 fn responses_websocket_probe(request: &Request<Body>) -> bool {
@@ -1850,14 +1988,23 @@ async fn forward_to_provider(
 ) -> Response<Body> {
     let invocation_authenticated = access == ProviderAccess::BoundRoute;
     // Daemon-held provider credentials (configured auth headers or the daemon's own API key
-    // environment) are only lent to requests attributed to a bound route, or to every request
-    // when the operator explicitly deployed the daemon in global pass-through mode.
-    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
-        && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    // environment) are only lent to requests attributed to a bound route, or to requests on
+    // a loopback listener when the operator explicitly deployed global pass-through mode.
+    let allow_environment_provider_auth = (invocation_authenticated
+        || (state.pass_through && state.loopback_listener))
+        && crate::gateway::daemon_allows_provider_auth(
+            request.headers(),
+            request.uri().path(),
+            &state.config,
+        );
     let path_and_query = request
         .uri()
         .path_and_query()
         .map_or("/", |value| value.as_str());
+    let client_named = crate::gateway::daemon_destination_is_client_named(
+        request.headers(),
+        invocation_authenticated,
+    );
     let destination = match crate::gateway::daemon_provider_upstream_url_with_access(
         request.headers(),
         path_and_query,
@@ -1880,76 +2027,70 @@ async fn forward_to_provider(
     request
         .headers_mut()
         .remove(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER);
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, &state.config);
+    if let Err(error) = crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination,
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        &state.config,
+    )
+    .await
+    {
+        return error.into_response();
     }
+    let helper_auth = allow_environment_provider_auth
+        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
+            .is_some();
     if crate::gateway::websocket::is_websocket(&request) {
-        let client = match crate::daemon::common::transport::pooled_websocket_client() {
-            Ok(client) => client,
-            Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
-        };
-        return crate::gateway::websocket::forward(
-            &client,
+        return crate::gateway::websocket::forward_to_provider(
+            client_named,
+            helper_auth,
             request,
             &destination,
-            None,
             (),
             &state.config,
             std::future::pending(),
         )
-        .await;
+        .await
+        .unwrap_or_else(|error| control_error(StatusCode::BAD_GATEWAY, error));
     }
-    let outcome = forward(
-        &state.upstream,
-        request,
-        &destination,
-        None,
-        None,
-        &state.config,
-    )
-    .await;
+    let upstream =
+        match crate::daemon::common::transport::provider_client(&state.upstream, helper_auth) {
+            Ok(client) => client,
+            Err(error) => return CliError::Launch(error.to_string()).into_response(),
+        };
+    let outcome = if client_named {
+        match crate::daemon::common::transport::named_upstream_client() {
+            Ok(client) => {
+                forward(
+                    &client,
+                    request,
+                    &destination,
+                    None,
+                    None,
+                    &state.config,
+                    client_named,
+                )
+                .await
+            }
+            Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+        }
+    } else {
+        forward(
+            &upstream,
+            request,
+            &destination,
+            None,
+            None,
+            &state.config,
+            client_named,
+        )
+        .await
+    };
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
     }
     outcome.response
-}
-
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    let configured = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    };
-    if let Some(configured) = configured.and_then(|value| HeaderValue::from_str(value).ok()) {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    let (name, value) = match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = nonempty_environment("OPENAI_API_KEY") else {
-                return;
-            };
-            (AUTHORIZATION, format!("Bearer {key}"))
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = nonempty_environment("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            (HeaderName::from_static("x-api-key"), key)
-        }
-    };
-    if let Ok(value) = HeaderValue::from_str(&value) {
-        headers.insert(name, value);
-    }
-}
-
-fn nonempty_environment(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 async fn forward_to_worker(
@@ -1958,17 +2099,11 @@ async fn forward_to_worker(
     worker: WorkerRequest,
 ) -> Response<Body> {
     let fingerprint = worker.fingerprint();
-    let worker_id = worker.target().worker_id().to_owned();
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .map_or("/", |value| value.as_str());
-    let destination = format!(
-        "{}{}",
-        worker.target().endpoint().trim_end_matches('/'),
-        path_and_query
-    );
-    let token = worker.session_token().to_owned();
+    let worker_id = worker.target().shared_worker_id();
+    let destination = match worker.target().request_uri(request.uri()) {
+        Ok(destination) => destination,
+        Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+    };
     if crate::gateway::websocket::is_websocket(&request) {
         let client = match worker.target().websocket_client() {
             Some(client) => client.clone(),
@@ -1980,8 +2115,11 @@ async fn forward_to_worker(
         return crate::gateway::websocket::forward(
             &client,
             request,
-            &destination,
-            Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
+            &destination.to_string(),
+            Some((
+                HeaderName::from_static(WORKER_TOKEN_HEADER),
+                worker.session_token().to_owned(),
+            )),
             worker,
             &state.config,
             std::future::pending(),
@@ -1989,16 +2127,25 @@ async fn forward_to_worker(
         .await;
     }
     let client = worker.target().client().clone();
-    let mut outcome = forward(
+    let authentication = worker.target().authentication();
+    let mut outcome = forward_prepared(
         &client,
         request,
-        &destination,
-        Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
+        destination,
+        Some((HeaderName::from_static(WORKER_TOKEN_HEADER), authentication)),
         Some(worker),
         &state.config,
+        false,
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
+    if let Some(failure) = outcome.failure {
+        diag::record(
+            DaemonFailureCode::Forward,
+            failure.failure_class(),
+            "Broker forwarding to worker failed",
+        );
+    }
     if matches!(outcome.failure, Some(ForwardFailure::ResponseHeadTimeout)) && !route_failure {
         // Middleware and provider work can delay headers while worker control stays healthy.
         // A request deadline alone does not establish loss of the assigned worker.
@@ -2007,7 +2154,7 @@ async fn forward_to_worker(
             target: "nemo_relay.daemon",
             event = "worker_request_failed",
             fingerprint = fingerprint.as_str(),
-            worker_id = worker_id.as_str(),
+            worker_id = worker_id.as_ref(),
             reason = "response_head_timeout",
             route_mode = "worker";
             "Worker request timed out waiting for response headers"
@@ -2092,6 +2239,14 @@ enum ForwardFailure {
 }
 
 impl ForwardFailure {
+    const fn failure_class(self) -> FailureClass {
+        match self {
+            Self::ResponseHeadTimeout => FailureClass::Timeout,
+            Self::InvalidDestination | Self::InvalidResponse => FailureClass::InvalidInput,
+            Self::Transport => FailureClass::Unknown,
+        }
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidDestination => "invalid_destination",
@@ -2119,6 +2274,11 @@ impl ForwardOutcome {
 }
 
 fn log_upstream_request_failed(route: ProviderRoute, failure: ForwardFailure) {
+    diag::record(
+        DaemonFailureCode::Forward,
+        failure.failure_class(),
+        failure.as_str(),
+    );
     static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
     let limiter = LIMITER.get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
     let Some(suppressed_since_last_emit) = limiter.record() else {
@@ -2135,14 +2295,18 @@ fn log_upstream_request_failed(route: ProviderRoute, failure: ForwardFailure) {
     );
 }
 
-async fn forward(
-    client: &PooledClient,
+async fn forward<C>(
+    client: &Client<C, RelayBody>,
     request: Request<Body>,
     destination: &str,
     authentication: Option<(HeaderName, String)>,
     hold: Option<WorkerRequest>,
     config: &GatewayConfig,
-) -> ForwardOutcome {
+    client_named: bool,
+) -> ForwardOutcome
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
         Err(_) => {
@@ -2152,26 +2316,74 @@ async fn forward(
             );
         }
     };
+    let authentication = match authentication {
+        Some((name, value)) => match HeaderValue::from_str(&value) {
+            Ok(value) => Some((name, value)),
+            Err(_) => {
+                return ForwardOutcome::response(control_message(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid worker credential",
+                ));
+            }
+        },
+        None => None,
+    };
+    forward_prepared(
+        client,
+        request,
+        destination,
+        authentication,
+        hold,
+        config,
+        client_named,
+    )
+    .await
+}
+
+async fn forward_prepared<C>(
+    client: &Client<C, RelayBody>,
+    request: Request<Body>,
+    destination: Uri,
+    authentication: Option<(HeaderName, HeaderValue)>,
+    hold: Option<WorkerRequest>,
+    config: &GatewayConfig,
+    client_named: bool,
+) -> ForwardOutcome
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
     ];
-    let mut request = match prepare_forward_request(request, destination, &strip) {
-        Ok(request) => request.map(box_body),
+    let provider_request = authentication.is_none();
+    let prepared = if provider_request {
+        prepare_provider_request(request, destination, &strip, config, client_named)
+    } else {
+        prepare_forward_request(request, destination, &strip)
+            .map(|request| request.map(box_body))
+            .map_err(CliError::UpstreamTransport)
+    };
+    let mut request = match prepared {
+        Ok(request) => request,
         Err(error) => {
             return ForwardOutcome::response(control_error(StatusCode::BAD_REQUEST, error));
         }
     };
     if let Some((name, value)) = authentication {
-        let Ok(value) = HeaderValue::from_str(&value) else {
-            return ForwardOutcome::response(control_message(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid worker credential",
-            ));
-        };
         request.headers_mut().insert(name, value);
     }
-    let response = match config.wait_for_response(client.request(request)).await {
+    let response = if provider_request {
+        match request_provider(client, client_named, request) {
+            Ok(response) => response,
+            Err(error) => {
+                return ForwardOutcome::response(control_error(StatusCode::BAD_GATEWAY, error));
+            }
+        }
+    } else {
+        client.request(request)
+    };
+    let response = match config.wait_for_response(response).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             let response = control_error(StatusCode::BAD_GATEWAY, &error);
@@ -2479,6 +2691,11 @@ fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
     {
         revoke_activation(state, &activation_id);
         cancel_staged_activation(state, &activation_id, "activation_expired");
+        diag::record(
+            DaemonFailureCode::ActivationDeadline,
+            FailureClass::Timeout,
+            "Broker activation deadline elapsed",
+        );
         state.sockets.changed.notify_waiters();
         let fingerprint = fingerprint.to_string();
         log::error!(
@@ -2599,7 +2816,7 @@ fn revoke_active_worker_generation(
     generation_id: &str,
 ) -> bool {
     let _generation_publication = lock(&state.worker_generation_publication);
-    match state
+    let revoked = match state
         .active_worker_generations
         .revoke_if_matches(fingerprint, generation_id)
     {
@@ -2615,7 +2832,33 @@ fn revoke_active_worker_generation(
             );
             true
         }
+    };
+    if revoked {
+        let worker_ids = {
+            let mut sessions = lock(&state.worker_sessions);
+            sessions
+                .values_mut()
+                .filter(|s| {
+                    s.fingerprint == fingerprint
+                        && s.generation_grant.generation_id == generation_id
+                })
+                .map(|session| {
+                    let supports_diagnostic_revocation =
+                        session.diagnostic_offer.is_some() || session.diagnostic_grant.is_some();
+                    session.diagnostic_grant = None;
+                    session.diagnostic_connected = false;
+                    session.diagnostic_revoked = true;
+                    (session.worker_id.clone(), supports_diagnostic_revocation)
+                })
+                .collect::<Vec<_>>()
+        };
+        for (worker_id, supports_diagnostic_revocation) in worker_ids {
+            state
+                .sockets
+                .revoke_diagnostics(&worker_id, supports_diagnostic_revocation);
+        }
     }
+    revoked
 }
 
 fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session_id: McpSessionId) {
@@ -2796,7 +3039,7 @@ fn prune_expired_mcp_control_state(
 /// Returns the single public route credential, `None` when the header is absent, or a 401 for a
 /// malformed or repeated header.
 #[allow(clippy::result_large_err)]
-fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Response<Body>> {
+fn public_credential(headers: &HeaderMap) -> Result<Option<TokenDigest>, Response<Body>> {
     let values = headers.get_all(CLIENT_TOKEN_HEADER);
     match values.iter().count() {
         0 => return Ok(None),
@@ -2813,7 +3056,7 @@ fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Res
         .next()
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))?;
-    RouteCredential::parse(value.to_owned())
+    RouteCredential::digest_from_str(value)
         .map(Some)
         .map_err(|_| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))
 }
@@ -2966,34 +3209,67 @@ fn load_tls_config(
 }
 
 fn decode_pem_blocks(bytes: &[u8], label: &str) -> Result<Vec<Vec<u8>>, CliError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| CliError::Config(format!("TLS PEM is not UTF-8: {error}")))?;
-    let begin = format!("-----BEGIN {label}-----");
-    let end = format!("-----END {label}-----");
-    let mut blocks = Vec::new();
-    let mut remainder = text;
-    while let Some((_, after_begin)) = remainder.split_once(&begin) {
-        let Some((encoded, after_end)) = after_begin.split_once(&end) else {
-            return Err(CliError::Config(format!(
-                "TLS PEM has an unterminated {label} block"
-            )));
-        };
-        let compact = encoded
-            .chars()
-            .filter(|character| !character.is_ascii_whitespace())
-            .collect::<String>();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(compact)
-            .map_err(|_| CliError::Config(format!("TLS PEM contains invalid {label} base64")))?;
-        if decoded.is_empty() {
-            return Err(CliError::Config(format!(
-                "TLS PEM contains an empty {label} block"
-            )));
+    crate::gateway::tls::decode_pem_blocks(bytes, label).map_err(CliError::Config)
+}
+
+async fn serve_plain(
+    listener: TcpListener,
+    app: Router,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> Result<(), CliError> {
+    let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(());
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => break,
+            _ = connections.join_next(), if !connections.is_empty() => {}
+            accepted = listener.accept() => {
+                let (stream, peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        log::warn!(
+                            target: "nemo_relay.daemon", event = "listener_accept_failed";
+                            "Daemon listener accept failed: {error}"
+                        );
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                let _ = stream.set_nodelay(true);
+                let local = stream.local_addr()?;
+                let service = app.clone()
+                    .layer(axum::Extension(ConnectInfo(peer)))
+                    .layer(axum::Extension(socket::LocalAddress(local)));
+                let shutdown = shutdown_sender.clone();
+                connections.spawn(async move {
+                    let mut builder = crate::daemon::common::transport::data_plane_connection_builder();
+                    builder.http2().enable_connect_protocol();
+                    // Match axum::serve: convert Incoming before entering the router.
+                    let service = hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+                        let mut service = service.clone();
+                        tower_service::Service::call(&mut service, request.map(Body::new))
+                    });
+                    let connection = builder.serve_connection_with_upgrades(
+                        TokioIo::new(stream), service,
+                    );
+                    tokio::pin!(connection);
+                    tokio::select! {
+                        _ = &mut connection => {}
+                        _ = shutdown.closed() => {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                });
+            }
         }
-        blocks.push(decoded);
-        remainder = after_end;
     }
-    Ok(blocks)
+    drop(shutdown_receiver);
+    // Preserve axum::serve's graceful shutdown: admitted responses finish before return.
+    while connections.join_next().await.is_some() {}
+    Ok(())
 }
 
 async fn serve_tls(
@@ -3040,7 +3316,7 @@ async fn serve_tls(
                         return;
                     };
                     drop(handshake_permit);
-                    let builder = ConnectionBuilder::new(TokioExecutor::new());
+                    let builder = crate::daemon::common::transport::data_plane_connection_builder();
                     let connection = builder.serve_connection_with_upgrades(
                         TokioIo::new(stream),
                         TowerToHyperService::new(service),

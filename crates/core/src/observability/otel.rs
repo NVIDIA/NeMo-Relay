@@ -25,15 +25,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::OpenTelemetryTlsConfig;
 use super::header_file::{
-    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_files,
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
+    validate_header_files, validate_otlp_transport_typed,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
     automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
-    automatic_signal_endpoint, classify_metric_mark, resolve_header_env,
+    automatic_signal_endpoint, classify_metric_mark, drain_startup_queue, resolve_header_env,
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
@@ -47,6 +48,7 @@ use super::{
     push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
     validate_metadata_promotion_prefixes,
 };
+
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::scope_stack::w3c_span_context;
@@ -184,6 +186,63 @@ pub enum OpenTelemetryError {
     Core(#[from] FlowError),
 }
 
+// Preserve typed initialization evidence until the automatic plugin reports it.
+// Public constructors retain the historical exhaustive error enum and payloads.
+pub(crate) type ExporterInitializationResult<T> =
+    std::result::Result<T, ExporterInitializationError>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExporterInitializationError {
+    /// A configured endpoint is malformed or uses an unsupported transport scheme.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidEndpoint(String),
+    /// The plaintext transport policy rejected the endpoint's destination.
+    #[error("failed to build the OTLP exporter: {0}")]
+    PlaintextRejected(String),
+    /// TLS settings or certificate/key material failed validation.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidTlsConfiguration(String),
+    /// A TLS material file could not be read. The path is deliberately omitted.
+    #[error("failed to build the OTLP exporter: tls.{field}: cannot read PEM file")]
+    TlsFileRead {
+        /// TLS field whose configured file could not be read.
+        field: String,
+        /// Filesystem cause, retained without the sensitive configured path.
+        kind: std::io::ErrorKind,
+    },
+    #[error(transparent)]
+    Public(#[from] OpenTelemetryError),
+}
+
+impl From<ExporterInitializationError> for OpenTelemetryError {
+    fn from(error: ExporterInitializationError) -> Self {
+        match error {
+            ExporterInitializationError::Public(error) => error,
+            ExporterInitializationError::InvalidEndpoint(message)
+            | ExporterInitializationError::PlaintextRejected(message)
+            | ExporterInitializationError::InvalidTlsConfiguration(message) => {
+                Self::ExporterBuild(message)
+            }
+            ExporterInitializationError::TlsFileRead { field, .. } => {
+                Self::ExporterBuild(format!("tls.{field}: cannot read PEM file"))
+            }
+        }
+    }
+}
+
+impl From<super::header_file::EndpointTransportError> for ExporterInitializationError {
+    fn from(error: super::header_file::EndpointTransportError) -> Self {
+        match error {
+            super::header_file::EndpointTransportError::InvalidEndpoint(message) => {
+                Self::InvalidEndpoint(message)
+            }
+            super::header_file::EndpointTransportError::PlaintextRejected(message) => {
+                Self::PlaintextRejected(message)
+            }
+        }
+    }
+}
+
 /// Supported OTLP trace transports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OtlpTransport {
@@ -223,7 +282,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
-fn trace_endpoint_log_identity(endpoint: &str) -> String {
+pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
     if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
         return "the environment-configured OTLP endpoint".to_string();
     }
@@ -248,24 +307,12 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
-    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        let host = url.host_str().unwrap_or_default();
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        url.scheme() == "https" || (url.scheme() == "http" && loopback)
-    });
-    if !protected {
-        return Err(OpenTelemetryError::ExporterBuild(
-            "OTLP trace endpoints require HTTPS; HTTP is allowed only for localhost or loopback IP addresses"
-                .to_string(),
-        ));
-    }
-    Ok(())
+pub(super) fn validate_trace_endpoint(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+) -> ExporterInitializationResult<()> {
+    validate_otlp_transport_typed(endpoint, plaintext, "trace")
+        .map_err(ExporterInitializationError::from)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -468,6 +515,8 @@ pub struct OpenTelemetryConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    tls: Option<Box<OpenTelemetryTlsConfig>>,
+    plaintext: PlaintextPolicy,
     timeout: Duration,
 }
 
@@ -698,6 +747,8 @@ impl OpenTelemetryConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            tls: None,
+            plaintext: PlaintextPolicy::LoopbackOnly,
             timeout: Duration::from_secs(3),
         }
     }
@@ -734,6 +785,12 @@ impl OpenTelemetryConfig {
         self
     }
 
+    /// Sets the certificate and private key file paths for this endpoint.
+    pub fn with_tls(mut self, tls: OpenTelemetryTlsConfig) -> Self {
+        self.tls = Some(Box::new(tls));
+        self
+    }
+
     /// Selects the OTLP transport.
     pub fn with_transport(mut self, transport: OtlpTransport) -> Self {
         self.transport = transport;
@@ -759,6 +816,17 @@ impl OpenTelemetryConfig {
         path: impl Into<String>,
     ) -> Self {
         self.header_file.insert(key.into(), path.into());
+        self
+    }
+
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
         self
     }
 
@@ -877,11 +945,13 @@ impl OpenTelemetrySubscriber {
     /// Builds a subscriber backed by a new OTLP tracer provider.
     pub fn new(config: OpenTelemetryConfig) -> Result<Self> {
         Self::new_with_runtime_diagnostics(TraceConfig::Endpoint(config), None)
+            .map_err(OpenTelemetryError::from)
     }
 
     /// Creates a subscriber writing OTLP to a local file.
     pub fn new_file_sink(config: OpenTelemetryFileSinkConfig) -> Result<Self> {
         Self::new_with_runtime_diagnostics(TraceConfig::File(config), None)
+            .map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_for_plugin(
@@ -892,6 +962,7 @@ impl OpenTelemetrySubscriber {
             TraceConfig::Endpoint(config),
             Some(format!("opentelemetry.traces[{endpoint_index}].endpoint")),
         )
+        .map_err(OpenTelemetryError::from)
     }
 
     /// Creates a plugin-managed subscriber for a configured file sink.
@@ -905,14 +976,20 @@ impl OpenTelemetrySubscriber {
                 "opentelemetry.file_sinks[{file_sink_index}].output_directory"
             )),
         )
+        .map_err(OpenTelemetryError::from)
     }
 
-    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+    pub(crate) fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> ExporterInitializationResult<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         )?;
         Self::new_with_runtime_diagnostics(
-            TraceConfig::Endpoint(OpenTelemetryConfig::from_automatic_configuration()),
+            TraceConfig::Endpoint(
+                OpenTelemetryConfig::from_automatic_configuration()
+                    .with_plaintext_policy(plaintext),
+            ),
             Some("opentelemetry.automatic.traces".to_string()),
         )
     }
@@ -920,12 +997,13 @@ impl OpenTelemetrySubscriber {
     fn new_with_runtime_diagnostics(
         mut config: TraceConfig,
         diagnostic_field: Option<String>,
-    ) -> Result<Self> {
+    ) -> ExporterInitializationResult<Self> {
         let shared = config.shared();
         if shared.completed_span_context_ttl.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "completed_span_context_ttl must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         validate_attribute_mappings(&shared.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
@@ -943,21 +1021,22 @@ impl OpenTelemetrySubscriber {
         }
         if let TraceConfig::Endpoint(endpoint) = &mut config {
             if endpoint.automatic {
-                let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?
                     .ok_or_else(|| {
-                        OpenTelemetryError::ExporterBuild(
+                        ExporterInitializationError::InvalidEndpoint(
                             "automatic trace exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )
                     })?;
-                validate_trace_endpoint(&resolved)?;
+                validate_trace_endpoint(&resolved, &endpoint.plaintext)?;
             } else {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
-                    ));
+                    )
+                    .into());
                 }
-                validate_trace_endpoint(&endpoint.endpoint)?;
+                validate_trace_endpoint(&endpoint.endpoint, &endpoint.plaintext)?;
                 reject_global_header_environment()?;
                 validate_headers(&endpoint.headers)?;
                 validate_header_files(
@@ -1292,7 +1371,7 @@ fn shutdown_trace_providers(
 fn build_owned_tracer_provider(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
-) -> Result<(SdkTracerProvider, ExporterRuntime)> {
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
     let resource_attributes = configured_resource_attributes(&config);
     build_owned_tracer_provider_with_resource(config, runtime_diagnostics, resource_attributes)
 }
@@ -1301,7 +1380,7 @@ fn build_owned_tracer_provider_with_resource(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<(SdkTracerProvider, ExporterRuntime)> {
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
     let provider_diagnostics = runtime_diagnostics.clone();
@@ -1316,7 +1395,9 @@ fn build_owned_tracer_provider_with_resource(
                 Ok(runtime) => runtime,
                 Err(error) => {
                     let _ = result_sender
-                        .send(Err(OpenTelemetryError::ExporterBuild(error.to_string())));
+                        .send(Err(
+                            OpenTelemetryError::ExporterBuild(error.to_string()).into()
+                        ));
                     return;
                 }
             };
@@ -1394,13 +1475,14 @@ fn build_tracer_provider(
     let config = TraceConfig::Endpoint(config.clone());
     let attributes = configured_resource_attributes(&config);
     build_tracer_provider_with_resource(&config, runtime_diagnostics, attributes)
+        .map_err(OpenTelemetryError::from)
 }
 
 fn build_tracer_provider_with_resource(
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<SdkTracerProvider> {
+) -> ExporterInitializationResult<SdkTracerProvider> {
     match config {
         TraceConfig::File(file) => provider_with_exporter(
             OtlpFileSpanExporter::new(
@@ -1415,7 +1497,7 @@ fn build_tracer_provider_with_resource(
             resource_attributes,
         ),
         TraceConfig::Endpoint(endpoint) => provider_with_exporter(
-            otlp_span_exporter(endpoint)?,
+            otlp_span_exporter(endpoint, runtime_diagnostics.clone())?,
             config,
             runtime_diagnostics,
             resource_attributes,
@@ -1424,47 +1506,67 @@ fn build_tracer_provider_with_resource(
 }
 
 /// Builds the OTLP network exporter for an endpoint destination.
-fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter> {
+fn otlp_span_exporter(
+    settings: &OpenTelemetryConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+) -> ExporterInitializationResult<OtlpSpanExporter> {
     if settings.automatic {
         let builder = OtlpSpanExporter::builder();
         return if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            let mut builder = builder.with_tonic();
+            if let Some(tls) = super::otel_signal::automatic_otlp_grpc_tls("TRACES")? {
+                builder = builder.with_tls_config(tls);
+            }
             builder
-                .with_tonic()
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
                 .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
         };
     }
     match settings.transport {
         OtlpTransport::HttpBinary => {
-            let client = reqwest::Client::builder()
-                .timeout(settings.timeout)
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            let client = settings
+                .tls
+                .as_deref()
+                .cloned()
+                .unwrap_or_default()
+                .http_client(&settings.endpoint, Some(settings.timeout))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(settings.timeout);
             if !settings.header_file.is_empty() {
-                builder = builder.with_http_client(HeaderFileHttpClient::new(
-                    client,
-                    HeaderFileResolver::new(settings.header_file.clone()),
-                ));
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(settings.header_file.clone()),
+                        settings.plaintext.clone(),
+                    ),
+                    diagnostics: runtime_diagnostics,
+                });
             } else {
-                builder = builder.with_http_client(client);
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: client,
+                    diagnostics: runtime_diagnostics,
+                });
             }
             builder =
                 builder.with_endpoint(resolve_http_trace_endpoint(&settings.endpoint).into_owned());
@@ -1473,7 +1575,7 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
         }
         OtlpTransport::Grpc => {
             let mut builder = OtlpSpanExporter::builder()
@@ -1481,6 +1583,23 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 .with_protocol(Protocol::Grpc)
                 .with_timeout(settings.timeout);
             builder = builder.with_endpoint(settings.endpoint.clone());
+            if settings
+                .endpoint
+                .trim()
+                .parse::<reqwest::Url>()
+                .is_ok_and(|url| url.scheme() == "https")
+            {
+                builder = builder.with_tls_config(
+                    settings
+                        .tls
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default()
+                        .grpc_config(&settings.endpoint)?,
+                );
+            } else if let Some(tls) = &settings.tls {
+                tls.validate(&settings.endpoint)?;
+            }
             if !settings.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&settings.headers)?);
             }
@@ -1491,7 +1610,7 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
             }
             builder
                 .build()
-                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
         }
     }
 }
@@ -1502,7 +1621,7 @@ fn provider_with_exporter<E: SpanExporter + 'static>(
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
-) -> Result<SdkTracerProvider> {
+) -> ExporterInitializationResult<SdkTracerProvider> {
     // Disable per-span attribute caps. Consumers may emit large attribute
     // sets on long-running spans; the OTel SDK default (128) silently drops
     // attributes added last in the span's lifecycle.
@@ -1532,7 +1651,9 @@ fn provider_with_exporter<E: SpanExporter + 'static>(
         batch_config.build(),
         config.channel_full_retry_budget(),
     );
-    Ok(builder.with_span_processor(processor).build())
+    let provider = builder.with_span_processor(processor).build();
+    drain_startup_queue(|| provider.force_flush())?;
+    Ok(provider)
 }
 
 fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
@@ -1568,6 +1689,80 @@ fn canonical_resource_key(attributes: &[KeyValue]) -> String {
     entries.join("\u{1f}")
 }
 
+/// Inspect TLS failures before the OTLP HTTP exporter replaces them with a
+/// generic network error. Only static classifications and URL origins are safe
+/// to report; error strings can contain credentials or collector response data.
+#[derive(Debug)]
+struct DiagnosticTraceHttpClient<C> {
+    inner: C,
+    diagnostics: SignalRuntimeDiagnostics,
+}
+
+#[async_trait::async_trait]
+impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
+    for DiagnosticTraceHttpClient<C>
+{
+    async fn send_bytes(
+        &self,
+        request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        if let Some(reason) = self.diagnostics.trace_tls_failure() {
+            return Err(std::io::Error::other(reason).into());
+        }
+        let endpoint = trace_endpoint_log_identity(&request.uri().to_string());
+        let result = self.inner.send_bytes(request).await;
+        if let Err(error) = &result
+            && let Some(reason) = safe_tls_failure_reason(error.as_ref())
+            && self
+                .diagnostics
+                .stop_trace_exports_after_tls_failure(reason)
+        {
+            let message = format!(
+                "OpenTelemetry trace export to {endpoint} stopped: {reason}; recreate the exporter after correcting TLS configuration"
+            );
+            self.diagnostics
+                .record("otel.tls_failed", message.clone(), 1);
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_tls_failed";
+                "{message}"
+            );
+        }
+        result
+    }
+}
+
+/// Return a safe reason for TLS failures that must stop the exporter.
+fn safe_tls_failure_reason(mut error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
+    loop {
+        if let Some(error) = error.downcast_ref::<rustls::Error>() {
+            return match error {
+                // Broken connections can produce malformed or unexpected
+                // records. Let a later request recover from these errors.
+                rustls::Error::InvalidMessage(_) | rustls::Error::InappropriateMessage { .. } => {
+                    None
+                }
+                rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer) => Some(
+                    "TLS certificate verification failed: unknown issuer; check the configured CA bundle",
+                ),
+                rustls::Error::InvalidCertificate(_) => Some("TLS certificate verification failed"),
+                _ => Some("TLS handshake failed"),
+            };
+        }
+        // io::Error's source can skip the wrapped error itself.
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io.get_ref()
+        {
+            error = inner;
+            continue;
+        }
+        error = error.source()?;
+    }
+}
+
 #[derive(Debug)]
 struct CountingSpanExporter<E> {
     inner: E,
@@ -1587,9 +1782,19 @@ impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
             }
             Err(_) => {
                 self.diagnostics.record_export_failure();
+                // The SDK's shutdown drains its final batch and forwards the
+                // export result. Mark this known delivery failure here as well
+                // as in the processor's successful-shutdown path, so cleanup
+                // does not mistake it for an incomplete provider shutdown.
+                let marker = if self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
+                    format!("{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: ")
+                } else {
+                    String::new()
+                };
                 Err(OTelSdkError::InternalFailure(format!(
-                    "OpenTelemetry trace export to {} failed",
-                    self.diagnostics.endpoint
+                    "{marker}OpenTelemetry trace export to {} failed{}",
+                    self.diagnostics.endpoint,
+                    self.diagnostics.failure_reason_suffix()
                 )))
             }
         }
@@ -1632,14 +1837,32 @@ impl TraceDeliveryDiagnostics {
         self.export_failures.fetch_add(1, Ordering::Relaxed);
         self.unresolved_export_failure
             .store(true, Ordering::Relaxed);
-        self.runtime_diagnostics.record(
+        let count = self.runtime_diagnostics.record(
             "otel.traces_export_failed",
             format!(
-                "OpenTelemetry trace export to endpoint {} failed",
-                self.endpoint
+                "OpenTelemetry trace export to endpoint {} failed{}",
+                self.endpoint,
+                self.failure_reason_suffix()
             ),
             1,
         );
+        if self.runtime_diagnostics.trace_tls_failure().is_none()
+            && should_relog_runtime_diagnostic(count)
+        {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_traces_export_failed",
+                endpoint = self.endpoint.as_str();
+                "OpenTelemetry trace export failed"
+            );
+        }
+    }
+
+    fn failure_reason_suffix(&self) -> String {
+        self.runtime_diagnostics
+            .trace_tls_failure()
+            .map(|reason| format!(": {reason}; recreate the exporter to resume HTTP trace exports"))
+            .unwrap_or_default()
     }
 
     fn record_export_success(&self) {
@@ -1653,8 +1876,9 @@ impl TraceDeliveryDiagnostics {
             .then(|| {
                 let failures = self.export_failures.load(Ordering::Relaxed);
                 format!(
-                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered",
-                    self.endpoint
+                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered{}",
+                    self.endpoint,
+                    self.failure_reason_suffix()
                 )
             })
     }
@@ -1772,6 +1996,16 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
     }
 
     fn on_end(&self, span: SpanData) {
+        // The endpoint is disabled until it is recreated. Keep new spans out
+        // of the batch queue rather than repeatedly invoking a failed exporter.
+        if self
+            .diagnostics
+            .runtime_diagnostics
+            .trace_tls_failure()
+            .is_some()
+        {
+            return;
+        }
         self.completed_spans.fetch_add(1, Ordering::Relaxed);
         self.inner.on_end(span);
     }
