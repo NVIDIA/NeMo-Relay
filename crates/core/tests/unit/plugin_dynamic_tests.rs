@@ -47,6 +47,7 @@ fn sample_record() -> DynamicPluginRecord {
             worker_protocol: "grpc-v1".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
@@ -183,6 +184,7 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: String::new(),
@@ -206,6 +208,7 @@ fn registry_replacement_rejects_invalid_record_shapes() {
     registry.add(sample_record()).expect("register plugin");
     let mut replacement = sample_record();
     replacement.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: String::new(),
@@ -317,6 +320,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
         worker_protocol: " grpc-v1 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: " acme_guardrails.plugin:register ".into(),
@@ -334,6 +338,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     assert_eq!(
         stored.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
@@ -594,6 +599,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         manifest.load,
         DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+            max_message_bytes: None,
             callback_timeouts: None,
             runtime: Some(WorkerRuntime::Python),
             entrypoint: Some("acme_guardrails.plugin:register".into()),
@@ -609,6 +615,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into()
@@ -973,6 +980,7 @@ entrypoint = " acme_guardrails.plugin:register "
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
@@ -1018,6 +1026,7 @@ entrypoint = "acme_guardrails.plugin:register"
         assert_eq!(
             record.load,
             DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                max_message_bytes: None,
                 callback_timeouts: None,
                 runtime: expected,
                 entrypoint: "acme_guardrails.plugin:register".into(),
@@ -1763,6 +1772,7 @@ fn manifest_validation_covers_forbidden_cross_lane_fields() {
 
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
     native.load = DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+        max_message_bytes: None,
         callback_timeouts: None,
         runtime: Some(WorkerRuntime::Rust),
         entrypoint: Some("worker".into()),
@@ -1892,6 +1902,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
             native_api: "1".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Rust,
         entrypoint: "worker".into(),
@@ -2061,6 +2072,63 @@ fn relay_version_matches_prerelease_hosts_as_their_release() {
     }
     assert!(matches(">=0.10.0-rc.1, <1.0.0", "0.10.0-rc.1"));
     assert!(!matches(">=0.10.0-rc.2", "0.10.0-rc.1"));
+}
+
+/// Keeps per-plugin byte defaults visible in manifests and durable inspection records.
+#[test]
+fn worker_message_size_defaults_validate_and_round_trip() {
+    for limit in [1, 16 * 1024 * 1024, i32::MAX as u32] {
+        let source = format!(
+            "{}\n[load.max_message_bytes]\ndefault_bytes = {limit}\n[load.max_message_bytes.by_name]\ninput_guardrail = {limit}\n",
+            valid_worker_manifest_toml()
+        );
+        let manifest = DynamicPluginManifest::parse_toml(&source).unwrap();
+        let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
+            panic!("worker load")
+        };
+        let limits = load.max_message_bytes.as_ref().unwrap();
+        assert_eq!(limits.default_bytes.unwrap().get(), limit);
+        assert_eq!(limits.by_name["input_guardrail"].get(), limit);
+        assert_eq!(
+            DynamicPluginManifest::parse_toml(&toml::to_string(&manifest).unwrap()).unwrap(),
+            manifest,
+        );
+        let record = manifest.into_record(None).unwrap();
+        let encoded = serde_json::to_value(&record).unwrap();
+        let decoded: DynamicPluginRecord = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, record);
+        let DynamicPluginLoadContract::Worker(load) = decoded.load else {
+            panic!("worker record")
+        };
+        let limits = load.max_message_bytes.unwrap();
+        assert_eq!(limits.default_bytes.unwrap().get(), limit);
+        assert_eq!(limits.by_name["input_guardrail"].get(), limit);
+    }
+    for value in ["0", "-1", "1.5", "2147483648", "4294967296", "\"16777216\""] {
+        for field in ["default_bytes", "by_name.input_guardrail"] {
+            let source = format!(
+                "{}\n[load.max_message_bytes]\n{field} = {value}\n",
+                valid_worker_manifest_toml()
+            );
+            assert!(
+                DynamicPluginManifest::parse_toml(&source).is_err(),
+                "accepted {field} = {value}"
+            );
+        }
+    }
+    let native = format!(
+        "{}\n[load.max_message_bytes]\ndefault_bytes = 16777216\n",
+        valid_rust_manifest_toml()
+    );
+    assert!(DynamicPluginManifest::parse_toml(&native).is_err());
+    for name in ["", " guardrail", "guardrail ", "   "] {
+        let source = format!(
+            "{}\n[load.max_message_bytes.by_name]\n{:#?} = 16777216\n",
+            valid_worker_manifest_toml(),
+            name
+        );
+        assert!(DynamicPluginManifest::parse_toml(&source).is_err());
+    }
 }
 
 /// Checks that valid deadlines survive conversion and invalid values are rejected.

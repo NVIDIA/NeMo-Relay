@@ -1318,12 +1318,23 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
     assert_eq!(valid_layer.status, Status::Pass);
     assert!(valid_layer.active);
 
-    let invalid_shape = temp.path().join("invalid-shape.toml");
+    // Configuration is fail-open (#1510): unknown keys warn and the layer stays active.
+    let unknown_keys = temp.path().join("unknown-keys.toml");
     std::fs::write(
-        &invalid_shape,
+        &unknown_keys,
         "[upstream.openai]\nbase_url = \"http://local\"\n",
     )
     .unwrap();
+    let unknown_keys_layer = layer_status(&unknown_keys);
+    assert_eq!(unknown_keys_layer.status, Status::Warn);
+    assert!(unknown_keys_layer.active);
+    assert_eq!(
+        unknown_keys_layer.details,
+        "unknown keys ignored: upstream.openai"
+    );
+
+    let invalid_shape = temp.path().join("invalid-shape.toml");
+    std::fs::write(&invalid_shape, "upstream = \"not-a-table\"\n").unwrap();
     let invalid_shape_layer = layer_status(&invalid_shape);
     assert_eq!(invalid_shape_layer.status, Status::Fail);
     assert!(!invalid_shape_layer.active);
@@ -1332,7 +1343,6 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
             .details
             .contains("invalid gateway configuration shape")
     );
-    assert!(invalid_shape_layer.details.contains("openai"));
 
     let invalid = temp.path().join("invalid.toml");
     std::fs::write(&invalid, "[upstream\n").unwrap();

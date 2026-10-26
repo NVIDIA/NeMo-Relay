@@ -201,6 +201,17 @@ validation to fail, the runtime report identifies the dynamic component, and tea
 removes its registrations before the library unloads or worker exits. The operator-side
 trust policy and file layout are documented in [Manage](/configure-plugins/discoverable-plugins).
 
+## Worker Message Limits
+
+Set `[load.max_message_bytes]` with an optional `default_bytes` and `by_name`
+overrides for exact callback registration names.
+
+For example, `by_name.input_guardrail = 16777216` raises the registered
+`input_guardrail` callback and its continuations to 16 MiB. Host environment
+settings override plugin settings. See the
+[execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
+for validation, compatibility, and memory considerations.
+
 ## Callback Deadlines
 
 A deadline limits how long Relay waits for a callback to finish. Set deadlines

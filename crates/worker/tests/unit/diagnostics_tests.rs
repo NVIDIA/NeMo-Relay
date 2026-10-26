@@ -777,6 +777,7 @@ async fn terminal_rejection_consumes_sequence_and_delivery_continues() {
 }
 
 #[tokio::test]
+/// Shares one diagnostic session between concurrent callers on cloned runtimes.
 async fn runtime_initializes_one_shared_diagnostic_session_under_concurrency() {
     let host = Host::default();
     let (channel, _server) = start_host(host.clone()).await;
@@ -786,6 +787,8 @@ async fn runtime_initializes_one_shared_diagnostic_session_under_concurrency() {
         auth_token: "token".into(),
         host_endpoint: "unused".into(),
         host_channel: Arc::new(tokio::sync::OnceCell::new_with(Some(channel))),
+        max_message_bytes: nemo_relay_worker_proto::WorkerCallbackMessageLimits::default(),
+        callback_name: None,
         conditional_middleware_callbacks: Default::default(),
     };
     let cloned = runtime.clone();

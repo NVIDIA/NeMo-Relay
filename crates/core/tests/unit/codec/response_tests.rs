@@ -134,7 +134,8 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                         "rates": {
                             "input_per_million": 1.0,
                             "output_per_million": 2.0,
-                            "cache_read_per_million": 0.1
+                            "cache_read_per_million": 0.1,
+                            "cache_write_per_million": 1.25
                         }
                     },
                     {
@@ -142,7 +143,8 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                         "rates": {
                             "input_per_million": 10.0,
                             "output_per_million": 20.0,
-                            "cache_read_per_million": 1.0
+                            "cache_read_per_million": 1.0,
+                            "cache_write_per_million": 12.5
                         }
                     }
                 ]
@@ -679,6 +681,151 @@ fn test_prompt_threshold_pricing_uses_lower_tier_at_boundary() {
     assert_eq!(cost.input, Some(0.2));
     assert_eq!(cost.output, Some(0.002));
     assert_eq!(cost.total, Some(0.202));
+}
+
+fn cache_pricing_catalog(read_accounting: &str) -> PricingCatalog {
+    pricing_catalog(json!([
+        {
+            "provider": "configured",
+            "model_id": "cache-model",
+            "pricing_as_of": "2026-06-05",
+            "pricing_source": "https://example.test/pricing",
+            "rates": {
+                "input_per_million": 3.0,
+                "output_per_million": 15.0,
+                "cache_read_per_million": 0.3,
+                "cache_write_per_million": 3.75
+            },
+            "prompt_cache": {
+                "read_accounting": read_accounting
+            }
+        }
+    ]))
+}
+
+#[test]
+fn test_split_usage_prices_the_same_under_either_read_accounting() {
+    let inclusive = Usage {
+        prompt_tokens: Some(100),
+        completion_tokens: Some(20),
+        cache_read_tokens: Some(40),
+        cache_write_tokens: Some(10),
+        uncached_input_tokens: Some(50),
+        ..Usage::default()
+    };
+    let separate = Usage {
+        prompt_tokens: Some(50),
+        ..inclusive.clone()
+    };
+
+    for read_accounting in ["included_in_prompt_tokens", "separate"] {
+        let catalog = cache_pricing_catalog(read_accounting);
+        for usage in [&inclusive, &separate] {
+            let cost = estimate_cost_with_catalog(&catalog, "cache-model", usage).unwrap();
+
+            assert_eq!(cost.input, Some(0.000_15), "{read_accounting} {usage:?}");
+            assert_eq!(cost.cache_read, Some(0.000_012), "{read_accounting}");
+            assert_eq!(cost.cache_write, Some(0.000_037_5), "{read_accounting}");
+            assert!(
+                (cost.total.unwrap() - 0.000_499_5).abs() < 1e-12,
+                "{read_accounting} {cost:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_usage_with_inconsistent_input_counts_is_not_priced() {
+    let catalog = cache_pricing_catalog("included_in_prompt_tokens");
+    let usages = [
+        Usage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cache_read_tokens: Some(140),
+            ..Usage::default()
+        },
+        Usage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            uncached_input_tokens: Some(999),
+            ..Usage::default()
+        },
+        Usage {
+            prompt_tokens: Some(100),
+            completion_tokens: Some(20),
+            cache_read_tokens: Some(40),
+            cache_write_tokens: Some(10),
+            uncached_input_tokens: Some(60),
+            ..Usage::default()
+        },
+    ];
+
+    for usage in &usages {
+        assert!(
+            estimate_cost_with_catalog(&catalog, "cache-model", usage).is_none(),
+            "{usage:?}"
+        );
+    }
+}
+
+#[test]
+fn test_split_usage_without_prompt_tokens_bills_its_uncached_input() {
+    let catalog = cache_pricing_catalog("included_in_prompt_tokens");
+    let usage = Usage {
+        completion_tokens: Some(20),
+        cache_read_tokens: Some(40),
+        uncached_input_tokens: Some(50),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "cache-model", &usage).unwrap();
+
+    assert_eq!(cost.input, Some(0.000_15));
+    assert_eq!(cost.cache_read, Some(0.000_012));
+    assert_eq!(cost.output, Some(0.000_3));
+    assert!((cost.total.unwrap() - 0.000_462).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_rate_tier_of_split_usage_counts_cache_reads_and_writes() {
+    let catalog = threshold_pricing_catalog("separate");
+    let usage = Usage {
+        prompt_tokens: Some(150_000),
+        completion_tokens: Some(1_000),
+        cache_read_tokens: Some(40_000),
+        cache_write_tokens: Some(20_000),
+        uncached_input_tokens: Some(150_000),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "threshold-model", &usage).unwrap();
+
+    assert_eq!(cost.input, Some(1.5));
+    assert_eq!(cost.output, Some(0.02));
+    assert_eq!(cost.cache_read, Some(0.04));
+    assert_eq!(cost.cache_write, Some(0.25));
+    assert!((cost.total.unwrap() - 1.81).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_rate_tier_matches_for_split_and_unsplit_usage_of_one_request() {
+    let catalog = threshold_pricing_catalog("separate");
+    let unsplit = Usage {
+        prompt_tokens: Some(150_000),
+        completion_tokens: Some(1_000),
+        cache_read_tokens: Some(60_000),
+        ..Usage::default()
+    };
+    let split = Usage {
+        uncached_input_tokens: Some(150_000),
+        ..unsplit.clone()
+    };
+
+    let unsplit_cost = estimate_cost_with_catalog(&catalog, "threshold-model", &unsplit).unwrap();
+    let split_cost = estimate_cost_with_catalog(&catalog, "threshold-model", &split).unwrap();
+
+    assert_eq!(unsplit_cost, split_cost);
+    assert_eq!(unsplit_cost.input, Some(1.5));
 }
 
 #[test]
@@ -1531,6 +1678,83 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_as_input() {
     let cost = usage.cost.as_ref().unwrap();
     assert!((cost.input.unwrap() - 0.00004).abs() < 1e-12, "{cost:?}");
     assert!((cost.total.unwrap() - 0.00008).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_with_uncached_input() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([{
+        "provider": "configured",
+        "model_id": "configured-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/configured",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_read_per_million": 0.5
+        },
+        "prompt_cache": {
+            "read_accounting": "included_in_prompt_tokens"
+        }
+    }]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.cache_write_tokens = None;
+    usage.uncached_input_tokens = Some(5);
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        tool_use_prompt_tokens: Some(30),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: url_context_extra(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let cost = response.usage.unwrap().cost.unwrap();
+    assert!((cost.input.unwrap() - 0.000_035).abs() < 1e-12, "{cost:?}");
+    assert!(
+        (cost.total.unwrap() - 0.000_077_5).abs() < 1e-12,
+        "{cost:?}"
+    );
+}
+
+#[test]
+fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_without_prompt_tokens() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    response.usage = Some(Usage {
+        completion_tokens: Some(20),
+        uncached_input_tokens: Some(50),
+        ..Usage::default()
+    });
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        tool_use_prompt_tokens: Some(7),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: url_context_extra(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let cost = response.usage.unwrap().cost.unwrap();
+    assert!((cost.input.unwrap() - 0.000_057).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.000_097).abs() < 1e-12, "{cost:?}");
 }
 
 #[test]

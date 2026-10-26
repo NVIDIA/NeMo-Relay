@@ -13,7 +13,7 @@ pub(crate) use types::*;
 use crate::runtime_diagnostics::{self as diag, Operation};
 use nemo_relay::diagnostics::CliFailureCode;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -70,14 +70,46 @@ struct FileConfig {
     diagnostics: Option<RuntimeDiagnosticsConfig>,
 }
 
+impl FileConfig {
+    /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
+    fn unknown_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
+            keys.extend(unknown.keys().map(|key| format!("{section}.{key}")));
+        };
+        if let Some(gateway) = &self.gateway {
+            collect("gateway", &gateway.unknown);
+        }
+        if let Some(upstream) = &self.upstream {
+            collect("upstream", &upstream.unknown);
+        }
+        if let Some(agents) = &self.agents {
+            collect("agents", &agents.unknown);
+            for (name, agent) in [
+                ("claude", &agents.claude),
+                ("codex", &agents.codex),
+                ("pi", &agents.pi),
+            ] {
+                if let Some(agent) = agent {
+                    collect(&format!("agents.{name}"), &agent.unknown);
+                }
+            }
+        }
+        keys
+    }
+}
+
+// Configuration is fail-open: unknown keys in these sections are collected in `unknown` and
+// reported as warnings instead of rejecting the file.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
     max_passthrough_body_bytes: Option<usize>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
     insecure_http_model_hosts: Option<Vec<String>>,
     response_timeout_secs: Option<u64>,
@@ -90,10 +122,11 @@ struct FileUpstreamConfig {
     anthropic_api_key: Option<String>,
     anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
     chatgpt_codex_base_url: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct FileAgentsConfig {
     // Keys match the agent's CLI invocation name (`claude`, `codex`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal
@@ -101,11 +134,15 @@ struct FileAgentsConfig {
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
     pi: Option<FileAgentCommandConfig>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentCommandConfig {
     command: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 /// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
@@ -1871,6 +1908,14 @@ pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBu
 // are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config = parse_file_config(value)?;
+    for key in config.unknown_keys() {
+        log::warn!(
+            target: "nemo_relay.configuration",
+            event = "configuration_unknown_key",
+            key = key.as_str();
+            "Unknown configuration key ignored"
+        );
+    }
     if let Some(diagnostics) = config.diagnostics {
         diagnostics.validate()?;
         resolved.diagnostics = diagnostics;
@@ -1882,9 +1927,9 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     Ok(())
 }
 
-pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<(), CliError> {
-    let _ = parse_file_config(value)?;
-    Ok(())
+/// Checks the shared config shape and returns the unknown keys it would ignore.
+pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<Vec<String>, CliError> {
+    Ok(parse_file_config(value)?.unknown_keys())
 }
 
 /// Validate one editor target with runtime rules, without loading other files or credentials.
@@ -1958,6 +2003,7 @@ fn apply_file_upstream_config(
         anthropic_api_key,
         anthropic_api_key_helper,
         chatgpt_codex_base_url,
+        unknown: _,
     } = upstream;
     if let Some(hosts) = insecure_http_model_hosts {
         gateway.insecure_http_model_hosts = HttpModelHosts::parse(hosts)?;

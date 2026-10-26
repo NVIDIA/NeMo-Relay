@@ -37,6 +37,7 @@ use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
     has_configured_headers, validate_header_files, validate_header_http_endpoint_typed,
+    validate_otlp_transport_typed,
 };
 use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, ExporterInitializationError, ExporterInitializationResult,
@@ -46,12 +47,11 @@ use super::otel_signal::{
     MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, SignalExporterRuntime,
     SignalResourceLineage, SignalRuntimeDiagnostics, automatic_otlp_http_client,
     automatic_protocol_is_grpc, automatic_protocol_is_unset, automatic_signal_endpoint,
-    automatic_signal_headers_configured, build_grpc_metadata, build_in_owned_runtime,
-    classify_metric_mark, drain_startup_queue, promoted_signal_resource_attributes,
-    record_resource_pipeline_limit, reject_signal_header_environment, resolve_header_env,
-    resolve_http_signal_endpoint, retry_batch_processor_channel_full,
-    should_relog_runtime_diagnostic, signal_resource, telemetry_resource, validate_signal_headers,
-    validate_telemetry_sdk_resource_attributes,
+    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark, drain_startup_queue,
+    promoted_signal_resource_attributes, record_resource_pipeline_limit,
+    reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
+    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
+    telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
 use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
@@ -287,16 +287,14 @@ impl OpenTelemetryLogConfig {
             .into());
         }
         if self.automatic {
-            if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
-                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")?
-                    .ok_or_else(|| {
-                        ExporterInitializationError::InvalidEndpoint(
-                            "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
-                        )
-                    })?;
-                validate_header_http_endpoint_typed(&endpoint, &self.plaintext)
-                    .map_err(ExporterInitializationError::from)?;
-            }
+            let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")?
+                .ok_or_else(|| {
+                    ExporterInitializationError::InvalidEndpoint(
+                        "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
+                    )
+                })?;
+            validate_otlp_transport_typed(&endpoint, &self.plaintext, "log")
+                .map_err(ExporterInitializationError::from)?;
         } else {
             validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
                 .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;

@@ -1555,24 +1555,29 @@ struct ToolCallState {
 impl OpenAIChatStreamingState {
     fn observe(&mut self, chunk: &Json) {
         // Top-level fields (id, object, created, model) are repeated on every chunk; capture once
-        // each so unrelated later chunks can't overwrite the canonical values.
+        // each so unrelated later chunks can't overwrite the canonical values. Empty values are
+        // skipped: Azure OpenAI's leading prompt-filter chunk carries "" and 0 for all four.
         if self.id.is_none()
             && let Some(id) = chunk.get("id").and_then(Json::as_str)
+            && !id.is_empty()
         {
             self.id = Some(id.to_string());
         }
         if self.object.is_none()
             && let Some(obj) = chunk.get("object").and_then(Json::as_str)
+            && !obj.is_empty()
         {
             self.object = Some(obj.to_string());
         }
         if self.created.is_none()
             && let Some(c) = chunk.get("created").and_then(Json::as_u64)
+            && c != 0
         {
             self.created = Some(c);
         }
         if self.model.is_none()
             && let Some(m) = chunk.get("model").and_then(Json::as_str)
+            && !m.is_empty()
         {
             self.model = Some(m.to_string());
         }

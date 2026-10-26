@@ -14,7 +14,8 @@ use crate::codec::optimization::{
     LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
 };
 use crate::codec::response::{
-    CostEstimate, CostSource, PricingCatalog, PricingCatalogError, PricingSource, Usage,
+    ApiSpecificResponse, CostEstimate, CostSource, PricingCatalog, PricingCatalogError,
+    PricingSource, Usage,
 };
 use crate::json::Json;
 
@@ -804,6 +805,253 @@ fn compression_contribution(
 }
 
 #[test]
+fn baseline_usage_keeps_the_uncached_input_split_of_the_effective_usage() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(contribution()));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(1000),
+            completion_tokens: Some(100),
+            total_tokens: Some(1100),
+            cache_read_tokens: Some(200),
+            uncached_input_tokens: Some(800),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+    let summary = finalize_optimization_summary(
+        &recorder,
+        Some(&mut response),
+        Some("baseline"),
+        &resolver(),
+    )
+    .unwrap();
+
+    let baseline = summary.baseline_usage.as_ref().unwrap();
+    assert_eq!(baseline.prompt_tokens, Some(1200));
+    assert_eq!(baseline.uncached_input_tokens, Some(1000));
+    assert_eq!(summary.baseline_cost.as_ref().unwrap().total, Some(0.0025));
+    assert_eq!(summary.actual_cost.as_ref().unwrap().total, Some(0.00105));
+}
+
+#[test]
+fn baseline_usage_keeps_a_separate_uncached_input_split() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(contribution()));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(800),
+            completion_tokens: Some(100),
+            total_tokens: Some(900),
+            cache_read_tokens: Some(200),
+            uncached_input_tokens: Some(800),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+    let summary = finalize_optimization_summary(
+        &recorder,
+        Some(&mut response),
+        Some("baseline"),
+        &resolver(),
+    )
+    .unwrap();
+
+    let baseline = summary.baseline_usage.as_ref().unwrap();
+    assert_eq!(baseline.prompt_tokens, Some(1000));
+    assert_eq!(baseline.uncached_input_tokens, Some(1000));
+    assert_eq!(summary.baseline_cost.as_ref().unwrap().total, Some(0.0025));
+    assert_eq!(summary.actual_cost.as_ref().unwrap().total, Some(0.00105));
+}
+
+#[test]
+fn an_inconsistent_effective_input_split_marks_the_baseline_incomplete() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(contribution()));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(1000),
+            completion_tokens: Some(100),
+            total_tokens: Some(1100),
+            cache_read_tokens: Some(200),
+            uncached_input_tokens: Some(999),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+    let summary = finalize_optimization_summary(
+        &recorder,
+        Some(&mut response),
+        Some("baseline"),
+        &resolver(),
+    )
+    .unwrap();
+
+    assert!(
+        summary
+            .limitations
+            .contains(&"inconsistent_baseline_input_split".to_string())
+    );
+    assert_eq!(
+        summary
+            .baseline_usage
+            .as_ref()
+            .unwrap()
+            .uncached_input_tokens,
+        None
+    );
+    assert!(summary.baseline_cost.is_none());
+    assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
+}
+
+fn cache_free_response(api_specific: Option<ApiSpecificResponse>) -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(1000),
+            completion_tokens: Some(100),
+            total_tokens: Some(1100),
+            uncached_input_tokens: Some(1000),
+            ..Usage::default()
+        }),
+        api_specific,
+        ..AnnotatedLlmResponse::default()
+    }
+}
+
+fn saved_prompt_and_cache_reads() -> LlmOptimizationContribution {
+    compression_contribution(
+        "compressor",
+        LlmOptimizationTokens {
+            prompt_tokens: Some(500),
+            cache_read_tokens: Some(200),
+            total_tokens: Some(500),
+            ..LlmOptimizationTokens::default()
+        },
+    )
+}
+
+#[test]
+fn baseline_split_of_cache_free_openai_usage_counts_saved_cache_reads_in_prompt() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(saved_prompt_and_cache_reads()));
+    let mut response = cache_free_response(Some(ApiSpecificResponse::OpenAIChat {
+        logprobs: None,
+        system_fingerprint: None,
+        service_tier: None,
+    }));
+
+    let summary =
+        finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver()).unwrap();
+
+    let baseline = summary.baseline_usage.as_ref().unwrap();
+    assert_eq!(baseline.prompt_tokens, Some(1500));
+    assert_eq!(baseline.uncached_input_tokens, Some(1300));
+}
+
+#[test]
+fn baseline_uncached_input_shrinks_when_saved_cache_reads_exceed_saved_prompt_tokens() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(compression_contribution(
+        "compressor",
+        LlmOptimizationTokens {
+            prompt_tokens: Some(100),
+            cache_read_tokens: Some(300),
+            total_tokens: Some(100),
+            ..LlmOptimizationTokens::default()
+        },
+    )));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(1000),
+            completion_tokens: Some(100),
+            total_tokens: Some(1100),
+            cache_read_tokens: Some(200),
+            uncached_input_tokens: Some(800),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let summary =
+        finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver()).unwrap();
+
+    let baseline = summary.baseline_usage.as_ref().unwrap();
+    assert_eq!(baseline.prompt_tokens, Some(1100));
+    assert_eq!(baseline.cache_read_tokens, Some(500));
+    assert_eq!(baseline.uncached_input_tokens, Some(600));
+    let total = summary.baseline_cost.as_ref().unwrap().total.unwrap();
+    assert!((total - 0.000_925).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn baseline_split_of_cache_free_usage_without_an_api_is_undetermined() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(saved_prompt_and_cache_reads()));
+    let mut response = cache_free_response(None);
+
+    let summary =
+        finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver()).unwrap();
+
+    assert_eq!(
+        summary
+            .baseline_usage
+            .as_ref()
+            .unwrap()
+            .uncached_input_tokens,
+        None
+    );
+    assert!(summary.baseline_cost.is_none());
+    assert!(
+        summary
+            .limitations
+            .contains(&"undetermined_baseline_input_split".to_string())
+    );
+}
+
+#[test]
+fn baseline_keeps_uncached_input_of_usage_without_prompt_tokens() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(compression_contribution(
+        "compressor",
+        LlmOptimizationTokens {
+            completion_tokens: Some(50),
+            ..LlmOptimizationTokens::default()
+        },
+    )));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            completion_tokens: Some(100),
+            uncached_input_tokens: Some(1000),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let summary =
+        finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver()).unwrap();
+
+    assert_eq!(
+        summary
+            .baseline_usage
+            .as_ref()
+            .unwrap()
+            .uncached_input_tokens,
+        Some(1000)
+    );
+    assert!(
+        !summary
+            .limitations
+            .contains(&"inconsistent_baseline_input_split".to_string())
+    );
+}
+
+#[test]
 fn missing_observed_fields_are_not_fabricated_for_baseline_usage() {
     let recorder = LlmOptimizationRecorder::default();
     assert!(recorder.record(compression_contribution(
@@ -1018,6 +1266,7 @@ fn checked_token_aggregation_reports_overflow_without_clamping_evidence() {
         usage: Some(Usage {
             prompt_tokens: Some(1),
             total_tokens: Some(1),
+            uncached_input_tokens: Some(1),
             ..Usage::default()
         }),
         ..AnnotatedLlmResponse::default()
@@ -1034,6 +1283,14 @@ fn checked_token_aggregation_reports_overflow_without_clamping_evidence() {
     assert_eq!(summary.tokens_saved.prompt_tokens, None);
     assert_eq!(summary.tokens_saved.total_tokens, None);
     assert_eq!(summary.baseline_usage.as_ref().unwrap().prompt_tokens, None);
+    assert_eq!(
+        summary
+            .baseline_usage
+            .as_ref()
+            .unwrap()
+            .uncached_input_tokens,
+        None
+    );
     assert!(summary.baseline_cost.is_none());
     assert!(summary.estimated_cost_saved.is_none());
     assert_eq!(summary.contributions.len(), 2);
