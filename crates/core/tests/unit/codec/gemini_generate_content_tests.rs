@@ -1561,6 +1561,44 @@ fn test_decode_response_text() {
 }
 
 #[test]
+fn test_decode_response_malformed_usage_is_invalid_argument() {
+    let codec = GeminiGenerateContentCodec;
+    for field in [
+        "promptTokenCount",
+        "candidatesTokenCount",
+        "totalTokenCount",
+        "cachedContentTokenCount",
+        "thoughtsTokenCount",
+        "toolUsePromptTokenCount",
+    ] {
+        for value in [
+            json!(-1),
+            json!(1.5),
+            json!("5"),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            let mut response = json!({
+                "candidates": [{
+                    "content": {"parts": [{"text": "IMPORTANT ANSWER"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+                "modelVersion": "gemini-2.5-flash"
+            });
+            response["usageMetadata"][field] = value.clone();
+
+            let err = codec.decode_response(&response).unwrap_err();
+            assert!(
+                matches!(&err, FlowError::InvalidArgument(message) if message.starts_with("Gemini response decode:")),
+                "{field}={value} should be invalid input, got: {err}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_decode_response_native_part_as_provider_native_content() {
     let codec = GeminiGenerateContentCodec;
     let response = json!({
