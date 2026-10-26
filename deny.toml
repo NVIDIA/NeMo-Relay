@@ -1,6 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+[advisories]
+# Remove these exceptions when opentelemetry-otlp and tonic support zstd >=0.14.3.
+# The CLI uses the patched release; telemetry still requires zstd 0.13.
+ignore = [
+    { id = "RUSTSEC-2026-0391", reason = "Telemetry does not reuse borrowed streaming contexts: tonic creates fresh read encoders/decoders per message and opentelemetry-otlp uses bulk compression." },
+    { id = "RUSTSEC-2026-0398", reason = "The zstd-safe 7.2.4 seekable feature is not enabled, including in all-features workspace builds." },
+    { id = "RUSTSEC-2026-0403", reason = "Telemetry uses read-based streaming and bulk compression, not the affected write-based streaming decoder; CLI decompression uses patched zstd-safe 8.2.0." },
+]
+
 [bans]
 skip = [
     { crate = "block-buffer@0.10.4", reason = "required by sha1 0.10 alongside sha2 0.11" },
@@ -19,6 +28,8 @@ skip = [
     { crate = "r-efi@6.0.0", reason = "target-specific build-only duplicate from cbindgen's tempfile stack" },
     { crate = "winnow@1.0.1", reason = "build-only duplicate internal to cbindgen's TOML parser stack" },
     { crate = "windows-sys@0.52.0", reason = "target-specific dependency required alongside newer windows-sys releases" },
+    { crate = "zstd@0.13.3", reason = "required by opentelemetry-otlp and tonic alongside the CLI's patched zstd 0.14.3" },
+    { crate = "zstd-safe@7.2.4", reason = "required by telemetry's zstd 0.13 alongside patched zstd-safe 8.2.0" },
 ]
 
 [licenses]
