@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import socket
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -203,7 +204,7 @@ async def test_worker_host_channel_request_response_boundary(
 @pytest.mark.parametrize("policy", ["scalar-small", "named-small", "named-large"])
 @pytest.mark.parametrize("transport", ["tcp", "unix"])
 async def test_diagnostics_keep_separate_budgets_inside_callbacks(
-    policy: str, transport: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    policy: str, transport: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """The real worker keeps diagnostic caps independent in both directions."""
     if transport == "unix" and not hasattr(socket, "AF_UNIX"):
@@ -247,7 +248,13 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
     host = Host()
     api.pb_grpc.add_RelayDiagnosticsServicer_to_server(host, server)
     api.pb_grpc.add_RelayHostRuntimeServicer_to_server(host, server)
-    host_endpoint = f"unix://{tmp_path / 'host.sock'}" if transport == "unix" else "tcp://127.0.0.1:0"
+    if transport == "unix":
+        # macOS pytest roots can exceed the Unix socket path-length limit.
+        directory = tempfile.TemporaryDirectory(prefix="nr-", dir="/tmp")
+        request.addfinalizer(directory.cleanup)
+        host_endpoint = f"unix://{Path(directory.name) / 'host.sock'}"
+    else:
+        host_endpoint = "tcp://127.0.0.1:0"
     port = server.add_insecure_port(api._grpc_target(host_endpoint))
     if transport == "tcp":
         host_endpoint = f"http://127.0.0.1:{port}"
