@@ -328,7 +328,7 @@ async fn daemon_collection_rejects_oversized_encoded_and_stalled_responses() {
                         tokio::time::sleep(Duration::from_secs(10)).await;
                         StatusCode::OK.into_response()
                     }
-                    "disabled" => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    "disabled" => error(HttpReason::Disabled),
                     "encoded" => (
                         [
                             (CONTENT_TYPE, "application/json"),
@@ -599,12 +599,125 @@ async fn daemon_collection_read_reports_negotiated_unavailability() {
         if scenario != "missing" {
             lock(&state.worker_sessions).insert("worker".into(), session);
         }
-        assert_eq!(
-            wrapper(&state, &token).await.status(),
-            expected,
-            "{scenario}"
-        );
+        let response = wrapper(&state, &token).await;
+        assert_eq!(response.status(), expected, "{scenario}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let envelope = DiagnosticHttpError::from_response(expected.as_u16(), &body).unwrap();
+        let expected_reason = match scenario {
+            "missing" => HttpReason::Missing,
+            "unsupported" => HttpReason::Unsupported,
+            "disabled" => HttpReason::Disabled,
+            "query_disabled" => HttpReason::QueryDisabled,
+            "schema" => HttpReason::UnsupportedSchema,
+            "http_disabled" => HttpReason::HttpReadDisabled,
+            "collection_disabled" => HttpReason::CollectionDisabled,
+            "closed" => HttpReason::ShuttingDown,
+            _ => unreachable!(),
+        };
+        assert_eq!(envelope.error.reason, expected_reason, "{scenario}");
     }
+}
+
+#[tokio::test]
+async fn diagnostic_polling_uses_error_reasons_before_stopping_a_session() {
+    // Exercise actual HTTP body consumption and the session's terminal decision.
+    for (status, body, outcome, stopped) in [
+        (
+            503,
+            r#"{"error":{"reason":"shutting_down"}}"#,
+            "shutting_down",
+            false,
+        ),
+        (503, r#"{"error":{"reason":"disabled"}}"#, "disabled", true),
+        (
+            503,
+            r#"{"error":{"reason":"query_disabled"}}"#,
+            "disabled",
+            true,
+        ),
+        (
+            503,
+            r#"{"error":{"reason":"read_authority_unavailable"}}"#,
+            "unreachable",
+            false,
+        ),
+        (
+            503,
+            r#"{"error":{"reason":"future_reason"}}"#,
+            "unreachable",
+            false,
+        ),
+        (503, "", "unreachable", false),
+        (503, "malformed", "unreachable", false),
+        (
+            503,
+            r#"{"error":{"reason":"unsupported"}}"#,
+            "unreachable",
+            false,
+        ),
+        (
+            404,
+            r#"{"error":{"reason":"missing"}}"#,
+            "unreachable",
+            false,
+        ),
+        (404, "", "unsupported", true),
+        (
+            501,
+            r#"{"error":{"reason":"unsupported"}}"#,
+            "unsupported",
+            true,
+        ),
+    ] {
+        let source = context();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            crate::diagnostics_http::PREFIX,
+            get(move || async move { (StatusCode::from_u16(status).unwrap(), body) }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (state, token) = broker();
+        lock(&state.worker_sessions).insert("worker".into(), session(&source, &endpoint));
+        poll_session(&state).await;
+        assert_eq!(
+            lock(&state.worker_sessions)["worker"].diagnostic_poll_stopped,
+            stopped,
+            "{body}"
+        );
+        let response = wrapper(&state, &token).await;
+        let value: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(value["collection"]["latest_poll"], outcome, "{body}");
+        assert!(value["snapshot"].is_null());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn oversized_diagnostic_errors_are_bounded_and_do_not_stop_polling() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let app = Router::new().route(
+        crate::diagnostics_http::PREFIX,
+        get(|| async {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "x".repeat(MAX_DIAGNOSTIC_HTTP_ERROR_BYTES + 1),
+            )
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (state, token) = broker();
+    lock(&state.worker_sessions).insert("worker".into(), session(&context(), &endpoint));
+    poll_session(&state).await;
+    assert!(!lock(&state.worker_sessions)["worker"].diagnostic_poll_stopped);
+    let response = wrapper(&state, &token).await;
+    let value: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(value["collection"]["latest_poll"], "oversized");
+    server.abort();
 }
 
 #[tokio::test]

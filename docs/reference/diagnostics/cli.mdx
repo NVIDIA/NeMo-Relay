@@ -291,6 +291,14 @@ reports these values:
 receipt age. It does not compare worker and broker wall clocks or infer worker
 health. Pages older than 15 seconds are marked stale. An uncached current source
 returns a null snapshot and `missing`. No per-worker eviction ledger is retained.
+An authorized lookup for an unknown worker assignment instead returns HTTP 404
+with error reason `missing`; the CLI reports `worker not found`. An unrecognized
+404 response reports that the diagnostics endpoint is unavailable.
+
+Worker collection interprets structured error reasons before deciding whether to
+stop polling a session. `disabled` and `unsupported` stop polling for the current
+session. `shutting_down` is reported as the latest poll outcome and remains
+retryable. Unknown or malformed errors do not establish permanent disablement.
 
 The read returns an explicit error in these cases:
 

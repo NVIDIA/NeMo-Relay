@@ -41,6 +41,9 @@ authoring SDKs.
   attributes.
 - **`codec` module**: Normalized LLM request and response annotations.
 - **`plugin` module**: Structured plugin configuration diagnostics.
+- **`diagnostics` module**: Portable snapshots and read reasons, plus diagnostic
+  HTTP error envelopes, stable reasons, and numeric status mappings. HTTP
+  framework responses and client retry policy remain in adapters.
 - **Optional `schema` feature**: `schemars` implementations for supported
   serializable types.
 

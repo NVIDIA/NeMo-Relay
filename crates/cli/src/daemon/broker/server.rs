@@ -363,9 +363,7 @@ fn router_with_diagnostics(state: Arc<DaemonState>, encrypted: bool) -> Router {
     } else {
         app.route(
             WORKER_DIAGNOSTICS,
-            get(|| async {
-                crate::diagnostics_http::error(StatusCode::UPGRADE_REQUIRED, "tls_required")
-            }),
+            get(crate::diagnostics_http::authenticated_transport_required),
         )
     };
     match diagnostics {

@@ -28,6 +28,7 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-types.workspace = true
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc", "__internal-gateway"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
