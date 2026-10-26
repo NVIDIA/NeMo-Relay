@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version = 1
+
+[llm_clients.nvidia]
+format = "openai_chat"
+base_url = "__NVIDIA_BASE_URL__"
+api_key_env = "NVIDIA_API_KEY"
+
+[targets.efficient]
+id = "__EFFICIENT_MODEL__"
+llm_client = "nvidia"
+
+[targets.capable]
+id = "__CAPABLE_MODEL__"
+llm_client = "nvidia"
+
+[targets.judge]
+id = "__JUDGE_MODEL__"
+llm_client = "nvidia"
+
+# All three arms use Relay and the same plugin; only the routing policy differs.
+[routes.baseline]
+id = "switchyard/baseline"
+type = "passthrough"
+target = "capable"
+
+[routes.efficient]
+id = "switchyard/efficient"
+type = "passthrough"
+target = "efficient"
+
+[routes.routed]
+id = "switchyard/routed"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "judge"
+strong_target = "capable"
+weak_target = "efficient"
+# Raising this threshold sends more requests to the capable target.
+base_threshold = 0.8
+response_format_type = "json_object"
