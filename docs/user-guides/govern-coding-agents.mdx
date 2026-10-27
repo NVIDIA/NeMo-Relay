@@ -1,429 +1,298 @@
 ---
 title: "Deploy Relay to Govern Coding Agents Across an Organization"
-sidebar-title: "Govern Coding Agents"
-description: "Operate supported coding harnesses through managed Relay workers and verify enterprise audit, privacy, and cost coverage."
+description: "Deploy managed workers, apply telemetry policy, and verify supported coding-agent activity."
 position: 6
+hide-nav-links: true
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use a Relay daemon when developers should keep their coding harnesses while
-your platform team owns their connection to providers and telemetry policy.
-The daemon gives supported harnesses a managed entry point and starts a Relay
-worker for each user-machine identity. The worker applies the approved plugins
-to activity it observes; the developer continues in Claude Code, Codex, or pi.
-A successful rollout produces an attributable, privacy-checked audit record for
-representative model and tool activity from each supported path.
+Enterprise platform teams need a consistent way to route supported coding-agent
+activity, apply telemetry policy, and audit what happened while developers keep
+their usual tools. A Relay daemon brokers those connections and coordinates
+workers running under each user's operating-system identity.
 
-## Example: two users with a shared deployment
+This guide covers managed routing, supported model/tool capture, and telemetry
+redaction. Identity-provider enrollment, offboarding, and preventing alternate
+network routes require your organization's additional controls.
 
-The companion uses one Linux host with two independent operating-system
-accounts. **Alice runs Claude Code; Bob runs Codex CLI.** An administrator
-installs the Relay CLI as a system daemon, provisions the managed harness
-bundle, and owns the worker plugin configuration. Each user has a separate
-home, Relay routing token, provider authentication, task repository, and worker.
+## Before you start
 
-| Example participant | What runs there | Responsibility |
+| Requirement | Your deployment | Brev example |
 | --- | --- | --- |
-| Administrator | Relay system service and immutable harness bundle | Distribute approved settings and plugin policy. |
-| Alice | Claude Code, MCP lifecycle client, and Alice's worker | Complete a coding task using her provider credentials. |
-| Bob | Codex CLI, MCP lifecycle client, and Bob's worker | Complete an independent task while Alice's session is active. |
-| Tracing backend | Phoenix, or your chosen OTLP destination | Inspect supported model/tool activity and redacted synthetic data. |
+| Host | Supported workstations and a local or remote daemon | Fresh Ubuntu systemd CPU VM with sudo, Git, curl, Python 3.12 |
+| Harness | A supported harness and approved provider authentication | Choose Claude Code for both users, or Codex for both |
+| Access | Administrator-managed policy and trace intake | Each Linux user signs into the chosen provider separately |
+| Changes | Managed bundle, service, worker policy, and user credentials | Creates three accounts, a system service, and files under /etc and /opt |
+| Cleanup | Follow your workstation removal runbook | [Remove the deployment](/daemon/operations#remove-a-deployment) or delete the disposable VM |
 
-<Card title="Run the two-user example on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-coding-agents/docs/user-guides/_examples/coding-agents">
-Inspect the provisioning script, system service, shared policy, and session
-launcher. Use a fresh systemd VM and supply each user's provider authentication.
+<Warning title="Dedicated host">
+The example installs system-wide Relay policy. Use a separate VM from the
+observability and routing examples; a virtual environment does not isolate this policy.
+</Warning>
+
+Example versions: Relay 0.10.4, Python 3.12, and either Claude Code 2.1.309 or
+Codex 0.164.0. The [support matrix](/reference/support-matrix) lists minimums;
+repeat acceptance after changing a version.
+
+## 1. Choose coverage and topology
+
+Inventory the harness version, provider API, required hooks, and operating system.
+Model calls must pass through a worker to receive model policy or telemetry.
+Supported hooks contribute tool and turn activity; coverage differs by harness.
+
+<CardGroup cols={2}>
+<Card title="Local daemon" href="/daemon/linux" icon="fa-solid fa-laptop-code">
+Run a daemon on each workstation. Workers execute as its users. The Brev
+example represents one workstation with two independent users.
 </Card>
+<Card title="Remote daemon" href="/daemon/remote-server" icon="fa-solid fa-server">
+Operate a trusted central entry point. Workers remain on client workstations;
+plan daemon-to-worker connectivity and transport trust.
+</Card>
+</CardGroup>
 
-<Note title="Example scope and alternatives">
-This demonstrates a shared-host deployment with real separate Linux users.
-Other supported coding harnesses and separate workstation deployments are
-possible. Brev only supplies the host; use the same artifacts on a comparable
-enterprise Linux host. Hermes uses a native in-process Relay integration and
-is a different setup from these managed daemon clients.
-</Note>
+For required audit coverage, use `--require-worker` on the daemon:
 
-## Prerequisites
-
-- A **fresh Ubuntu systemd VM** with sudo, Git, curl, and Python 3.11+. The
-  provisioning script refuses to replace existing accounts or Relay files.
-- [Relay CLI 0.11.0-rc.1](/getting-started/installation),
-  [Claude Code >=2.1.121](https://code.claude.com/docs/en/setup), and
-  [Codex CLI >=0.143.0](https://developers.openai.com/codex/cli). Install harnesses
-  where the new users' login shells can find them.
-- A **Claude.ai subscription login for Alice** and **ChatGPT sign-in for Bob**.
-  API keys or approved gateway credentials are alternatives. Authenticate in
-  each user's account on the example host; a login on your laptop does not
-  automatically sign in a different user on the VM.
-- Phoenix on loopback port 6006, or an approved OTLP destination. A disposable
-  Phoenix can run in a separate terminal with `uvx --from arize-phoenix phoenix serve`.
-
-```text
-Claude / Codex ─ model URL + token ─→ daemon :47632 ─→ user's worker ─→ provider
-              └ hook forwarder ────→ daemon ─────────→ user's worker
-MCP lifecycle client ← control connection → daemon (coordinates worker lifetime)
-User's worker reads administrator-owned /etc/nemo-relay/plugins.toml
+```ini
+ExecStart=/opt/nvidia/bin/nemo-relay daemon --bind 127.0.0.1 --port 47632 --require-worker
 ```
 
-The **daemon** is the shared broker. A **worker** is a Relay process running as
-the developer, so their requests and plugins run with that user's permissions.
-Managed settings select the daemon model URL and `x-nemo-relay-client-token`
-header. Hook commands send supported tool/session events directly to the daemon;
-the MCP connection coordinates worker startup and lifetime.
+Without it, allowed pass-through can return a provider response while no worker
+is capturing the request. Verify the worker and plugin output before accepting
+a cohort. Consult the [support matrix](/reference/support-matrix) for capture limits.
 
-<Note title="Pinned release candidate">
-This feedback branch was verified with Relay CLI **0.11.0-rc.1**, a prerelease.
-Install the explicit tested tag for this preview and repeat acceptance checks
-when upgrading:
+### Choose the coding harness
+
+<CardGroup cols={2}>
+<Card title="Claude Code" href="/nemo-relay-cli/claude-code" icon="fa-solid fa-terminal">
+Use the Claude provider login approved for your organization. The Brev variant
+runs Claude Code for both Alice and Bob.
+</Card>
+<Card title="Codex" href="/nemo-relay-cli/codex" icon="fa-solid fa-code">
+Use ChatGPT sign-in or an OpenAI API key. The Brev variant runs Codex for both
+Alice and Bob.
+</Card>
+</CardGroup>
+
+A deployment can contain multiple supported harnesses, including mixed Claude
+Code and Codex users. The example chooses one harness for both users to simplify setup.
+
+## 2. Apply the managed policy
+
+Distribute an administrator-owned bundle and worker `plugins.toml`. Keep provider
+credentials in each user's authentication store; do not place them in shared
+configuration. This policy redacts selected emitted fields and exports metadata
+to Phoenix, with full payload capture disabled:
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+version = 1
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 90
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://127.0.0.1:6006/v1/traces"
+transport = "http_binary"
+service_name = "relay-managed-coding-agents"
+```
+
+Lower profile priorities run first: email at 80, then API keys at 90. These two
+detectors are a sample policy, not comprehensive PII coverage. Other built-in
+detectors include phone, IPv4/IPv6, URL, UUID, bearer token, JWT, credit card,
+and AWS, GCP, and Azure credential patterns. Select and test detectors for your data using the
+[detector reference](/configure-plugins/pii-redaction/configuration#detector-presets).
+
+Redaction affects emitted telemetry, not the conversation sent to the provider.
+For another destination, replace the endpoint and authentication using
+[Connecting to Observability Platforms](/user-guides/connecting-to-observability-platforms).
+
+## 3. Provision users and managed sessions
+
+Each user-machine identity needs its own routing token. As that user:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0-rc.1 sh
+nemo-relay daemon token ensure --json
+```
+
+Relay generates 32 random bytes, stores the token in the resolved user configuration
+directory, and reports its path without printing its value. On Unix the file
+has mode 0600 and its newly created directory has mode 0700. Hooks, MCP registration,
+and provider routing must use the same token.
+
+<Note title="Trust boundaries on a shared host">
+Bob cannot read Alice's owner-only token file under normal account permissions;
+root and processes running as Alice can. This token selects a managed identity;
+it does not replace provider authentication or enterprise SSO.
+
+Other local users can query the loopback worker-status endpoint. It exposes
+operational state without a username mapping. Keep it
+on loopback for this example. Removing a token file does not revoke its existing
+daemon binding: restart the daemon to clear bindings, then provision and
+reconnect approved clients. See [credential lifecycle](/daemon/configuration#replace-a-client-token).
+</Note>
+
+<Accordion title="Brev example: provision two users with one harness">
+Install Relay from a stable, pinned installer and select one harness for both users:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
+NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
 export PATH="$HOME/.local/bin:$PATH"
+git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-coding-agents
+cd relay-coding-agents/docs/user-guides/_examples/coding-agents
+# Choose claude OR codex. Both accounts use this selection.
+sudo bash deploy.sh "$(command -v nemo-relay)" claude "$(command -v python3.12)"
 ```
 
-Use your organization's approved release before a production rollout.
-</Note>
+Use `codex` in the deployment command for the Codex variant. Install that harness
+where both new users' login shells can find it. The provisioning script:
 
-## Run the optional two-user example
+- Creates Alice, Bob, and the dedicated service account, with private home directories.
+- Installs Relay and the selected read-only managed bundle under `/opt/nvidia`.
+- Creates distinct per-user tokens and task repositories.
+- Installs policy under `/etc/nemo-relay` and a systemd service on loopback port 47632.
+- Prepares managed Codex settings and a local plugin marketplace when Codex is selected.
 
-On Brev, use `brev shell YOUR_INSTANCE` and confirm PID 1 is systemd.
-If that connection opens a container, use `--host` only when its host route is reachable.
-The same files run on an ordinary enterprise Linux VM. As administrator:
+It refuses to overwrite existing users or deployment files. Check Python 3.12
+explicitly: with uv, install it using `uv python install 3.12` and pass the
+absolute path from `uv python find 3.12`.
+
+Start Phoenix in another terminal with `uvx --from arize-phoenix phoenix serve`.
+For the synthetic redaction check only, opt into payloads before starting sessions:
 
 ```bash
-git clone --branch topic/codex/user-guides-coding-agents --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-coding-agents
-cd relay-coding-agents/docs/user-guides/_examples/coding-agents
-sudo bash deploy.sh "$(command -v nemo-relay)" "$(command -v python3.12)"
+sudo install -m 0644 plugins.synthetic.toml /etc/nemo-relay/plugins.toml
+sudo systemctl restart nemo-relay.service
 ```
 
-The example command selects Python 3.12 explicitly because Ubuntu images can
-still default to Python 3.10, including under sudo. Install Python 3.12 through
-your approved method; with uv, use `uv python install 3.12` and pass the absolute
-path printed by `uv python find 3.12` as the second deployment argument.
+Use only the supplied synthetic task with that policy.
+</Accordion>
 
-The branch URL is the review copy until this guide lands upstream. Follow the
-[companion's Codex plugin setup](https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-coding-agents/docs/user-guides/_examples/coding-agents#prepare-bobs-managed-codex-integration)
-before starting Bob. In two independent terminals, begin at the original
-administrator shell. If you are already inside Alice's or Bob's shell, use
-`exit` first; these example users do not have administrator privileges.
+<Accordion title="Brev example: authenticate and start each user">
+Connect with `brev shell YOUR_INSTANCE`. In separate administrator terminals,
+enter `sudo -iu alice` and `sudo -iu bob`. Inside **each** account, follow the
+same chosen harness tab. A laptop login does not sign in a different Linux user.
 
 <Tabs>
-<Tab title="Alice: Claude Code">
+<Tab title="Both users: Claude Code">
+
 ```bash
-sudo -iu alice
 claude auth login
 claude auth status
 /opt/nvidia/share/relay-user-guide/session.sh
 ```
+
+Use your organization's approved account or API authentication. For a subscription
+login, leave provider credential overrides unset and retain the provider's
+authorization headers. Check Anthropic's
+[subscription and gateway requirements](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)
+for the account and gateway you use.
+
 </Tab>
-<Tab title="Bob: Codex">
+<Tab title="Both users: Codex">
+
 ```bash
-sudo -iu bob
 codex plugin marketplace add /opt/nvidia/share/nemo-relay-codex-marketplace-v1
 codex plugin add nemo-relay-managed-v1@nemo-relay-managed
 codex login --device-auth
 codex login status
 /opt/nvidia/share/relay-user-guide/session.sh
 ```
+
+Device login must be allowed by your workspace. An OpenAI API key is another
+authentication option; see [Codex authentication](https://developers.openai.com/codex/auth).
+
 </Tab>
 </Tabs>
 
-Complete the device-login URL and code in your own browser. Workspace policy
-must permit device login. If Bob is already signed in, check his status and
-reuse that login. With the default OpenAI upstream and no replacement provider
-credential, Relay recognizes Codex's ChatGPT OAuth and forwards to the native
-ChatGPT Codex backend. A custom upstream or administrator-supplied credential
-changes that routing; see [Codex Responses compatibility](/daemon/configuration#codex-responses-compatibility).
-
-<Accordion title="Use an OpenAI API key for Bob instead">
-As Bob, supply the key through your secret manager or an interactive Bash shell:
-
-```bash
-IFS= read -r -s -p 'OpenAI API key: ' OPENAI_API_KEY; printf '\n'
-export OPENAI_API_KEY
-printenv OPENAI_API_KEY | codex login --with-api-key
-```
+Review plugin/hook trust prompts and retain required command approvals.
+Ask the agent to read `/opt/nvidia/share/relay-user-guide/task.txt` and complete
+it in the current repository. Keep Alice's session open while starting Bob.
+From your local machine, forward Phoenix with
+`brev port-forward YOUR_INSTANCE --port 6006:6006`.
 </Accordion>
 
-<Note title="Preserve subscription authentication">
-For Alice, choose the Claude.ai account during browser login and reuse an
-existing login when available. Leave provider credential overrides unset when
-using the subscription: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and
-`apiKeyHelper` select other authentication paths. The example's
-`ANTHROPIC_CUSTOM_HEADERS` carries a separate Relay routing token; it does not
-replace Alice's provider login.
+## 4. Verify attribution, activity, and privacy
 
-Claude Code can send its subscription-authenticated requests through
-`ANTHROPIC_BASE_URL`. The gateway must preserve the provider authorization and
-`anthropic-beta` OAuth capability. This path was verified with Claude Code
-2.1.309 and Relay 0.11.0-rc.1; repeat acceptance for your installed versions.
-See [managed Claude authentication](/daemon/configuration#claude-code) and
-[Anthropic's gateway guidance](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways).
-</Note>
+Accept one user first, then repeat with both sessions active:
 
-<Accordion title="Use an Anthropic API key for Alice instead">
-As Alice, supply the key through your secret manager or an interactive Bash shell:
+| Check | Pass condition |
+| --- | --- |
+| Worker isolation | Two ready worker IDs, with processes owned separately by Alice and Bob. |
+| Task completion | Each repository contains the implementation and tests; the task contract and independent checks pass. |
+| Captured work | Supported model and tool spans are present and connected to the expected task or turn. |
+| Attribution | Record which worker/session and run time belong to each OS account; confirm the corresponding trace. |
+| Privacy | With the synthetic policy, exported task content contains `[REDACTED]` instead of the synthetic contact. |
+| Independent lifetime | Closing Alice removes her worker after shutdown; Bob can complete another captured request. |
 
-```bash
-IFS= read -r -s -p 'Anthropic API key: ' ANTHROPIC_API_KEY; printf '\n'
-export ANTHROPIC_API_KEY
-/opt/nvidia/share/relay-user-guide/session.sh
-```
+The trace's `nemo_relay.uuid` and `nemo_relay.parent_uuid` establish scope identity
+and parentage; `nemo_relay.session.instance_id` identifies the emitted session
+where supplied. These are not employee usernames. Join session evidence with
+worker lifecycle logs, process ownership, and your enrollment inventory.
+Do not infer a person from the shared `service_name` alone.
 
-This selects API billing rather than subscription usage. An organization-managed
-Anthropic-compatible gateway is another option; follow its credential policy.
-</Accordion>
-
-Use your secret manager for managed deployments. The Bash examples hide key
-input and keep key values out of shell history. Review Codex's plugin hook trust
-request for the generated `/opt/nvidia/bin/nemo-relay` handlers; prompt wording
-varies by version. Check `/plugins` and the generated bundle if the handler differs.
-Do not disable trust checks.
-
-<Note title="Keep organization approval requirements in force">
-Use the interactive harness sessions shown here for command and hook approvals.
-In an authenticated Codex check, model requests reached Relay and Phoenix, but
-the coding task could not execute commands because the enterprise policy required
-approvals unavailable in that noninteractive mode. The process still exited zero.
-Require the expected files, passing task tests, and supported model/tool spans;
-a successful process exit or model response is insufficient.
-</Note>
-
-Ask each agent to read `/opt/nvidia/share/relay-user-guide/task.txt` and complete
-it in its current repository. Keep both sessions open for verification. On your
-local computer, forward Phoenix with
-`brev port-forward YOUR_INSTANCE --port 6006:6006` if using Brev.
-Add `--host` only when Phoenix is running through that same reachable host route.
-
-## Decide what the deployment must cover
-
-The harness's provider request must pass through its Relay worker for model
-telemetry or policy. Supported lifecycle hooks can add tool and session events,
-but their coverage differs by harness. Inventory the harness and version, the
-provider route it uses, the hooks you need, and the workstation operating system
-before claiming organization-wide coverage. The
-[coding-agent support matrix](/reference/support-matrix) gives the current
-limits for Claude Code, Codex, and pi.
-
-| Deployment | Where the daemon runs | Where the managed worker runs | Choose it when |
-| --- | --- | --- | --- |
-| Local | On each workstation | On that workstation under the user's identity | Local lifecycle and provider routing are acceptable. |
-| Remote | On a trusted Linux server | On each client workstation under the user's identity | You need a centrally operated entry point and can provide a trusted server connection plus a return route to the client worker. |
-
-In either topology, a worker uses administrator-owned system configuration and
-managed harness settings. Users keep their normal provider login; a Relay routing
-token identifies the user-machine session and must be unique to that
-identity. The daemon does not turn an unsupported provider or hook path into a
-captured one. See [daemon architecture](/daemon/architecture) for the trust and
-network boundaries.
-
-<Warning>
-A provider response can succeed through pass-through while the managed worker
-is absent. Decide whether pass-through is allowed for the cohort before rollout.
-For a required audit boundary, accept a session only after the worker and its
-plugin output are both visible.
-</Warning>
-
-## Apply one managed worker policy
-
-Place the approved `plugins.toml` in the client's system configuration so each
-managed worker receives the same policy. The following example redacts email
-addresses and API keys from supported emitted telemetry surfaces, then sends
-OpenInference traces to a local Phoenix intake. Replace that endpoint with your
-organization-operated OTLP collector or tracing backend and choose a service name that
-identifies your deployment.
-
-<Code src="_examples/coding-agents/plugins.toml" language="toml" title="Shared worker plugins.toml" />
-
-<Warning title="Synthetic example payloads">
-This companion enables payload export to inspect redaction of a synthetic email
-address. Use only the supplied synthetic task. Select permitted fields and
-payload settings before adapting the policy to production data.
-</Warning>
-
-<Accordion title="Example system service">
-The system service runs under a dedicated account; workers run as Alice and
-Bob. `--require-worker` makes missing worker coverage visible as a failed
-request instead of silently accepting pass-through during the demonstration.
-
-<Code src="_examples/coding-agents/nemo-relay.service" language="ini" title="nemo-relay.service" />
-</Accordion>
-
-Redaction applies to emitted observability data; it does not change the real
-provider conversation. Test it with representative prompts and tool results
-before sending production telemetry. If your audit pipeline collects ATOF
-records instead of OTLP spans, configure that output under the same managed
-policy. Keep collector credentials in the worker's secret-backed environment,
-and avoid one writable log file shared by every worker.
-
-## Verify the example deployment
-
-From an administrator terminal:
+<Accordion title="Brev example: inspect workers and task results">
 
 ```bash
 curl -fsS http://127.0.0.1:47632/_nemo_relay/v1/workers/status
 ps -eo user,pid,args | grep -E '[n]emo-relay daemon (mcp|worker)'
 sudo journalctl -u nemo-relay.service -n 50 --no-pager
+sudo -iu alice bash -lc 'cd ticket-service && python3 -m unittest discover'
+sudo -iu bob bash -lc 'cd ticket-service && python3 -m unittest discover'
+sudo -iu alice bash -lc 'python3 /opt/nvidia/share/relay-user-guide/verify_task.py "$HOME/ticket-service"'
+sudo -iu bob bash -lc 'python3 /opt/nvidia/share/relay-user-guide/verify_task.py "$HOME/ticket-service"'
 ```
 
-Require two distinct ready worker IDs and worker processes owned separately by
-Alice and Bob. Status fields include `worker_id`, `state`, `reference_count`,
-`control_available`, and `in_flight`; match assignments to process owners and
-lifecycle timestamps. The status endpoint has no username mapping and does not
-probe provider traffic.
+Status reports `worker_id`, `state`, `reference_count`, `control_available`, and
+`in_flight`; it does not test provider capture. In Phoenix project `default`,
+find service `relay-managed-coding-agents` at each task's time. Inspect the
+`task.txt` tool result for redaction and the model/tool parentage.
 
-<Accordion title="Captured Brev worker status and ownership">
-The following excerpts were captured on the example VM with two real MCP
-clients. They verify worker startup and ownership; they are not completed
-Claude/Codex task results.
-
-```json
-{
-  "status": "ok",
-  "workers": [
-    {"worker_id": "01a16aa4-8626-78c1-a7fa-72453bee161d", "state": "ready", "reference_count": 1, "control_available": true, "in_flight": 0},
-    {"worker_id": "01a16aa4-8627-7b43-ab1c-ea1adc78a2d8", "state": "ready", "reference_count": 1, "control_available": true, "in_flight": 0}
-  ]
-}
-```
-
-```text
-alice  841482 /opt/nvidia/bin/nemo-relay daemon worker --daemon-address http://127.0.0.1:47632 --bind 127.0.0.1
-bob    841484 /opt/nvidia/bin/nemo-relay daemon worker --daemon-address http://127.0.0.1:47632 --bind 127.0.0.1
-```
-
-Worker IDs and PIDs change each time. Compare your status assignments with
-process ownership and lifecycle timestamps, rather than copying these values.
+A successful process exit is insufficient: noninteractive harnesses can return
+zero while policy prevents the task's commands. Check the files and run the tests.
+Validate ASCII prefixes as well as ASCII digits; Unicode lookalikes must be rejected.
 </Accordion>
-
-In Phoenix, open project `default`, find service `relay-managed-coding-agents`,
-and inspect the supported
-tool-result payload from reading `task.txt`. The synthetic
-`sample.employee@example.com` should appear as **`[REDACTED]`** in exported
-payload data. The source file and provider conversation retain the original.
-Then review the code and tests from each user.
-
-A synthetic hook sequence on the Brev example produced a `Read` span with kind
-`TOOL` and `output.value = "[REDACTED]"` in Phoenix. Its parent was
-`claude-code-turn` (`CHAIN`). This verifies hook export and redaction; a complete
-harness task must also exercise authenticated model traffic.
-
-<Accordion title="Verified interactive Codex task with ChatGPT sign-in">
-On the Brev VM, Bob completed the ticket task using ChatGPT sign-in, Codex
-0.164.0, and Relay 0.11.0-rc.1. The generated implementation passed its three
-test methods and 21 independent acceptance cases, including Unicode digits
-and non-string inputs.
-
-Phoenix received the following completed spans in one task trace:
-
-| Span | Count | Parent |
-| --- | --- | --- |
-| `codex-task` (`AGENT`) | 1 | Root |
-| `codex-turn` (`CHAIN`) | 1 | Agent |
-| `openai.responses` (`LLM`) | 6 | Turn |
-| `Bash` / `apply_patch` (`TOOL`) | 8 | Turn |
-
-The captured `task.txt` tool result and final handoff contained `[REDACTED]`;
-the original synthetic email was absent from the exported task attributes.
-All parent spans were present. Bob's worker remained ready with the session
-open. This verifies the interactive Codex path. See the separate Claude result below
-for its measured coverage and limits.
-</Accordion>
-
-<Accordion title="Verified Claude task with Enterprise subscription sign-in">
-Alice completed the task through the same managed deployment using her existing
-Claude.ai Enterprise login and Claude Code 2.1.309. The first implementation
-passed its six test methods but failed two of 21 independent cases because it
-accepted Unicode prefix lookalikes. After review feedback, Claude added a fix
-and regression coverage: seven test methods and all 21 independent cases passed.
-
-The first completed task trace contained three `anthropic.messages` model spans
-and five tool spans under `claude-code-turn`; the repair trace contained five
-model spans and five tool spans. The `Read` result for `task.txt` was redacted,
-and the original synthetic email was absent from both traces' attributes.
-
-These were bounded `claude -p` validation runs with explicit approvals limited
-to the task files and local tests. They establish subscription model routing,
-tool capture, and redaction. Claude uses a bounded `claude-code-turn` (`CHAIN`)
-as its root; a durable session-level `AGENT` span is not expected. Codex uses a
-bounded `codex-task` (`AGENT`) around its turns. Check the parentage appropriate
-to each harness rather than requiring identical trees.
-
-Cold starts also emitted separate `mark:agent_end_without_start` diagnostics.
-Initializing an MCP session first preserved a `session.start` mark; it did not
-change Claude's intended turn structure. The measured Claude turn output was
-`{"content":[]}`, so these runs do not verify full assistant-transcript capture.
-Inspect required payload fields before accepting a conversation-audit use case.
-
-An additional controlled test held independent MCP sessions for Alice and Bob
-and made real subscription-authenticated calls in both harnesses. After closing
-only Alice's session, her worker disappeared. Bob's next request succeeded
-through the same remaining worker ID. This verifies worker isolation and
-continued model routing; the test did not send input to the earlier interactive
-Codex UI.
-</Accordion>
-
-Close Alice's harness and watch for `worker_drain_started` and `worker_stopped`.
-Allow up to **two minutes** for accepted requests to drain; abrupt control
-connection loss also has a 30-second reconnect grace. Recheck status/processes
-and confirm Bob can continue. Sessions of one user can share a worker; these
-two users must have distinct workers.
-
-## Accept a workstation cohort
-
-<Steps>
-<Step title="Provision the managed identity and harness settings">
-Distribute the administrator-owned configuration and harness artifacts. Give
-each user-machine identity its own Relay routing token, and confirm that the
-harness actually targets its daemon entry point. For a remote deployment, also
-confirm server trust and reachability back to the client worker.
-</Step>
-
-<Step title="Confirm worker-backed execution">
-Start a non-sensitive session in each supported harness. Confirm the worker is
-ready and bound to that session, then exercise one provider call and a harmless
-supported tool hook. A ready MCP connection alone is insufficient: the worker
-must receive the request, and an expected plugin result must appear.
-</Step>
-
-<Step title="Inspect the audit and privacy result">
-Find the same session in the approved collector. Check the attributed identity
-and service, agent/model/tool parentage where supported, model and token fields,
-and redacted payloads. Record unsupported paths and any requests that bypassed
-the worker before reporting fleet coverage or spend.
-</Step>
-</Steps>
-
-| If the evidence is missing | Check first |
-| --- | --- |
-| No worker or plugin result | Managed bundle, Relay routing token, worker readiness, and pass-through policy. |
-| Model spans but no tool activity | Harness hook support and whether the tested action crosses a supported hook. |
-| Trace present but cost absent | Model identity, usage fields, and the pricing catalog. |
-| Unredacted sensitive field | The emitted surface and whether the configured detector covers it. |
-
-The [managed-client configuration](/daemon/configuration) and
-[worker-backed verification](/daemon/operations#verify-worker-backed-operation)
-provide the platform-specific provisioning and operational checks. Repeat the
-acceptance run after a policy, harness, or Relay upgrade.
-
-<Note title="Limits and enforcement">
-`--require-worker` rejects model requests without a worker. The example applies
-telemetry redaction and routing policy to supported paths; it does not configure
-SSO, enterprise offboarding, or prevent every bypass. Use organization-managed
-harness settings and network controls for that enforcement. A remote daemon
-still uses a worker on each client and needs a trusted return route to that
-worker. Full payload export here is for the synthetic task only.
-</Note>
 
 ## Cleanup and next steps
 
-Close both harnesses and wait for workers to stop. Follow
-[Remove a Deployment](/daemon/operations#remove-a-deployment) and your
-[Linux runbook](/daemon/linux) to remove the example service and managed files,
-or delete the disposable VM after retaining needed results. Stop only a Phoenix
-process you started for this example.
+Close both sessions, retain required evidence, and follow
+[Remove a Deployment](/daemon/operations#remove-a-deployment), or delete the
+disposable VM. Stop only the Phoenix process you started.
 
-Repeat cohort verification after upgrades. For an additional tracing backend,
-use [Observability configuration](/configure-plugins/observability/configuration).
-For cost attribution, add a validated [model-pricing catalog](/configure-plugins/model-pricing)
-and check model identity and usage coverage. Missing cost remains unknown.
+Restore metadata-only capture before introducing real data. Repeat acceptance
+after changing a harness, Relay version, provider route, or policy. Add a
+validated [pricing catalog](/configure-plugins/model-pricing) if your audit
+pipeline also needs cost attribution.

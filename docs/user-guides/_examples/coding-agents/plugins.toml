@@ -32,7 +32,7 @@ enabled = true
 
 [components.config]
 version = 4
-enable_full_payloads = true
+enable_full_payloads = false
 
 [components.config.opentelemetry]
 enabled = true

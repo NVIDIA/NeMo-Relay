@@ -12,10 +12,14 @@ digest=$(cat /etc/nemo-relay/managed-bundle.sha256)
 export NEMO_RELAY_CLIENT_TOKEN
 NEMO_RELAY_CLIENT_TOKEN=$(cat "$HOME/.config/nemo-relay/.client-token")
 cd "$HOME/ticket-service"
-if [[ $account == alice ]]; then
+agent=$(cat /opt/nvidia/share/relay-user-guide/harness)
+if [[ $agent == claude ]]; then
     export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: $NEMO_RELAY_CLIENT_TOKEN"
     exec claude --plugin-dir "$bundle/claude-code/plugin-v1" \
         --settings "$bundle/claude-code/settings-v1/managed-settings.json"
-else
+elif [[ $agent == codex ]]; then
     exec codex
+else
+    echo "Unknown administrator-selected harness: $agent" >&2
+    exit 1
 fi

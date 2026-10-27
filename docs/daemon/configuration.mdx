@@ -752,9 +752,8 @@ login when no provider credential override is active. Keep
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `apiKeyHelper` unset for this
 path; `ANTHROPIC_CUSTOM_HEADERS` carries the separate Relay routing token.
 Relay must forward the provider authorization and the OAuth capability in
-`anthropic-beta` unchanged. The managed route was verified with Claude Code
-2.1.309 and Relay 0.11.0-rc.1; validate your installed versions with an actual
-model call and supported tool hook before rollout.
+`anthropic-beta` unchanged. Validate the installed Relay and Claude Code versions
+with an actual model call and supported tool hook before rollout.
 
 An Anthropic API key or administrator-configured Anthropic-compatible gateway
 credential is an alternative with its own billing. See Anthropic's
