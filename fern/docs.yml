@@ -18,6 +18,9 @@ announcement:
   message: "🔔 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and behavior may change with each release."
 
 redirects:
+# User-guide routing evaluation
+- source: /nemo/relay/user-guides/reduce-agent-model-spend
+  destination: /nemo/relay/user-guides/evaluate-model-routing-with-switchyard
 # Concept relocations
 - source: /nemo/relay/about-nemo-relay/concepts/framework-integrations
   destination: /nemo/relay/integrate-into-frameworks/about
