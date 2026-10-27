@@ -1902,9 +1902,13 @@ func TestLlmStreamCallbacksKeepScopeLocalGuardrails(t *testing.T) {
 			t.Fatalf("Close failed: %v", err)
 		}
 		for _, callback := range []string{"collector", "finalizer"} {
-			got := <-results
-			if got == nil || !strings.Contains(got.Error(), scopeLocalGuardrailRejected) {
-				t.Fatalf("nested call from the %s = %v, want %q", callback, got, scopeLocalGuardrailRejected)
+			select {
+			case got := <-results:
+				if got == nil || !strings.Contains(got.Error(), scopeLocalGuardrailRejected) {
+					t.Fatalf("nested call from the %s = %v, want %q", callback, got, scopeLocalGuardrailRejected)
+				}
+			default:
+				t.Fatalf("the %s did not run before Close returned", callback)
 			}
 		}
 	})
