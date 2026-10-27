@@ -11,11 +11,16 @@
 
 mod environment;
 mod model;
+mod policy_inventory;
 mod probes;
 mod render;
 
 use environment::collect_environment;
 pub(crate) use model::*;
+use policy_inventory::{
+    collect_pii_checks, observability_otlp_enablement_checks, observability_otlp_file_checks,
+    otlp_trace_endpoints, validate_otlp_credential_references,
+};
 use probes::*;
 use render::*;
 
@@ -1033,6 +1038,11 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
             status: Status::Info,
             details: "plugins.toml not configured".into(),
         });
+        checks.push(Check {
+            name: "PII redaction",
+            status: Status::Info,
+            details: "component not configured; no configured privacy policy".into(),
+        });
         return checks;
     };
 
@@ -1047,6 +1057,18 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
             return checks;
         }
     };
+    checks.extend(
+        plugin_config.components.iter().enumerate()
+            .filter(|(_, component)| !component.enabled)
+            .map(|(index, component)| Check {
+                name: "Plugin component",
+                status: Status::Warn,
+                details: format!(
+                    "components[{index}] ({}): disabled; enable this component in plugins.toml if it should run",
+                    component.kind
+                ),
+            }),
+    );
     let component_errors = register_and_validate_plugin_components(&plugin_config);
     if !component_errors.is_empty() {
         checks.extend(component_errors.into_iter().map(|error| Check {
@@ -1057,6 +1079,10 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
         return checks;
     }
     let report = validate_static_plugin_config(&plugin_config);
+    let pii_invalid = report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.level == DiagnosticLevel::Error
+            && diagnostic.component.as_deref() == Some("pii_redaction")
+    });
     let response_cache_invalid = report.diagnostics.iter().any(|diagnostic| {
         diagnostic.level == DiagnosticLevel::Error
             && diagnostic.component.as_deref().is_some_and(|component| {
@@ -1085,7 +1111,22 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
     }
 
     if let Some(config) = observability_component_config(plugin_value) {
-        collect_observability_component_checks(&mut checks, config, probe_mode).await;
+        let enabled = plugin_config
+            .components
+            .iter()
+            .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
+            .is_some_and(|component| component.enabled);
+        checks.extend(observability_otlp_file_checks(config, enabled));
+        checks.extend(observability_otlp_enablement_checks(config, enabled));
+        if enabled {
+            collect_observability_component_checks(&mut checks, config, probe_mode).await;
+        } else {
+            checks.push(Check {
+                name: "Observability plugin",
+                status: Status::Info,
+                details: "component disabled".into(),
+            });
+        }
     } else {
         checks.push(Check {
             name: "Observability plugin",
@@ -1093,6 +1134,7 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
             details: "component not configured".into(),
         });
     }
+    collect_pii_checks(&mut checks, &plugin_config, pii_invalid);
     collect_pricing_component_checks(&mut checks, &plugin_config);
     collect_response_cache_component_checks(
         &mut checks,
@@ -1332,11 +1374,7 @@ async fn observability_http_exporter_checks(
     if !section_enabled(config, "opentelemetry") {
         return Vec::new();
     }
-    let Some(endpoints) = config
-        .get("opentelemetry")
-        .and_then(|section| section.get("endpoints"))
-        .and_then(Value::as_array)
-    else {
+    let Some(endpoints) = otlp_trace_endpoints(config) else {
         return Vec::new();
     };
     join_all(
@@ -1364,6 +1402,15 @@ async fn observability_http_exporter_check(
             details: format!("endpoints[{index}] ({endpoint_type}): endpoint is required"),
         };
     };
+    if let Err(error) = validate_otlp_credential_references(endpoint) {
+        return Check {
+            name: label,
+            status: Status::Fail,
+            details: format!(
+                "endpoints[{index}] ({endpoint_type}): credential configuration invalid: {error}; live probe skipped"
+            ),
+        };
+    }
     let transport = endpoint
         .get("transport")
         .and_then(Value::as_str)
@@ -1373,7 +1420,19 @@ async fn observability_http_exporter_check(
     } else {
         probe_http_endpoint(label, url, probe_mode).await
     };
-    check.details = format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+    check.details = format!(
+        "endpoints[{index}] ({endpoint_type}): {}; configured headers/header_env validated locally; credential validity and OTLP ingestion unverified{}",
+        check.details,
+        if endpoint
+            .get("header_file")
+            .and_then(Value::as_object)
+            .is_some_and(|headers| !headers.is_empty())
+        {
+            "; header_file values are resolved at export time and remain unverified"
+        } else {
+            ""
+        }
+    );
     check
 }
 

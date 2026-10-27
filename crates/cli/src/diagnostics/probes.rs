@@ -67,7 +67,7 @@ pub(super) async fn probe_otlp_http_named(name: &'static str, url: &str) -> Chec
                 Status::Warn
             },
             details: format!(
-                "{} (live HTTP reachability probe returned HTTP {})",
+                "{} (live HTTP reachability probe returned HTTP {}); unauthenticated GET only; authentication and OTLP ingestion unverified",
                 url,
                 response.status().as_u16()
             ),

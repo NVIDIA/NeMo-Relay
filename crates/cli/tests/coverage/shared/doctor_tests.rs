@@ -2721,6 +2721,12 @@ async fn collect_observability_reports_invalid_pii_redaction_config() {
         .expect("plugin diagnostic check");
     assert_eq!(diagnostic.status, Status::Fail);
     assert!(diagnostic.details.contains("unsupported_config_version"));
+    let pii = checks
+        .iter()
+        .find(|check| check.name == "PII redaction")
+        .unwrap();
+    assert_eq!(pii.status, Status::Fail);
+    assert!(pii.details.contains("effective policy unavailable"));
 }
 
 #[tokio::test]
@@ -3554,4 +3560,394 @@ fn doctor_agent_status_helpers_cover_readiness_and_version_outcomes() {
     );
     assert_eq!(status, Status::Fail);
     assert!(details[0].contains("could not determine version"));
+}
+
+#[tokio::test]
+async fn doctor_inventories_otlp_files_without_modifying_telemetry() {
+    let temp = tempfile::tempdir().unwrap();
+    let existing = temp.path().join("spans.jsonl");
+    std::fs::write(&existing, b"existing telemetry\n").unwrap();
+    let missing = temp.path().join("nested/new");
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{"kind": "observability", "config": {
+                "version": 4,
+                "opentelemetry": {"enabled": true, "file_sinks": [
+                    {"type": "gen_ai", "output_directory": temp.path(), "filename": "spans.jsonl", "mode": "overwrite"},
+                    {"type": "full", "output_directory": missing, "filename": "new.jsonl"},
+                    {"type": "openinference", "output_directory": temp.path()}
+                ]}
+            }}]
+        })),
+        ..GatewayConfig::default()
+    };
+    let checks = collect_offline_observability(&gateway).await;
+    let sinks: Vec<_> = checks
+        .iter()
+        .filter(|check| check.name == "OpenTelemetry file sink")
+        .collect();
+    assert_eq!(sinks.len(), 3, "{checks:?}");
+    assert_eq!(sinks[0].status, Status::Pass);
+    assert!(sinks[0].details.contains("file_sinks[0] (gen_ai); enabled"));
+    assert!(sinks[0].details.contains(existing.to_str().unwrap()));
+    assert_eq!(sinks[1].status, Status::Warn);
+    assert!(sinks[1].details.contains("ancestor"));
+    assert!(sinks[2].details.contains("runtime-generated filename"));
+    assert_eq!(std::fs::read(existing).unwrap(), b"existing telemetry\n");
+    assert!(!missing.exists());
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn doctor_otlp_files_report_unusable_paths_and_disabled_sinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("file");
+    std::fs::write(&file, "untouched").unwrap();
+    let config = json!({"opentelemetry": {"enabled": true, "file_sinks": [
+        {"output_directory": file.join("child"), "filename": "spans.jsonl"},
+        {"output_directory": temp.path(), "filename": "file"},
+        {"output_directory": temp.path(), "filename": "directory"}
+    ]}});
+    std::fs::create_dir(temp.path().join("directory")).unwrap();
+    let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&file, permissions).unwrap();
+    let checks = observability_otlp_file_checks(&config, true);
+    for check in checks {
+        assert_eq!(check.status, Status::Fail, "{check:?}");
+    }
+    for component_enabled in [true, false] {
+        let mut disabled = config.clone();
+        disabled["opentelemetry"]["enabled"] = json!(!component_enabled);
+        let checks = observability_otlp_file_checks(&disabled, component_enabled);
+        assert_eq!(checks.len(), 3);
+        assert!(
+            checks
+                .iter()
+                .all(|check| check.status == Status::Info && check.details.contains("disabled"))
+        );
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), b"untouched");
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_otlp_files_detect_unwritable_ancestors() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let locked = temp.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let config = json!({"opentelemetry": {"enabled": true, "file_sinks": [
+        {"output_directory": locked.join("missing/nested"), "filename": "spans.jsonl"}
+    ]}});
+    // Root can write regardless of mode bits; exercise the failure as an unprivileged user.
+    let root_can_write = check_dir_writable(&locked).is_ok();
+    let checks = observability_otlp_file_checks(&config, true);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if !root_can_write {
+        assert_eq!(checks[0].status, Status::Fail);
+        assert!(checks[0].details.contains("write permissions"));
+    }
+    assert!(!locked.join("missing").exists());
+}
+
+#[tokio::test]
+async fn doctor_summarizes_effective_pii_surfaces_without_policy_secrets() {
+    let secret = "sensitive-replacement-value";
+    let mut gateway = GatewayConfig {
+        plugin_config: Some(json!({"version": 1, "components": [{
+            "kind": "pii_redaction", "config": {
+                "input": false, "tool_output": false,
+                "builtin": {"action": "redact", "detector": "email", "replacement": secret}
+            }
+        }]})),
+        ..GatewayConfig::default()
+    };
+    let checks = collect_offline_observability(&gateway).await;
+    let pii = checks
+        .iter()
+        .find(|check| check.name == "PII redaction")
+        .unwrap();
+    assert!(pii.details.contains("component enabled; single policy"));
+    assert!(
+        pii.details
+            .contains("input=off, output=on, mark=on, tool_input=on, tool_output=off")
+    );
+    assert!(pii.details.contains("content sanitization unverified"));
+    assert!(!pii.details.contains(secret));
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["enabled"] = json!(false);
+    let checks = collect_offline_observability(&gateway).await;
+    let pii = checks
+        .iter()
+        .find(|check| check.name == "PII redaction")
+        .unwrap();
+    assert!(pii.details.contains("component disabled"));
+    assert!(!pii.details.contains("=on"));
+    gateway.plugin_config = Some(json!({"version": 1, "components": []}));
+    let checks = collect_offline_observability(&gateway).await;
+    assert!(
+        checks
+            .iter()
+            .any(|check| check.name == "PII redaction" && check.details.contains("not configured"))
+    );
+}
+
+#[tokio::test]
+async fn doctor_summarizes_enabled_and_disabled_pii_profiles() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({"version": 1, "components": [{
+            "kind": "pii_redaction", "config": {"profiles": [
+                {"builtin": {"action": "redact", "detector": "email"}},
+                {"enabled": false, "builtin": {"action": "redact", "detector": "api_key"}}
+            ]}
+        }]})),
+        ..GatewayConfig::default()
+    };
+    let checks = collect_offline_observability(&gateway).await;
+    let pii = checks
+        .iter()
+        .find(|check| check.name == "PII redaction")
+        .unwrap();
+    assert!(pii.details.contains(
+        "profile_0=enabled; input=on, output=on, mark=on, tool_input=on, tool_output=on"
+    ));
+    assert!(pii.details.contains("profile_1=disabled; input=off"));
+}
+
+#[tokio::test]
+async fn doctor_lists_otlp_sinks_when_observability_component_is_disabled() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({"version": 1, "components": [{
+            "kind": "observability", "enabled": false, "config": {
+                "version": 4, "opentelemetry": {"enabled": true, "file_sinks": [
+                    {"output_directory": "/unavailable/doctor-test", "type": "gen_ai"}
+                ]}
+            }
+        }]})),
+        ..GatewayConfig::default()
+    };
+    let checks = collect_offline_observability(&gateway).await;
+    let sink = checks
+        .iter()
+        .find(|check| check.name == "OpenTelemetry file sink")
+        .unwrap();
+    assert_eq!(sink.status, Status::Info);
+    assert!(sink.details.contains("disabled; filesystem probe skipped"));
+    assert!(
+        checks
+            .iter()
+            .any(|check| check.name == "Observability plugin"
+                && check.details == "component disabled")
+    );
+}
+
+#[tokio::test]
+async fn doctor_warns_for_each_disabled_plugin_component() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({"version": 1, "components": [
+            {"kind": "observability", "enabled": false, "config": {"version": 4}},
+            {"kind": "pricing", "enabled": false, "config": {"sources": []}},
+            {"kind": "pii_redaction", "enabled": false, "config": {
+                "builtin": {"action": "redact", "detector": "email"}
+            }},
+            {"kind": "adaptive", "enabled": true, "config": {"version": 1}}
+        ]})),
+        ..GatewayConfig::default()
+    };
+    let checks = collect_offline_observability(&gateway).await;
+    let warnings: Vec<_> = checks
+        .iter()
+        .filter(|check| check.name == "Plugin component")
+        .collect();
+    assert_eq!(warnings.len(), 3, "{checks:?}");
+    for (index, kind) in ["observability", "pricing", "pii_redaction"]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(warnings[index].status, Status::Warn);
+        assert!(
+            warnings[index]
+                .details
+                .contains(&format!("components[{index}] ({kind}): disabled"))
+        );
+    }
+    let mut report = empty_report();
+    report.observability = checks;
+    assert_eq!(
+        exit_code(&report),
+        0,
+        "disabled components warn without failing doctor"
+    );
+    assert!(format_human(&report).contains("disabled"));
+}
+
+#[tokio::test]
+async fn doctor_otlp_credentials_fail_locally_in_offline_and_live_modes() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint_url = format!("http://{}", listener.local_addr().unwrap());
+    for (value, expected) in [
+        (None, "is not set"),
+        (Some("   "), "is blank"),
+        (
+            Some("padded-synthetic-secret "),
+            "without surrounding whitespace",
+        ),
+        (Some("invalid\nsynthetic-secret"), "invalid"),
+    ] {
+        let _environment = EnvScope::set(&[(
+            "RELAY_DOCTOR_OTLP_TEST_KEY",
+            value.map(std::ffi::OsStr::new),
+        )]);
+        for mode in [DoctorProbeMode::Offline, DoctorProbeMode::Live] {
+            for transport in ["http_binary", "grpc"] {
+                let check = observability_http_exporter_check(
+                    0,
+                    &json!({
+                        "type": "gen_ai", "endpoint": endpoint_url, "transport": transport,
+                        "header_env": {"wandb-api-key": "RELAY_DOCTOR_OTLP_TEST_KEY"}
+                    }),
+                    mode,
+                )
+                .await;
+                assert_eq!(check.status, Status::Fail, "{check:?}");
+                assert!(check.details.contains(expected), "{check:?}");
+                assert!(check.details.contains("live probe skipped"));
+                assert!(!check.details.contains("synthetic-secret"));
+            }
+        }
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
+async fn doctor_otlp_get_never_claims_valid_or_invalid_keys_are_authenticated() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    for key in ["synthetic-valid-key", "synthetic-invalid-key"] {
+        let _environment = EnvScope::set(&[(
+            "RELAY_DOCTOR_OTLP_TEST_KEY",
+            Some(std::ffi::OsStr::new(key)),
+        )]);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_bounded(&listener);
+            let request = read_headers(&mut stream);
+            // A collector that rejects GET regardless of whether POST would accept the key.
+            stream
+                .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            request
+        });
+        let endpoint = json!({"endpoint": endpoint_url, "header_env": {"wandb-api-key": "RELAY_DOCTOR_OTLP_TEST_KEY"}});
+        let offline =
+            observability_http_exporter_check(0, &endpoint, DoctorProbeMode::Offline).await;
+        assert_eq!(offline.status, Status::Info);
+        assert!(
+            offline
+                .details
+                .contains("credential validity and OTLP ingestion unverified")
+        );
+        let live = observability_http_exporter_check(0, &endpoint, DoctorProbeMode::Live).await;
+        assert_eq!(live.status, Status::Pass);
+        assert!(live.details.contains("HTTP 405"));
+        assert!(live.details.contains("unauthenticated GET only"));
+        assert!(
+            live.details
+                .contains("authentication and OTLP ingestion unverified")
+        );
+        let request = server.join().unwrap();
+        assert!(request.starts_with("GET "));
+        assert!(!request.contains(key));
+        assert!(!request.contains("wandb-api-key"));
+        assert!(!format!("{live:?} {offline:?}").contains(key));
+    }
+}
+
+#[test]
+fn doctor_otlp_credential_validation_matches_activation_header_constraints() {
+    for endpoint in [
+        json!({"header_env": {"x-key": " KEY "}}),
+        json!({"header_env": {"x-key": "BAD=KEY"}}),
+        json!({"header_env": {"x-key": "BAD\u{0}KEY"}}),
+        json!({"header_env": {"x-key": 1}}),
+        json!({"headers": {"x-key": " padded-secret"}}),
+        json!({"headers": {"x-key": "secret"}, "header_env": {"X-Key": "ANY_VARIABLE"}}),
+        json!({"headers": {"X-Key": "one", "x-key": "two"}}),
+    ] {
+        assert!(validate_otlp_credential_references(&endpoint).is_err());
+    }
+}
+
+#[tokio::test]
+async fn doctor_warns_for_disabled_otlp_destinations_without_probing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("otel");
+    for enabled in [None, Some(false)] {
+        for destinations in [
+            json!({"endpoints": [{"type": "gen_ai", "endpoint": format!("http://{}", listener.local_addr().unwrap()), "header_env": {"x-key": "INTENTIONALLY_UNRESOLVED_DOCTOR_KEY"}}]}),
+            json!({"traces": [{"type": "gen_ai", "endpoint": "http://127.0.0.1:1"}]}),
+            json!({"file_sinks": [{"type": "gen_ai", "output_directory": missing}]}),
+        ] {
+            let mut section = destinations;
+            if let Some(enabled) = enabled {
+                section["enabled"] = json!(enabled);
+            }
+            let gateway = GatewayConfig {
+                plugin_config: Some(
+                    json!({"version": 1, "components": [{"kind": "observability", "config": {"version": 4, "opentelemetry": section}}]}),
+                ),
+                ..GatewayConfig::default()
+            };
+            for mode in [DoctorProbeMode::Offline, DoctorProbeMode::Live] {
+                let checks = collect_observability(&gateway, mode).await;
+                let warning = checks
+                    .iter()
+                    .find(|check| check.name == "OpenTelemetry enablement")
+                    .expect("disabled section warning");
+                assert_eq!(warning.status, Status::Warn);
+                assert!(
+                    warning
+                        .details
+                        .contains("components.config.opentelemetry.enabled = true")
+                );
+                assert!(
+                    !checks.iter().any(|check| check.status == Status::Fail),
+                    "{checks:?}"
+                );
+                let mut report = empty_report();
+                report.observability = checks;
+                assert!(format_human(&report).contains("configured but disabled"));
+                assert!(
+                    format_json(&report)
+                        .unwrap()
+                        .contains("configured but disabled")
+                );
+            }
+        }
+    }
+    assert!(!missing.exists());
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    for section in [
+        json!({}),
+        json!({"enabled": false}),
+        json!({"endpoints": [], "file_sinks": []}),
+    ] {
+        assert!(
+            observability_otlp_enablement_checks(&json!({"opentelemetry": section}), true)
+                .is_empty()
+        );
+    }
+    assert!(observability_otlp_enablement_checks(&json!({"opentelemetry": {"enabled": true, "endpoints": [{"endpoint": "http://127.0.0.1:1"}]}}), true).is_empty());
 }
