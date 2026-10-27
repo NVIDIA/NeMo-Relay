@@ -1,56 +1,69 @@
 ---
 title: "User Guides"
 sidebar-title: "About"
-description: "Apply NeMo Relay to enterprise observability, coding-agent governance, and model-spend goals."
+description: "Apply Relay to enterprise observability, coding-agent governance, and model-routing decisions."
 position: 1
+hide-nav-links: true
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-These guides connect NeMo Relay capabilities to outcomes that an enterprise
-platform team needs to deliver. Start with the goal that matches your deployment:
+Use these guides to connect Relay capabilities to an enterprise deployment goal.
+Each guide explains the decisions, configuration, and evidence you need.
+An optional Brev example demonstrates the same process with specific products.
 
 <CardGroup cols={3}>
-<Card title="Connect observability platforms" icon="fa-solid fa-chart-line" href="https://github.com/NVIDIA/NeMo-Relay/blob/topic/codex/user-guides-observability/docs/user-guides/connecting-to-observability-platforms/index.mdx">
-Export a representative agent run and verify arrival in your team's tracing platform.
+<Card title="Connecting to Observability Platforms" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms">
+Bring agent, model, and tool activity into your team's tracing platform.
 </Card>
-<Card title="Govern coding agents" icon="fa-solid fa-shield" href="https://github.com/NVIDIA/NeMo-Relay/blob/topic/codex/user-guides-coding-agents/docs/user-guides/govern-coding-agents.mdx">
-Deploy a shared daemon with separate developer workers, attribution, and telemetry redaction.
+<Card title="Deploy Relay to Govern Coding Agents Across an Organization" icon="fa-solid fa-shield" href="/user-guides/govern-coding-agents">
+Apply a shared policy while keeping developers' supported coding harnesses.
 </Card>
-<Card title="Evaluate model routing" icon="fa-solid fa-code-branch" href="https://github.com/NVIDIA/NeMo-Relay/blob/topic/codex/user-guides-model-cost/docs/user-guides/reduce-agent-model-spend.mdx">
-Compare fixed-model and routed tasks with Switchyard before changing a model policy.
+<Card title="Evaluate Model Routing with Switchyard" icon="fa-solid fa-code-branch" href="/user-guides/evaluate-model-routing-with-switchyard">
+Compare fixed-model and routed tasks before changing a model policy.
 </Card>
 </CardGroup>
 
-<Note title="Feedback branches">
-Each guide is currently reviewed on its own branch. The cards open those review
-copies; use this preview's sidebar for the guides included in its build. Replace
-these card destinations with internal guide links when the guide set lands.
-</Note>
+| Goal | What you need | Brev example |
+| --- | --- | --- |
+| Connect observability | A Relay capture path and a tracing destination | Instrumented Python application and Phoenix; no separate agent harness |
+| Govern coding agents | Administrator access and a managed deployment | Two Linux users running either Claude Code or Codex |
+| Evaluate routing | Supported model traffic and two accessible model targets | pi and NVIDIA inference, with fixed and routed policies |
 
-Each guide identifies the decisions and evidence that matter to its goal and
-links to the setup and configuration pages that own the detailed instructions.
-Use [Getting Started](/getting-started/about) if you need to choose your first
-Relay integration. Keep the [Daemon](/daemon/about) and
-[Configure Plugins](/configure-plugins/about) sections available when planning a
-managed deployment.
+Start with **Connecting to Observability Platforms** if you want the smallest
+deployment to inspect. The other guides introduce managed operating-system
+accounts or native model-routing plugins.
 
-## Runnable companion examples
+## Try the same workflow on Brev
 
-Each guide names a concrete example environment, the result to inspect, and the
-choices you can replace. The example files live beside the guide in this
-repository and can run on an ordinary Brev VM or a comparable Linux host.
-A premade Brev Launchable is not required. The same workload and configuration
-files serve both environments; credentials and host provisioning come from your
-own deployment.
+Use the examples to try a representative enterprise workflow with Relay.
+The selected harnesses and integrations are example choices. You can use the
+same files on a comparable Linux host; no premade Brev Launchable is required.
 
-Use the examples to inspect a realistic slice of the workflow, then adapt the
-harness, model provider, tracing backend, and topology to your organization.
-The selected products are example choices, rather than prerequisites for every
-Relay deployment. A successful example run verifies its stated scope; it does
-not establish coverage for every workstation, harness, or provider path.
+<Warning title="Use a separate host for each example">
+The coding-agent example installs system-wide configuration that can affect
+other Relay processes on the host. Use a fresh VM for it, or remove that
+deployment before trying another example. A separate virtual environment does
+not isolate system plugin policy.
+</Warning>
 
-Use a separate disposable host for each companion, or clean up one deployment
-before starting another. The coding-agent example installs system-wide plugin
-policy; that policy can also affect Hermes or a routing comparison on the same
-host. An isolated user configuration does not override administrator policy.
+Each guide separates **Your deployment** from **Brev example** instructions.
+Follow the deployment process with your existing setup, or use the example
+panels to see each step in a disposable environment. Accounts, model access,
+and compute charges depend on the products you select.
+
+
+## Example runtimes
+
+Use Python 3.12 for the companion scripts. On Ubuntu, check the explicit
+executable: the default `python3` can be older. With uv:
+
+```bash
+uv python install 3.12
+uv python find 3.12
+```
+
+The routing example also uses Node.js 24.13.1+ and pi 0.84.0.
+Authenticate providers before allowing time for a run: observability makes one
+model request, governance runs two interactive coding sessions, and routing
+runs 27 attempts with `--repeat 3`. Use `--repeat 1` for its first check.
