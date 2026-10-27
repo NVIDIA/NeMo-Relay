@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.10.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker_example/worker.py"
+
+[integrity]
+sha256 = "sha256:<worker-source-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"

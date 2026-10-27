@@ -37,9 +37,9 @@ host-runtime RPCs. Each getter request carries the current callback or explicit
 stack binding; the host validates ownership and lifetime before reading it.
 Select the nearest Agent entry inside an application-owned Agent context:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import ScopeType
 
 snapshot = await ctx.runtime.current_scope_stack_snapshot()
@@ -50,9 +50,8 @@ agent_scope_uuid = next(
 ) if snapshot is not None else None
 # Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use nemo_relay_worker::ScopeType;
 
 let snapshot = runtime.current_scope_stack_snapshot().await?;
@@ -63,8 +62,8 @@ let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
 });
 // Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Each call reads fresh root-to-top UUID/type entries, including the implicit
 root. Earlier snapshots survive later push/pop unchanged. Unbound calls return
@@ -88,9 +87,9 @@ failures leave the target enabled. Keep callbacks fast and side-effect free.
 The following worker flows discover the observability plugin's OpenTelemetry subscriber
 and disable it for one timer interval:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 import asyncio
 
 from nemo_relay_plugin import RuntimeRegistrationKind
@@ -121,10 +120,8 @@ try:
 finally:
     await ctx.runtime.deregister_conditional_middleware_guardrail(gate)
 ```
-</Tab>
 
-<Tab title="Rust" language="rust">
-```rust
+```rust title="Rust"
 use std::collections::BTreeSet;
 use std::time::Duration;
 use nemo_relay_worker::{RuntimeRegistrationKind, WorkerSdkError};
@@ -153,8 +150,8 @@ let gate = runtime
 tokio::time::sleep(Duration::from_secs(30)).await;
 runtime.deregister_conditional_middleware_guardrail(&gate).await?;
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 The worker can remove only gates owned by its activation. Relay removes any
 remaining owned gates during ordinary activation teardown. A worker can also
@@ -171,9 +168,9 @@ the distinction between activation-owned and runtime-discovered gates.
 Use the component context when the validated configuration requires the gate for the
 complete worker activation. The following examples install equivalent callbacks:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 ctx.register_conditional_middleware_guardrail(
     "documentation_registration_control",
     {RuntimeRegistrationKind.SUBSCRIBER},
@@ -181,10 +178,8 @@ ctx.register_conditional_middleware_guardrail(
     lambda _kinds, _name: "disabled by documentation plugin",
 )
 ```
-</Tab>
 
-<Tab title="Rust" language="rust">
-```rust
+```rust title="Rust"
 ctx.register_conditional_middleware_guardrail(
     "documentation_registration_control",
     BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
@@ -192,8 +187,8 @@ ctx.register_conditional_middleware_guardrail(
     |_, _| async { Ok(Some("disabled by documentation plugin".into())) },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Relay validates initial gate names, kinds, targets, and duplicate names before it commits
 the worker registrations. Failed registration returns no initial gates. Ordinary
@@ -210,9 +205,9 @@ that recorded a diagnostic.
 Choose your worker language to add schema, severity, and category metadata to a mark and inspect
 runtime diagnostics:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
 
 await ctx.runtime.emit_mark(
@@ -231,9 +226,8 @@ diagnostic = (await ctx.runtime.runtime_diagnostics()).get("otel.metric_mark_inv
 if diagnostic is not None:
     print(f"{diagnostic.message} occurred {diagnostic.count} times")
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use nemo_relay_worker::{DataSchema, EmitMarkOptions, EventCategory, LogSeverity};
 
 runtime
@@ -259,8 +253,8 @@ if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
     eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 An older host can return `UNIMPLEMENTED` for `runtime_diagnostics`. The SDK reports that
 as an unsupported runtime-diagnostics error. Relay validates the data schema and

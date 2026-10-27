@@ -51,17 +51,15 @@ Registration and recording helpers return diagnostic errors in Rust and can rais
 replacing the lookup's original result. These are SDK usage examples, not complete
 plugin entrypoints.
 
-<Tabs>
-<Tab title="Rust (Native)" language="rust">
+<CodeBlocks>
+
 <Code src="native/_code/internal_diagnostics.rs" language="rust" title="Native lookup diagnostics" lines="4-64" showLineNumbers={false} />
-</Tab>
-<Tab title="Rust (gRPC)" language="rust">
+
 <Code src="workers/_code/internal_diagnostics.rs" language="rust" title="Rust worker lookup diagnostics" lines="4-69" showLineNumbers={false} />
-</Tab>
-<Tab title="Python (gRPC)" language="python">
+
 <Code src="workers/_code/internal_diagnostics.py" language="python" title="Python worker lookup diagnostics" lines="4-72" showLineNumbers={false} />
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 The host assigns the extension namespace and component ownership. A local code
 position is its one-based position in the declaration. It is not a global

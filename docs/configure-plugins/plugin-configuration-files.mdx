@@ -197,10 +197,11 @@ Each built-in component has:
 
 ## Gateway Discoverable Plugin Records
 
-Use `[[plugins.dynamic]]` only for a gateway-managed manifest-backed native or
-worker plugin. These records remain separate from `[[components]]`. During
-gateway activation, Relay loads each enabled dynamic adapter, synthesizes its
-internal component, and validates the component configuration.
+Use `[[plugins.dynamic]]` for a native or worker plugin that has a manifest.
+The CLI gateway and SDK initialization read these records from `plugins.toml`.
+Keep them separate from `[[components]]` entries for built-in plugins or plugins
+that application code registers. At startup, Relay loads each selected plugin
+and creates its component. It then validates the component's settings.
 
 The following record configures a dynamic plugin:
 
@@ -221,7 +222,43 @@ this record manually. The command creates and records the Relay-managed Python
 environment that the worker requires at startup.
 </Warning>
 
-`manifest` is required and resolves relative to this file. `config` is optional.
+Each dynamic record accepts only these fields:
+
+| Field | Default | Notes |
+|---|---|---|
+| `manifest` | Required | Path to `relay-plugin.toml`, relative to this `plugins.toml` file. The manifest defines the plugin ID, kind, and how Relay loads it. |
+| `config` | `{}` | Plugin settings, written as TOML tables and values. The plugin's schema and validation hook define the fields. |
+
+Relay rejects records with unknown fields. Do not put `kind`, `id`, or
+`enabled` beside `manifest`. Use `nemo-relay plugins enable <plugin-id>` and
+`nemo-relay plugins disable <plugin-id>` to enable or disable the plugin. The
+manifest's `[defaults]` section must declare `enabled = false`.
+
+The tables `[plugins.dynamic.config]` and `[plugins.dynamic.config.executor]`
+above belong to the most recent `[[plugins.dynamic]]` record. Add another
+`[[plugins.dynamic]]` header before configuring a second plugin.
+
+Relay passes the contents of `config` to the plugin as a JSON object. For the
+example above, that object is:
+
+```json
+{
+  "mode": "audit",
+  "executor": { "worker_threads": 4 }
+}
+```
+
+The plugin receives only this object. Relay also checks this object against the
+manifest's optional `config_schema`. The schema describes `mode` and `executor`
+directly, without an extra `config` level.
+
+If you omit `config`, Relay passes an empty object (`{}`). Validation can still
+fail if the plugin requires settings. JSON Schema `default` values do not fill
+in missing fields. The plugin code must supply its own defaults.
+
+The `mode` setting belongs to the example plugin. Each plugin defines its own
+settings.
+
 For Rust native plugins using the typed SDK, `config.executor.worker_threads`
 sets the positive worker count for that component's SDK-owned Tokio executor.
 When the manifest declares a configuration schema, it must include the
@@ -234,13 +271,71 @@ manifest’s optional static JSON Schema before you enable or run the plugin. Us
 dynamic-plugin lifecycle. Refer to [Manage](/configure-plugins/discoverable-plugins)
 for manifest, trust, and policy requirements.
 
-For SDK initialization and activation handles, see
+For SDK initialization and activation handles, refer to
 [Initialize](/configure-plugins/initialize-plugins).
 
-The runtime reads only files named `plugins.toml` during default discovery.
+### Worker Timeouts and Payload Limits
+
+Set worker timeouts and message sizes under `load` in `relay-plugin.toml`.
+These settings apply to Python, Rust, and custom-command workers. Keep plugin
+settings under `plugins.dynamic.config` in `plugins.toml`. Native plugins do
+not use worker timeouts or message limits.
+
+Add the following tables to a worker manifest after setting its `[load]`
+runtime and entrypoint:
+
+<Code src="_code/workers/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-14" showLineNumbers={false} />
+
+The following table lists the available settings and defaults:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `load.callback_timeouts.default_ms` | `30000` | Time limit in milliseconds for short callbacks. Use a positive integer. |
+| `load.callback_timeouts.by_name` | `{}` | Time limits for specific callback names. These replace `default_ms` for those callbacks. |
+| `load.max_message_bytes.default_bytes` | `4194304` (4 MiB) | Size limit in bytes for each sent or received message. Control RPCs also use this limit. |
+| `load.max_message_bytes.by_name` | `{}` | Size limits for specific callback names. These replace `default_bytes` for those callbacks. |
+
+Timeouts must be positive whole numbers in milliseconds. Message limits must
+be whole numbers from 1 through 2,147,483,647 bytes.
+
+In this example, `input_guardrail` gets a 90-second deadline and a 16 MiB
+message limit. Other short callbacks get 60 seconds and 4 MiB.
+
+Use the exact name that the plugin registers for each callback. Names are
+case-sensitive. If several callbacks share a name, the setting applies to all
+of them. A name that matches no callback has no effect. Names cannot be empty
+or have spaces at the start or end.
+
+A callback's deadline includes time spent waiting for calls back to Relay.
+When the deadline expires, Relay asks the worker to cancel the callback. The
+callback then follows its normal error or fallback behavior.
+
+Tool and LLM execution intercepts, including streams, ignore
+`callback_timeouts`. Their callers control cancellation. Validation and shutdown
+keep their separate 30-second timeout. Refer to
+[Callback Deadlines](/build-plugins/package-discoverable-plugins#callback-deadlines).
+
+Payload limits apply to each message, including stream chunks and calls to
+continuations. They do not limit the total stream size or change model context
+limits. Relay uses the following settings in order, from highest to lowest
+priority:
+
+1. `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: a JSON object, such as
+   `{"input_guardrail":16777216}`.
+2. `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: a decimal byte limit. Setting it
+   replaces the manifest default and clears its limits for specific callbacks.
+3. Manifest `load.max_message_bytes.by_name`.
+4. Manifest `load.max_message_bytes.default_bytes`, then 4 MiB.
+
+Relay sends the final limits to the worker. It rejects invalid limits. Zero
+does not mean unlimited. After changing the manifest or host environment,
+reactivate the plugin to apply the changes. For protocol details, refer to the
+[worker message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
+in the worker protocol guide.
 
 ## Runtime Discovery
 
+During default discovery, the runtime reads only files named `plugins.toml`.
 The runtime resolves plugin configuration from `plugins.toml` files and an
 optional code-driven layer. Direct Rust, Python, and Node.js calls to
 their plugin-initialization APIs use this same discovery and layering behavior.

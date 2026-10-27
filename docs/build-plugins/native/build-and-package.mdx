@@ -21,23 +21,7 @@ plugin depends on the published `nemo-relay-plugin = "0.11.0"` package without `
 
 The checked example uses the following package and dependency configuration:
 
-```toml
-[package]
-name = "nemo-relay-rust-native-plugin-example"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-futures = "0.3"
-nemo-relay-plugin = { version = "0.11.0", path = "../../crates/plugin" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["io-util", "macros", "time"] }
-```
+<Code src="../_code/native-rust/Cargo.toml" language="toml" title="Cargo.toml" lines="4-18" showLineNumbers={false} />
 
 Build and materialize the platform-specific library as follows:
 
@@ -69,36 +53,7 @@ The checked [manifest](/build-plugins/package-discoverable-plugins) template dec
 the plugin identity, version contracts, schema,
 library path, and exported symbol:
 
-```toml
-manifest_version = 1
-
-[plugin]
-id = "examples.rust_native_policy"
-kind = "rust_dynamic"
-
-[compat]
-relay = ">=0.10.0,<1.0"
-native_api = "1"
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_native", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-artifact = "target/debug/<platform-library-file>"
-
-[integrity]
-sha256 = "sha256:<artifact-sha256>"
-
-[load]
-library = "target/debug/<platform-library-file>"
-symbol = "nemo_relay_register_plugin"
-```
+<Code src="../_code/rust_native_policy/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
 The `source.artifact` and `load.library` paths must identify the same library. Replace
 `<artifact-sha256>` with the lowercase digest of those bytes. The exported descriptor's

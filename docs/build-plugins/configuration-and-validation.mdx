@@ -31,54 +31,39 @@ TOML even though Node.js API method names use `camelCase`.
 The following configuration activates every shared feature group and the native-only
 executor control:
 
-```toml
-version = 1
-
-[[components]]
-kind = "documentation-plugin"
-enabled = true
-
-[components.config]
-tag = "documentation"
-
-[components.config.observe]
-enabled = true
-redact_keys = ["secret"]
-
-[components.config.requests]
-enabled = true
-mode = "enforce"
-blocked_tools = ["dangerous_tool"]
-blocked_models = ["restricted-model"]
-header_name = "x-nemo-relay-plugin"
-header_value = "documentation"
-priority = 20
-break_chain = false
-
-[components.config.execution]
-enabled = true
-priority = 30
-emit_pending_marks = true
-
-[components.config.runtime]
-emit_marks = true
-emit_isolated_scope = true
-
-# Include this group only for a native typed plugin.
-[components.config.executor]
-worker_threads = 2
-
-[policy]
-unknown_component = "error"
-unknown_field = "warn"
-unsupported_value = "error"
-```
+<Code src="_code/component/plugins.toml" language="toml" title="plugins.toml" lines="4-43" showLineNumbers={false} />
 
 The top-level policy controls document validation that Relay owns. A custom plugin's
 `validate` hook is responsible for unknown fields, types, ranges, enums, and cross-field
 rules inside its own `config`. Built-in plugins can additionally receive host policy
 overrides. Do not assume the top-level `unknown_field` choice automatically inspects an
 arbitrary third-party JSON object; implement and test that behavior in the plugin.
+
+## Configure a Manifest-Backed Dynamic Plugin
+
+The `[[components]]` example above is for a plugin registered by application
+code. For a native or worker package with a manifest, use `[[plugins.dynamic]]`
+to reference the manifest. Move the plugin settings under
+`[plugins.dynamic.config]`, as shown in the following example:
+
+<Code src="_code/dynamic-plugin/plugins.toml" language="toml" title="plugins.toml" lines="4-19" showLineNumbers={false} />
+
+Use the same table prefix for any other groups from the component example.
+The `observe`, `requests`, `execution`, and `runtime` groups belong to these
+examples. Other plugins can define different groups.
+
+Relay creates an enabled component for the dynamic plugin. Its `kind` matches
+`plugin.id` in the manifest. Its settings come from `plugins.dynamic.config`.
+Declare the package in one `[[plugins.dynamic]]` entry. Do not also add a
+`[[components]]` entry for its ID. After you register and validate the package,
+run `nemo-relay plugins enable <plugin-id>` to enable it.
+
+Keep the plugin ID, compatibility, load settings, and schema path in
+`relay-plugin.toml`. The schema describes the object inside `config`, without
+an extra `plugins`, `dynamic`, or `config` level. The plugin's validation and
+registration hooks receive that same object. Refer to
+[Dynamic Plugin Configuration](/configure-plugins/plugin-configuration-files#gateway-discoverable-plugin-records)
+for the record fields, enable and disable commands, and default values.
 
 ## Publish the Component Schema with the Package
 
