@@ -1026,6 +1026,23 @@ is_true() {
 }
 '''
 
+# validate quickstart metadata, referenced files, and checker tests (no guide execution)
+check-quickstarts:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for Quick Start checks. Install jq and rerun just check-quickstarts." >&2
+        exit 1
+    fi
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    # Keep automatic checks explicit: guide shell/Python execution belongs to the manual workflow.
+    "$python_executable" -m unittest \
+        scripts.tests.test_quickstarts \
+        scripts.tests.test_quickstart_jq
+    "$python_executable" scripts/check-quickstarts.py check
+
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples
     #!/usr/bin/env bash

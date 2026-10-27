@@ -119,6 +119,9 @@ the following:
    just set-version <next-version>
    ```
 
+Include the [documentation maintenance review](#documentation-maintenance) in
+that version-bump PR.
+
 New PRs that must go into the upcoming release must target the new `release/*`
 branch. Changes intended for later releases should continue to target `main`.
 
@@ -183,15 +186,39 @@ The helper updates:
    [`package-lock.json`](package-lock.json) to the same release version.
 5. The Python `nemo-relay-cli-bin` metadata, including the exact
    `nemo-relay[cli]` dependency version.
-Review docs and snippets that mention explicit versions, including:
 
-- [`README.md`](README.md)
-- [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- [`docs/getting-started/installation.mdx`](docs/getting-started/installation.mdx)
-- Any binding README or example that pins a release number
+Include the [documentation maintenance review](#documentation-maintenance) in
+the version-bump PR.
 
 Do not commit a static Python package version into `pyproject.toml` just to cut
 the release. The packaging workflow stamps that file during the build.
+
+## Documentation Maintenance
+
+Review documentation in the same PR as each version bump, including early
+development bumps at code freeze. Ask a coding agent to review affected
+installation instructions, Quick Starts, and examples against the intended
+development or release changes. The agent proposes a documentation diff and
+explains intentional exceptions; a maintainer reviews that diff with the version
+changes.
+
+Select documentation versions according to the intended audience and package
+availability. A development version in `Cargo.toml` can precede publication, so
+installation instructions may still correctly recommend an available release.
+Assess version references and verification claims in context rather than applying
+a blanket replacement or preservation rule. `just set-version` updates package
+manifests; it does not synchronize documentation versions, and Quick Start
+contract checks do not enforce equality with the workspace version.
+
+Review affected sources such as [`README.md`](README.md),
+[`CONTRIBUTING.md`](CONTRIBUTING.md),
+[`docs/getting-started/installation.mdx`](docs/getting-started/installation.mdx),
+the Quick Starts, and binding READMEs or examples.
+
+Quick Start execution is a separate validation step. When using the execution
+workflow, trigger it manually against explicitly selected development source or
+package assets. A passing run validates execution with those inputs; reviewers
+still assess the versions displayed in the documentation.
 
 ## Local Validation
 

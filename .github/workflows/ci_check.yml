@@ -205,6 +205,10 @@ jobs:
           restore-keys: |
             nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
 
+      - name: Validate quickstart contracts
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just check-quickstarts
+
       - name: pre-commit
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
