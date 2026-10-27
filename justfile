@@ -1033,7 +1033,10 @@ check-quickstarts:
     cd "$NEMO_RELAY_REPO_ROOT"
     uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
     python_executable="$(project_python_executable)"
-    "$python_executable" -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
+    # Keep automatic checks explicit: guide shell/Python execution belongs to the manual workflow.
+    "$python_executable" -m unittest \
+        scripts.tests.test_quickstarts \
+        scripts.tests.test_quickstart_jq
     "$python_executable" scripts/check-quickstarts.py check
 
 # validate the documentation site, links, navigation, and generated references

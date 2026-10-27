@@ -32,6 +32,11 @@ credentials. Every guide in `docs/getting-started/quick-start/`, except
 `index.mdx`, must have a contract. Missing contracts and an empty guide
 directory fail validation.
 
+The target explicitly selects the contract-checker and jq fixture tests. It does
+not discover execution tests or run shell/Python code extracted from the guides.
+Document execution and its regression tests belong to the separate manual
+Quick Start execution workflow.
+
 The committed `scripts/quickstarts/schema.json` defines scenario and block
 metadata, including field types, required fields, and permitted values. Unknown
 fields fail validation. The `schema: 1` field versions this testing format,
