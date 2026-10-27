@@ -151,15 +151,30 @@ content when `is_error` is `true`. An invalid edit fails the call.
 If an intercept returns a cached result without calling the tool, it must
 return the full wrapper for that framework's codec.
 
-The LangChain and LangGraph tool codec can save and restore JSON values,
-standard framework messages, commands, and graph destinations across calls.
-On replay, it binds matching tool messages to the current tool-call ID. It
-clears their old graph message IDs so the graph can assign new ones. Other
-messages keep their IDs.
+The LangChain and LangGraph tool codec writes each value in `result` with its
+type. The same tool result always gives the same JSON. Subscribers and
+intercepts can read every field.
 
-Custom message subclasses and other Python objects, such as artifacts and state
-objects, stay in the original call's memory. The codec marks these results as
-not replayable. The built-in cache runs the tool again instead of reusing them.
+A later call can restore built-in Python values, standard framework messages,
+commands, and graph destinations. On replay, the codec binds matching tool
+messages to the current tool-call ID. It clears their old graph message IDs so
+the graph can assign new ones. Other messages keep their IDs.
+
+Other Python objects, such as custom message subclasses, artifacts, and state
+objects, stay with the call that returned them. Their JSON shows type and data.
+Parts with no JSON form show only a type name. These results are not
+replayable. The built-in cache runs the tool again instead of reusing them.
+
+An intercept can edit `result` during the call. The codec rebuilds each changed
+value with its type and keeps unchanged objects. Parts with no JSON form must
+stay unchanged.
+
+JSON cannot hold some Python values exactly. The codec records these values in
+`result` with their own kinds. In `content` and in readable JSON of other
+objects, NaN and infinity appear as `null`. Integers outside the 64-bit range
+appear as decimal text. Lone surrogate characters appear as U+FFFD. When an
+intercept leaves these parts unchanged, the tool and framework receive the
+original values.
 
 ## Managed Lifecycle
 
