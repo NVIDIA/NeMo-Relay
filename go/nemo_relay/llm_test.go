@@ -1953,12 +1953,60 @@ func TestLlmStreamCallbacksHonorExplicitScopeStackRun(t *testing.T) {
 			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
 		}
 
+		expectGuardrail := func(phase, want string) error {
+			err := ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				return fmt.Errorf("guardrail %s = %v, want %q", phase, err, want)
+			}
+			return nil
+		}
+		expectCurrent := func(phase string, want *ScopeHandle) error {
+			current, err := GetHandle()
+			if err != nil {
+				return err
+			}
+			if current.UUID() != want.UUID() {
+				return fmt.Errorf("GetHandle %s = %s, want %s", phase, current.UUID(), want.UUID())
+			}
+			return nil
+		}
+		inside := func() error {
+			if err := expectGuardrail("inside Run", "explicit stack block"); err != nil {
+				return err
+			}
+			if err := expectCurrent("inside Run", otherScope); err != nil {
+				return err
+			}
+			child, err := PushScope("explicit_child", ScopeTypeAgent)
+			if err != nil {
+				return err
+			}
+			parent := child.ParentUUID()
+			if err := PopScope(child); err != nil {
+				return err
+			}
+			if parent != otherScope.UUID() {
+				return fmt.Errorf("PushScope parent inside Run = %s, want %s", parent, otherScope.UUID())
+			}
+			snapshot, err := CurrentScopeStackSnapshot()
+			if err != nil {
+				return err
+			}
+			if snapshot == nil || snapshot.Scopes[len(snapshot.Scopes)-1].ScopeID != otherScope.UUID() {
+				return fmt.Errorf("snapshot inside Run = %+v, want top %s", snapshot, otherScope.UUID())
+			}
+			return nil
+		}
+		after := func() error {
+			if err := expectGuardrail("after Run", "stream stack block"); err != nil {
+				return err
+			}
+			return expectCurrent("after Run", handle)
+		}
 		results := make(chan error, 4)
 		probe := func() {
-			other.Run(func() {
-				results <- ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
-			})
-			results <- ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
+			other.Run(func() { results <- inside() })
+			results <- after()
 		}
 		stream, err := LlmStreamCallExecute("explicit_stack_llm", makeRequest(),
 			func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
@@ -1976,11 +2024,11 @@ func TestLlmStreamCallbacksHonorExplicitScopeStackRun(t *testing.T) {
 			t.Fatalf("Close failed: %v", err)
 		}
 		for _, callback := range []string{"collector", "finalizer"} {
-			for _, want := range []string{"explicit stack block", "stream stack block"} {
+			for _, phase := range []string{"inside Run", "after Run"} {
 				select {
 				case got := <-results:
-					if got == nil || !strings.Contains(got.Error(), want) {
-						t.Fatalf("nested call from the %s = %v, want %q", callback, got, want)
+					if got != nil {
+						t.Fatalf("%s %s: %v", callback, phase, got)
 					}
 				default:
 					t.Fatalf("the %s did not run before Close returned", callback)

@@ -1339,14 +1339,28 @@ pub fn with_scope_stack<T>(handle: ScopeStackHandle, f: impl FnOnce() -> T) -> T
 
     impl Drop for OverrideGuard {
         fn drop(&mut self) {
-            let previous = self.previous.take();
-            SCOPE_STACK_OVERRIDE.with(|stack| *stack.borrow_mut() = previous);
+            restore_scope_stack_override(self.previous.take());
         }
     }
 
-    let previous = SCOPE_STACK_OVERRIDE.with(|stack| stack.replace(Some(handle)));
+    let previous = install_scope_stack_override(handle);
     let _guard = OverrideGuard { previous };
     f()
+}
+
+/// Return the scope stack override installed on the current thread.
+pub fn current_scope_stack_override() -> Option<ScopeStackHandle> {
+    SCOPE_STACK_OVERRIDE.with(|stack| stack.borrow().clone())
+}
+
+/// Install `handle` as the scope stack override and return the previous one.
+pub fn install_scope_stack_override(handle: ScopeStackHandle) -> Option<ScopeStackHandle> {
+    SCOPE_STACK_OVERRIDE.with(|stack| stack.replace(Some(handle)))
+}
+
+/// Restore an override returned by [`install_scope_stack_override`].
+pub fn restore_scope_stack_override(previous: Option<ScopeStackHandle>) {
+    SCOPE_STACK_OVERRIDE.with(|stack| *stack.borrow_mut() = previous);
 }
 
 /// Install an explicit scope stack for the current thread.

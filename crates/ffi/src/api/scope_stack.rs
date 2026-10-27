@@ -10,6 +10,7 @@ use crate::convert::str_to_c_string;
 use nemo_relay::api::runtime::{
     PropagationContext, capture_propagation_context, capture_propagation_context_with_root,
     capture_rootless_propagation_context, capture_traceparent, create_scope_stack_from_propagation,
+    current_scope_stack_override, install_scope_stack_override, restore_scope_stack_override,
 };
 use uuid::Uuid;
 
@@ -30,11 +31,7 @@ pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
         return NemoRelayStatus::NullPointer;
     }
     unsafe { *out = std::ptr::null_mut() };
-    let snapshot = match nemo_relay::api::runtime::explicit_thread_scope_stack() {
-        Some(stack) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
-        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
-    };
-    let result = snapshot.and_then(|snapshot| {
+    let result = nemo_relay::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
         snapshot
             .map(|snapshot| {
                 serde_json::to_string(&snapshot)
@@ -365,7 +362,8 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_set_thread(
         return NemoRelayStatus::NullPointer;
     }
     let handle = unsafe { &*stack }.0.clone();
-    set_thread_scope_stack(handle);
+    set_thread_scope_stack(handle.clone());
+    install_scope_stack_override(handle);
     NemoRelayStatus::Ok
 }
 
@@ -388,8 +386,11 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_capture_thread(
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let binding = capture_thread_scope_stack();
-    unsafe { *out = Box::into_raw(Box::new(FfiThreadScopeStackBinding(binding))) };
+    let binding = FfiThreadScopeStackBinding {
+        thread: capture_thread_scope_stack(),
+        override_stack: current_scope_stack_override(),
+    };
+    unsafe { *out = Box::into_raw(Box::new(binding)) };
     NemoRelayStatus::Ok
 }
 
@@ -408,7 +409,8 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_restore_thread(
         return NemoRelayStatus::NullPointer;
     }
     let binding = unsafe { Box::from_raw(binding) };
-    restore_thread_scope_stack(binding.0);
+    restore_thread_scope_stack(binding.thread);
+    restore_scope_stack_override(binding.override_stack);
     NemoRelayStatus::Ok
 }
 
