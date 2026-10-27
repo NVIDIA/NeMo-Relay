@@ -1610,6 +1610,17 @@ impl SessionManager {
     }
 }
 
+fn explicit_agent_name(metadata: &Value) -> Option<&str> {
+    metadata
+        .get("gen_ai.agent.name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+}
+
+fn scope_agent_name(scope: &ScopeHandle) -> Option<&str> {
+    scope.metadata.as_ref().and_then(explicit_agent_name)
+}
+
 // Keep defaulting consistent with the exporter's canonical and legacy string aliases.
 fn set_tool_metadata_default(
     metadata: &mut Map<String, Value>,
@@ -2113,10 +2124,11 @@ impl Session {
             return Ok(());
         }
         let _root = get_handle()?;
-        let metadata = merge_metadata(
+        let mut metadata = merge_metadata(
             self.scope_metadata(event_metadata),
             json!({ "nemo_relay_scope_role": "session" }),
         );
+        self.set_main_agent_scope_name(&mut metadata);
         let scope = push_scope(
             PushScopeParams::builder()
                 .name(self.agent_kind.as_str())
@@ -2292,14 +2304,16 @@ impl Session {
         if self.agent_kind != AgentKind::Codex || self.task_scope.is_some() {
             return Ok(());
         }
+        let mut scope_metadata = merge_metadata(
+            self.scope_metadata(metadata),
+            json!({ "nemo_relay_scope_role": "task" }),
+        );
+        self.set_main_agent_scope_name(&mut scope_metadata);
         self.task_scope = Some(push_scope(
             PushScopeParams::builder()
                 .name("codex-task")
                 .scope_type(ScopeType::Agent)
-                .metadata(merge_metadata(
-                    self.scope_metadata(metadata),
-                    json!({ "nemo_relay_scope_role": "task" }),
-                ))
+                .metadata(scope_metadata)
                 .build(),
         )?);
         if self.pending_start_mark {
@@ -2364,16 +2378,22 @@ impl Session {
             .get(id)
             .expect("active child has a stack")
             .clone();
+        let agent_name = scope_agent_name(&parent)
+            .or_else(|| explicit_agent_name(&metadata))
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| parent.name.clone());
+        let mut turn_metadata = merge_metadata(
+            self.scope_metadata(metadata),
+            json!({ "nemo_relay_scope_role": "turn", "subagent_id": id }),
+        );
+        turn_metadata["gen_ai.agent.name"] = json!(agent_name);
         let scope = nemo_relay::api::runtime::with_scope_stack(stack, || {
             push_scope(
                 PushScopeParams::builder()
                     .name("codex-turn")
                     .scope_type(ScopeType::Custom)
                     .parent(&parent)
-                    .metadata(merge_metadata(
-                        self.scope_metadata(metadata),
-                        json!({ "nemo_relay_scope_role": "turn", "subagent_id": id }),
-                    ))
+                    .metadata(turn_metadata)
                     .input(input)
                     .build(),
             )
@@ -2471,27 +2491,50 @@ impl Session {
     }
 
     fn main_turn_agent_name(&self, event_metadata: &Value) -> Option<String> {
-        [event_metadata, &self.session_metadata]
-            .into_iter()
-            .chain(self.config.metadata.iter())
-            .find_map(|metadata| {
-                metadata
-                    .get("gen_ai.agent.name")
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.trim().is_empty())
-            })
-            .or_else(|| match self.agent_kind {
-                // A subagent hook may open an implicit main turn. Only the session's
-                // agent_type identifies the main agent; the hook's type belongs to the child.
-                AgentKind::ClaudeCode => self
-                    .session_metadata
-                    .get("agent_type")
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.trim().is_empty()),
-                _ => None,
-            })
-            .or_else(|| (self.agent_kind != AgentKind::Gateway).then(|| self.agent_kind.as_str()))
-            .map(ToOwned::to_owned)
+        let owner_name = self
+            .task_scope
+            .as_ref()
+            .or(self.agent_scope.as_ref())
+            .and_then(scope_agent_name);
+        let explicit_turn_name = explicit_agent_name(event_metadata);
+        let configured_name = self.configured_agent_name();
+        // An owner named by the session or configuration is authoritative. An explicit turn
+        // may override only a harness-derived owner name such as "codex" or "pi".
+        if configured_name.is_some()
+            || owner_name.is_some_and(|name| name != self.agent_kind.as_str())
+        {
+            owner_name.or(explicit_turn_name).or(configured_name)
+        } else {
+            explicit_turn_name.or(owner_name)
+        }
+        .or_else(|| match self.agent_kind {
+            // A subagent hook may open an implicit main turn. Only the session's
+            // agent_type identifies the main agent; the hook's type belongs to the child.
+            AgentKind::ClaudeCode => self
+                .session_metadata
+                .get("agent_type")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty()),
+            _ => None,
+        })
+        .or_else(|| (self.agent_kind != AgentKind::Gateway).then(|| self.agent_kind.as_str()))
+        .map(ToOwned::to_owned)
+    }
+
+    fn configured_agent_name(&self) -> Option<&str> {
+        explicit_agent_name(&self.session_metadata)
+            .or_else(|| self.config.metadata.as_ref().and_then(explicit_agent_name))
+    }
+
+    fn set_main_agent_scope_name(&self, metadata: &mut Value) {
+        let agent_name = self
+            .configured_agent_name()
+            .or_else(|| (self.agent_kind != AgentKind::Gateway).then(|| self.agent_kind.as_str()));
+        if let Some(agent_name) = agent_name {
+            metadata["gen_ai.agent.name"] = json!(agent_name);
+        } else if let Some(object) = metadata.as_object_mut() {
+            object.remove("gen_ai.agent.name");
+        }
     }
 
     fn scope_metadata(&self, event_metadata: Value) -> Value {
@@ -2911,7 +2954,7 @@ impl Session {
     // order.
     async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         if self.task_scope.is_none() {
-            self.ensure_turn_started(event.metadata.clone())?;
+            self.ensure_turn_started(Value::Null)?;
         }
         if self.subagents.contains_key(&event.subagent_id) {
             return Ok(());
@@ -3191,7 +3234,11 @@ impl Session {
             owner.subagent_id.as_deref(),
             owner.hint.as_ref(),
         );
-        self.apply_tool_execution_metadata(&mut metadata, owner.subagent_id.as_deref());
+        self.apply_tool_execution_metadata(
+            &mut metadata,
+            owner.subagent_id.as_deref(),
+            owner.parent.as_ref(),
+        );
         self.set_last_tool_owner(owner.subagent_id.clone());
         let handle = tool_call(
             ToolCallParams::builder()
@@ -3225,7 +3272,12 @@ impl Session {
     }
 
     // Apply execution defaults equally to pre-hook and synthesized post-only starts.
-    fn apply_tool_execution_metadata(&self, metadata: &mut Value, subagent_id: Option<&str>) {
+    fn apply_tool_execution_metadata(
+        &self,
+        metadata: &mut Value,
+        subagent_id: Option<&str>,
+        parent: Option<&ScopeHandle>,
+    ) {
         let Some(metadata) = metadata.as_object_mut() else {
             return;
         };
@@ -3236,9 +3288,14 @@ impl Session {
         }
         // Identity is independent of classification. Gateway alone does not
         // identify an executing agent, but a known subagent still does.
-        let agent_name = subagent_id.map(|id| format!("subagent:{id}")).or_else(|| {
-            (self.agent_kind != AgentKind::Gateway).then(|| self.agent_kind.as_str().to_string())
-        });
+        let agent_name = parent
+            .and_then(scope_agent_name)
+            .map(ToOwned::to_owned)
+            .or_else(|| subagent_id.map(|id| format!("subagent:{id}")))
+            .or_else(|| {
+                (self.agent_kind != AgentKind::Gateway)
+                    .then(|| self.agent_kind.as_str().to_string())
+            });
         if let Some(agent_name) = agent_name {
             set_tool_metadata_default(metadata, "gen_ai.agent.name", "agent_name", &agent_name);
         }
@@ -3259,7 +3316,7 @@ impl Session {
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let Some(handle) = self.remove_tool_handle_for_event(&event) else {
             let mut metadata = self.event_identity_metadata(event.metadata.clone());
-            self.apply_tool_execution_metadata(&mut metadata, event.subagent_id.as_deref());
+            self.apply_tool_execution_metadata(&mut metadata, event.subagent_id.as_deref(), None);
             let metadata = tool_end_metadata(metadata, event.status.as_deref());
             self.completion_mark(
                 "tool_end_without_start",
