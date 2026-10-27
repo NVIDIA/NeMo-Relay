@@ -78,24 +78,7 @@ Relay creates the managed environment from the package root named by the
 minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
 0.11 worker SDK dependency:
 
-```toml
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "nemo-relay-python-grpc-worker-example"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["nemo-relay-plugin>=0.11.0"]
-
-[dependency-groups]
-test = ["pytest>=8", "pytest-asyncio>=0.26"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["nemo_relay_python_grpc_worker_example"]
-```
+<Code src="../_code/python-worker/pyproject.toml" language="toml" title="pyproject.toml" lines="4-19" showLineNumbers={false} />
 
 The module entrypoint is an async function, not a server factory or a prebound port.
 Relay supplies the authenticated endpoint and activation credentials when it starts the
@@ -162,34 +145,7 @@ The corresponding manifest tells Relay to install this directory and import `mai
 the installed module. Calculate the `<worker-source-sha256>` placeholder from the current
 `worker.py`; changing that file requires a new digest.
 
-```toml
-manifest_version = 1
-
-[plugin]
-id = "examples.python_grpc_worker"
-kind = "worker"
-
-[compat]
-relay = ">=0.10.0,<1.0"
-worker_protocol = "grpc-v1"
-
-[capabilities]
-items = ["plugin_worker", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-manifest_root = "."
-artifact = "nemo_relay_python_grpc_worker_example/worker.py"
-
-[integrity]
-sha256 = "sha256:<worker-source-sha256>"
-
-[load]
-runtime = "python"
-entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
-```
+<Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
 The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
 contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns

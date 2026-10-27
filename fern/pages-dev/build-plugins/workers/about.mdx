@@ -80,9 +80,9 @@ $env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
 export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 ```
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 import asyncio
 from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, WorkerPlugin, serve_plugin
 
@@ -116,9 +116,8 @@ async def main() -> None:
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use nemo_relay_worker::{
     ConfigDiagnostic, Json, PluginContext, Result,
     WorkerPlugin, WorkerSdkError, serve_plugin,
@@ -158,8 +157,8 @@ async fn main() -> Result<()> {
     serve_plugin(DocumentationWorker).await
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Both `register` methods are synchronous because they describe and return the component's
 registration set during activation. The callbacks they install can be asynchronous.
