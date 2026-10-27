@@ -181,10 +181,23 @@ single slash instead of Claude's `//` syntax for absolute paths. Correcting the
 rule enabled the authorized read. A later shell-based rewrite was denied;
 Claude used the approved Edit tool instead. No bypass-permissions mode was used.
 
-Session-level agent parentage remains open: the runs emitted separate
-`mark:agent_end_without_start` diagnostics. After Alice exited, her workers
-were removed and Bob's original worker remained ready. Sending a new request
-inside Bob's still-open interactive session remains a separate continuity check.
+Claude's expected root is a bounded `claude-code-turn` Custom scope, projected
+as OpenInference `CHAIN`; the pinned source deliberately omits a durable Claude
+session-level Agent scope. Codex instead groups turns under `codex-task`
+(`AGENT`). Both measured Claude task traces had complete model/tool parentage
+under their turn roots. Missing a session-level AGENT is not itself a capture
+failure.
+
+Cold starts emitted separate `mark:agent_end_without_start` diagnostics.
+Initializing MCP first preserved a `session.start` mark. The exported Claude
+turn output was `{"content":[]}` despite a native final handoff, so complete
+assistant-transcript capture remains unverified. Tool-result redaction is
+verified separately above.
+
+After Alice exited, her workers were removed and Bob's original worker remained
+ready at that check. A later standalone Bob request succeeded, but the original
+worker had already ended before that probe; it does not establish continuity
+in the earlier interactive session.
 
 ## Apply the files elsewhere
 
@@ -245,3 +258,15 @@ interpreter as the second argument to `deploy.sh`. For uv-managed Python, run
 `uv python install 3.12` and use the path from `uv python find 3.12`. The script
 validates `tomllib` before changing deployment files; sudo may use a different
 PATH from your normal shell.
+
+
+### Authenticated worker-isolation check
+
+A controlled follow-up held two independent MCP sessions and required two ready
+workers before making actual subscription-authenticated Claude and Codex calls.
+After only Alice's session closed, her worker disappeared from status. Bob's
+next exact-response request succeeded through the same remaining worker ID.
+This verifies worker isolation and continued model routing with provider logins;
+it does not claim that input was sent to the earlier interactive Codex UI.
+The earlier standalone Bob probe and the initially failed lifecycle harness
+remain separate validation records.

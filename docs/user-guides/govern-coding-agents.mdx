@@ -343,14 +343,23 @@ and the original synthetic email was absent from both traces' attributes.
 
 These were bounded `claude -p` validation runs with explicit approvals limited
 to the task files and local tests. They establish subscription model routing,
-tool capture, and redaction. They also emitted a separate
-`mark:agent_end_without_start` diagnostic instead of a session-level agent span.
-Treat complete Claude session parentage as an open acceptance check.
+tool capture, and redaction. Claude uses a bounded `claude-code-turn` (`CHAIN`)
+as its root; a durable session-level `AGENT` span is not expected. Codex uses a
+bounded `codex-task` (`AGENT`) around its turns. Check the parentage appropriate
+to each harness rather than requiring identical trees.
 
-After Alice's processes exited, lifecycle logs showed her worker draining and
-it disappeared from status. Bob's original worker remained ready with its
-session open. Continuing a request in that existing interactive session is a
-separate continuity check.
+Cold starts also emitted separate `mark:agent_end_without_start` diagnostics.
+Initializing an MCP session first preserved a `session.start` mark; it did not
+change Claude's intended turn structure. The measured Claude turn output was
+`{"content":[]}`, so these runs do not verify full assistant-transcript capture.
+Inspect required payload fields before accepting a conversation-audit use case.
+
+An additional controlled test held independent MCP sessions for Alice and Bob
+and made real subscription-authenticated calls in both harnesses. After closing
+only Alice's session, her worker disappeared. Bob's next request succeeded
+through the same remaining worker ID. This verifies worker isolation and
+continued model routing; the test did not send input to the earlier interactive
+Codex UI.
 </Accordion>
 
 Close Alice's harness and watch for `worker_drain_started` and `worker_stopped`.
