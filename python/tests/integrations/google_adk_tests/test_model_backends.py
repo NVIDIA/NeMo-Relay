@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final
 from unittest import mock
@@ -59,8 +59,6 @@ from nemo_relay.model_pricing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
-
     from anthropic import AsyncAnthropic
     from google.adk.agents.callback_context import CallbackContext
     from google.adk.models import BaseLlm
@@ -1513,7 +1511,6 @@ async def test_a_model_edit_onto_a_context_window_fallback_key_fails_the_call(
             "context_window_fallback_dict",
             id="context_window_fallback_dict",
         ),
-        pytest.param("openai/gpt-4o", {"prompt_id": "weather"}, "prompt_id", id="prompt_id"),
         pytest.param("litellm_agent/openai/gpt-4o", {}, "LiteLLM agent model", id="litellm_agent_model"),
     ],
 )
@@ -1632,22 +1629,23 @@ def _prompt_management_logger() -> CustomLogger:
     return Managed()
 
 
+def _cache_control_points() -> list[nemo_relay.JsonObject]:
+    return [{"location": "message", "role": "system"}]
+
+
+_CALLBACK_LISTS: Final = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+
 @pytest.mark.parametrize(
     ("attribute", "value", "feature"),
     [
         pytest.param("model_fallbacks", lambda: [f"anthropic/{_CLAUDE}"], "LiteLLM fallbacks", id="model_fallbacks"),
-        *(
-            pytest.param(
-                name, lambda: [_prompt_manager()], "callback CustomPromptManagement", id=f"{name}_prompt_manager"
-            )
-            for name in (
-                "callbacks",
-                "success_callback",
-                "failure_callback",
-                "_async_success_callback",
-                "_async_failure_callback",
-            )
-        ),
         *(
             pytest.param("callbacks", functools.partial(_hooked_callbacks, hook), "callback Hooked", id=hook)
             for hook in (
@@ -1692,15 +1690,6 @@ async def test_litellm_settings_that_can_move_a_call_to_another_provider_fail_li
     assert_balanced(subscribed_events)
 
 
-_CALLBACK_LISTS: Final = (
-    "callbacks",
-    "success_callback",
-    "failure_callback",
-    "_async_success_callback",
-    "_async_failure_callback",
-)
-
-
 @pytest.mark.parametrize(
     ("attribute", "value"),
     [
@@ -1714,9 +1703,10 @@ _CALLBACK_LISTS: Final = (
             functools.partial(_hooked_callbacks, "async_build_agentic_loop_plan"),
             id="agentic_loop_plan_without_gate",
         ),
-        pytest.param("success_callback", lambda: [_prompt_id_manager()], id="prompt_manager_needing_prompt_id"),
-        pytest.param("callbacks", lambda: [_failing_prompt_manager()], id="prompt_manager_whose_check_raises"),
-        pytest.param("success_callback", lambda: [_prompt_management_logger()], id="prompt_management_logger"),
+        *(
+            pytest.param(name, lambda: [_prompt_manager()], id=f"{name}_prompt_manager_litellm_does_not_run")
+            for name in _CALLBACK_LISTS
+        ),
         pytest.param(
             "callbacks",
             functools.partial(_instance_hooked_callbacks, "async_should_run_agentic_loop"),
@@ -1752,7 +1742,6 @@ async def test_litellm_settings_that_cannot_move_a_call_reach_lite_llm_calls(
 @pytest.mark.parametrize(
     ("argument", "value", "feature"),
     [
-        pytest.param("callbacks", lambda: [_prompt_manager()], "callback CustomPromptManagement", id="prompt_manager"),
         pytest.param(
             "success_callback",
             functools.partial(_hooked_callbacks, "async_should_run_agentic_loop"),
@@ -1868,6 +1857,212 @@ async def test_callbacks_in_a_lite_llm_credential_reach_lite_llm_calls(
     assert final_text(adk_events) == "Sunny."
     (start,) = starts(subscribed_events, "llm")
     assert start.name == "openai"
+    assert_balanced(subscribed_events)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "arguments", "cached"),
+    [
+        pytest.param(
+            "callbacks",
+            lambda: {"cache_control_injection_points": _cache_control_points()},
+            False,
+            id="injection_points",
+        ),
+        pytest.param("callbacks", lambda: {"knowledge_bases": ["relay-kb"]}, False, id="knowledge_bases"),
+        pytest.param("callbacks", dict, True, id="adk_context_caching"),
+        pytest.param(
+            None,
+            lambda: {"callbacks": [_prompt_manager()], "cache_control_injection_points": _cache_control_points()},
+            False,
+            id="callbacks_argument",
+        ),
+    ],
+)
+async def test_a_prompt_manager_fails_lite_llm_calls_litellm_runs_prompt_management_for(
+    attribute: str | None,
+    arguments: Callable[[], dict[str, object]],
+    cached: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.adk.agents.context_cache_config import ContextCacheConfig
+    from google.adk.models.lite_llm import LiteLlm
+
+    _import_litellm()
+    import litellm
+
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    if attribute is not None:
+        monkeypatch.setattr(litellm, attribute, [_prompt_manager()])
+    model = LiteLlm(model="openai/gpt-4o", mock_response="Sunny.", **arguments())
+    agent = LlmAgent(name="weather_agent", model=model, instruction="Be brief.")
+
+    with pytest.raises(TypeError, match="callback CustomPromptManagement"):
+        await run_recorded(agent, context_cache_config=ContextCacheConfig() if cached else None)
+
+    (start,) = starts(subscribed_events, "llm")
+    assert start.name == "openai"
+    assert status_of(ends(subscribed_events, "llm")[0]) == "ERROR"
+    assert_balanced(subscribed_events)
+
+
+async def test_a_prompt_manager_fails_lite_llm_calls_litellm_seeds_anthropic_cache_control_for(
+    monkeypatch: pytest.MonkeyPatch, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.adk.models.lite_llm import LiteLlm
+
+    _import_litellm()
+    import litellm
+
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "callbacks", [_prompt_manager()])
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    model = LiteLlm(model=f"anthropic/{_CLAUDE}", mock_response="Sunny.")
+
+    with pytest.raises(TypeError, match="callback CustomPromptManagement"):
+        await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    (start,) = starts(subscribed_events, "llm")
+    assert start.name == "anthropic"
+    assert status_of(ends(subscribed_events, "llm")[0]) == "ERROR"
+    assert_balanced(subscribed_events)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "provider", "settings", "arguments"),
+    [
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"callbacks": [_prompt_id_manager()]},
+            lambda: {"cache_control_injection_points": _cache_control_points()},
+            id="cache_control_hook",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"callbacks": [_failing_prompt_manager()]},
+            lambda: {"cache_control_injection_points": _cache_control_points()},
+            id="prompt_manager_whose_check_raises",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"success_callback": [_prompt_management_logger()]},
+            lambda: {"cache_control_injection_points": _cache_control_points()},
+            id="prompt_management_logger",
+        ),
+        pytest.param(
+            "prometheus-eval/prometheus-7b-v2.0",
+            "hosted_vllm",
+            lambda: {"callbacks": [_prompt_manager()]},
+            lambda: {"custom_llm_provider": "hosted_vllm", "cache_control_injection_points": _cache_control_points()},
+            id="model_named_after_a_litellm_integration",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"callbacks": [_prompt_manager()], "enable_anthropic_prompt_caching": True},
+            dict,
+            id="anthropic_cache_control_defaults_for_another_provider",
+        ),
+        pytest.param("openai/gpt-4o", "openai", dict, lambda: {"prompt_id": "weather"}, id="prompt_id_alone"),
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"callbacks": [_prompt_id_manager()]},
+            lambda: {"prompt_id": "weather"},
+            id="prompt_id_with_the_cache_control_hook",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            "openai",
+            lambda: {"callbacks": [_failing_prompt_manager()]},
+            lambda: {"prompt_id": "weather"},
+            id="prompt_id_with_a_prompt_manager_whose_check_raises",
+        ),
+    ],
+)
+async def test_prompt_management_litellm_keeps_the_model_for_reaches_lite_llm_calls(
+    model_name: str,
+    provider: str,
+    settings: Callable[[], dict[str, object]],
+    arguments: Callable[[], dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.adk.models.lite_llm import LiteLlm
+
+    _import_litellm()
+    import litellm
+
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    for name, value in settings().items():
+        monkeypatch.setattr(litellm, name, value)
+    model = LiteLlm(model=model_name, mock_response="Sunny.", **arguments())
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert final_text(adk_events) == "Sunny."
+    (start,) = starts(subscribed_events, "llm")
+    assert start.name == provider
+    assert_balanced(subscribed_events)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "settings", "arguments", "feature"),
+    [
+        *(
+            pytest.param(
+                "openai/gpt-4o",
+                lambda name=name: {name: [_prompt_manager()]},
+                dict,
+                "callback CustomPromptManagement",
+                id=f"{name}_prompt_manager",
+            )
+            for name in _CALLBACK_LISTS
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            dict,
+            lambda: {"callbacks": [_prompt_manager()]},
+            "callback CustomPromptManagement",
+            id="callbacks_argument",
+        ),
+        pytest.param("langfuse/weather", dict, dict, "prompt integration langfuse", id="prompt_integration_prefix"),
+    ],
+)
+async def test_a_prompt_id_litellm_hands_to_a_prompt_integration_fails_lite_llm_calls(
+    model_name: str,
+    settings: Callable[[], dict[str, object]],
+    arguments: Callable[[], dict[str, object]],
+    feature: str,
+    monkeypatch: pytest.MonkeyPatch,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.adk.models.lite_llm import LiteLlm
+
+    _import_litellm()
+    import litellm
+
+    for name in _CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    for name, value in settings().items():
+        monkeypatch.setattr(litellm, name, value)
+    model = LiteLlm(model=model_name, mock_response="Sunny.", prompt_id="weather", **arguments())
+
+    with pytest.raises(TypeError, match=re.escape(feature)):
+        await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert starts(subscribed_events, "llm") == []
     assert_balanced(subscribed_events)
 
 
@@ -2551,6 +2746,12 @@ def _chat_reply_reporting_cost_breakdown() -> httpx.Response:
     return httpx.Response(200, json=body)
 
 
+def _chat_reply_reporting_nested_cost_breakdown() -> httpx.Response:
+    body = as_object(_chat_reply_reporting_cost().json())
+    body["usage"] = {**as_object(body["usage"]), "cost": {"total_cost": {"request_cost": 0.005, "total_cost": 0.0042}}}
+    return httpx.Response(200, json=body)
+
+
 def _responses_reply_reporting_cost() -> httpx.Response:
     reply = _responses_reply("Sunny.")
     body = as_object(reply.json())
@@ -2575,6 +2776,13 @@ def _responses_reply_reporting_cost() -> httpx.Response:
             _chat_reply_reporting_cost_breakdown,
             _usd(0.0042),
             id="lite_llm_cost_breakdown",
+            marks=pytest.mark.filterwarnings(_ADK_USAGE_DUMP_WARNING),
+        ),
+        pytest.param(
+            _lite_llm_model,
+            _chat_reply_reporting_nested_cost_breakdown,
+            _usd(0.0042),
+            id="lite_llm_nested_cost_breakdown",
             marks=pytest.mark.filterwarnings(_ADK_USAGE_DUMP_WARNING),
         ),
     ],

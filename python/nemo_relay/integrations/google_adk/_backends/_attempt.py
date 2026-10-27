@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, Generic, NamedTuple, TypeVar, cast
@@ -14,8 +15,6 @@ from google.genai import types
 from nemo_relay.integrations.google_adk._serialization import RECORDED_USAGE_KEY
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
-
     from pydantic import BaseModel
 
     from nemo_relay import JsonObject

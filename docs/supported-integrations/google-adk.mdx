@@ -86,9 +86,12 @@ fails calls that use them, set directly or through a LiteLLM credential:
 - `fallbacks`, including LiteLLM's global `model_fallbacks`
 - `model_list`
 - A `context_window_fallback_dict` entry for the call's model
-- `prompt_id`
 - Model names that start with `litellm_agent/`
-- LiteLLM callbacks that can change a call's model, provider, or response
+- LiteLLM callbacks with a deployment hook or an agentic loop gate
+- Prompt management that LiteLLM hands to a registered prompt manager or to
+  the integration a model prefix such as `langfuse/` names: a `prompt_id`, or
+  a dynamic prompt management argument such as the
+  `cache_control_injection_points` ADK context caching sets
 
 To fall back across providers, use ADK `FallbackModel`.
 

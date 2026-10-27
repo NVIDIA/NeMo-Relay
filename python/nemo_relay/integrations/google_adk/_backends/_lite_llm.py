@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from inspect import signature
 from types import MethodType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, Unpack, cast
@@ -13,6 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, Unpack, 
 import litellm
 from google.genai import types
 from litellm.exceptions import BadRequestError
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.litellm_agent.litellm_agent_model_resolver import LITELLM_AGENT_PREFIX
@@ -20,7 +23,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import DynamicPromptManagementParamLiteral, ModelResponse, Usage
 from pydantic import ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -49,11 +52,10 @@ from nemo_relay.integrations.google_adk._serialization import (
 from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-
     from google.adk.models.lite_llm import LiteLlm, LiteLLMClient
     from litellm import CustomStreamWrapper
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.utils import ModelResponseStream, StandardCallbackDynamicParams
 
     from nemo_relay import JsonObject
 
@@ -88,7 +90,7 @@ _CHOICES: Final[
 def _function_name(tool: JsonObject) -> str | None:
     """Return function name of `tool`, or None for a built-in tool."""
     function = tool.get("function")
-    return cast("str", function["name"]) if isinstance(function, dict) else None
+    return cast(str, function["name"]) if isinstance(function, dict) else None
 
 
 def _named_function(name: str) -> JsonObject:
@@ -98,10 +100,13 @@ def _named_function(name: str) -> JsonObject:
 _TOOL_CHOICE: Final[ToolChoiceApi[JsonObject, _ToolChoice | None]] = ToolChoiceApi(
     name="Chat Completions", choices=_CHOICES, named=_named_function, tool_name=_function_name
 )
-_Callbacks: TypeAlias = "list[CustomLogger | str | Callable[..., object]]"
+_Callbacks: TypeAlias = list[CustomLogger | str | Callable[..., object]]
 _CALLBACK_ARGS: Final[Annotated[frozenset[str], "Callback arguments LiteLLM reads before it loads a credential."]] = (
     frozenset({"callbacks", "success_callback"})
 )
+_DYNAMIC_PROMPT_ARGS: Final[
+    Annotated[tuple[str, ...], "Call arguments that make LiteLLM run prompt management without `prompt_id`."]
+] = tuple(DynamicPromptManagementParamLiteral.list_all_params())
 
 
 class _LiteLlmArgs(TypedDict, total=False):
@@ -112,6 +117,7 @@ class _LiteLlmArgs(TypedDict, total=False):
     model_list: ReadOnly[list[dict[str, object]]]
     context_window_fallback_dict: ReadOnly[dict[str, str]]
     prompt_id: ReadOnly[str]
+    enable_prompt_caching: ReadOnly[bool]
     api_base: ReadOnly[str]
     base_url: ReadOnly[str]
     custom_llm_provider: ReadOnly[str]
@@ -180,13 +186,27 @@ async def lite_llm_backend(model: LiteLlm, request_model: str | None) -> Backend
     Raises:
         TypeError: LiteLLM settings can switch provider mid-call.
     """
-    name = request_model or model.model
-    options = _with_credential(cast("_LiteLlmArgs", model._additional_args))
-    _require_fixed_route(name, options)
+    call = _call(request_model or model.model, cast(_LiteLlmArgs, model._additional_args))
+    _require_fixed_route(call)
     swap_class(model.llm_client, _client_methods)
-    route = await asyncio.to_thread(_route, name, options)
+    route = await asyncio.to_thread(_route, call)
     provider = type(model).__name__ if route is None else route
-    return Backend(provider, _LITE_LLM_CODEC, client_headers=False, model=name)
+    return Backend(provider, _LITE_LLM_CODEC, client_headers=False, model=call.model)
+
+
+@dataclass(frozen=True, slots=True)
+class _Call:
+    """What LiteLLM reads from one call's arguments."""
+
+    model: str
+    options: Annotated[_LiteLlmArgs, "Arguments, with the named LiteLLM credential filling missing ones."]
+    dynamic: Annotated[
+        StandardCallbackDynamicParams, "Callback parameters, which LiteLLM reads before it loads the credential."
+    ]
+
+
+def _call(model: str, args: _LiteLlmArgs) -> _Call:
+    return _Call(model, _with_credential(args), initialize_standard_callback_dynamic_params(dict(args)))
 
 
 def _with_credential(args: _LiteLlmArgs) -> _LiteLlmArgs:
@@ -201,25 +221,25 @@ def _with_credential(args: _LiteLlmArgs) -> _LiteLlmArgs:
     return args
 
 
-def _require_fixed_route(name: str, options: _LiteLlmArgs) -> None:
-    """Raise `TypeError` when LiteLLM can move a call to another provider mid-call.
+def _require_fixed_route(call: _Call) -> None:
+    """Raise `TypeError` when LiteLLM can move `call` to another provider while it runs.
 
-    Args:
-        name: Model name of the call.
-        options: Call arguments plus credential values.
+    Prompt management that a dynamic argument opens is checked by `_dynamic_prompt_integration`, once the call's
+    messages and tools are known.
     """
+    options = call.options
     if (options.get("fallbacks") or litellm.model_fallbacks) is not None:
         raise _moving_route("LiteLLM fallbacks")
     if options.get("model_list") is not None:
         raise _moving_route("LiteLLM model_list")
-    if name in (options.get("context_window_fallback_dict") or {}):
+    if call.model in (options.get("context_window_fallback_dict") or {}):
         raise _moving_route("LiteLLM context_window_fallback_dict")
-    if options.get("prompt_id"):
-        raise _moving_route("LiteLLM prompt_id")
-    if name.startswith(LITELLM_AGENT_PREFIX):
-        raise _moving_route(f"LiteLLM agent model {name!r}")
+    if call.model.startswith(LITELLM_AGENT_PREFIX):
+        raise _moving_route(f"LiteLLM agent model {call.model!r}")
     if (callback := _moving_callback(options)) is not None:
         raise _moving_route(f"LiteLLM callback {type(callback).__name__}")
+    if options.get("prompt_id") and (integration := _prompt_integration(call)) is not None:
+        raise _moving_route(integration)
 
 
 def _moving_route(feature: str) -> TypeError:
@@ -229,17 +249,13 @@ def _moving_route(feature: str) -> TypeError:
 
 
 def _moving_callback(args: _LiteLlmArgs) -> CustomLogger | None:
-    """Return a LiteLLM callback that can change a call's model, provider, or response.
+    """Return a LiteLLM callback whose deployment or agentic loop hook can change a call or its response.
 
     Check each hook only in the callback lists LiteLLM scans for it.
 
     Returns:
         First such callback, or None.
     """
-    managers = [*litellm.logging_callback_manager.get_all_callbacks(), *(args.get("callbacks") or [])]
-    for callback in managers:
-        if isinstance(callback, CustomPromptManagement) and _runs_without_prompt_id(callback, args):
-            return callback
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger) and _changes_calls(callback):
             return callback
@@ -249,16 +265,60 @@ def _moving_callback(args: _LiteLlmArgs) -> CustomLogger | None:
     return None
 
 
-def _runs_without_prompt_id(manager: CustomPromptManagement, args: _LiteLlmArgs) -> bool:
-    """Return whether LiteLLM would use `manager` for a call without `prompt_id`.
+def _prompt_integration(call: _Call) -> str | None:
+    """Return the prompt integration LiteLLM hands `call` to once its prompt management gate is open, or None.
 
-    False when manager's check raises, as in LiteLLM.
+    LiteLLM takes the integration a model prefix names first, else the first registered `CustomPromptManagement`
+    whose `should_run_prompt_management` accepts the call's `prompt_id`. A built-in integration keeps the model
+    without `prompt_id`.
     """
-    params = initialize_standard_callback_dynamic_params(dict(args))
+    prompt_id = call.options.get("prompt_id") or None
+    for integration in litellm._known_custom_logger_compatible_callbacks:
+        if call.model.startswith(integration):
+            return None if prompt_id is None else f"LiteLLM prompt integration {integration}"
+    registered = [*litellm.logging_callback_manager.get_all_callbacks(), *(call.options.get("callbacks") or [])]
+    for callback in registered:
+        if isinstance(callback, CustomPromptManagement) and _accepts(callback, prompt_id, call.dynamic):
+            return f"LiteLLM callback {type(callback).__name__}"
+    return None
+
+
+def _accepts(manager: CustomPromptManagement, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
+    """Return whether `manager` runs for `prompt_id`. False when its check raises, as in LiteLLM."""
     try:
-        return manager.should_run_prompt_management(prompt_id=None, prompt_spec=None, dynamic_callback_params=params)
+        return manager.should_run_prompt_management(
+            prompt_id=prompt_id, prompt_spec=None, dynamic_callback_params=params
+        )
     except Exception:
         return False
+
+
+def _dynamic_prompt_integration(
+    call: _Call, messages: list[AllMessageValues], tools: list[JsonObject] | None
+) -> str | None:
+    """Return the prompt integration LiteLLM hands a call without `prompt_id` to, or None.
+
+    LiteLLM opens its prompt management gate for such a call when, after it seeds Anthropic cache control points,
+    the call carries a dynamic prompt management argument or names a registered vector store.
+    """
+    if call.options.get("prompt_id"):
+        return None
+    params: dict[str, object] = dict(call.options)
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=params,
+        messages=messages,
+        model=call.model,
+        custom_llm_provider=call.options.get("custom_llm_provider"),
+        tools=tools,
+        enable_prompt_caching=call.options.get("enable_prompt_caching"),
+        api_base=call.options.get("api_base") or call.options.get("base_url"),
+    )
+    registry = litellm.vector_store_registry
+    if any(params.get(argument) for argument in _DYNAMIC_PROMPT_ARGS) or (
+        registry is not None and registry.get_vector_store_to_run(non_default_params=params, tools=tools) is not None
+    ):
+        return _prompt_integration(call)
+    return None
 
 
 def _changes_calls(callback: CustomLogger) -> bool:
@@ -288,11 +348,13 @@ def _function(value: object) -> object:
     return value.__func__ if isinstance(value, MethodType) else value
 
 
-def _route(name: str, args: _LiteLlmArgs) -> str | None:
-    """Return provider LiteLLM picks for `name` and `args`, or None.
+def _route(call: _Call) -> str | None:
+    """Return provider LiteLLM picks for `call`, or None.
 
     Apply routing settings in LiteLLM's order.
     """
+    args = call.options
+    name = call.model
     api_base = args.get("api_base")
     base_url = args.get("base_url")
     custom_llm_provider = args.get("custom_llm_provider")
@@ -329,16 +391,16 @@ def _client_methods(cls: type[LiteLLMClient]) -> Methods[LiteLLMClient]:
     async def acompletion(
         self: LiteLLMClient,
         model: str,
-        messages: object,
+        messages: list[AllMessageValues],
         tools: list[JsonObject] | None,
         **kwargs: Unpack[_LiteLlmArgs],
     ) -> ModelResponse | AsyncIterator[ModelResponseStream]:
         attempt = CURRENT_ATTEMPT.get()
         if attempt is None:
             return await original(self, model=model, messages=messages, tools=tools, **kwargs)
-        options = _with_credential(kwargs)
-        _require_fixed_route(model, options)
-        route = await asyncio.to_thread(_route, model, options)
+        call = _call(model, kwargs)
+        _require_fixed_route(call)
+        route = await asyncio.to_thread(_route, call)
         if route is not None and route != attempt.provider:
             raise ValueError(f"LiteLLM routes model {model!r} to {route}, not to recorded provider {attempt.provider}")
         if attempt.tool_choice is not None:
@@ -348,6 +410,8 @@ def _client_methods(cls: type[LiteLLMClient]) -> Methods[LiteLLMClient]:
             tools, choice = (None, None) if chosen is None else chosen
             if choice is not None:
                 kwargs["tool_choice"] = choice
+        if (integration := _dynamic_prompt_integration(call, messages, tools)) is not None:
+            raise _moving_route(integration)
         result = await original(self, model=model, messages=messages, tools=tools, **kwargs)
         if isinstance(result, ModelResponse):
             attempt.recorded[RECORDED_ID_KEY] = result.id
@@ -382,7 +446,7 @@ def _provider_cost(stream: CustomStreamWrapper) -> float | None:
 def _cost(usage: Usage) -> float | None:
     """Return `usage` cost, `total_cost` of a breakdown, or None."""
     cost: object = usage.get("cost")
-    if isinstance(cost, dict):
+    while isinstance(cost, dict):
         cost = cost.get("total_cost")
     return float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
 
