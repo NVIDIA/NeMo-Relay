@@ -864,3 +864,41 @@ func testSubscriberReceivesAllEventFields(t *testing.T) {
 		t.Fatalf("expected name 'field_test', got '%s'", start.name)
 	}
 }
+
+func TestPushScopeKeepsGoroutineOnScopeThread(t *testing.T) {
+	outer, err := PushScope("pinned_outer", ScopeTypeAgent)
+	if err != nil {
+		t.Fatalf(pushScopeFailed, err)
+	}
+	crossSchedulerBoundary(64)
+	current, err := GetHandle()
+	if err != nil {
+		t.Fatalf("GetHandle failed: %v", err)
+	}
+	if current.UUID() != outer.UUID() {
+		t.Fatalf("top of stack after scheduling = %s, want %s", current.UUID(), outer.UUID())
+	}
+
+	inner, err := PushScope("pinned_inner", ScopeTypeFunction)
+	if err != nil {
+		t.Fatalf(pushScopeFailed, err)
+	}
+	if inner.ParentUUID() != outer.UUID() {
+		t.Fatalf("inner parent = %s, want %s", inner.ParentUUID(), outer.UUID())
+	}
+	crossSchedulerBoundary(64)
+	if err := PopScope(inner); err != nil {
+		t.Fatalf("PopScope inner failed: %v", err)
+	}
+	crossSchedulerBoundary(64)
+	current, err = GetHandle()
+	if err != nil {
+		t.Fatalf("GetHandle failed: %v", err)
+	}
+	if current.UUID() != outer.UUID() {
+		t.Fatalf("top of stack after inner pop = %s, want %s", current.UUID(), outer.UUID())
+	}
+	if err := PopScope(outer); err != nil {
+		t.Fatalf("PopScope outer failed: %v", err)
+	}
+}

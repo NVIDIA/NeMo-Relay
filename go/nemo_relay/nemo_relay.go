@@ -484,6 +484,23 @@ func callStatus(call func() C.int32_t) error {
 	return checkStatus(call())
 }
 
+func pushPinned(call func() C.int32_t) error {
+	runtime.LockOSThread()
+	if err := callStatus(call); err != nil {
+		runtime.UnlockOSThread()
+		return err
+	}
+	return nil
+}
+
+func popPinned(call func() C.int32_t) error {
+	if err := callStatus(call); err != nil {
+		return err
+	}
+	runtime.UnlockOSThread()
+	return nil
+}
+
 // callPointer is callStatus for FFI calls that return null on failure.
 func callPointer[P comparable](call func() P) (P, error) {
 	runtime.LockOSThread()
@@ -768,6 +785,8 @@ func GetHandle() (*ScopeHandle, error) {
 // observability; see [ScopeType] constants for valid values. [WithData] stores
 // application data on the returned handle, while [WithInput] supplies the
 // semantic data payload for the Start event.
+//
+// Pins calling goroutine to its OS thread until [PopScope].
 func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHandle, error) {
 	o := &scopeOptions{}
 	for _, opt := range opts {
@@ -791,7 +810,7 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 	}
 
 	var out *C.FfiScopeHandle
-	if err := callStatus(func() C.int32_t {
+	if err := pushPinned(func() C.int32_t {
 		return C.nemo_relay_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.input, o.timestamp, &out)
 	}); err != nil {
 		return nil, err
@@ -805,6 +824,8 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // error. Optional end payloads can be attached via [WithOutput] and
 // [WithScopeEndMetadata], and an explicit event timestamp can be supplied with
 // [WithScopeEndTimestamp].
+//
+// Releases the [PushScope] pin on success.
 func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	defer runtime.KeepAlive(handle)
 	o := &scopeEndOptions{}
@@ -820,7 +841,7 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return callStatus(func() C.int32_t { return C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp) })
+	return popPinned(func() C.int32_t { return C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp) })
 }
 
 // ---------------------------------------------------------------------------
