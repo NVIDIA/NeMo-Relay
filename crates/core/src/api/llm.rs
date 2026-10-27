@@ -262,7 +262,7 @@ pub struct LlmCallExecuteParams {
     /// Optional normalized model name for observability output.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
-    /// Record optional model the annotated request names after request intercepts run.
+    /// Record optional model the request names after request intercepts run.
     #[builder(default)]
     pub model_name_follows_request: bool,
     /// Optional request codec used to produce annotated request data.
@@ -310,7 +310,7 @@ pub struct LlmStreamCallExecuteParams {
     /// Optional normalized model name for observability output.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
-    /// Record optional model the annotated request names after request intercepts run.
+    /// Record optional model the request names after request intercepts run.
     #[builder(default)]
     pub model_name_follows_request: bool,
     /// Optional request codec used to produce annotated request data.
@@ -1656,8 +1656,8 @@ impl Drop for ManagedLlmCompletion {
 ///   may be used on failure end events that have no output payload.
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 /// - `model_name`: Optional normalized model name for observability output.
-/// - `model_name_follows_request`: Record the model the annotated request names
-///   after request intercepts run. Uses `model_name` when it names none.
+/// - `model_name_follows_request`: Record the model the request names after
+///   request intercepts run. Uses `model_name` when the request names none.
 /// - `codec`: Optional request codec used to produce annotated request data for
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
@@ -1896,8 +1896,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 ///   may be used on failure end events that have no output payload.
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 /// - `model_name`: Optional normalized model name for observability output.
-/// - `model_name_follows_request`: Record the model the annotated request names
-///   after request intercepts run. Uses `model_name` when it names none.
+/// - `model_name_follows_request`: Record the model the request names after
+///   request intercepts run. Uses `model_name` when the request names none.
 /// - `codec`: Optional request codec used to produce annotated request data for
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
