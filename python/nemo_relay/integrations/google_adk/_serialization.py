@@ -68,6 +68,9 @@ GENAI_USAGE: Final = (
     ("tool_use_prompt_token_count", "tool_use_prompt_tokens"),
 )
 BASE_USAGE_KEYS: Final = frozenset(source for source, _ in BASE_USAGE)
+CACHE_WRITE_KEY: Final[
+    Annotated[str, "Usage field where ADK puts cache writes. GenAI usage has no field for them."]
+] = "cache_creation_input_tokens"
 
 
 _FinishReason: TypeAlias = Literal["complete", "length", "content_filter", "tool_use"]
@@ -206,7 +209,7 @@ def request_payload(request: LlmRequest) -> JsonObject:
     Keep only extra request body from HTTP options.
     """
     payload = _framework_json(request, _REQUEST_EXCLUDE)
-    config: JsonObject = dict(_object(payload.get("config"), field="ADK config"))
+    config: JsonObject = dict(object_field(payload.get("config"), field="ADK config"))
     if (schema := response_schema_payload(request.config.response_schema)) is not None:
         config["response_schema"] = schema
     options = request.config.http_options
@@ -250,7 +253,7 @@ def response_payload(response: LlmResponse) -> JsonObject:
             raise TypeError(f"ADK usage_metadata {key} must be an integer")
         attached[key] = value
     if attached:
-        usage_metadata = _object(payload.get("usage_metadata"), field="ADK usage_metadata")
+        usage_metadata = object_field(payload.get("usage_metadata"), field="ADK usage_metadata")
         payload["usage_metadata"] = {**usage_metadata, **attached}
     return payload
 
@@ -289,10 +292,10 @@ def _without_extra_body(payload: JsonObject) -> tuple[JsonObject, Json]:
 
     Raise `ValueError` when HTTP options hold any key besides `extra_body`.
     """
-    config = _object(payload.get("config"), field="ADK config")
+    config = object_field(payload.get("config"), field="ADK config")
     if "http_options" not in config:
         return payload, None
-    options = _object(config["http_options"], field="ADK http_options")
+    options = object_field(config["http_options"], field="ADK http_options")
     if options.keys() - {"extra_body"}:
         raise ValueError(
             "NeMo Relay can write only extra_body to ADK's http_options; request headers belong in the request headers"
@@ -713,7 +716,7 @@ def _observe_fragment(
     for key, value in part.items():
         if key != "function_call" and key not in active.part:
             active.part[key] = value
-    for key, value in _object(function.get("args"), field="ADK function_call args").items():
+    for key, value in object_field(function.get("args"), field="ADK function_call args").items():
         active.write((key,), value)
     for partial in _objects(function.get("partial_args"), field="ADK function_call partial_args"):
         active.apply(partial)
@@ -767,7 +770,7 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                 continue
             run = None
             if function is not None:
-                function = _object(function, field="ADK function_call")
+                function = object_field(function, field="ADK function_call")
                 if not _joins_call(function, call):
                     _flush_call(parts, call)
                     call = None
@@ -815,7 +818,7 @@ def _last_seen(dumps: Iterable[JsonObject]) -> JsonObject:
 
 
 def _parts_of(chunk: JsonObject) -> list[JsonObject]:
-    content = _object(chunk.get("content"), field="ADK response content")
+    content = object_field(chunk.get("content"), field="ADK response content")
     return _objects(content.get("parts"), field="ADK response content parts")
 
 
@@ -832,7 +835,7 @@ def _objects(value: Json, *, field: str) -> list[JsonObject]:
     return objects
 
 
-def _object(value: Json, *, field: str) -> JsonObject:
+def object_field(value: Json, *, field: str) -> JsonObject:
     if value is None:
         return {}
     if not _is_object(value):
@@ -969,7 +972,7 @@ def _function_response_content(function_response: JsonObject) -> str | list[Json
     if response is None:
         raise ValueError("ADK function_response must have a response")
     text = json.dumps(
-        _object(response, field="ADK function_response response"), ensure_ascii=False, separators=(",", ":")
+        object_field(response, field="ADK function_response response"), ensure_ascii=False, separators=(",", ":")
     )
     nested = _objects(function_response.get("parts"), field="ADK function_response parts")
     if nested:
@@ -1032,7 +1035,7 @@ def _content_messages(content: JsonObject) -> list[JsonObject]:
                 "function": {
                     "name": _name(call, field="ADK function_call"),
                     "arguments": json.dumps(
-                        _object(call.get("args"), field="ADK function_call args"),
+                        object_field(call.get("args"), field="ADK function_call args"),
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
@@ -1069,13 +1072,13 @@ def _parsed_arguments(arguments: str) -> JsonObject:
 
 
 def _function_call_part(call: _Message, names_by_id: dict[str, str]) -> JsonObject:
-    function = _object(call.get("function"), field="tool call function") or call
+    function = object_field(call.get("function"), field="tool call function") or call
     name = _name(function, field="tool call")
     arguments = function.get("arguments")
     if isinstance(arguments, str):
         args = _parsed_arguments(arguments)
     else:
-        args = _object(arguments, field="tool call arguments")
+        args = object_field(arguments, field="tool call arguments")
     part: JsonObject = {"name": name, "args": args}
     identifier = _identifier(call, field="tool call")
     if identifier is not None:
@@ -1291,7 +1294,7 @@ def _rebuilt_responses(
         if (original := originals.get(identifier)) is not None:
             kept = {
                 key: value
-                for key, value in _object(original.get("function_response"), field="ADK function_response").items()
+                for key, value in object_field(original.get("function_response"), field="ADK function_response").items()
                 if key not in _FUNCTION_RESPONSE_FIELDS
             }
             part = {**original, "function_response": {**kept, **response}}
@@ -1351,7 +1354,7 @@ def _patched_content(original: JsonObject, run: Sequence[_Message], names_by_id:
 
 
 def _call_key(part: JsonObject) -> str | None:
-    call = _object(part.get("function_call"), field="ADK function_call")
+    call = object_field(part.get("function_call"), field="ADK function_call")
     if not call:
         return None
     return _identifier(call, field="ADK function_call") or _name(call, field="ADK function_call")
@@ -1573,7 +1576,7 @@ def _native_tool(original: JsonObject, edited: Mapping[str, Json] | None) -> Jso
 
 
 def _tool_choice(tool_config: Json) -> _ToolChoice | JsonObject | None:
-    calling = _object(tool_config, field="ADK tool_config").get("function_calling_config")
+    calling = object_field(tool_config, field="ADK tool_config").get("function_calling_config")
     if calling is None:
         return None
     if not _is_object(calling):
@@ -1604,7 +1607,7 @@ def _function_calling_config(choice: str | Mapping[str, Json] | None) -> JsonObj
         if _is_object(value):
             return dict(value)
     else:
-        name = _object(choice.get("function"), field="tool choice function").get("name")
+        name = object_field(choice.get("function"), field="tool choice function").get("name")
         if name:
             return {"mode": types.FunctionCallingConfigMode.ANY.value, "allowed_function_names": [str(name)]}
     raise ValueError(f"NeMo Relay cannot write tool choice {choice!r} back to an ADK request")
@@ -1614,7 +1617,7 @@ def _config_remainder(config: JsonObject) -> JsonObject:
     remainder = {key: value for key, value in config.items() if key not in _MODELED_CONFIG_KEYS}
     other = {
         key: value
-        for key, value in _object(config.get("tool_config"), field="ADK tool_config").items()
+        for key, value in object_field(config.get("tool_config"), field="ADK tool_config").items()
         if key != "function_calling_config"
     }
     if other:
@@ -1655,8 +1658,8 @@ def _write_api_specific(
         if key not in _API_SPECIFIC_REQUEST_KEYS:
             raise ValueError(f"NeMo Relay cannot write {key!r} back to an ADK request")
         _set_or_pop(payload, key, data.get(key))
-    edited_config = _object(data.get("config"), field="api_specific data config")
-    original_config = _object(original.get("config"), field="api_specific data config")
+    edited_config = object_field(data.get("config"), field="api_specific data config")
+    original_config = object_field(original.get("config"), field="api_specific data config")
     for key in sorted(edited_config.keys() | original_config.keys()):
         value = edited_config.get(key)
         if same_json(value, original_config.get(key)):
@@ -1666,11 +1669,11 @@ def _write_api_specific(
         if key != "tool_config":
             _set_or_pop(config, key, value)
             continue
-        remainder = _object(value, field="ADK tool_config")
+        remainder = object_field(value, field="ADK tool_config")
         if "function_calling_config" in remainder:
             raise ValueError("NeMo Relay writes the ADK function_calling_config through tool_choice")
         tool_config: JsonObject = dict(remainder)
-        calling = _object(config.get("tool_config"), field="ADK tool_config").get("function_calling_config")
+        calling = object_field(config.get("tool_config"), field="ADK tool_config").get("function_calling_config")
         if calling is not None:
             tool_config["function_calling_config"] = calling
         _set_or_pop(config, "tool_config", tool_config or None)
@@ -1702,7 +1705,7 @@ def _finish_reason(raw: Json, *, has_tool_calls: bool) -> _FinishReason | JsonOb
 
 
 def _decode(payload: JsonObject) -> AnnotatedLLMRequest:
-    config = _object(payload.get("config"), field="ADK config")
+    config = object_field(payload.get("config"), field="ADK config")
     contents = _objects(payload.get("contents"), field="ADK contents")
     messages = [message for content in contents for message in _content_messages(content)]
     params = {target: config[source] for source, target in _PARAMS if source in config}
@@ -1757,7 +1760,7 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
         payload = original.content
         baseline = _decode(payload)
-        config = _object(payload.get("config"), field="ADK config")
+        config = object_field(payload.get("config"), field="ADK config")
         messages, baseline_messages = annotated.messages, baseline.messages
         if not same_json(messages, baseline_messages):
             originals = _objects(payload.get("contents"), field="ADK contents")
@@ -1773,7 +1776,7 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
             if not same_json(params.get(target), baseline_params.get(target)):
                 _set_or_pop(config, source, params.get(target))
         if not same_json(annotated.tool_choice, baseline.tool_choice):
-            tool_config = dict(_object(config.get("tool_config"), field="ADK tool_config"))
+            tool_config = dict(object_field(config.get("tool_config"), field="ADK tool_config"))
             _set_or_pop(tool_config, "function_calling_config", _function_calling_config(annotated.tool_choice))
             _set_or_pop(config, "tool_config", tool_config or None)
         if not same_json(annotated.tools, baseline.tools):
@@ -1797,12 +1800,12 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
             {
                 "id": ids[index],
                 "name": _name(call, field="ADK function_call"),
-                "arguments": _object(call.get("args"), field="ADK function_call args"),
+                "arguments": object_field(call.get("args"), field="ADK function_call args"),
             }
             for index, call in calls
         ]
-        usage_metadata = _object(response.get("usage_metadata"), field="ADK usage_metadata")
-        recorded = _object(response.get(RECORDED_KEY), field=f"ADK response {RECORDED_KEY}")
+        usage_metadata = object_field(response.get("usage_metadata"), field="ADK usage_metadata")
+        recorded = object_field(response.get(RECORDED_KEY), field=f"ADK response {RECORDED_KEY}")
         read = self._variant(response, recorded, usage_metadata)
         usage: dict[str, Json] = dict(read.usage)
         if read.cost is not None:
@@ -1839,6 +1842,24 @@ def with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
     if prompt is not None and cached is not None and cached <= prompt:
         usage["uncached_input_tokens"] = prompt - cached
     return usage
+
+
+def without_cache(prompt: int, cached: int | None, written: int | None, *, folded: str) -> int:
+    """Return `prompt` minus `cached` and `written`.
+
+    Args:
+        prompt: Prompt token count, cache tokens included.
+        cached: Cache read tokens, or None.
+        written: Cache write tokens, or None.
+        folded: Name for cache tokens in the error message.
+
+    Raises:
+        ValueError: `cached` plus `written` exceeds `prompt`.
+    """
+    uncached = prompt - (cached or 0) - (written or 0)
+    if uncached < 0:
+        raise ValueError(f"ADK prompt_token_count must include {folded}")
+    return uncached
 
 
 def reported_cost(recorded: JsonObject, *, codec: LlmResponseCodec) -> Json:

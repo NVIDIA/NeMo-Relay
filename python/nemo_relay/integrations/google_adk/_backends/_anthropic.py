@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 from anthropic import NOT_GIVEN, AsyncAnthropicFoundry, NotGiven
 from anthropic.lib.vertex import AsyncAnthropicVertex
@@ -17,6 +17,8 @@ from nemo_relay.integrations.google_adk._backends._attempt import (
     CURRENT_ATTEMPT,
     Attempt,
     Backend,
+    ToolChoiceApi,
+    provider_tool_choice,
     record_usage,
     usage_fields,
     with_extra_headers,
@@ -24,6 +26,7 @@ from nemo_relay.integrations.google_adk._backends._attempt import (
 from nemo_relay.integrations.google_adk._serialization import (
     BASE_USAGE,
     BASE_USAGE_KEYS,
+    CACHE_WRITE_KEY,
     GENAI_USAGE,
     RECORDED_ID_KEY,
     RECORDED_USAGE_KEY,
@@ -31,6 +34,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     Normalized,
     reported_cost,
     token_counts,
+    without_cache,
 )
 from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
@@ -47,19 +51,29 @@ if TYPE_CHECKING:
 _Provider: TypeAlias = Literal["vertex_ai", "azure_ai", "anthropic"]
 _Stream: TypeAlias = "AsyncStream[RawMessageStreamEvent]"
 _API: Final = "anthropic_messages"
-CACHE_WRITE_KEY: Final[Annotated[str, "Usage attribute ADK sets for cache writes outside GenAI schema."]] = (
-    "cache_creation_input_tokens"
-)
 _CACHE_WRITE: Final = ((CACHE_WRITE_KEY, "cache_write_tokens"),)
 _USAGE_KEYS: Final = BASE_USAGE_KEYS | {CACHE_WRITE_KEY}
 _RECORDED_KEYS: Final = frozenset({RECORDED_USAGE_KEY})
 _NATIVE_CODEC: Final = AnthropicMessagesCodec()
-_ANY: Final = types.FunctionCallingConfigMode.ANY
-_FORCED: Final[Mapping[types.FunctionCallingConfigMode, ToolChoiceParam]] = {
+_CHOICES: Final[Mapping[types.FunctionCallingConfigMode, ToolChoiceParam]] = {
     types.FunctionCallingConfigMode.AUTO: {"type": "auto"},
-    _ANY: {"type": "any"},
+    types.FunctionCallingConfigMode.ANY: {"type": "any"},
     types.FunctionCallingConfigMode.NONE: {"type": "none"},
 }
+
+
+def _named_tool(name: str) -> ToolChoiceParam:
+    return {"type": "tool", "name": name}
+
+
+def _tool_name(tool: ToolUnionParam) -> str | None:
+    """Return function name of `tool`, or None for a built-in tool, which carries a versioned `type`."""
+    return tool["name"] if tool.get("type") in (None, "custom") else None
+
+
+_TOOL_CHOICE: Final[ToolChoiceApi[ToolUnionParam, ToolChoiceParam | NotGiven]] = ToolChoiceApi(
+    name="Anthropic", choices=_CHOICES, named=_named_tool, tool_name=_tool_name
+)
 
 
 def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject) -> Normalized:
@@ -73,10 +87,9 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
     usage: dict[str, int] = {}
     cached, written = counts.get("cache_read_tokens"), writes.get("cache_write_tokens")
     if (prompt := counts.get("prompt_tokens")) is not None:
-        folded = (cached or 0) + (written or 0)
-        if folded > prompt:
-            raise ValueError("ADK prompt_token_count must include the Anthropic cache tokens it reports")
-        usage["prompt_tokens"] = usage["uncached_input_tokens"] = prompt - folded
+        usage["prompt_tokens"] = usage["uncached_input_tokens"] = without_cache(
+            prompt, cached, written, folded="the Anthropic cache tokens it reports"
+        )
     if (candidates := counts.get("completion_tokens")) is not None:
         usage["completion_tokens"] = candidates + separate.get("thoughts_tokens", 0)
     if "prompt_tokens" in usage and "completion_tokens" in usage:
@@ -98,7 +111,7 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
 ANTHROPIC_CODEC: Final = AdkCodec(_read)
 
 
-async def anthropic_backend(model: AnthropicLlm) -> Backend:
+async def anthropic_backend(model: AnthropicLlm, request_model: str | None) -> Backend:
     """Return Anthropic Messages backend for model's client, and swap client's messages resource.
 
     Provider: `vertex_ai` for Vertex AI client, `azure_ai` for Microsoft Foundry client, `anthropic` for any other,
@@ -106,7 +119,7 @@ async def anthropic_backend(model: AnthropicLlm) -> Backend:
     """
     client = await model._get_anthropic_client()
     swap_class(client.messages, _messages_methods)
-    return Backend(_provider(client), ANTHROPIC_CODEC, client_headers=True)
+    return Backend(_provider(client), ANTHROPIC_CODEC, client_headers=True, model=request_model or model.model)
 
 
 def _provider(client: AsyncAnthropic | AsyncAnthropicVertex) -> _Provider:
@@ -134,7 +147,9 @@ def _messages_methods(cls: type[AsyncMessages]) -> Methods[AsyncMessages]:
         if attempt is not None and attempt.tool_choice is not None:
             tools = cast("Iterable[ToolUnionParam] | NotGiven", kwargs["tools"])
             choice = cast("ToolChoiceParam | NotGiven", kwargs["tool_choice"])
-            kwargs["tools"], kwargs["tool_choice"] = _tool_choice(attempt.tool_choice, tools, choice)
+            declared: list[ToolUnionParam] = [] if isinstance(tools, NotGiven) else list(tools)
+            chosen = provider_tool_choice(_TOOL_CHOICE, attempt.tool_choice, declared, choice)
+            kwargs["tools"], kwargs["tool_choice"] = (NOT_GIVEN, NOT_GIVEN) if chosen is None else chosen
         result = await original(self, **with_extra_headers(kwargs))
         if attempt is None:
             return result
@@ -161,35 +176,3 @@ async def _recorded_messages(stream: _Stream, attempt: Attempt) -> AsyncIterator
             yield event
     finally:
         await stream.close()
-
-
-def _tool_choice(
-    config: types.FunctionCallingConfig,
-    tools: Iterable[ToolUnionParam] | NotGiven,
-    choice: ToolChoiceParam | NotGiven,
-) -> tuple[list[ToolUnionParam] | NotGiven, ToolChoiceParam | NotGiven]:
-    """Return Anthropic tools and tool choice for function calling config.
-
-    Keep only tools listed in `allowed_function_names`. Force named tool when mode is `ANY` with one allowed name. Keep
-    request's tool choice when mode is unset or `MODE_UNSPECIFIED`. Return `NOT_GIVEN` for both when no tools remain.
-    Raise `ValueError` for undeclared allowed name, mode with no Anthropic equivalent, or mode requiring tool call when
-    no tools remain.
-    """
-    declared: list[ToolUnionParam] = [] if isinstance(tools, NotGiven) else list(tools)
-    names = config.allowed_function_names or []
-    if names:
-        known = {tool["name"] for tool in declared}
-        if missing := [name for name in names if name not in known]:
-            raise ValueError(f"ADK allowed_function_names {missing} are not declared on the request")
-        declared = [tool for tool in declared if tool["name"] in names]
-    mode = config.mode
-    forced: ToolChoiceParam | None = None
-    if mode is not None and mode is not types.FunctionCallingConfigMode.MODE_UNSPECIFIED:
-        if mode not in _FORCED:
-            raise ValueError(f"Anthropic has no equivalent of the {mode.value} function calling mode")
-        forced = {"type": "tool", "name": names[0]} if mode is _ANY and len(names) == 1 else _FORCED[mode]
-    if not declared:
-        if forced is not None and forced["type"] == "any":
-            raise ValueError("the function calling config requires a tool call but the request declares no tools")
-        return NOT_GIVEN, NOT_GIVEN
-    return declared, choice if forced is None else forced

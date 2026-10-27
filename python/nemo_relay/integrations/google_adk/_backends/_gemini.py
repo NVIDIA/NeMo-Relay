@@ -86,7 +86,7 @@ def _wire(model: type[BaseModel], value: Json) -> Json:
 GEMINI_CODEC: Final = AdkCodec(_read)
 
 
-def gemini_backend(model: Gemini) -> Backend:
+def gemini_backend(model: Gemini, request_model: str | None) -> Backend:
     """Return backend for model's client: `vertex_ai` for Vertex AI client, `gemini` otherwise.
 
     Swap client's models resource to record each response, unless model uses interactions API.
@@ -95,7 +95,7 @@ def gemini_backend(model: Gemini) -> Backend:
     if not model.use_interactions_api:
         swap_class(client.aio.models, _models_methods)
     provider = "vertex_ai" if client.vertexai else "gemini"
-    return Backend(provider, GEMINI_CODEC, client_headers=False)
+    return Backend(provider, GEMINI_CODEC, client_headers=False, model=request_model)
 
 
 def _models_methods(cls: type[AsyncModels]) -> Methods[AsyncModels]:

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from google.adk.agents import BaseAgent, LlmAgent
+    from google.adk.agents.context_cache_config import ContextCacheConfig
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.agents.llm_agent import ToolUnion
     from google.adk.agents.readonly_context import ReadonlyContext
@@ -392,7 +393,12 @@ def event_signal(reached: asyncio.Event, matches: Callable[[Event], bool]) -> Ba
     return EventSignal("event_signal")
 
 
-def make_runner(root_agent: BaseNode, *, plugins: Sequence[BasePlugin] | None = None) -> Runner:
+def make_runner(
+    root_agent: BaseNode,
+    *,
+    plugins: Sequence[BasePlugin] | None = None,
+    context_cache_config: ContextCacheConfig | None = None,
+) -> Runner:
     from google.adk.apps import App
     from google.adk.artifacts import InMemoryArtifactService
     from google.adk.runners import Runner
@@ -400,7 +406,12 @@ def make_runner(root_agent: BaseNode, *, plugins: Sequence[BasePlugin] | None = 
 
     from nemo_relay.integrations.google_adk import NemoRelayPlugin
 
-    app = App(name=APP_NAME, root_agent=root_agent, plugins=[NemoRelayPlugin()] if plugins is None else list(plugins))
+    app = App(
+        name=APP_NAME,
+        root_agent=root_agent,
+        plugins=[NemoRelayPlugin()] if plugins is None else list(plugins),
+        context_cache_config=context_cache_config,
+    )
     return Runner(app=app, session_service=InMemorySessionService(), artifact_service=InMemoryArtifactService())
 
 
@@ -437,10 +448,13 @@ async def run_app(
     plugin: NemoRelayPlugin | None = None,
     extra_plugins: Sequence[BasePlugin] = (),
     message: str = "hi",
+    context_cache_config: ContextCacheConfig | None = None,
 ) -> list[Event]:
     from nemo_relay.integrations.google_adk import NemoRelayPlugin
 
-    runner = make_runner(root_agent, plugins=[plugin or NemoRelayPlugin(), *extra_plugins])
+    runner = make_runner(
+        root_agent, plugins=[plugin or NemoRelayPlugin(), *extra_plugins], context_cache_config=context_cache_config
+    )
     try:
         return await run_turn(runner, message=message, run_config=run_config)
     finally:
@@ -453,11 +467,18 @@ async def run_recorded(
     run_config: RunConfig | None = None,
     extra_plugins: Sequence[BasePlugin] = (),
     message: str = "hi",
+    context_cache_config: ContextCacheConfig | None = None,
 ) -> list[Event]:
     """Run the agent under a `request` scope, and flush the subscribers after the run ends or fails."""
     try:
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-            return await run_app(root_agent, run_config=run_config, extra_plugins=extra_plugins, message=message)
+            return await run_app(
+                root_agent,
+                run_config=run_config,
+                extra_plugins=extra_plugins,
+                message=message,
+                context_cache_config=context_cache_config,
+            )
     finally:
         await nemo_relay.subscribers.flush_async()
 

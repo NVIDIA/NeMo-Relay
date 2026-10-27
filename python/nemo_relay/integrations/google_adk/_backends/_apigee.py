@@ -25,16 +25,16 @@ if TYPE_CHECKING:
     from nemo_relay import Json
 
 
-def apigee_backend(model: ApigeeLlm) -> Backend:
+def apigee_backend(model: ApigeeLlm, request_model: str | None) -> Backend:
     """Return Gemini backend in GenAI mode, `openai` Chat Completions backend in chat completions mode.
 
     In chat completions mode, swap proxy client's class to send attempt's request headers and record each parsed
     response.
     """
     if model._api_type is not ApigeeLlm.ApiType.CHAT_COMPLETIONS:
-        return gemini_backend(model)
+        return gemini_backend(model, request_model)
     swap_class(model._completions_http_client, _completions_methods)
-    return Backend("openai", CHAT_CODEC, client_headers=True)
+    return Backend("openai", CHAT_CODEC, client_headers=True, model=request_model)
 
 
 def _completions_methods(cls: type[CompletionsHTTPClient]) -> Methods[CompletionsHTTPClient]:
