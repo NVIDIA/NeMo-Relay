@@ -230,9 +230,21 @@ Each dynamic record accepts only these fields:
 | `config` | `{}` | Plugin settings, written as TOML tables and values. The plugin's schema and validation hook define the fields. |
 
 Relay rejects records with unknown fields. Do not put `kind`, `id`, or
-`enabled` beside `manifest`. Use `nemo-relay plugins enable <plugin-id>` and
-`nemo-relay plugins disable <plugin-id>` to enable or disable the plugin. The
-manifest's `[defaults]` section must declare `enabled = false`.
+`enabled` beside `manifest`. The manifest must include `[defaults]` with
+`enabled = false`. This field does not control startup selection for manual
+records.
+
+When you use `nemo-relay plugins add <manifest>`, Relay records the plugin as
+disabled in `.dynamic-plugins.json` beside `plugins.toml`. Use
+`nemo-relay plugins enable <plugin-id>` and
+`nemo-relay plugins disable <plugin-id>` to change that saved state.
+
+If you add a record manually and no `.dynamic-plugins.json` file exists beside
+`plugins.toml`, Relay selects the plugin at startup. It can activate after
+validation, trust, and policy checks pass, even though the manifest declares
+`enabled = false`. If the state file exists, Relay selects only plugins with a
+matching record marked present and enabled. It skips plugins that have no
+matching state record.
 
 The tables `[plugins.dynamic.config]` and `[plugins.dynamic.config.executor]`
 above belong to the most recent `[[plugins.dynamic]]` record. Add another

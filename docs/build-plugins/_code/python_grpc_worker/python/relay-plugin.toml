@@ -11,6 +11,9 @@ kind = "worker"
 relay = ">=0.10.0,<1.0"
 worker_protocol = "grpc-v1"
 
+[defaults]
+enabled = false
+
 [capabilities]
 items = ["plugin_worker", "config_schema"]
 

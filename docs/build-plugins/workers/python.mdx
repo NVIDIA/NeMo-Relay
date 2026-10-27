@@ -145,7 +145,7 @@ The corresponding manifest tells Relay to install this directory and import `mai
 the installed module. Calculate the `<worker-source-sha256>` placeholder from the current
 `worker.py`; changing that file requires a new digest.
 
-<Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-29" showLineNumbers={false} />
+<Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
 The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
 contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns

@@ -11,7 +11,8 @@ native library or worker entrypoint, and an optional component JSON Schema. The 
 lets Relay validate compatibility and integrity before code is loaded or a process is
 started. Declare the package with `[[plugins.dynamic]]` in `plugins.toml` and
 put its runtime settings under `[plugins.dynamic.config]`. The CLI gateway and
-SDK initialization read these records and load the plugins you have enabled.
+SDK initialization read these records and use lifecycle state to select plugins.
+A manual record can activate at startup when no lifecycle state file exists.
 Refer to
 [Dynamic Plugin Configuration](/configure-plugins/plugin-configuration-files#gateway-discoverable-plugin-records)
 for the configuration shape.
@@ -22,7 +23,7 @@ for the configuration shape.
 |---|---|
 | `[plugin]` | Stable package identity and plugin kind. |
 | `[compat]` | Supported Relay range plus the native manifest API or worker protocol contract. A typed native plugin built with the current SDK must declare a Relay range beginning at 0.10.0. |
-| `[defaults]` and `[capabilities]` | Initial enabled state and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
+| `[defaults]` and `[capabilities]` | The required `enabled = false` declaration and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
 | `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
 | `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
 | `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
