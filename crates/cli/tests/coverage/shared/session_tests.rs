@@ -4647,7 +4647,9 @@ async fn gateway_child_turn_uses_only_explicit_agent_identity() {
     let subscriber_name = "cli-unnamed-gateway-child-turn";
     let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
     subscriber.register(subscriber_name).unwrap();
-    let manager = SessionManager::new(session_test_config());
+    let mut config = session_test_config();
+    config.metadata = Some(json!({ "gen_ai.agent.name": "root-owner" }));
+    let manager = SessionManager::new(config);
     manager
         .apply_events(
             &HeaderMap::new(),

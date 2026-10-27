@@ -2388,6 +2388,8 @@ impl Session {
         );
         if let Some(agent_name) = agent_name {
             turn_metadata["gen_ai.agent.name"] = json!(agent_name);
+        } else if let Some(object) = turn_metadata.as_object_mut() {
+            object.remove("gen_ai.agent.name");
         }
         let scope = nemo_relay::api::runtime::with_scope_stack(stack, || {
             push_scope(
