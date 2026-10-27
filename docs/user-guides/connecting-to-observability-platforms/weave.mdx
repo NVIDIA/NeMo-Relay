@@ -1,6 +1,7 @@
 ---
 title: "Connect to W&B Weave"
 description: "Send Relay GenAI traces to a Weave project and inspect them in the Agents view."
+hide-nav-links: true
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -12,7 +13,7 @@ to send Relay-observed agent activity to Weave. Its Agents view recognizes
 so use Relay's `gen_ai` trace projection for this destination.
 
 <Tip title="Use the same companion workload">
-Select `--destination weave` in the parent guide's Hermes example. Supply the Agents trace URL, `WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_PROJECT` in the runner environment.
+Select `--destination weave` in the parent guide's example. Supply the Agents trace URL, `WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_PROJECT` in the runner environment.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 

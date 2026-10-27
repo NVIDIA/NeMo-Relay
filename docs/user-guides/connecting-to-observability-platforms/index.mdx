@@ -1,265 +1,244 @@
 ---
 title: "Connecting to Observability Platforms"
-description: "Send Relay-observed agent, model, and tool activity to an existing tracing platform."
+description: "Export Relay telemetry from your existing deployment and verify delivery to a tracing platform."
 position: 2
+hide-nav-links: true
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Connect a Relay-observed workload to the tracing platform your organization
-already operates. By the end, a real agent run should appear as a trace with
-its observed model calls and tool actions, under the intended service and
-project. The exporter can only send activity that Relay has captured.
+Enterprise teams need to investigate agent activity in the observability platform
+they already operate. This guide connects a Relay capture path to that platform
+and verifies that agent or turn activity, model calls, and tools arrive together.
+It applies to managed coding agents, framework integrations, and instrumented applications.
 
-## What you'll connect
+The optional Brev example uses a small Python application and Phoenix.
+It reads synthetic incident requests, asks a model to prioritize them, and writes
+a handoff. Hermes is another example choice; neither harness is required for your deployment.
 
-The optional example uses **Hermes Agent's native Relay integration** to read a
-synthetic incident queue and write a support handoff. Send that same run to one
-of four destinations and inspect its agent, model, and file-tool activity.
-Inference is remote, so an ordinary CPU VM is sufficient.
+## Before you start
 
-```text
-Hermes (Relay in process) → Observability plugin → OTLP → chosen platform
-                                            └─→ local events.jsonl
-Datadog path: OTLP → your Collector or Agent → Datadog APM
-```
+| Requirement | Your deployment | Brev example |
+| --- | --- | --- |
+| Relay | A capture path that sees the required model and tool activity | Relay Python SDK 0.10.4; no separate coding agent |
+| Host | A platform supported by your chosen integration | CPU Linux VM, Python 3.12, Git, uv |
+| Access | Trace-ingestion permission and any provider credentials | NVIDIA API key and an accessible model; local Phoenix needs no API key |
+| Changes | Exporter configuration in the process that owns capture | Virtual environment and new output directory; no system service |
+| Cleanup | Retain required audit evidence before removal | Stop Phoenix and remove only the example directories you created |
 
-## Prerequisites
+<Warning title="Keep examples isolated">
+Use a host without the coding-agent example's system-wide Relay policy.
+That policy also applies to SDK and framework processes, including explicit plugin files.
+</Warning>
 
-- Python 3.12, Git, and an authenticated, tool-capable Hermes model.
-- A Hermes build with native Relay support and `chat --oneshot`. Follow the
-  [Hermes quickstart](/getting-started/quick-start/hermes), then check the **NeMo
-  Relay Plugins** section of `hermes doctor`. Hermes manages its Relay version;
-  a numeric minimum Hermes version has not been established for this example.
-  The verified public checkout was
-  [`91b17917`](https://github.com/NousResearch/hermes-agent/tree/91b17917e60500afc566d669bac9c065a48ed478).
-- A running destination and permission to send traces to its project. The
-  Phoenix subsection includes a local server command; hosted destinations need
-  their own credentials and project access.
+## 1. Choose the Relay capture path
 
-Choose your destination before running the example:
+Choose the process that observes your workload. Configure its exporter there.
 
 <CardGroup cols={2}>
-<Card title="Phoenix" icon="fa-solid fa-magnifying-glass" href="/user-guides/connecting-to-observability-platforms/phoenix">
-Use OpenInference spans in a Phoenix project.
+<Card title="Managed coding agents" href="/daemon/about" icon="fa-solid fa-laptop-code">
+A daemon brokers supported harness connections. Per-user workers capture routed
+model calls and supported hooks; install the exporter policy in the workers.
 </Card>
-<Card title="LangSmith" icon="fa-solid fa-diagram-project" href="/user-guides/connecting-to-observability-platforms/langsmith">
-Route a trace to a LangSmith project with OTLP headers.
+<Card title="Framework integration" href="/supported-integrations/about" icon="fa-solid fa-diagram-project">
+LangChain, LangGraph, and Deep Agents integrations observe supported model and
+tool boundaries inside the application. Configure that application's Relay host.
 </Card>
-<Card title="W&B Weave" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms/weave">
-Send GenAI spans to Weave's Agents view.
+<Card title="Instrumented application" href="/instrument-applications/about" icon="fa-solid fa-code">
+Python, Node.js, or Rust code creates agent scopes and wraps the model and tool
+calls it owns. The Brev example uses this path.
 </Card>
-<Card title="Datadog" icon="fa-solid fa-chart-simple" href="/user-guides/connecting-to-observability-platforms/datadog">
-Send traces through an Agent or Collector to Datadog.
+<Card title="Hermes native integration" href="/getting-started/quick-start/hermes" icon="fa-solid fa-robot">
+Hermes initializes Relay in process. Select its plugin configuration through
+HERMES_NEMO_RELAY_PLUGINS_TOML; a separate CLI gateway is unnecessary.
 </Card>
 </CardGroup>
 
-<Tip title="Python on Brev Ubuntu">
-Check `python3.12 --version` before running. The default `python3` can still be
-3.10. If uv is installed, `uv python install 3.12` provides the required version;
-ensure its executable is on your PATH. The runner uses only the standard library.
-</Tip>
+Confirm capture with one agent or turn scope, one model call, and one tool call.
+An exporter sends existing events; it does not add instrumentation. The
+[support matrix](/reference/support-matrix) describes each integration's coverage.
 
-## Run the optional companion
+## 2. Enable the plugin and select a destination
 
-The [example directory](https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-observability/docs/user-guides/_examples/observability)
-contains the runner and destination environment table. These review files live
-on the feedback branch until the guide lands upstream. On your Linux host:
+Place the following `plugins.toml` in the configuration loaded by that worker
+or application. This minimal example sends OpenInference traces to local Phoenix
+and omits full prompt and tool payloads:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://127.0.0.1:6006/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"openinference.project.name" = "relay-support-triage"
+```
+
+Workers load administrator-owned system configuration. Framework integrations
+load it when they initialize Relay. For a directly instrumented Python application,
+import the observability component and activate the host around application work:
+
+```python
+from nemo_relay import plugin
+import nemo_relay.observability
+
+async with plugin.activate(plugin.PluginConfig(), "plugins.toml"):
+    await run_application()
+```
+
+Restart or reopen the affected process after changing its configuration.
+Check activation diagnostics before testing delivery.
+[Plugin initialization](/configure-plugins/initialize-plugins) explains the lifecycle.
+
+Choose the destination recipe for the endpoint, projection, and authentication
+changes. Credentials belong in the exporting process's environment;
+`header_env` maps header names to environment-variable names.
+
+<CardGroup cols={2}>
+<Card title="Phoenix" href="/user-guides/connecting-to-observability-platforms/phoenix" icon="fa-solid fa-magnifying-glass">
+OpenInference projects. Backend delivery verified with the companion workload.
+</Card>
+<Card title="LangSmith" href="/user-guides/connecting-to-observability-platforms/langsmith" icon="fa-solid fa-diagram-project">
+Project or agent/environment routing. Export request verified; hosted delivery needs your account.
+</Card>
+<Card title="W&B Weave" href="/user-guides/connecting-to-observability-platforms/weave" icon="fa-solid fa-chart-line">
+GenAI spans in Agents. Export request verified; verify hosted delivery and conversation grouping.
+</Card>
+<Card title="Datadog" href="/user-guides/connecting-to-observability-platforms/datadog" icon="fa-solid fa-chart-simple">
+Send OTLP through your Agent or Collector. Export request verified; verify the resulting Datadog view.
+</Card>
+</CardGroup>
+
+## 3. Exercise a representative workload
+
+Run work with a clear expected outcome. Keep the service name, run time, and
+local event log so you can find the same activity in the destination.
+Approve payload fields and redaction policy before enabling payload capture.
+
+<Accordion title="Brev example: instrumented Python application">
+Use a disposable CPU instance with the [shared runtime setup](/user-guides/about#example-runtimes).
+The SDK example also runs on macOS using the same virtual-environment commands.
+On Brev, connect with `brev shell YOUR_INSTANCE`, then:
 
 ```bash
-git clone --branch topic/codex/user-guides-observability --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-observability
+git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-observability
 cd relay-observability/docs/user-guides/_examples/observability
-export PATH="$HOME/.local/bin:$PATH"
-hermes doctor
-# Start Phoenix in another terminal using its subsection, then:
-python3.12 run.py --destination phoenix --output /tmp/relay-triage-phoenix
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python nemo-relay==0.10.4
 ```
 
-For a hosted destination, set its endpoint and environment variables from the
-matching subsection, then select `--destination langsmith`, `weave`, or `datadog`.
-Supply secrets through your approved secret store. For an interactive Bash
-session, this pattern reads a key without echoing or saving its value in history:
+In a second terminal on the same host, start disposable Phoenix:
 
 ```bash
-IFS= read -r -s -p 'LangSmith API key: ' LANGSMITH_API_KEY; printf '\n'
-export LANGSMITH_API_KEY
+uvx --from arize-phoenix phoenix serve
 ```
 
-<Accordion title="Run on Brev">
-Use an ordinary Linux CPU instance and run the same clone and workload commands
-there. From your local computer, connect and forward the Phoenix UI port:
+Back in the example directory, select a tool-capable model from the
+[NVIDIA API catalog](https://build.nvidia.com/explore/discover) and enter its API key:
 
 ```bash
-brev shell YOUR_INSTANCE
-# In another local terminal, while Phoenix runs on the instance:
+export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+export NVIDIA_MODEL=YOUR_ACCESSIBLE_MODEL_ID
+IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
+export NVIDIA_API_KEY
+.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage --verify
+```
+
+The runner uses real SDK scopes and a real model request. It validates the handoff,
+local event parentage, and Phoenix delivery. It preserves failed runs for inspection.
+For a hosted destination, use that recipe's environment variables and
+`--destination langsmith`, `weave`, or `datadog`; `--verify` is Phoenix-specific.
+
+From your local computer, forward the Phoenix UI:
+
+```bash
 brev port-forward YOUR_INSTANCE --port 6006:6006
 ```
 
-Open `http://localhost:6006` locally. Use `--host` on both commands if Phoenix runs
-on the VM host rather than Brev's workspace container. See
-[Brev connectivity](https://docs.nvidia.com/brev/cli/connectivity).
+Open `http://localhost:6006`. Use `--host` only if both services run on a reachable
+Brev VM host rather than its workspace container.
 </Accordion>
 
-## Verify the run
+<Accordion title="Brev alternative: use Hermes">
+Install and authenticate a Hermes build with native Relay support using the
+[Hermes quickstart](/getting-started/quick-start/hermes). In the same example directory:
 
-The runner writes `handoff.md`, `agent.log`, and `logs/events.jsonl`. It checks
-that all three incidents appear, the checkout outage precedes the report delay,
-and model/tool scopes connect to agent scopes in the local **Agent Trajectory
-Observability Format (ATOF)** log. It prints this success message only after
-those local checks pass:
+```bash
+hermes doctor
+python3.12 run.py --harness hermes --destination phoenix --output /tmp/relay-hermes --verify
+```
+
+Hermes manages its own Relay dependency. Check the NeMo Relay Plugins section
+of `hermes doctor` before running.
+</Accordion>
+
+## 4. Verify capture and destination delivery
+
+Accept the integration when all these checks pass:
+
+| Check | Evidence |
+| --- | --- |
+| Correct destination | The intended project and service contain the run at its recorded time. |
+| Captured activity | Expected agent or turn, LLM, and tool spans exist for the chosen capture path. |
+| Correlation | Observed calls share the trace and have the expected parents; exported parents are present. |
+| Useful fields | Model identity and usage appear when the capture path supplies them. |
+| Privacy | Restricted payloads are absent or redacted according to the approved policy. |
+
+Local ATOF records prove capture. Inspect the destination tree to prove delivery;
+an HTTP success or a closed model scope alone is insufficient.
+
+<Accordion title="Brev example: verify synthetic redaction">
+Use only the supplied synthetic fixture. This second run explicitly enables
+payloads and an email redaction profile:
+
+```bash
+.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage-redacted --redaction-demo --verify
+```
+
+The runner checks that the synthetic contact is absent from emitted payloads.
+The source file and provider conversation retain it; redaction affects telemetry.
+</Accordion>
+
+### Reference trace
+
+The instrumented Python workload delivered four correlated spans to Phoenix:
 
 ```text
-Handoff and correlated local agent/model/tool scopes found. Verify delivery in your destination UI.
+support-triage                       AGENT
+├─ read_file                         TOOL
+├─ openai.chat_completions            LLM
+└─ write_file                        TOOL
 ```
 
-This is the runner's output contract, not a captured hosted-platform result.
-Find service `relay-support-triage` at the run time in the destination UI and
-compare its trace tree with the local log. For Phoenix and LangSmith inspect
-`openinference.span.kind` values `AGENT`, `LLM`, and `TOOL` where emitted; Weave
-uses GenAI operations described in its subsection. In Datadog APM, compare
-operation names and parent spans after your Collector's mapping. Model IDs and
-usage are present only when the source supplies them.
+The metadata-only and synthetic-redaction runs both passed local parentage and
+Phoenix delivery checks. The redaction run also confirmed that the synthetic
+contact was absent from emitted payloads.
 
-<Accordion title="Measured destination export checks">
-The actual Hermes companion also ran against a loopback OTLP receiver on Brev.
-It used synthetic destination credentials and the same authenticated NVIDIA
-model as the Phoenix example. Each run passed the handoff and local scope
-checks; the receiver decoded the emitted protobuf requests:
-
-| Destination recipe | Spans | What the receiver verified |
-| --- | --- | --- |
-| LangSmith project | 15 | `/otel/v1/traces`, API-key and project headers, OpenInference roles |
-| LangSmith agent/environment | 15 | Both agent headers, no project header, OpenInference roles |
-| Weave Agents | 15 | `/agents/otel/v1/traces`, API-key header, entity/project resources, GenAI operations |
-| Datadog Collector | 21 | `/v1/traces`, OpenInference roles, service name |
-
-Every run contained one trace with all exported parents present and service
-`relay-support-triage`. Span counts vary with the agent's tool use and retries.
-These checks establish the exporter request contract. They do not establish
-authenticated delivery to LangSmith, Weave, or Datadog; verify those accounts
-and their UI separately. The Phoenix result below is an actual backend run.
-</Accordion>
-
-## A measured Phoenix run
-
-On a Brev CPU VM, the companion completed in **70 seconds**, including Hermes
-startup. It used `https://inference-api.nvidia.com/v1` with the accessible model
-`nvidia/nvidia/Nemotron-3-Nano-30B-A3B`. This organization-configured endpoint and
-model are example choices; use your own authenticated provider where appropriate.
-The handoff placed the checkout outage before provisioning and the report delay.
-
-The local log contained **one closed agent scope, four model calls, and two tool
-calls**. Phoenix received all 12 exported spans in one trace under project
-`relay-support-triage`:
-
-```text
-hermes.session                           AGENT
-└─ hermes.turn                           CHAIN
-   ├─ hermes.logical_llm_call × 4         CHAIN
-   │  └─ openai.chat_completions          LLM (one per logical call)
-   ├─ read_file                          TOOL
-   └─ write_file                         TOOL
-```
-
-Model spans included the requested model identity and prompt/completion/total
-token counts. These observed counts describe this one task; they are not a
-performance target. Hosted destination verification remains a separate check.
-
-<Accordion title="Trimmed ATOF records from that run">
-Selected records are grouped by category, rather than event order. Only identity,
-parentage, name, category, and phase fields are shown. Intermediate
-function scopes explain why a model/tool record's immediate parent may differ
-from the agent UUID. Use the complete log to follow those ancestors.
-
-```jsonl
-{"kind":"scope","uuid":"01a16ac3-cb96-71f2-86f2-599dc3d81ad5","parent_uuid":"01a16ac3-cb96-71f2-86f2-597529a85244","name":"hermes.session","category":"agent","scope_category":"end"}
-{"kind":"scope","uuid":"01a16ac3-cdec-7b22-897e-c3175a9bbc44","parent_uuid":"01a16ac3-cdea-7f93-8d39-788cee130ddf","name":"openai.chat_completions","category":"llm","scope_category":"end"}
-{"kind":"scope","uuid":"01a16ac3-da4e-75f3-84ec-1ba93528815e","parent_uuid":"01a16ac3-cb97-7f30-942f-78e1d3748638","name":"read_file","category":"tool","scope_category":"end"}
-```
-</Accordion>
-
-## Adapt to an existing deployment
-
-Relay needs to see the run before it can export a useful trace. Match the
-capture path to the component that owns execution:
-
-| Workload | What Relay sees | Where the exporter runs |
-| --- | --- | --- |
-| Managed coding agents | A daemon keeps a shared local or remote entry point for supported harnesses such as Claude Code and Codex. Per-user workers handle provider traffic and supported lifecycle hooks while developers stay in their usual harness. Model calls that bypass the gateway are outside this capture path. | The per-user worker, using administrator-owned plugin configuration. |
-| Maintained framework integration | LangChain, LangGraph, and Deep Agents integrations wrap supported tool and model calls and attach those events to agent scopes. OpenClaw has hook-backed telemetry with narrower coverage. | The application process loading the integration. |
-| Instrumented application | Python, Node.js, or Rust code creates agent scopes and wraps the tool and model boundaries it owns. This is appropriate when your application controls those calls directly. | The instrumented application process. |
-
-Hermes Agent has its own native Relay integration, which the companion uses. Check the
-[support matrix](/reference/support-matrix) for its current export path and for
-each harness's capture limits. The [daemon](/daemon/about),
-[framework integration](/supported-integrations/about), and
-[application instrumentation](/instrument-applications/about) sections provide
-deeper setup details after you choose the path.
-
-<Note>
-An exporter does not instrument a provider call or tool by itself. If a model
-or tool span is absent, first check that the run crossed a Relay-managed
-boundary. A successful model response from a daemon can also be pass-through;
-confirm worker-backed execution before accepting the trace.
-</Note>
-
-## Connect and verify
-
-<Steps>
-<Step title="Choose a representative run">
-Use an existing, non-sensitive agent task that calls a model and at least one
-tool. Record its approximate time, harness or service identity, and expected
-parent-child activity so you can recognize it in the destination.
-</Step>
-
-<Step title="Set the privacy and service boundary">
-Decide which prompt, response, and tool fields may leave the process. Apply
-Relay's [PII redaction policy](/configure-plugins/pii-redaction/about) to emitted
-telemetry before export. Give the OTLP trace a stable `service_name` that maps
-to your deployment, rather than a developer's local process name.
-</Step>
-
-<Step title="Configure one trace destination">
-In the worker or application process, enable the Observability plugin's
-OpenTelemetry trace endpoint. Choose `openinference` for Phoenix and LangSmith,
-or `gen_ai` for Weave's Agents view. For Datadog, the example uses
-`openinference`. Use the complete trace URL and the transport and headers shown
-in the [Phoenix](/user-guides/connecting-to-observability-platforms/phoenix),
-[LangSmith](/user-guides/connecting-to-observability-platforms/langsmith),
-[Weave](/user-guides/connecting-to-observability-platforms/weave), or
-[Datadog](/user-guides/connecting-to-observability-platforms/datadog) subsection. Keep API keys in the deployment's secret store;
-Relay's `header_env` reads their values from the process environment.
-</Step>
-
-<Step title="Inspect the destination trace">
-Find the run by time and service. Confirm agent, model, and tool parentage,
-relevant model identity and token fields, and the expected redacted payload.
-If the run is absent, inspect exporter delivery and endpoint authorization. If
-only one activity type is absent, compare the trace with the source's actual
-capture coverage before changing the exporter.
-</Step>
-</Steps>
-
-Relay's [Observability configuration](/configure-plugins/observability/configuration)
-explains activation and delivery diagnostics. The
-[OpenTelemetry reference](/configure-plugins/observability/opentelemetry)
-documents all endpoint fields. Use the destination subsection for the concrete
-configuration and checks that complete this guide.
-
-<Note title="Limits of the example">
-Hermes and the incident queue are example choices. Other supported integrations
-can use the same exporter settings. Payload capture is disabled here; the run
-does not validate payload redaction. Local events establish capture; destination
-UI inspection establishes delivery. A separate Hermes gateway retains its own
-configuration: use a dedicated profile, inspect the resolved plugin policy in
-`hermes doctor`, and restart only a gateway belonging to that profile after
-policy changes. Administrator policy can override the example file.
-</Note>
+A Hermes run exported 12 spans, including a session, turn, logical-call parents,
+four model calls, and two tools. Counts depend on the workload and capture path.
+Hosted-platform export checks establish request contracts; confirm authenticated
+delivery in your destination.
 
 ## Cleanup and next steps
 
-Stop only the Phoenix process you started with Ctrl+C, close its port forward,
-and delete your chosen `/tmp/relay-triage-*` run directories after retaining
-needed results. Leave shared backends running. For a managed rollout, continue
-with [daemon deployment](/daemon/about); for exporter tuning, use the
-[OpenTelemetry reference](/configure-plugins/observability/opentelemetry).
+Stop the disposable Phoenix process and retain any evidence you need before
+removing your chosen output directories and virtual environment. Leave shared
+collectors and other users' configurations running.
+
+Apply the same exporter settings to your chosen capture path. Use
+[exporter diagnostics](/configure-plugins/observability/configuration) to distinguish
+capture gaps, authentication failures, and delivery problems.

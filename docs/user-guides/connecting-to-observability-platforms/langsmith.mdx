@@ -1,6 +1,7 @@
 ---
 title: "Connect to LangSmith"
 description: "Export Relay traces to a LangSmith project and inspect correlated agent work."
+hide-nav-links: true
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -12,7 +13,7 @@ trace projection carries agent, model, and tool span attributes that LangSmith
 can map into its run view.
 
 <Tip title="Use the same companion workload">
-Select `--destination langsmith` in the parent guide's Hermes example. Supply the regional trace URL and `LANGSMITH_API_KEY`, then choose project or agent/environment addressing below.
+Select `--destination langsmith` in the parent guide's example. Supply the regional trace URL and `LANGSMITH_API_KEY`, then choose project or agent/environment addressing below.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 
@@ -93,7 +94,7 @@ export LANGSMITH_AGENT_ENVIRONMENT=development
 # Use these instead of LANGSMITH_PROJECT.
 ```
 
-The runner rejects conflicting or incomplete addressing before starting Hermes.
+The runner rejects conflicting or incomplete addressing before starting the workload.
 </Accordion>
 
 ## Check the LangSmith run

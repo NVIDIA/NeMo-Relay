@@ -1,6 +1,7 @@
 ---
 title: "Connect to Datadog"
 description: "Send Relay traces through an enterprise OTLP collector or tracing backend to Datadog."
+hide-nav-links: true
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -12,12 +13,12 @@ Datadog. The example routes Relay OTLP traces to an organization-operated
 OpenTelemetry Collector; that Collector forwards them to your Datadog site.
 
 <Tip title="Use the same companion workload">
-Select `--destination datadog` in the parent guide's Hermes example. Supply your running Collector's trace URL. Its Datadog exporter and credentials stay in that collector or tracing backend.
+Select `--destination datadog` in the parent guide's example. Supply your running Collector's trace URL. Its Datadog exporter and credentials stay in that collector or tracing backend.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 
 The example uses OpenInference to keep the same agent/model/tool roles as the
-Phoenix and LangSmith recipes. Datadog also supports OpenTelemetry GenAI
+Phoenix and LangSmith recipes. Datadog accepts both OpenInference and OpenTelemetry GenAI
 conventions; use `gen_ai` when your pipeline standardizes on those attributes.
 This recipe verifies **APM trace arrival**. Enabling Datadog's Agent/LLM
 Observability product requires its additional

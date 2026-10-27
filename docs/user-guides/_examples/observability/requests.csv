@@ -1,4 +1,4 @@
-request_id,service,impact,status
-INC-1042,checkout,All customers cannot submit orders,Investigating
-INC-1043,reporting,Daily report delayed for one team,Workaround available
-INC-1044,identity,New employee provisioning blocked,Investigating
+request_id,service,impact,status,contact
+INC-1042,checkout,All customers cannot submit orders,Investigating,sample.employee@example.com
+INC-1043,reporting,Daily report delayed for one team,Workaround available,
+INC-1044,identity,New employee provisioning blocked,Investigating,

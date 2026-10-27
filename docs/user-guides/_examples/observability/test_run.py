@@ -3,15 +3,44 @@
 
 """Regression checks for unsafe endpoints and misleading local success."""
 
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from run import check_events, langsmith_headers, validate_endpoint
+from run import check_events, langsmith_headers, validate_endpoint, verify_phoenix
 
 
 class CaptureChecks(unittest.TestCase):
+    def test_delivery_waits_for_all_local_scopes_and_exported_parents(self):
+        events = [
+            {"kind": "scope", "scope_category": "end", "category": category, "uuid": category}
+            for category in ("agent", "llm", "tool")
+        ]
+        spans = [
+            {
+                "context": {"span_id": category},
+                "parent_id": None if category == "agent" else "agent",
+                "attributes": {"nemo_relay.uuid": category},
+            }
+            for category in ("agent", "llm", "tool")
+        ]
+        responses = [
+            io.BytesIO(json.dumps({"data": spans[1:]}).encode()),
+            io.BytesIO(json.dumps({"data": spans}).encode()),
+        ]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("run.urllib.request.urlopen", side_effect=responses) as get,
+            patch("run.time.sleep"),
+        ):
+            verify_phoenix(events, Path(directory))
+            self.assertEqual(get.call_count, 2)
+            self.assertIn("trace_id=agent", get.call_args.args[0].full_url)
+            self.assertEqual(json.loads((Path(directory) / "delivery.json").read_text())["matched_local_scopes"], 3)
+
     def test_langsmith_addressing_rejects_partial_or_mixed_modes(self):
         for environment in (
             {"LANGSMITH_AGENT_ID": "support-triage"},

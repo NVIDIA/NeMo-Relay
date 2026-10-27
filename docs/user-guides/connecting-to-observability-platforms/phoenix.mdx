@@ -1,6 +1,7 @@
 ---
 title: "Connect to Phoenix"
 description: "Export Relay OpenInference traces to Phoenix and confirm agent, model, and tool spans."
+hide-nav-links: true
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -12,7 +13,7 @@ traces; Relay supplies the agent, model, and tool spans it captured. Use the
 `openinference` projection so Phoenix can identify those span roles.
 
 <Tip title="Use the same companion workload">
-Select `--destination phoenix` in the parent guide's Hermes example. Start a local Phoenix instance, or supply its remote trace URL and required authorization. The loopback endpoint is the default.
+Select `--destination phoenix` in the parent guide's example. Start a local Phoenix instance, or supply its remote trace URL and required authorization. The loopback endpoint is the default.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 
@@ -88,9 +89,9 @@ provides exporter delivery diagnostics.
 
 ## Example trace to recognize
 
-The Brev companion run exported `hermes.session` (`AGENT`) and `hermes.turn`
-(`CHAIN`), with four `openai.chat_completions` (`LLM`) spans beneath logical-call
-spans and two tool spans named `read_file` and `write_file`. All 12 spans shared
-one trace ID in project `relay-support-triage`. See the parent guide's measured
-example and compare your own run time and tree rather than expecting these
-exact call counts from every model.
+The default SDK workload exports `support-triage` (`AGENT`), one
+`openai.chat_completions` (`LLM`) span, and `read_file` and `write_file`
+(`TOOL`). Both metadata-only and synthetic-redaction checks delivered all four
+spans with their parents. The optional Hermes workload produces a larger tree.
+Compare your own run's identities and parentage rather than requiring one fixed
+span count for every integration.
