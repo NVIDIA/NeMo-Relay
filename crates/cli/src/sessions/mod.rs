@@ -2258,7 +2258,8 @@ impl Session {
         self.ensure_agent_started(event_metadata.clone())?;
         self.ensure_task_started(event_metadata.clone())?;
         self.turn_index += 1;
-        let metadata = merge_metadata(
+        let agent_name = self.main_turn_agent_name(&event_metadata);
+        let mut metadata = merge_metadata(
             self.scope_metadata(event_metadata),
             json!({
                 "nemo_relay_scope_role": "turn",
@@ -2266,6 +2267,9 @@ impl Session {
                 "turn_source": turn_source,
             }),
         );
+        if let Some(agent_name) = agent_name {
+            metadata["gen_ai.agent.name"] = json!(agent_name);
+        }
         let turn_name = self.turn_scope_name();
         let scope = push_scope(
             PushScopeParams::builder()
@@ -2464,6 +2468,30 @@ impl Session {
 
     fn turn_scope_name(&self) -> String {
         format!("{}-turn", self.agent_kind.as_str())
+    }
+
+    fn main_turn_agent_name(&self, event_metadata: &Value) -> Option<String> {
+        [event_metadata, &self.session_metadata]
+            .into_iter()
+            .chain(self.config.metadata.iter())
+            .find_map(|metadata| {
+                metadata
+                    .get("gen_ai.agent.name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+            })
+            .or_else(|| match self.agent_kind {
+                // A subagent hook may open an implicit main turn. Only the session's
+                // agent_type identifies the main agent; the hook's type belongs to the child.
+                AgentKind::ClaudeCode => self
+                    .session_metadata
+                    .get("agent_type")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty()),
+                _ => None,
+            })
+            .or_else(|| (self.agent_kind != AgentKind::Gateway).then(|| self.agent_kind.as_str()))
+            .map(ToOwned::to_owned)
     }
 
     fn scope_metadata(&self, event_metadata: Value) -> Value {
