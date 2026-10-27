@@ -66,8 +66,9 @@ def _named_tool(name: str) -> ToolChoiceParam:
     return {"type": "tool", "name": name}
 
 
-def _tool_name(tool: ToolUnionParam) -> str:
-    return tool["name"]
+def _tool_name(tool: ToolUnionParam) -> str | None:
+    """Return function name of `tool`, or None for a built-in tool, which carries a versioned `type`."""
+    return tool["name"] if tool.get("type") in (None, "custom") else None
 
 
 _TOOL_CHOICE: Final[ToolChoiceApi[ToolUnionParam, ToolChoiceParam | NotGiven]] = ToolChoiceApi(

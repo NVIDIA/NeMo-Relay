@@ -634,6 +634,43 @@ async def test_tool_choice_edits_anthropic_cannot_carry_fail_the_call(
     assert_balanced(subscribed_events)
 
 
+def _anthropic_function(name: str) -> nemo_relay.JsonObject:
+    return {"name": name, "description": f"Call {name}.", "input_schema": {"type": "object", "properties": {}}}
+
+
+async def test_a_tool_choice_edit_keeps_the_built_in_tools_an_anthropic_client_sends() -> None:
+    from anthropic import NOT_GIVEN
+    from google.adk.models.anthropic_llm import AnthropicLlm
+    from google.genai import types
+
+    from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, Attempt, backend_of
+
+    canned = _Canned([_message([_text("Sunny.")], "end_turn")])
+    client = _anthropic_client(canned)
+    model = AnthropicLlm(model=_CLAUDE, client=client)
+    await backend_of(model, model.model)
+    choice = types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.ANY, allowed_function_names=["get_time"])
+    token = CURRENT_ATTEMPT.set(Attempt(tool_choice=choice, headers={}, provider="anthropic"))
+    try:
+        await client.messages.create(
+            model=_CLAUDE,
+            max_tokens=16,
+            messages=[{"role": "user", "content": "Hi."}],
+            tools=[
+                _anthropic_function("get_weather"),
+                _anthropic_function("get_time"),
+                {"type": "web_search_20250305", "name": "web_search"},
+            ],
+            tool_choice=NOT_GIVEN,
+        )
+    finally:
+        CURRENT_ATTEMPT.reset(token)
+
+    (request,) = canned.requests
+    assert request["tool_choice"] == {"type": "tool", "name": "get_time"}
+    assert [as_object(tool)["name"] for tool in as_list(request["tools"])] == ["get_time", "web_search"]
+
+
 async def test_anthropic_stream_records_the_message_id(subscribed_events: list[nemo_relay.Event]) -> None:
     from google.adk.agents import LlmAgent, RunConfig
     from google.adk.agents.run_config import StreamingMode
