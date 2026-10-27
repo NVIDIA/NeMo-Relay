@@ -160,7 +160,8 @@ The agent can access other files visible to your user; isolation is configuratio
 isolation, not a security sandbox. Use a disposable VM and trusted synthetic tasks.
 
 The pinned Relay version is a release candidate: use `NEMO_RELAY_VERSION=0.11.0-rc.1`
-with the official installer. Stable `0.11.0` assets are not available yet.
+with the official installer. This is the tested pin for this feedback branch;
+repeat acceptance when changing versions.
 
 Use a clean host for this companion. The two-user coding-agent companion installs
 system-wide plugin configuration; if it is present on the same host, its
@@ -219,6 +220,34 @@ models used different token totals; prices remain unapplied. Repeat with the
 runner's default timeout and rotated arm order. The earlier failed trials remain
 below; task details and policy changed, so do not interpret the difference as a
 controlled improvement estimate.
+
+## Measured three-trial comparison
+
+The follow-up used `--repeat 3`, the default 600-second task timeout, the same
+model pair/endpoint and 16384-token answer budget, and rotated arm order. It
+completed all 18 task attempts:
+
+| Arm | Accepted | Seconds | Answer tokens | Routing tokens |
+| --- | --- | --- | --- | --- |
+| baseline | 6/6 | 681.7 | 117,081 | No routing calls |
+| efficient | 3/6 | 228.3 | 229,281 | No routing calls |
+| routed | 6/6 | 473.5 | 303,000 | 21,295 |
+
+Baseline used 42 Super calls; efficient used 35 Nano calls; routed used 34 Nano
+and 23 Super calls. Six judge requests succeeded at HTTP level, but one parse
+error and one invalid verdict recovered to Super. The remaining 51 routing
+decisions retained the task's target. Every routed Super selection came from
+recovery; valid classifier verdicts selected Nano, so this is not evidence of a
+calibrated two-target split. No answer fallback flags were true. One
+efficient call was truncated; baseline and routed had none.
+
+The three failed efficient tasks all exited zero. Two left the required function
+unimplemented, and one accepted a Unicode prefix lookalike. The runner returned
+nonzero because any failed arm produces that status; inspect per-arm acceptance
+before treating it as an infrastructure failure. Routed and capable passed this
+sample. Judge reliability still needs tuning, and no prices or savings claims
+are applied. The pilot and repeated run have different timeout limits and are
+reported separately rather than pooled into one score.
 
 ## Earlier rejected comparison
 

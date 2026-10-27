@@ -74,8 +74,9 @@ ensure its executable is on your PATH. The runner uses only the standard library
 </Tip>
 
 <Note title="Pinned release candidate">
-The available 0.11 package is **0.11.0-rc.1**, a prerelease. The stable
-`0.11.0` download does not exist yet. Install the explicit tag for this preview:
+This feedback branch was verified with Relay CLI **0.11.0-rc.1**, a prerelease.
+Install the explicit tested tag for this preview and repeat acceptance checks
+when upgrading:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0-rc.1 sh
@@ -316,6 +317,47 @@ or monetary savings. Nano used more answer tokens than Super; add validated
 prices before interpreting spend. The pilot used `--repeat 1` and a 240-second
 task timeout. Repeat with the documented default timeout and rotated arm order
 before drawing conclusions about latency or repeatability.
+
+## Repeat the comparison before accepting a policy
+
+A subsequent run used `--repeat 3` and the runner's default 600-second task
+timeout: 18 task attempts, with the first arm rotated between trials. The
+endpoint, model IDs, task contracts, and 16384-token answer budget stayed the
+same. The completed scorecard was:
+
+| Arm | Accepted | Seconds | Answer tokens | Judge tokens |
+| --- | --- | --- | --- | --- |
+| baseline | 6/6 | 681.7 | 117,081 | No judge calls |
+| efficient | 3/6 | 228.3 | 229,281 | No judge calls |
+| routed | 6/6 | 473.5 | 303,000 | 21,295 |
+
+The fixed capable arm made 42 Super calls; efficient made 35 Nano calls. Routed
+made 34 Nano and 23 Super calls. Its six judge calls returned HTTP success,
+but only four produced usable verdicts. One parse error and one invalid verdict
+recovered to Super; 51 later decisions retained the task's selected target.
+All Super selections in the routed arm came from those recoveries; the four
+usable verdicts selected Nano. The mixed model count therefore does not prove
+that valid capability forecasts chose both targets. Answer fallback flags were
+false. The efficient arm had one truncated call;
+the capable and routed arms had none.
+
+All agent processes exited zero. External checks rejected two efficient-only
+attempts that left their function unimplemented and one that accepted a Unicode
+prefix lookalike. The overall comparison returned nonzero because it reports
+failed rows from **any arm**. Read each arm separately: capable and routed met
+this sample's quality bar; efficient-only did not.
+
+<Note title="A passing routed sample still needs interpretation">
+The pilot's perfect results did not predict repeatability for the efficient
+arm. The repeated routed sample retained task acceptance, but two judge
+recoveries remain a tuning finding; HTTP success alone does not establish a
+usable verdict. Inspect the judge's final JSON and its rule/boundary consistency,
+then adjust the judge model or its budget and repeat before promoting the
+policy. Routed also used more answer tokens than baseline. These small
+synthetic trials establish neither calibrated routing probabilities nor monetary
+savings. Keep failed attempts and judge overhead when evaluating a larger
+workload.
+</Note>
 
 <Accordion title="Earlier rejected comparison: why the quality gate matters">
 The earlier fixture revision below used less explicit task examples and
