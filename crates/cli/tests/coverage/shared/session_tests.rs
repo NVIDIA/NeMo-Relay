@@ -2106,17 +2106,17 @@ fn tool_execution_metadata_preserves_explicit_values_and_subagent_identity() {
         let session = Session::new("metadata-policy".into(), kind, SessionConfig::default());
         let mut explicit = json!({"gen_ai.tool.type": "extension", "gen_ai.agent.name": "custom-agent", "gen_ai.tool.description": "explicit"});
         let expected = explicit.clone();
-        session.apply_tool_execution_metadata(&mut explicit, Some("worker-1"));
+        session.apply_tool_execution_metadata(&mut explicit, Some("worker-1"), None);
         assert_eq!(explicit, expected);
         let mut metadata = json!({});
-        session.apply_tool_execution_metadata(&mut metadata, Some("worker-1"));
+        session.apply_tool_execution_metadata(&mut metadata, Some("worker-1"), None);
         assert_eq!(metadata["gen_ai.agent.name"], "subagent:worker-1");
         assert_eq!(
             metadata.get("gen_ai.tool.type").and_then(Value::as_str),
             kind.tool_execution_type()
         );
         let mut absent = Value::Null;
-        session.apply_tool_execution_metadata(&mut absent, None);
+        session.apply_tool_execution_metadata(&mut absent, None, None);
         assert!(absent.is_null());
     }
     let gateway = Session::new(
@@ -2125,7 +2125,7 @@ fn tool_execution_metadata_preserves_explicit_values_and_subagent_identity() {
         SessionConfig::default(),
     );
     let mut metadata = json!({});
-    gateway.apply_tool_execution_metadata(&mut metadata, None);
+    gateway.apply_tool_execution_metadata(&mut metadata, None, None);
     assert_eq!(
         metadata,
         json!({}),
@@ -2146,7 +2146,7 @@ fn tool_execution_metadata_normalizes_default_provenance() {
             json!({"existing": "retained"}),
         ] {
             let mut metadata = json!({"nemo_relay.tool.execution.defaults": provenance});
-            session.apply_tool_execution_metadata(&mut metadata, None);
+            session.apply_tool_execution_metadata(&mut metadata, None, None);
             let defaults = &metadata["nemo_relay.tool.execution.defaults"];
             assert_eq!(defaults["gen_ai.tool.type"], "function");
             assert_eq!(defaults["gen_ai.agent.name"], kind.as_str());
@@ -2158,7 +2158,7 @@ fn tool_execution_metadata_normalizes_default_provenance() {
         let mut explicit =
             json!({"gen_ai.tool.type": "function", "gen_ai.agent.name": kind.as_str()});
         let expected = explicit.clone();
-        session.apply_tool_execution_metadata(&mut explicit, None);
+        session.apply_tool_execution_metadata(&mut explicit, None, None);
         assert_eq!(explicit, expected);
     }
 }
@@ -2174,15 +2174,15 @@ fn tool_execution_metadata_respects_aliases_and_ignores_invalid_strings() {
                 "tool_type": "datastore", "agent_name": "researcher"
             });
             let expected = metadata.clone();
-            session.apply_tool_execution_metadata(&mut metadata, None);
+            session.apply_tool_execution_metadata(&mut metadata, None, None);
             assert_eq!(metadata, expected);
         }
         let mut metadata = json!({"tool_type": "extension", "agent_name": "explicit"});
         let expected = metadata.clone();
-        session.apply_tool_execution_metadata(&mut metadata, None);
+        session.apply_tool_execution_metadata(&mut metadata, None, None);
         assert_eq!(metadata, expected);
         let mut invalid = json!({"gen_ai.tool.type": false, "agent_name": " "});
-        session.apply_tool_execution_metadata(&mut invalid, None);
+        session.apply_tool_execution_metadata(&mut invalid, None, None);
         assert_eq!(invalid["gen_ai.tool.type"], "function");
         assert_eq!(invalid["gen_ai.agent.name"], kind.as_str());
     }
@@ -2190,19 +2190,25 @@ fn tool_execution_metadata_respects_aliases_and_ignores_invalid_strings() {
 
 #[tokio::test]
 async fn parallel_subagents_are_siblings_under_turn_scope() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-subagent-gen-ai-identity";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
     let manager = SessionManager::new(session_test_config());
+    let mut start = session_event("sibling-subagents", "SessionStart");
+    start.metadata = json!({"agent_type": "main-reviewer"});
     manager
         .apply_events(
             &HeaderMap::new(),
             vec![
-                NormalizedEvent::AgentStarted(session_event("sibling-subagents", "SessionStart")),
+                NormalizedEvent::AgentStarted(start),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "sibling-subagents".into(),
                     agent_kind: AgentKind::ClaudeCode,
                     event_name: "SubagentStart".into(),
                     subagent_id: "worker-1".into(),
                     payload: json!({}),
-                    metadata: json!({}),
+                    metadata: json!({"agent_type": "Explore"}),
                 }),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "sibling-subagents".into(),
@@ -2210,7 +2216,7 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
                     event_name: "SubagentStart".into(),
                     subagent_id: "worker-2".into(),
                     payload: json!({}),
-                    metadata: json!({}),
+                    metadata: json!({"agent_type": "Explore"}),
                 }),
             ],
         )
@@ -2243,6 +2249,34 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
         session.subagents.get("worker-2").unwrap().parent_uuid,
         Some(turn_uuid)
     );
+    drop(sessions);
+
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    let spans = exporter.get_finished_spans().unwrap();
+    let parent = spans
+        .iter()
+        .find(|span| span.name == "invoke_agent main-reviewer")
+        .expect("expected named main-agent turn");
+    for id in ["worker-1", "worker-2"] {
+        let child = spans
+            .iter()
+            .find(|span| span.name == format!("invoke_agent subagent:{id}"))
+            .expect("expected distinct subagent span");
+        assert_eq!(child.parent_span_id, parent.span_context.span_id());
+        assert_eq!(
+            child.span_context.trace_id(),
+            parent.span_context.trace_id()
+        );
+        assert_eq!(
+            attr_map(&child.attributes)["gen_ai.agent.name"],
+            format!("subagent:{id}")
+        );
+        assert!(!attr_map(&child.attributes).contains_key("gen_ai.agent.id"));
+    }
+    subscriber.shutdown().unwrap();
 }
 
 #[tokio::test]
@@ -4142,6 +4176,545 @@ async fn codex_openinference_spans_match_shared_contract() {
             .flat_map(|attributes| attributes.values())
             .all(|value| !value.contains("sessionEnd"))
     );
+}
+
+#[tokio::test]
+async fn cli_turn_gen_ai_spans_carry_authoritative_agent_identity() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-turn-gen-ai-agent-identity";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+
+    let cases = [
+        (AgentKind::ClaudeCode, json!({}), Some("claude-code")),
+        (AgentKind::Codex, json!({}), Some("codex")),
+        (AgentKind::Pi, json!({}), Some("pi")),
+        (AgentKind::Gateway, json!({}), None),
+        (
+            AgentKind::ClaudeCode,
+            json!({"gen_ai.agent.name": "reviewer"}),
+            Some("reviewer"),
+        ),
+        (
+            AgentKind::Pi,
+            json!({"gen_ai.agent.name": "pi-reviewer"}),
+            Some("pi-reviewer"),
+        ),
+        (
+            AgentKind::Gateway,
+            json!({"gen_ai.agent.name": "custom-gateway-agent"}),
+            Some("custom-gateway-agent"),
+        ),
+        (
+            AgentKind::ClaudeCode,
+            json!({"gen_ai.agent.name": "  "}),
+            Some("claude-code"),
+        ),
+        (
+            AgentKind::ClaudeCode,
+            json!({"gen_ai.agent.name": false}),
+            Some("claude-code"),
+        ),
+    ];
+    for (index, (kind, metadata, expected_name)) in cases.into_iter().enumerate() {
+        let session_id = format!("turn-agent-identity-{index}");
+        let manager = SessionManager::new(session_test_config());
+        let mut event = session_event(&session_id, "UserPromptSubmit");
+        event.agent_kind = kind;
+        event.metadata = metadata;
+        let mut stop = session_event(&session_id, "Stop");
+        stop.agent_kind = kind;
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::PromptSubmitted(event),
+                    NormalizedEvent::TurnEnded(stop),
+                ],
+            )
+            .await
+            .unwrap();
+        // Inspect the completed turn before closing a same-named session Agent scope.
+        flush_subscribers().unwrap();
+        subscriber.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let turn = spans
+            .iter()
+            .find(|span| {
+                let attributes = attr_map(&span.attributes);
+                attributes.get("gen_ai.conversation.id") == Some(&session_id)
+                    && span.name
+                        == expected_name.map_or_else(
+                            || "invoke_agent".to_string(),
+                            |name| format!("invoke_agent {name}"),
+                        )
+            })
+            .unwrap_or_else(|| panic!("missing turn span for {session_id}: {spans:?}"));
+        let attributes = attr_map(&turn.attributes);
+        assert_eq!(attributes["gen_ai.operation.name"], "invoke_agent");
+        assert_eq!(
+            attributes.get("gen_ai.agent.name").map(String::as_str),
+            expected_name,
+            "unexpected agent identity for {session_id}"
+        );
+        assert!(!attributes.contains_key("gen_ai.agent.id"));
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn cli_turn_gen_ai_spans_preserve_configured_agent_identity_precedence() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-turn-gen-ai-identity-precedence";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(GatewayConfig {
+        metadata: Some(json!({"gen_ai.agent.name": "configured-reviewer"})),
+        ..session_test_config()
+    });
+
+    for (session_id, session_metadata, turn_metadata, expected_name) in [
+        (
+            "config-name",
+            json!({"agent_type": "session-type"}),
+            json!({}),
+            "configured-reviewer",
+        ),
+        (
+            "session-name",
+            json!({"gen_ai.agent.name": "session-reviewer"}),
+            json!({}),
+            "session-reviewer",
+        ),
+        (
+            "turn-name",
+            json!({"gen_ai.agent.name": "session-reviewer"}),
+            json!({"gen_ai.agent.name": "turn-reviewer"}),
+            "turn-reviewer",
+        ),
+        (
+            "blank-turn-name",
+            json!({"gen_ai.agent.name": "session-reviewer"}),
+            json!({"gen_ai.agent.name": "  "}),
+            "session-reviewer",
+        ),
+        (
+            "invalid-session-name",
+            json!({"gen_ai.agent.name": false}),
+            json!({}),
+            "configured-reviewer",
+        ),
+    ] {
+        let mut start = session_event(session_id, "SessionStart");
+        start.metadata = session_metadata;
+        let mut prompt = session_event(session_id, "UserPromptSubmit");
+        prompt.metadata = turn_metadata;
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::AgentStarted(start),
+                    NormalizedEvent::PromptSubmitted(prompt),
+                    NormalizedEvent::TurnEnded(session_event(session_id, "Stop")),
+                ],
+            )
+            .await
+            .unwrap();
+        flush_subscribers().unwrap();
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let turn = spans
+            .iter()
+            .find(|span| {
+                attr_map(&span.attributes).get("gen_ai.conversation.id")
+                    == Some(&session_id.to_string())
+            })
+            .expect("expected completed turn span");
+        assert_eq!(turn.name, format!("invoke_agent {expected_name}"));
+        assert_eq!(
+            attr_map(&turn.attributes)["gen_ai.agent.name"],
+            expected_name
+        );
+    }
+
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn cli_turn_inherits_owning_agent_name_over_conflicting_turn_metadata() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-turn-owner-identity";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let mut start = session_event("owner-identity", "SessionStart");
+    start.agent_kind = AgentKind::Pi;
+    start.metadata = json!({"gen_ai.agent.name": "session-owner"});
+    let mut turn = session_event("owner-identity", "turn_start");
+    turn.agent_kind = AgentKind::Pi;
+    turn.metadata = json!({"gen_ai.agent.name": "different-turn-name"});
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(start),
+                NormalizedEvent::TurnStarted(turn),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    let spans = exporter.get_finished_spans().unwrap();
+    let agent = spans
+        .iter()
+        .find(|span| {
+            span.name == "invoke_agent session-owner"
+                && span.parent_span_id == opentelemetry::trace::SpanId::INVALID
+        })
+        .expect("expected named session Agent");
+    let turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == agent.span_context.span_id()
+                && attr_map(&span.attributes).get("gen_ai.operation.name")
+                    == Some(&"invoke_agent".to_string())
+        })
+        .unwrap_or_else(|| panic!("expected child turn: {spans:?}"));
+    assert_eq!(turn.name, "invoke_agent session-owner");
+    assert_eq!(
+        attr_map(&turn.attributes)["gen_ai.agent.name"],
+        "session-owner"
+    );
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn pi_named_turn_overrides_generic_session_owner_for_turn_and_tool() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-pi-named-turn-after-session-start";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let mut start = session_event("pi-named-turn", "SessionStart");
+    start.agent_kind = AgentKind::Pi;
+    let mut turn = session_event("pi-named-turn", "turn_start");
+    turn.agent_kind = AgentKind::Pi;
+    turn.metadata = json!({"gen_ai.agent.name": "pi-reviewer"});
+    let tool = ToolEvent {
+        session_id: "pi-named-turn".into(),
+        agent_kind: AgentKind::Pi,
+        event_name: "PreToolUse".into(),
+        tool_call_id: "pi-read".into(),
+        tool_name: "Read".into(),
+        subagent_id: None,
+        arguments: json!({"file_path": "README.md"}),
+        result: Value::Null,
+        status: None,
+        payload: json!({}),
+        metadata: json!({}),
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(start),
+                NormalizedEvent::TurnStarted(turn),
+                NormalizedEvent::ToolStarted(tool.clone()),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    event_name: "PostToolUse".into(),
+                    result: json!("README contents"),
+                    status: Some("success".into()),
+                    ..tool
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    let spans = exporter.get_finished_spans().unwrap();
+    let agent = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == opentelemetry::trace::SpanId::INVALID
+                && span.name == "invoke_agent pi"
+        })
+        .expect("expected generic Pi session Agent");
+    let turn = spans
+        .iter()
+        .find(|span| span.parent_span_id == agent.span_context.span_id())
+        .expect("expected Pi turn");
+    assert_eq!(
+        attr_map(&turn.attributes)["gen_ai.agent.name"],
+        "pi-reviewer"
+    );
+    let tool = spans
+        .iter()
+        .find(|span| span.parent_span_id == turn.span_context.span_id())
+        .expect("expected paired Pi tool");
+    assert_eq!(
+        attr_map(&tool.attributes)["gen_ai.agent.name"],
+        "pi-reviewer"
+    );
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn codex_child_hook_does_not_name_implicit_main_scopes() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-codex-child-first-identity";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                session_id: "child-first".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SubagentStart".into(),
+                subagent_id: "worker-1".into(),
+                payload: json!({}),
+                metadata: json!({"gen_ai.agent.name": "child-owner"}),
+            })],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    let spans = exporter.get_finished_spans().unwrap();
+    let main_spans = spans
+        .iter()
+        .filter(|span| span.name == "invoke_agent codex")
+        .count();
+    assert_eq!(
+        main_spans, 2,
+        "task and turn must retain main identity: {spans:?}"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.name == "invoke_agent child-owner")
+    );
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn codex_child_turn_and_tool_inherit_delegated_agent_identity() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-codex-child-owner-identity";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "child-owner-session",
+                    "SessionStart",
+                    json!({"gen_ai.agent.name": "main-owner"}),
+                )),
+                NormalizedEvent::PromptSubmitted(codex_session_event(
+                    "child-owner-session",
+                    "UserPromptSubmit",
+                    json!({}),
+                )),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "child-owner-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({"gen_ai.agent.name": "child-owner"}),
+                }),
+                NormalizedEvent::PromptSubmitted(codex_session_event(
+                    "child-owner-session",
+                    "UserPromptSubmit",
+                    json!({"agent_id": "worker-1", "gen_ai.agent.name": "different-turn-owner"}),
+                )),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "child-owner-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "child-tool".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: json!({"file_path": "README.md"}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "child-owner-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "child-tool".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: Value::Null,
+                    result: json!("README contents"),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "child-owner-session".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::PromptSubmitted(codex_session_event(
+                    "child-owner-session",
+                    "UserPromptSubmit",
+                    json!({"agent_id": "worker-2"}),
+                )),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+    let spans = exporter.get_finished_spans().unwrap();
+    let task = spans
+        .iter()
+        .find(|span| span.parent_span_id == opentelemetry::trace::SpanId::INVALID)
+        .expect("expected Codex task span");
+    let child = spans
+        .iter()
+        .find(|span| {
+            span.name == "invoke_agent child-owner"
+                && span.parent_span_id == task.span_context.span_id()
+        })
+        .expect("expected delegated Agent span");
+    let child_turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == child.span_context.span_id()
+                && attr_map(&span.attributes).get("gen_ai.operation.name")
+                    == Some(&"invoke_agent".to_string())
+        })
+        .expect("expected delegated turn span");
+    assert_eq!(child_turn.name, "invoke_agent child-owner");
+    let tool = spans
+        .iter()
+        .find(|span| span.parent_span_id == child_turn.span_context.span_id())
+        .expect("expected child tool span");
+    assert_eq!(
+        attr_map(&tool.attributes)["gen_ai.agent.name"],
+        "child-owner"
+    );
+    let unnamed_child = spans
+        .iter()
+        .find(|span| {
+            span.name == "invoke_agent subagent:worker-2"
+                && span.parent_span_id == task.span_context.span_id()
+        })
+        .expect("expected child scope fallback");
+    let unnamed_child_turn = spans
+        .iter()
+        .find(|span| span.parent_span_id == unnamed_child.span_context.span_id())
+        .expect("expected child turn fallback");
+    assert_eq!(unnamed_child_turn.name, "invoke_agent subagent:worker-2");
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn gateway_child_turn_uses_only_explicit_agent_identity() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-unnamed-gateway-child-turn";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let mut config = session_test_config();
+    config.metadata = Some(json!({ "gen_ai.agent.name": "root-owner" }));
+    let manager = SessionManager::new(config);
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "work" }),
+                    metadata: json!({ "subagent_id": "worker" }),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "more work" }),
+                    metadata: json!({
+                        "subagent_id": "worker",
+                        "gen_ai.agent.name": "named-worker",
+                    }),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let child = spans
+        .iter()
+        .find(|span| {
+            span.name == "invoke_agent subagent:worker"
+                && !attr_map(&span.attributes).contains_key("gen_ai.conversation.id")
+        })
+        .expect("expected child Agent span");
+    let turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == child.span_context.span_id()
+                && !attr_map(&span.attributes).contains_key("gen_ai.agent.name")
+        })
+        .expect("expected unnamed child turn span");
+    assert_eq!(turn.name, "invoke_agent");
+    assert!(!attr_map(&turn.attributes).contains_key("gen_ai.agent.name"));
+    let named_turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == child.span_context.span_id()
+                && attr_map(&span.attributes).get("gen_ai.agent.name")
+                    == Some(&"named-worker".to_string())
+        })
+        .expect("expected explicitly named child turn span");
+    assert_eq!(named_turn.name, "invoke_agent named-worker");
+    subscriber.shutdown().unwrap();
 }
 
 #[tokio::test]
