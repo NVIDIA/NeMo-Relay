@@ -888,12 +888,134 @@ def test_iterators_and_reference_cycles_stay_with_their_call() -> None:
         "value": ["<builtins.list>"],
     }
     assert update["ordered"] == {
-        "kind": "local",
+        "kind": "mapping",
         "type": "collections.OrderedDict",
-        "ref": 3,
-        "value": {"self": "<collections.OrderedDict>"},
+        "value": [
+            [
+                {"kind": "json", "value": "self"},
+                {
+                    "kind": "local",
+                    "type": "collections.OrderedDict",
+                    "ref": 3,
+                    "value": {"self": "<collections.OrderedDict>"},
+                },
+            ]
+        ],
     }
     assert encoded["cache"]["replayable"] is False
     assert codec.from_json(json.loads(json.dumps(encoded))) is result
     assert list(iterator) == [1]
     assert list(holder.rows) == [1]
+
+
+def test_mapping_subclasses_are_recorded_as_entries_with_their_type_and_rebuilt_by_their_call() -> None:
+    from collections import OrderedDict, defaultdict
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    ordered = OrderedDict([(1, "a"), ("1", "b")])
+    rows: defaultdict[int, list[str]] = defaultdict(list, {1: ["a"]})
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(update={"messages": [message], "ordered": ordered, "rows": rows})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["ordered"] == {
+        "kind": "mapping",
+        "type": "collections.OrderedDict",
+        "value": [
+            [{"kind": "json", "value": 1}, {"kind": "json", "value": "a"}],
+            [{"kind": "json", "value": "1"}, {"kind": "json", "value": "b"}],
+        ],
+    }
+    assert encoded["cache"]["replayable"] is False
+    assert codec.from_json(encoded) is result
+
+    update["ordered"]["value"].reverse()
+    update["ordered"]["value"][0][1] = {"kind": "json", "value": "c"}
+    update["rows"]["value"].append(
+        [{"kind": "json", "value": 2}, {"kind": "list", "value": [{"kind": "json", "value": "b"}]}]
+    )
+    restored = codec.from_json(encoded)
+
+    assert isinstance(restored, Command)
+    assert type(restored.update["ordered"]) is OrderedDict
+    assert list(restored.update["ordered"].items()) == [("1", "c"), (1, "a")]
+    assert type(restored.update["rows"]) is defaultdict
+    assert restored.update["rows"].default_factory is list
+    assert restored.update["rows"] == {1: ["a"], 2: ["b"]}
+    assert restored.update["rows"][1] is rows[1]
+    with pytest.raises(ValueError, match="Only the call that returned"):
+        LangChainToolResultCodec("call-1").from_json(encoded)
+
+
+def test_mappings_that_cannot_take_edited_entries_fail_the_edit() -> None:
+    from collections import ChainMap
+    from types import MappingProxyType
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    frozen = MappingProxyType({1: "a"})
+    layered = ChainMap({1: "a"}, {2: "b"})
+    result = Command(update={"messages": [message], "frozen": frozen, "layered": layered})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["frozen"]["type"] == "builtins.mappingproxy"
+    assert [entry[0]["value"] for entry in update["layered"]["value"]] == [2, 1]
+    assert codec.from_json(encoded) is result
+
+    frozen_edit = json.loads(json.dumps(encoded))
+    frozen_edit["result"]["value"]["update"]["value"]["frozen"]["value"][0][1] = {"kind": "json", "value": "b"}
+    with pytest.raises(ValueError, match="cannot take edited entries"):
+        codec.from_json(frozen_edit)
+    layered_edit = json.loads(json.dumps(encoded))
+    del layered_edit["result"]["value"]["update"]["value"]["layered"]["value"][0]
+    with pytest.raises(ValueError, match="did not take the edited entries"):
+        codec.from_json(layered_edit)
+
+
+def test_typed_values_whose_json_cannot_rebuild_them_stay_with_their_call() -> None:
+    from typing import NamedTuple
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+    from pydantic import RootModel
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class Mixed(RootModel[dict[int | str, str]]):
+        pass
+
+    class Ints(RootModel[dict[int, str]]):
+        pass
+
+    class Row(NamedTuple):
+        cells: dict[object, str]
+
+    mixed = Mixed({1: "a", "1": "b"})
+    row = Row({1: "a"})
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(update={"messages": [message], "mixed": mixed, "ints": Ints({1: "a"}), "row": row})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert (update["mixed"]["kind"], update["mixed"]["type"]) == ("local", f"{__name__}.{Mixed.__qualname__}")
+    assert (update["row"]["kind"], update["row"]["type"]) == ("local", f"{__name__}.{Row.__qualname__}")
+    assert update["ints"] == {"kind": "typed", "type": f"{__name__}.{Ints.__qualname__}", "value": {"1": "a"}}
+    assert codec.from_json(encoded) is result
+
+    update["ints"]["value"] = {"2": "b"}
+    restored = codec.from_json(encoded)
+
+    assert isinstance(restored, Command)
+    assert restored.update["ints"] == Ints({2: "b"})
+    assert restored.update["mixed"] is mixed
+    assert restored.update["row"] is row

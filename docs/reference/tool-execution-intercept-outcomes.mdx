@@ -153,7 +153,7 @@ return the full wrapper for that framework's codec.
 
 The LangChain and LangGraph tool codec writes each value in `result` with its
 type. The same tool result always gives the same JSON. Subscribers and
-intercepts can read every field.
+intercepts can read every field that has a JSON form.
 
 A later call can restore built-in Python values, standard framework messages,
 commands, and graph destinations. On replay, the codec binds matching tool

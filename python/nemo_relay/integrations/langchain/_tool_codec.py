@@ -9,7 +9,7 @@ import base64
 import copy
 import dataclasses
 import inspect
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Annotated, Any, Final, NamedTuple, TypeAlias, TypeGuard, cast
 
@@ -420,6 +420,11 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
                 return self._keyed(value, {"kind": "dict"}, cast(dict[str, object], fields).items(), encoding)
             pairs = [self._pair(key, item, encoding) for key, item in fields.items()]
             return _Recorded(value, {"kind": "dict_items", "value": [pair.encoded for pair in pairs]}, {}, pairs)
+        if isinstance(value, Mapping):
+            entries = cast(Mapping[object, object], value).items()
+            pairs = [self._pair(key, item, encoding) for key, item in entries]
+            header = {"kind": "mapping", "type": self._class_name(cls, encoding)}
+            return _Recorded(value, {**header, "value": [pair.encoded for pair in pairs]}, {}, pairs)
         if _CONTAINERS.get(cls.__name__) is cls:
             items = [self._encoded(item, encoding) for item in cast(Iterable[object], value)]
             if isinstance(value, AbstractSet):
@@ -503,7 +508,9 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         if kind == "dict":
             return {key: self._decoded(item, parts.get(key)) for key, item in _object(value, kind).items()}
         if kind == "dict_items":
-            return self._dict(_items(value, kind), items)
+            return dict(self._entries(_items(value, kind), items))
+        if kind == "mapping":
+            return self._mapping(self._class(data.get("type")), _items(value, kind), recorded)
         if kind == "send":
             return Send(**self._arguments(value, parts.get("value")))
         # Results cached by 0.11.0 release candidates use `command` and `message` kinds.
@@ -534,7 +541,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             for item, position in zip(value, positions, strict=True)
         ]
 
-    def _dict(self, value: list[Json], items: Sequence[_Recorded]) -> dict[object, object]:
+    def _entries(self, value: list[Json], items: Sequence[_Recorded]) -> list[tuple[object, object]]:
         entries: list[tuple[object, object]] = []
         positions = paired_items(value, [item.encoded for item in items])
         for entry, position in zip(value, positions, strict=True):
@@ -546,9 +553,23 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
                 raise ValueError("Each entry of a LangChain tool result dictionary needs a key and a value")
             key_record, item_record = recorded.items if recorded is not None else (None, None)
             entries.append((self._decoded(entry[0], key_record), self._decoded(entry[1], item_record)))
-        rebuilt = dict(entries)
-        if len(rebuilt) != len(entries):
+        if len({key for key, _ in entries}) != len(entries):
             raise ValueError("A LangChain tool result dictionary repeats a key")
+        return entries
+
+    def _mapping(self, cls: type[object], value: list[Json], recorded: _Recorded | None) -> object:
+        name = cls.__qualname__
+        if recorded is None or type(recorded.value) is not cls:
+            raise ValueError(f"A {name} in a LangChain tool result is rebuilt only from the mapping it replaces")
+        if not isinstance(recorded.value, MutableMapping):
+            raise ValueError(f"A {name} in a LangChain tool result cannot take edited entries. Keep it unchanged.")
+        entries = self._entries(value, recorded.items)
+        rebuilt = copy.copy(cast(MutableMapping[object, object], recorded.value))
+        rebuilt.clear()
+        for key, item in entries:
+            rebuilt[key] = item
+        if list(rebuilt.items()) != entries:
+            raise ValueError(f"A {name} in a LangChain tool result did not take the edited entries")
         return rebuilt
 
     def _arguments(self, data: Json, recorded: _Recorded | None) -> dict[str, Any]:

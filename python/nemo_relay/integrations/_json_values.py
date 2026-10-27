@@ -14,7 +14,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias, TypeGuard, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from pydantic.errors import PydanticSchemaGenerationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 if TYPE_CHECKING:
@@ -152,14 +153,12 @@ def _is_relay_json(value: Json) -> bool:
     return True
 
 
-def _rebuildable(item: object, path: set[int]) -> bool:
+def _dumpable(item: object, path: set[int]) -> bool:
     if isinstance(item, str | bytes | bytearray):
         return True
     if isinstance(item, Mapping):
         entries = cast(Mapping[object, object], item)
-        if not all(_is_text(key) if isinstance(key, str) else isinstance(key, int | float) for key in entries):
-            return False
-        parts: Iterable[object] = entries.values()
+        parts: Iterable[object] = (*entries, *entries.values())
     elif isinstance(item, Sequence):
         parts = cast(Sequence[object], item)
     else:
@@ -168,17 +167,20 @@ def _rebuildable(item: object, path: set[int]) -> bool:
         return False
     path.add(id(item))
     try:
-        return all(_rebuildable(part, path) for part in parts)
+        return all(_dumpable(part, path) for part in parts)
     finally:
         path.discard(id(item))
 
 
 def typed_json(value: object) -> Json | None:
-    """Return JSON that can rebuild an object. Return None when no such JSON exists or Relay cannot carry it."""
+    """Return JSON that rebuilds an equal object of the same type. None when none exists or Relay cannot carry it."""
     try:
-        if not _rebuildable(_PYTHON_VALUES.dump_python(value, mode="python", round_trip=True), set()):
+        if not _dumpable(_PYTHON_VALUES.dump_python(value, mode="python", round_trip=True), set()):
             return None
         dumped: Json = to_jsonable_python(value, round_trip=True)
-    except PydanticSerializationError:
+        rebuilt = TypeAdapter(type(value)).validate_python(dumped)
+    except (PydanticSchemaGenerationError, PydanticSerializationError, ValidationError):
+        return None
+    if type(rebuilt) is not type(value) or rebuilt != value:
         return None
     return dumped if _is_relay_json(dumped) else None
