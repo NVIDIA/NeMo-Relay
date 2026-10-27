@@ -9,6 +9,7 @@ use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactio
 use serde_json::Value;
 use std::path::Path;
 
+/// List file sinks and check enabled destinations without writing telemetry.
 pub(super) fn observability_otlp_file_checks(
     config: &Value,
     component_enabled: bool,
@@ -59,17 +60,34 @@ pub(super) fn observability_otlp_file_checks(
         .collect()
 }
 
+/// Check file access or create and remove a probe in the nearest existing folder.
+/// Output-file symlinks are rejected to match the exporter's file confinement.
 fn file_destination_feasibility(
     directory: &Path,
     filename: Option<&str>,
 ) -> std::io::Result<(Status, String)> {
+    if directory.as_os_str().is_empty()
+        || directory
+            .to_str()
+            .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "output_directory must be a nonblank path",
+        ));
+    }
     if let Some(filename) = filename {
         let path = directory.join(filename);
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(std::io::Error::other(
+                        "the OTLP exporter rejects output-file symlinks; configure a regular file",
+                    ));
+                }
                 if !metadata.is_file() || metadata.permissions().readonly() {
                     return Err(std::io::Error::other(
-                        "output must be a writable regular file (symlinks are not probed)",
+                        "output must be a writable regular file",
                     ));
                 }
                 // Opening without create or truncate verifies access without changing telemetry.
@@ -95,12 +113,12 @@ fn file_destination_feasibility(
             Ok(_) => {
                 check_dir_writable(candidate)?;
                 return if candidate == directory {
-                    Ok((Status::Pass, "directory appears writable; output file not created; runtime export unverified".into()))
+                    Ok((Status::Pass, "directory appears writable; temporary probe file created and removed; telemetry file not created; runtime export unverified".into()))
                 } else {
                     Ok((
                         Status::Warn,
                         format!(
-                            "directory not present; runtime will create it; ancestor {} appears writable; runtime export unverified",
+                            "directory not present; runtime will create it; ancestor {} appears writable; temporary probe file created and removed there; runtime export unverified",
                             candidate.display()
                         ),
                     ))
@@ -116,6 +134,7 @@ fn file_destination_feasibility(
     }
 }
 
+/// Summarize configured privacy coverage without exposing policy values or payloads.
 pub(super) fn collect_pii_checks(checks: &mut Vec<Check>, plugins: &PluginConfig, invalid: bool) {
     let Some(component) = plugins
         .components
@@ -196,6 +215,7 @@ pub(super) fn collect_pii_checks(checks: &mut Vec<Check>, plugins: &PluginConfig
     });
 }
 
+/// Read trace endpoints using the current field name or its legacy alias.
 pub(super) fn otlp_trace_endpoints(config: &Value) -> Option<&Vec<Value>> {
     let section = config.get("opentelemetry")?;
     section
@@ -204,6 +224,7 @@ pub(super) fn otlp_trace_endpoints(config: &Value) -> Option<&Vec<Value>> {
         .as_array()
 }
 
+/// Warn about inactive destinations and name only the settings that are disabled.
 pub(super) fn observability_otlp_enablement_checks(
     config: &Value,
     component_enabled: bool,
@@ -220,11 +241,19 @@ pub(super) fn observability_otlp_enablement_checks(
     if (!component_enabled || !section_enabled(config, "opentelemetry"))
         && (endpoints > 0 || files > 0)
     {
+        let mut settings = Vec::new();
+        if !component_enabled {
+            settings.push("components[kind=observability].enabled = true");
+        }
+        if !section_enabled(config, "opentelemetry") {
+            settings.push("components[kind=observability].config.opentelemetry.enabled = true");
+        }
+        let settings = settings.join(" and ");
         checks.push(Check {
             name: "OpenTelemetry enablement",
             status: Status::Warn,
             details: format!(
-                "components[kind=observability].config.opentelemetry: {endpoints} trace endpoint(s) and {files} file sink(s) configured but disabled; set components[kind=observability].enabled = true and components.config.opentelemetry.enabled = true in plugins.toml to activate; no probes or exports performed"
+                "components[kind=observability].config.opentelemetry: {endpoints} trace endpoint(s) and {files} file sink(s) configured but disabled; set {settings} in plugins.toml to activate; no probes or exports performed"
             ),
         });
     }

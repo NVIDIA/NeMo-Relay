@@ -2691,6 +2691,7 @@ async fn collect_observability_registers_pii_redaction_before_validation() {
     );
 }
 
+/// Reject invalid PII settings without reporting an effective privacy policy.
 #[tokio::test]
 async fn collect_observability_reports_invalid_pii_redaction_config() {
     let gateway = GatewayConfig {
@@ -3562,6 +3563,7 @@ fn doctor_agent_status_helpers_cover_readiness_and_version_outcomes() {
     assert!(details[0].contains("could not determine version"));
 }
 
+/// List every file sink while preserving telemetry and leaving missing folders absent.
 #[tokio::test]
 async fn doctor_inventories_otlp_files_without_modifying_telemetry() {
     let temp = tempfile::tempdir().unwrap();
@@ -3599,6 +3601,7 @@ async fn doctor_inventories_otlp_files_without_modifying_telemetry() {
     assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
 }
 
+/// Fail unusable destinations and skip filesystem checks for disabled sinks.
 #[test]
 fn doctor_otlp_files_report_unusable_paths_and_disabled_sinks() {
     let temp = tempfile::tempdir().unwrap();
@@ -3631,6 +3634,7 @@ fn doctor_otlp_files_report_unusable_paths_and_disabled_sinks() {
     assert_eq!(std::fs::read(&file).unwrap(), b"untouched");
 }
 
+/// Detect blocked parent folders without creating the requested output path.
 #[cfg(unix)]
 #[test]
 fn doctor_otlp_files_detect_unwritable_ancestors() {
@@ -3653,6 +3657,7 @@ fn doctor_otlp_files_detect_unwritable_ancestors() {
     assert!(!locked.join("missing").exists());
 }
 
+/// Report configured privacy coverage without revealing replacement values.
 #[tokio::test]
 async fn doctor_summarizes_effective_pii_surfaces_without_policy_secrets() {
     let secret = "sensitive-replacement-value";
@@ -3694,6 +3699,7 @@ async fn doctor_summarizes_effective_pii_surfaces_without_policy_secrets() {
     );
 }
 
+/// Distinguish active and disabled profiles and their effective data coverage.
 #[tokio::test]
 async fn doctor_summarizes_enabled_and_disabled_pii_profiles() {
     let gateway = GatewayConfig {
@@ -3716,6 +3722,7 @@ async fn doctor_summarizes_enabled_and_disabled_pii_profiles() {
     assert!(pii.details.contains("profile_1=disabled; input=off"));
 }
 
+/// Keep disabled file sinks visible without probing their destinations.
 #[tokio::test]
 async fn doctor_lists_otlp_sinks_when_observability_component_is_disabled() {
     let gateway = GatewayConfig {
@@ -3743,6 +3750,7 @@ async fn doctor_lists_otlp_sinks_when_observability_component_is_disabled() {
     );
 }
 
+/// Warn for every disabled component without failing an otherwise valid report.
 #[tokio::test]
 async fn doctor_warns_for_each_disabled_plugin_component() {
     let gateway = GatewayConfig {
@@ -3783,6 +3791,7 @@ async fn doctor_warns_for_each_disabled_plugin_component() {
     assert!(format_human(&report).contains("disabled"));
 }
 
+/// Reject invalid credential references without connecting or exposing values.
 #[tokio::test]
 async fn doctor_otlp_credentials_fail_locally_in_offline_and_live_modes() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -3826,6 +3835,7 @@ async fn doctor_otlp_credentials_fail_locally_in_offline_and_live_modes() {
     );
 }
 
+/// Keep synthetic keys out of GET probes and leave authentication unverified.
 #[tokio::test]
 async fn doctor_otlp_get_never_claims_valid_or_invalid_keys_are_authenticated() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -3870,6 +3880,7 @@ async fn doctor_otlp_get_never_claims_valid_or_invalid_keys_are_authenticated() 
     }
 }
 
+/// Reject malformed references, padded values, and duplicate header names.
 #[test]
 fn doctor_otlp_credential_validation_matches_activation_header_constraints() {
     for endpoint in [
@@ -3885,6 +3896,7 @@ fn doctor_otlp_credential_validation_matches_activation_header_constraints() {
     }
 }
 
+/// Report inactive destinations consistently in human and JSON output without probes.
 #[tokio::test]
 async fn doctor_warns_for_disabled_otlp_destinations_without_probing() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3914,11 +3926,9 @@ async fn doctor_warns_for_disabled_otlp_destinations_without_probing() {
                     .find(|check| check.name == "OpenTelemetry enablement")
                     .expect("disabled section warning");
                 assert_eq!(warning.status, Status::Warn);
-                assert!(
-                    warning
-                        .details
-                        .contains("components.config.opentelemetry.enabled = true")
-                );
+                assert!(warning.details.contains(
+                    "components[kind=observability].config.opentelemetry.enabled = true"
+                ));
                 assert!(
                     !checks.iter().any(|check| check.status == Status::Fail),
                     "{checks:?}"
@@ -3950,4 +3960,108 @@ async fn doctor_warns_for_disabled_otlp_destinations_without_probing() {
         );
     }
     assert!(observability_otlp_enablement_checks(&json!({"opentelemetry": {"enabled": true, "endpoints": [{"endpoint": "http://127.0.0.1:1"}]}}), true).is_empty());
+}
+
+/// Keep doctor consistent with the exporter for live and dangling output-file symlinks.
+#[cfg(unix)]
+#[test]
+fn doctor_otlp_file_symlinks_match_exporter_rejection_without_changing_targets() {
+    use nemo_relay::observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
+
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target.jsonl");
+    std::fs::write(&target, b"existing telemetry\n").unwrap();
+    for target_name in ["target.jsonl", "missing.jsonl"] {
+        let filename = format!("link-{target_name}");
+        let path = temp.path().join(&filename);
+        std::os::unix::fs::symlink(temp.path().join(target_name), &path).unwrap();
+        let checks = observability_otlp_file_checks(
+            &json!({"opentelemetry": {
+                "enabled": true, "file_sinks": [{"output_directory": temp.path(), "filename": filename}]
+            }}),
+            true,
+        );
+        assert_eq!(checks[0].status, Status::Fail);
+        assert!(
+            checks[0]
+                .details
+                .contains("exporter rejects output-file symlinks")
+        );
+        let error = OtlpFileSpanExporter::new(temp.path(), &path, OtlpFileFormat::JsonLines, false)
+            .unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert!(
+            std::fs::symlink_metadata(path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+    assert_eq!(std::fs::read(target).unwrap(), b"existing telemetry\n");
+    assert!(!temp.path().join("missing.jsonl").exists());
+}
+
+/// Report current-folder access, missing relative folders, and invalid blank paths.
+#[test]
+fn doctor_otlp_files_handle_relative_and_blank_directories() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
+    let missing = format!(".doctor-missing-{}", uuid::Uuid::now_v7());
+    let config = json!({"opentelemetry": {"enabled": true, "file_sinks": [
+        {"output_directory": "."},
+        {"output_directory": missing},
+        {"output_directory": ""},
+        {"output_directory": "   "}
+    ]}});
+    let checks = observability_otlp_file_checks(&config, true);
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("directory appears writable"));
+    assert!(
+        checks[0]
+            .details
+            .contains("temporary probe file created and removed")
+    );
+    assert_eq!(checks[1].status, Status::Warn);
+    assert!(checks[1].details.contains("ancestor . appears writable"));
+    assert!(
+        checks[1]
+            .details
+            .contains("temporary probe file created and removed there")
+    );
+    assert!(!std::path::Path::new(&missing).exists());
+    for check in &checks[2..] {
+        assert_eq!(check.status, Status::Fail);
+        assert!(
+            check
+                .details
+                .contains("output_directory must be a nonblank path")
+        );
+    }
+}
+
+/// Limit activation guidance to the component or section flags that are off.
+#[test]
+fn doctor_otlp_enablement_guidance_names_only_disabled_settings() {
+    let component_setting = "components[kind=observability].enabled = true";
+    let section_setting = "components[kind=observability].config.opentelemetry.enabled = true";
+    for (component_enabled, section_enabled) in [(true, false), (false, true), (false, false)] {
+        let config = json!({"opentelemetry": {
+            "enabled": section_enabled, "endpoints": [{"type": "gen_ai", "endpoint": "http://127.0.0.1:1"}]
+        }});
+        let checks = observability_otlp_enablement_checks(&config, component_enabled);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, Status::Warn);
+        assert_eq!(
+            checks[0].details.contains(component_setting),
+            !component_enabled
+        );
+        assert_eq!(
+            checks[0].details.contains(section_setting),
+            !section_enabled
+        );
+        assert!(
+            !checks[0]
+                .details
+                .contains("components.config.opentelemetry.enabled")
+        );
+    }
 }

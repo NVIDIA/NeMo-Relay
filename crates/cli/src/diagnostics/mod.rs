@@ -1029,6 +1029,7 @@ async fn probe_version(argv: &[String]) -> Option<String> {
     }
 }
 
+/// Collect plugin validation, exporter readiness, and privacy configuration checks.
 async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeMode) -> Vec<Check> {
     let mut checks = Vec::new();
 
@@ -1367,6 +1368,7 @@ fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Ch
     })
 }
 
+/// Check enabled trace endpoints without contacting disabled destinations.
 async fn observability_http_exporter_checks(
     config: &Value,
     probe_mode: DoctorProbeMode,
@@ -1385,6 +1387,7 @@ async fn observability_http_exporter_checks(
     .await
 }
 
+/// Validate credential references before checking transport reachability.
 async fn observability_http_exporter_check(
     index: usize,
     endpoint: &Value,

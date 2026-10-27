@@ -871,11 +871,13 @@ Doctor fails when an enabled model pricing source is unreadable or contains an
 invalid catalog, and it reports passing sources as `Model pricing source`.
 
 Doctor lists each OpenTelemetry file sink, its trace type, its destination, and
-whether it's enabled. File checks also run with `--offline`. Doctor checks write
-access without creating or changing telemetry files. If an output folder is
+whether it's enabled. File checks also run with `--offline`. For folder checks,
+doctor creates and removes a temporary probe file in the folder it checks.
+It does not create or change telemetry files. If an output folder is
 missing, it checks the nearest parent folder that exists. A missing folder
 triggers a warning when that parent is writable. An invalid path or a lack of
-write access causes the check to fail.
+write access causes the check to fail. Output-file symlinks also fail because
+the exporter does not allow them.
 
 The `Plugin component` warning identifies each component with `enabled = false`.
 Doctor also warns when an OpenTelemetry section has trace endpoints or file
