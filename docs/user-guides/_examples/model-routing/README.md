@@ -39,7 +39,7 @@ Select exact model IDs from your accessible endpoint. Nano and Super are
 candidates, not a tested pairing or a guaranteed quality ranking. Both targets
 must support pi's tools and a context of at least 32768 tokens with 16384 output
 tokens; adjust the generated `pi/models.json` limits for your actual models.
-The judge uses `json_object` and Switchyard's local schema validation. Confirm
+The judge uses `json_object`, an 8192-token completion budget for reasoning plus final JSON, and Switchyard's local schema validation. Confirm
 judge success in telemetry: failure can route every call to the capable model,
 making a successful answer an inadequate routing check.
 
@@ -66,7 +66,7 @@ task inputs, and acceptance checks:
 
 1. `baseline`: a Switchyard passthrough route always selects the capable model.
 2. `efficient`: a passthrough route always selects the efficient model.
-3. `routed`: a capability classifier selects between them, starting at threshold 0.8. Raising the threshold sends more requests to the capable target.
+3. `routed`: a capability classifier selects a target once per task, starting at threshold 0.8, and keeps that target across its tool calls. Raising the threshold sends more tasks to the capable target.
 
 Each arm starts from the same source scaffold in a fresh task directory. One
 task implements an incident-ID normalizer; another implements a capped retry
@@ -194,7 +194,33 @@ alongside task acceptance. A larger budget does not guarantee a better answer.
 The example caps this setting at 16384 to retain input space in its configured
 32768-token context. Adjust model limits together when adapting the fixture.
 
-## Measured run and expected nonzero exit
+## Measured successful pilot
+
+After making the ASCII requirements explicit, classifying once per task, and
+allowing 8192 judge completion tokens, a new six-task Brev pilot passed every
+external check and returned zero. It used the same organization endpoint and
+model IDs listed in the earlier comparison below, `--repeat 1`, a 240-second
+task timeout, and the 16384-token answer budget:
+
+| Arm | Accepted | Seconds | Answer tokens | Routing tokens |
+| --- | --- | --- | --- | --- |
+| baseline | 2/2 | 354.0 | 48,434 | No routing calls |
+| efficient | 2/2 | 100.3 | 117,270 | No routing calls |
+| routed | 2/2 | 100.9 | 95,441 | 5,460 |
+
+All arms made 16 answer calls. Routed selected Nano for both tasks, made two
+successful judge calls, and retained decisions across 14 tool continuations.
+There were no classifier recoveries, answer fallbacks, or truncated calls.
+The real Relay/pi timeout test also stopped an active pi request and left no
+processes in its task directory. A separate regression covers detached children.
+
+This small pilot does not establish savings or production quality. The answer
+models used different token totals; prices remain unapplied. Repeat with the
+runner's default timeout and rotated arm order. The earlier failed trials remain
+below; task details and policy changed, so do not interpret the difference as a
+controlled improvement estimate.
+
+## Earlier rejected comparison
 
 The Brev comparison used `https://inference-api.nvidia.com/v1`, efficient/judge
 `nvidia/nvidia/Nemotron-3-Nano-30B-A3B`, capable
@@ -210,3 +236,32 @@ reported (five parse errors, one invalid verdict). No monetary prices were
 applied. See the guide for the full scorecard and a real routing mark. A completed
 comparison can reject the proposed policy; the example does not guarantee that
 routing improves your workload or that any model satisfies every requirement.
+
+
+## Task-level classification and startup checks
+
+The routed arm uses `classify_trigger = "new_session"` and
+`message_hash_fallback = true`. Each task starts its own Relay gateway, so the
+first-user-message affinity key holds the target across that task's tool calls
+without sharing decisions between independent trials. This avoids a fresh judge
+request for every tool continuation. With a persistent gateway, identical
+opening messages can share an affinity key; use explicit session identity for
+that deployment instead of assuming this fixture's process boundary applies.
+
+The judge's completion budget includes reasoning and final JSON. Truncated or
+invalid JSON still fails open to the capable target and must be counted. The
+example retains the models' default reasoning behavior; disabling reasoning
+also changes answer-model behavior when judge and efficient roles share a model
+ID. In plugin 0.3.2, shared model IDs must have identical client and inference
+settings; distinct role names alone do not isolate those settings.
+
+The runner now starts the gateway once with `pi --version` before inference.
+This catches native-plugin route configuration errors that manifest validation
+alone does not detect. Inspect `startup.log` if that check fails.
+
+Timeout cleanup enumerates numeric PID, parent PID, and process-group metadata
+using `ps` (provided by procps on Ubuntu). It stops detached task descendants as
+well as the Relay wrapper. If enumeration fails, the comparison stops and asks
+you to inspect the task processes rather than silently starting the next trial.
+The independent ticket checks include Unicode digits and prefix lookalikes;
+the same explicit requirements are supplied to every model arm.

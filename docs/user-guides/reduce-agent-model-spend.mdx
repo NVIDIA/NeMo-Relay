@@ -47,7 +47,7 @@ The companion extends the [pi quickstart](/getting-started/quick-start/pi):
 It retains pi's Relay extension, wrapped execution, and local ATOF capture.
 Switchyard runs inside Relay, so the example needs no separate router service.
 
-<Card title="Run the routing comparison on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-model-cost/docs/user-guides/_examples/model-routing">
+<Card title="Run the routing comparison on Brev or Linux" icon="fa-solid fa-code" href="https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-model-cost/docs/user-guides/_examples/model-routing">
 Use the same source scaffold and acceptance checks for fixed and routed coding
 tasks. Supply NVIDIA model access and a verified compatible plugin bundle.
 </Card>
@@ -57,7 +57,7 @@ tasks. Supply NVIDIA model access and a verified compatible plugin bundle.
 | pi coding agent | Calls tools and sends supported OpenAI Chat Completions requests through Relay. | Another supported harness or an instrumented application with a compatible request path. |
 | NVIDIA-hosted Nemotron targets | Supply efficient and capable models plus a routing judge. The published Nano Omni and Super IDs below are candidates; check access and behavior for your account. | Other compatible providers or self-hosted NVIDIA inference. |
 | Ordinary Brev CPU VM | Runs the harness, Relay, and local task checks while inference is remote. | A comparable Linux development or enterprise test host. |
-| Capability classifier | Selects the efficient or capable target from each request. | Another Switchyard algorithm that fits your workload. |
+| Capability classifier | Selects a target once per task and keeps it across that task's tool calls. | Another Switchyard algorithm that fits your workload. |
 
 <Note title="The selected stack is an example">
 pi, NVIDIA-hosted models, and Brev are not general Relay requirements. The pi
@@ -87,13 +87,13 @@ Use your organization's approved release before a production rollout.
 
 ## Run the optional comparison
 
-The [companion directory](https://github.com/exactlyallan/NeMo-Relay-ae/tree/codex/user-guide-model-cost/docs/user-guides/_examples/model-routing)
+The [companion directory](https://github.com/NVIDIA/NeMo-Relay/tree/topic/codex/user-guides-model-cost/docs/user-guides/_examples/model-routing)
 is the review copy until the guide lands upstream. On your Linux CPU host or
 Brev instance (`brev shell YOUR_INSTANCE`), clone the branch and install the
 bundle into an unused directory:
 
 ```bash
-git clone --branch codex/user-guide-model-cost --single-branch https://github.com/exactlyallan/NeMo-Relay-ae.git relay-routing
+git clone --branch topic/codex/user-guides-model-cost --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-routing
 cd relay-routing/docs/user-guides/_examples/model-routing
 SWITCHYARD_MANIFEST=$(bash install-plugin.sh /tmp/relay-switchyard-bundle)
 export SWITCHYARD_MANIFEST
@@ -234,6 +234,24 @@ your team needs to inspect the comparison centrally. See the
 [Switchyard telemetry contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/#routing-telemetry)
 for mark fields and the distinction between trace and metric views.
 
+## Keep routing decisions stable during a task
+
+The companion classifies the opening task once, then reuses the selected model
+across tool calls. `classify_trigger = "new_session"` and
+`message_hash_fallback = true` provide this behavior. Each fixture task starts a
+fresh gateway; a persistent enterprise gateway should use explicit session
+identity because identical opening messages can share the fallback key.
+
+The judge has an 8192-token budget covering reasoning and final JSON. Inspect
+invalid verdicts and truncation before interpreting its choices. The fixture
+retains default model reasoning: the pinned plugin requires identical client
+and inference settings when judge and answer roles share a model ID.
+
+Before inference, the runner starts the gateway with `pi --version`. This
+checks route activation beyond manifest validation. On failure, inspect
+`startup.log`. Task timeouts stop detached pi descendants as well as Relay;
+process enumeration requires `ps` (procps on Ubuntu).
+
 ## Read the scorecard
 
 `results.json` retains each task's arm, trial, exit status, acceptance result,
@@ -273,7 +291,37 @@ group and preserve partial files; missing routing decisions fail the run's
 telemetry check. Successful acceptance alone does not establish routing quality.
 </Note>
 
-## A measured comparison on Brev
+## A successful pilot on Brev
+
+The revised companion completed all six tasks in about nine minutes, including
+startup, on the same organization-accessible NVIDIA endpoint and model pair
+shown below. Every arm used the same explicit ASCII contract, stronger external
+checks, model defaults, and 16384-token answer budget:
+
+| Arm | Accepted | Seconds | Answer tokens | Judge tokens |
+| --- | --- | --- | --- | --- |
+| baseline | 2/2 | 354.0 | 48,434 | No judge calls |
+| efficient | 2/2 | 100.3 | 117,270 | No judge calls |
+| routed | 2/2 | 100.9 | 95,441 | 5,460 |
+
+Each arm made 16 successful answer calls. Baseline used Super; efficient and
+routed used Nano. The routed arm made **two successful judge calls**, then
+retained its decisions across 14 tool continuations. It recorded no judge
+errors, classifier recoveries, answer fallbacks, or truncated calls. The runner
+returned zero after task and routing checks passed.
+
+These two tasks did not require a mixed routed model selection. They establish
+this fixture's quality and routing behavior, not a production quality guarantee
+or monetary savings. Nano used more answer tokens than Super; add validated
+prices before interpreting spend. The pilot used `--repeat 1` and a 240-second
+task timeout. Repeat with the documented default timeout and rotated arm order
+before drawing conclusions about latency or repeatability.
+
+<Accordion title="Earlier rejected comparison: why the quality gate matters">
+The earlier fixture revision below used less explicit task examples and
+classified every request. Its failures remain useful, but it is not a controlled
+before/after comparison with the revised pilot.
+
 
 A six-task run used an account-accessible NVIDIA endpoint and these exact IDs:
 
@@ -345,6 +393,8 @@ These results do not establish savings or an acceptable production quality bar.
 Choose or tune a policy that meets your task requirements, then repeat on a
 larger workload before deployment. Failed trials remain part of the comparison.
 </Warning>
+
+</Accordion>
 
 ## Add monetary comparison when ready
 

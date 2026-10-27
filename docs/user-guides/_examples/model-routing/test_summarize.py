@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -22,12 +23,39 @@ def mark(name, data, identity):
 
 
 class SummaryChecks(unittest.TestCase):
+    def test_acceptance_rejects_unicode_digit_and_prefix_regressions(self):
+        # Both defects appeared in real model outputs. Keep the external check
+        # capable of rejecting them even when the agent's own tests pass.
+        for pattern, flags, expected in (
+            (r"INC-\d{4}", "re.IGNORECASE | re.ASCII", 0),
+            (r"INC-\d{4}", "re.IGNORECASE", 1),
+            (r"INC-[0-9]{4}", "re.IGNORECASE", 1),
+        ):
+            with self.subTest(pattern=pattern, flags=flags), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "service.py").write_text(
+                    "import re\n"
+                    "def normalize_ticket_id(value):\n"
+                    "    if not isinstance(value, str): raise ValueError()\n"
+                    f"    if not re.fullmatch({pattern!r}, value.strip(), {flags}): raise ValueError()\n"
+                    "    return value.strip().upper()\n"
+                )
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).with_name("acceptance.py")), directory, "ticket-id"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
     @unittest.skipUnless(os.name == "posix", "The companion runs on Linux/macOS")
     def test_timeout_stops_child_processes(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "child-survived"
             child = "import pathlib,time; time.sleep(1); pathlib.Path('child-survived').write_text('alive')"
-            parent = f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(60)"
+            parent = (
+                f"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',{child!r}], "
+                "start_new_session=True); time.sleep(60)"
+            )
             with (Path(directory) / "agent.log").open("w") as log:
                 status = run_task(
                     [sys.executable, "-c", parent], cwd=directory, env=os.environ.copy(), log=log, timeout=0.3

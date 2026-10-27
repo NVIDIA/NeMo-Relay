@@ -41,3 +41,9 @@ weak_target = "efficient"
 # Raising this threshold sends more requests to the capable target.
 base_threshold = 0.8
 response_format_type = "json_object"
+# Include the judge's reasoning and final JSON in its completion budget.
+max_output_tokens = 8192
+# Hold the task-level choice across its tool calls. Each task starts a fresh
+# gateway, so repeated opening prompts cannot share state between trials.
+classify_trigger = "new_session"
+message_hash_fallback = true

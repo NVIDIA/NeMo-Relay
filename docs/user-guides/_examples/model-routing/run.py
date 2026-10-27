@@ -22,7 +22,10 @@ TASKS = {
         "Implement normalize_ticket_id(value) in service.py. Strip surrounding whitespace, accept "
         "case-insensitive INC- followed by exactly four ASCII digits, return the uppercase canonical "
         "ID, and raise ValueError for any other input including non-string values. Write and run "
-        "your own tests. Leave retry_delays unchanged."
+        "your own tests, including full-width INC-１２３４, Arabic-digit INC-١٢٣٤, and non-string "
+        "inputs. The prefix letters must be ASCII I/N/C in either case; reject dotless-i ınc-1234 "
+        "and dotted-I İNC-1234. Do not transliterate Unicode digits or letters. "
+        "Leave retry_delays unchanged."
     ),
     "retry-policy": (
         "Implement retry_delays(attempts, base, cap) in service.py. Return a list with attempts "
@@ -34,14 +37,53 @@ TASKS = {
 }
 
 
+def stop_task(process):
+    """Stop the wrapper and detached descendants created by harness launchers."""
+    try:
+        listing = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid="], text=True, timeout=5)
+        rows = [tuple(map(int, line.split())) for line in listing.splitlines() if line.strip()]
+        owned = {process.pid}
+        while True:
+            descendants = {pid for pid, parent, _ in rows if parent in owned}
+            expanded = owned | descendants
+            if expanded == owned:
+                break
+            owned = expanded
+        # Relay starts pi in another process group. Kill those groups too, but
+        # never signal a group whose snapshot includes an unrelated process.
+        groups = {group for pid, _, group in rows if pid in owned}
+        for group in groups:
+            members = {pid for pid, _, candidate in rows if candidate == group}
+            if group != os.getpgrp() and members <= owned:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        for pid in owned:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # Stop the wrapper, then stop the comparison: starting another task
+        # without confirming descendant cleanup would contaminate its timing.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise ValueError(
+            "Task cleanup could not enumerate/stop descendants; check ps permissions and task processes"
+        ) from None
+    process.wait()
+
+
 def run_task(command, *, cwd, env, log, timeout):
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         return process.wait(timeout=timeout)
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-        # Stop pi and the gateway as well as the wrapper; preserve partial results.
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
+        stop_task(process)
         if isinstance(error, KeyboardInterrupt):
             raise
         return "timeout"
@@ -171,6 +213,22 @@ attestation = "integrity_only"
         # Dynamic manifests are added disabled. Explicit lifecycle enablement is required.
         subprocess.run(command + ["plugins", "enable", "nvidia.switchyard"], env=environment, check=True)
         subprocess.run(command + ["plugins", "validate", "nvidia.switchyard"], env=environment, check=True)
+    # Manifest validation does not instantiate the native plugin's routes.
+    # Start the same gateway once without an inference task to catch route/client
+    # conflicts before repeating identical startup failures across every arm.
+    with (output / "startup.log").open("w") as log:
+        try:
+            startup = subprocess.run(
+                ["nemo-relay", "--config", str(output / "baseline/config.toml"), "pi", "--", "--version"],
+                env=environment,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            raise ValueError("Routing startup timed out; inspect startup.log before rerunning") from None
+    if startup.returncode:
+        raise ValueError("Routing startup failed; inspect startup.log before running task comparisons")
     for trial in range(1, args.repeat + 1):
         order = arms[(trial - 1) % 3 :] + arms[: (trial - 1) % 3]
         for task, prompt in TASKS.items():

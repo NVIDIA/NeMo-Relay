@@ -27,7 +27,23 @@ def main():
         normalize = service.normalize_ticket_id
         assert normalize(" inc-1042 ") == "INC-1042"
         assert normalize("INC-0000") == "INC-0000"
-        for value in [None, 1042, "", "INC-123", "INC-12345", "INC-１２３４", "XINC-1042", "INC-1042\nx"]:
+        for value in [
+            None,
+            1042,
+            True,
+            b"INC-1042",
+            "",
+            "INC-123",
+            "INC-12345",
+            "INC-１２３４",
+            "INC-١٢٣٤",
+            "INC-12３4",
+            "ınc-1234",
+            "İNC-1234",
+            "XINC-1042",
+            "INC-1042x",
+            "INC-1042\nx",
+        ]:
             rejects(normalize, value)
     elif task == "retry-policy":
         delays = service.retry_delays
