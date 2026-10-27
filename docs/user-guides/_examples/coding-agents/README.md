@@ -251,7 +251,8 @@ and disposable accounts after retaining needed results. Check ownership before
 removing anything on a reused host; deleting the disposable VM is simpler.
 
 The pinned Relay version is a release candidate: use `NEMO_RELAY_VERSION=0.11.0-rc.1`
-with the official installer. Stable `0.11.0` assets are not available yet.
+with the official installer. This is the tested pin for this feedback branch;
+repeat acceptance when changing versions.
 
 On Ubuntu images that default to Python 3.10, pass an explicit Python 3.11+
 interpreter as the second argument to `deploy.sh`. For uv-managed Python, run
