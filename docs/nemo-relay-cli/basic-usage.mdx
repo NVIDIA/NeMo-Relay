@@ -877,7 +877,8 @@ It does not create or change telemetry files. If an output folder is
 missing, it checks the nearest parent folder that exists. A missing folder
 triggers a warning when that parent is writable. An invalid path or a lack of
 write access causes the check to fail. Output-file symlinks also fail because
-the exporter does not allow them.
+the exporter does not allow them. Doctor also rejects paths that use `..` to
+refer to a parent folder.
 
 The `Plugin component` warning identifies each component with `enabled = false`.
 Doctor also warns when an OpenTelemetry section has trace endpoints or file

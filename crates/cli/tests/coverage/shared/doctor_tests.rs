@@ -4065,3 +4065,51 @@ fn doctor_otlp_enablement_guidance_names_only_disabled_settings() {
         );
     }
 }
+
+/// Reject parent-folder traversal even when it reaches a writable output file.
+#[test]
+fn doctor_otlp_files_reject_parent_traversal_before_probing() {
+    use nemo_relay::observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
+
+    let _cwd = crate::test_support::CwdTestScope::locked();
+    let temp = tempfile::tempdir_in(".").unwrap();
+    let relative = std::path::Path::new(temp.path().file_name().unwrap());
+    std::fs::create_dir(temp.path().join("existing")).unwrap();
+    let telemetry = temp.path().join("spans.jsonl");
+    std::fs::write(&telemetry, b"existing telemetry\n").unwrap();
+    for directory in [
+        relative.join("existing/.."),
+        relative.join("missing/../unused"),
+        std::env::current_dir()
+            .unwrap()
+            .join(relative)
+            .join("existing/.."),
+    ] {
+        for filename in [Some("spans.jsonl"), None] {
+            let checks = observability_otlp_file_checks(
+                &json!({"opentelemetry": {
+                    "enabled": true, "file_sinks": [{"output_directory": directory, "filename": filename}]
+                }}),
+                true,
+            );
+            assert_eq!(checks[0].status, Status::Fail, "{checks:?}");
+            assert!(
+                checks[0]
+                    .details
+                    .contains("output_directory must not contain '..' path components")
+            );
+        }
+        let error = OtlpFileSpanExporter::new(
+            &directory,
+            &directory.join("spans.jsonl"),
+            OtlpFileFormat::JsonLines,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsafe traversal"), "{error}");
+    }
+    assert_eq!(std::fs::read(telemetry).unwrap(), b"existing telemetry\n");
+    assert!(!temp.path().join("missing").exists());
+    assert!(!temp.path().join("unused").exists());
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
+}

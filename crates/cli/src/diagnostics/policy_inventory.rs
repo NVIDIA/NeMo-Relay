@@ -7,7 +7,7 @@ use super::{Check, Status, check_dir_writable, section_enabled};
 use nemo_relay::plugin::PluginConfig;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Component, Path};
 
 /// List file sinks and check enabled destinations without writing telemetry.
 pub(super) fn observability_otlp_file_checks(
@@ -61,7 +61,7 @@ pub(super) fn observability_otlp_file_checks(
 }
 
 /// Check file access or create and remove a probe in the nearest existing folder.
-/// Output-file symlinks are rejected to match the exporter's file confinement.
+/// Reject parent-folder traversal and output-file symlinks, matching the exporter.
 fn file_destination_feasibility(
     directory: &Path,
     filename: Option<&str>,
@@ -74,6 +74,15 @@ fn file_destination_feasibility(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "output_directory must be a nonblank path",
+        ));
+    }
+    if directory
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "output_directory must not contain '..' path components; the OTLP exporter rejects parent-folder traversal",
         ));
     }
     if let Some(filename) = filename {
