@@ -123,7 +123,83 @@ def test_tool_codec_rejects_invalid_cached_tool_call_id():
         LangChainToolResultCodec("call-2").from_json(encoded)
 
 
-def test_opaque_artifacts_remain_local_without_python_deserialization():
+def test_results_cached_by_release_candidates_replay_in_a_new_call() -> None:
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command, Send
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    def kind(name: str, value: nemo_relay.Json) -> nemo_relay.JsonObject:
+        return {"kind": name, "value": value}
+
+    def text(value: str | None) -> nemo_relay.JsonObject:
+        return kind("json", value)
+
+    data = kind("dict", {"content": text("answer"), "tool_call_id": text("call-1"), "id": text("message-1")})
+    message = kind("message", kind("dict", {"type": text("tool"), "data": data}))
+    send = kind("send", kind("dict", {"node": text("next"), "arg": kind("dict", {})}))
+    fields = {"graph": text(None), "update": kind("dict", {"messages": kind("list", [message])}), "resume": text(None)}
+    cached: nemo_relay.JsonObject = {
+        "schema": "nemo.relay.tool_result@1",
+        "content": "answer",
+        "is_error": False,
+        "cache": {"replayable": True, "tool_call_id": "call-1"},
+        "result": kind("command", kind("dict", {**fields, "goto": send})),
+    }
+
+    restored = LangChainToolResultCodec("call-2").from_json(cached)
+
+    assert isinstance(restored, Command)
+    assert restored.update == {"messages": [ToolMessage(content="answer", tool_call_id="call-2")]}
+    assert restored.goto == Send("next", {})
+
+
+@pytest.mark.parametrize(
+    ("result", "error", "match"),
+    [
+        pytest.param({"kind": 5, "value": {}}, TypeError, "needs a kind", id="kind-not-text"),
+        pytest.param({"kind": "json", "value": [1]}, ValueError, "Invalid encoded json value", id="scalar-shape"),
+        pytest.param({"kind": "list", "value": {}}, ValueError, "Invalid encoded list value", id="container-shape"),
+        pytest.param(
+            {"kind": "dict_items", "value": [[{"kind": "json", "value": 1}]]},
+            ValueError,
+            "needs a key and a value",
+            id="entry-shape",
+        ),
+        pytest.param(
+            {"kind": "dict_items", "value": [[{"kind": "json", "value": 1}, {"kind": "json", "value": 1}]] * 2},
+            ValueError,
+            "repeats a key",
+            id="repeated-key",
+        ),
+        pytest.param(
+            {"kind": "dataclass", "type": "langgraph.types.Overwrite", "value": {"kind": {"kind": "json", "value": 1}}},
+            ValueError,
+            r"needs the fields \['type', 'value'\]",
+            id="dataclass-fields",
+        ),
+        pytest.param(
+            {"kind": "model", "type": "langchain_core.messages.tool.ToolMessage", "fields_set": ["other"], "value": {}},
+            ValueError,
+            "needs a list of its set fields",
+            id="model-fields-set",
+        ),
+        pytest.param({"kind": "typed", "type": 5, "value": 1}, TypeError, "type name must be text", id="type-name"),
+    ],
+)
+def test_malformed_encodings_are_rejected(result: nemo_relay.JsonObject, error: type[Exception], match: str) -> None:
+    from langchain_core.messages import ToolMessage
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    codec = LangChainToolResultCodec("call-1")
+    encoded = codec.to_json(ToolMessage(content="answer", tool_call_id="call-1"))
+    encoded["result"] = result
+    with pytest.raises(error, match=match):
+        codec.from_json(encoded)
+
+
+def test_custom_objects_are_recorded_with_types_and_stay_with_their_call() -> None:
     from dataclasses import dataclass
 
     from langchain_core.messages import ToolMessage
@@ -141,22 +217,37 @@ def test_opaque_artifacts_remain_local_without_python_deserialization():
     result = Command(update={"messages": [message], "state": state})
     codec = LangChainToolResultCodec("call-1")
     encoded = json.loads(json.dumps(codec.to_json(result)))
+    assert encoded == LangChainToolResultCodec("call-1").to_json(result)
+    assert encoded["cache"]["replayable"] is False
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["messages"]["value"][0]["value"]["artifact"] == {
+        "kind": "dataclass",
+        "type": f"{__name__}.{Artifact.__qualname__}",
+        "value": {"answer": {"kind": "json", "value": 42}},
+    }
+    assert update["state"] == {
+        "kind": "dict_items",
+        "value": [
+            [
+                {"kind": "json", "value": 42},
+                {"kind": "local", "type": "builtins.object", "ref": 0, "value": "<builtins.object>"},
+            ]
+        ],
+    }
     restored = codec.from_json(encoded)
     assert isinstance(restored, Command)
-    assert restored.update["messages"][0].artifact is artifact
-    assert restored.update["state"] is state
-    with pytest.raises(ValueError, match="original invocation"):
+    assert restored is result
+    with pytest.raises(ValueError, match="Only the call that returned"):
         LangChainToolResultCodec("call-1").from_json(encoded)
 
 
 @pytest.mark.parametrize("integration", ["langchain", "langgraph"])
 @pytest.mark.parametrize("result_kind", ["message", "command", "dict_command", "role_dict_command", "list"])
-@pytest.mark.parametrize("opaque", [False, True])
+@pytest.mark.parametrize("local", [False, True])
 @pytest.mark.parametrize("status", ["success", "error"])
-def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
-    integration, result_kind, opaque, status, subscribed_events
-):
-    """Replay portable results with fresh call IDs and execute opaque results on every call."""
+def test_tool_cache_replays_current_call_identity_or_runs_local_results_live(
+    integration: str, result_kind: str, local: bool, status: str, subscribed_events: list[nemo_relay.Event]
+) -> None:
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.graph.message import add_messages
@@ -172,11 +263,11 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
     from nemo_relay.integrations.langchain import NemoRelayMiddleware
     from nemo_relay.integrations.langgraph.tool_node import awrap_tool_call
 
-    artifact = object() if opaque else {"answer": 42}
+    artifact = object() if local else {"answer": 42}
     calls = 0
     unrelated = ToolMessage(content="other", tool_call_id="other", id="message-other")
 
-    async def handler(request):
+    async def handler(request: ToolCallRequest) -> ToolMessage | Command[Any] | list[ToolMessage | Command[Any]]:
         """Count live invocations and return the selected message or graph command shape."""
         nonlocal calls
         calls += 1
@@ -186,17 +277,18 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
         )
         if result_kind == "message":
             return message
+        written: ToolMessage | dict[str, object] = message
         if result_kind in ("dict_command", "role_dict_command"):
-            message = message.model_dump(mode="python")
+            written = message.model_dump(mode="python")
             if result_kind == "role_dict_command":
-                message["role"] = message.pop("type")
+                written["role"] = written.pop("type")
         command = Command(
-            update={"messages": [unrelated, message], "state": (1, 2)},
-            goto=Send("next", {"messages": [message]}),
+            update={"messages": [unrelated, written], "state": (1, 2)},
+            goto=Send("next", {"messages": [written]}),
         )
         return [unrelated, command] if result_kind == "list" else command
 
-    def projected_message(result, call_id):
+    def projected_message(result: object, call_id: str) -> object:
         if result_kind == "list":
             assert isinstance(result, list)
             assert result[0] == unrelated
@@ -214,7 +306,7 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
                 result = ToolMessage.model_validate(result)
         return result
 
-    async def run():
+    async def run() -> None:
         """Exercise repeated calls through the integration and verify results and graph history."""
         runtime = AdaptiveRuntime(
             AdaptiveConfig(
@@ -247,8 +339,8 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
                     assert result.content == "answer"
                     assert result.status == status
                     assert result.tool_call_id == call_id
-                    assert result.id == (f"message-{call_id}" if opaque or call_id == "call-1" else None)
-                    if opaque:
+                    assert result.id == (f"message-{call_id}" if local or call_id == "call-1" else None)
+                    if local:
                         assert result.artifact is artifact
                     else:
                         assert result.artifact == artifact
@@ -259,11 +351,13 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
             await nemo_relay.subscribers.flush_async()
 
     asyncio.run(run())
-    assert calls == (3 if opaque else 1)
+    assert calls == (3 if local else 1)
     hits = [
-        event for event in subscribed_events if event.name == "response_cache" and event.data.get("status") == "hit"
+        event
+        for event in subscribed_events
+        if event.name == "response_cache" and isinstance(event.data, dict) and event.data.get("status") == "hit"
     ]
-    assert len(hits) == (0 if opaque else 2)
+    assert len(hits) == (0 if local else 2)
 
 
 def test_replayed_graph_destination_binds_messages_without_display_content():
@@ -327,7 +421,7 @@ def test_custom_tool_message_class_and_fields_are_preserved(command, custom_type
         assert restored_message is message
     assert message.content == "answer"
     assert message.status == "success"
-    with pytest.raises(ValueError, match="original invocation"):
+    with pytest.raises(ValueError, match="Only the call that returned"):
         LangChainToolResultCodec("call-1").from_json(encoded)
 
 
@@ -575,8 +669,373 @@ def test_list_edits_only_change_the_matching_message():
     restored = codec.from_json(encoded)
     assert isinstance(restored, list)
     assert restored[0] == other
-    assert restored[1][0].goto == "next"
-    updated = restored[1][0].update["messages"][0]
+    inner = restored[1]
+    assert isinstance(inner, list)
+    command = inner[0]
+    assert isinstance(command, Command)
+    assert command.goto == "next"
+    updated = command.update["messages"][0]
     assert updated.content == "edited failure"
     assert updated.status == "error"
     assert message.content == "answer"
+
+
+def test_values_without_plain_json_form_replay_exactly(subscribed_events: list[nemo_relay.Event]) -> None:
+    import math
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command, Overwrite, Send
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec, ToolResultValue
+
+    state = {
+        "nan": math.nan,
+        "inf": -math.inf,
+        "big": 2**70,
+        "text": "a\ud800",
+        "\udc00": "key",
+        "bytes": b"\xff",
+        "buffer": bytearray(b"\x00"),
+        "set": {"b", "a"},
+        "frozen": frozenset({(1, 2)}),
+        "keys": {1: "int", (1, 2): "tuple"},
+        "tuple": (1, [2]),
+    }
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    command = Command(
+        update={"messages": Overwrite([message]), "state": state}, goto=[Send("next", {"x": 1}, timeout=5.0)]
+    )
+
+    def call(_args: nemo_relay.Json) -> nemo_relay.ToolExecutionResult[ToolResultValue]:
+        return nemo_relay.ToolExecutionResult(command)
+
+    async def run() -> ToolResultValue:
+        outcome = await nemo_relay.typed.tool_execute(
+            name="lookup",
+            args={},
+            func=call,
+            args_codec=nemo_relay.typed.JsonPassthrough(),
+            result_codec=LangChainToolResultCodec("call-1"),
+            tool_call_id="call-1",
+        )
+        return outcome.result
+
+    assert asyncio.run(run()) is command
+    nemo_relay.subscribers.flush()
+    event = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "lookup" and event.scope_category == "end"
+    )
+    assert event.data["cache"]["replayable"] is True
+    restored = LangChainToolResultCodec("call-1").from_json(event.data)
+    assert isinstance(restored, Command)
+    assert restored.goto == command.goto
+    assert restored.update["messages"] == Overwrite([message])
+    restored_state = dict(restored.update["state"])
+    assert math.isnan(restored_state.pop("nan"))
+    assert restored_state == {key: item for key, item in state.items() if key != "nan"}
+    assert [type(restored_state[key]) for key in ("buffer", "set", "frozen")] == [bytearray, set, frozenset]
+
+
+@pytest.mark.parametrize("update_kind", ["model", "dataclass", "pairs", "overwrite", "single"])
+def test_projection_edits_messages_in_each_state_update_shape(update_kind: str) -> None:
+    from dataclasses import dataclass
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command, Overwrite
+    from pydantic import BaseModel
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class ModelState(BaseModel):
+        messages: list[ToolMessage]
+
+    @dataclass
+    class DataclassState:
+        messages: list[ToolMessage]
+
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    updates: dict[str, object] = {
+        "model": ModelState(messages=[message]),
+        "dataclass": DataclassState(messages=[message]),
+        "pairs": [("messages", [message])],
+        "overwrite": {"messages": Overwrite([message])},
+        "single": {"messages": message},
+    }
+    update = updates[update_kind]
+    result = Command(update=update)
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    assert encoded["content"] == "answer"
+    encoded["content"] = "edited"
+    encoded["is_error"] = True
+    restored = codec.from_json(encoded)
+    assert isinstance(restored, Command)
+    assert type(restored.update) is type(update)
+    reencoded = LangChainToolResultCodec("call-1").to_json(restored)
+    assert (reencoded["content"], reencoded["is_error"]) == ("edited", True)
+    assert LangChainToolResultCodec("call-1").to_json(result)["content"] == "answer"
+    assert message.content == "answer"
+
+
+def test_result_edits_rebuild_changed_values_and_keep_other_objects() -> None:
+    from dataclasses import dataclass
+    from datetime import datetime
+    from enum import StrEnum
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class Color(StrEnum):
+        RED = "red"
+        BLUE = "blue"
+
+    @dataclass
+    class Artifact:
+        rows: list[int]
+        color: Color
+
+    handle = object()
+    artifact = Artifact([1], Color.RED)
+    message = ToolMessage(content="answer", tool_call_id="call-1", artifact=artifact)
+    result = Command(update={"messages": [message], "handle": handle, "at": datetime(2026, 1, 1)})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    update["messages"]["value"][0]["value"]["artifact"]["value"]["color"]["value"] = "blue"
+    update["at"]["value"] = "2027-01-01T00:00:00"
+    restored = codec.from_json(encoded)
+    assert isinstance(restored, Command)
+    assert restored.update["handle"] is handle
+    assert restored.update["at"] == datetime(2027, 1, 1)
+    edited = restored.update["messages"][0].artifact
+    assert edited == Artifact([1], Color.BLUE)
+    assert type(edited.color) is Color
+    assert edited.rows is artifact.rows
+    update["handle"]["value"] = "edited"
+    with pytest.raises(ValueError, match="has no JSON form"):
+        codec.from_json(encoded)
+
+
+def test_content_shows_str_and_int_subclasses_by_their_values() -> None:
+    from enum import Enum, IntEnum
+
+    from langchain_core.messages import ToolMessage
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class Color(str, Enum):
+        RED = "red"
+
+    class Level(IntEnum):
+        LOW = 1
+
+    message = ToolMessage(content=[{"type": "text", "text": Color.RED, "level": Level.LOW}], tool_call_id="call-1")
+    codec = LangChainToolResultCodec("call-1")
+    encoded = codec.to_json(message)
+    assert encoded["content"] == [{"type": "text", "text": "red", "level": 1}]
+    assert codec.from_json(json.loads(json.dumps(encoded))) is message
+
+
+def test_iterators_and_reference_cycles_stay_with_their_call() -> None:
+    from collections import OrderedDict
+    from collections.abc import Iterator
+    from dataclasses import dataclass
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    @dataclass
+    class Holder:
+        rows: Iterator[int]
+
+    def numbers() -> Iterator[int]:
+        yield 1
+
+    iterator = numbers()
+    holder = Holder(numbers())
+    cycle: list[object] = []
+    cycle.append(cycle)
+    ordered: OrderedDict[str, object] = OrderedDict()
+    ordered["self"] = ordered
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(
+        update={"messages": [message], "iterator": iterator, "holder": holder, "cycle": cycle, "ordered": ordered}
+    )
+    codec = LangChainToolResultCodec("call-1")
+    encoded = codec.to_json(result)
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["iterator"] == {
+        "kind": "local",
+        "type": "builtins.generator",
+        "ref": 0,
+        "value": "<builtins.generator>",
+    }
+    assert update["holder"] == {
+        "kind": "dataclass",
+        "type": f"{__name__}.{Holder.__qualname__}",
+        "value": {"rows": {"kind": "local", "type": "builtins.generator", "ref": 1, "value": "<builtins.generator>"}},
+    }
+    assert update["cycle"]["value"][0] == {
+        "kind": "local",
+        "type": "builtins.list",
+        "ref": 2,
+        "value": ["<builtins.list>"],
+    }
+    assert update["ordered"] == {
+        "kind": "mapping",
+        "type": "collections.OrderedDict",
+        "value": [
+            [
+                {"kind": "json", "value": "self"},
+                {
+                    "kind": "local",
+                    "type": "collections.OrderedDict",
+                    "ref": 3,
+                    "value": {"self": "<collections.OrderedDict>"},
+                },
+            ]
+        ],
+    }
+    assert encoded["cache"]["replayable"] is False
+    assert codec.from_json(json.loads(json.dumps(encoded))) is result
+    assert list(iterator) == [1]
+    assert list(holder.rows) == [1]
+
+
+def test_mapping_subclasses_are_recorded_as_entries_with_their_type_and_rebuilt_by_their_call() -> None:
+    from collections import OrderedDict, defaultdict
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    ordered = OrderedDict([(1, "a"), ("1", "b")])
+    rows: defaultdict[int, list[str]] = defaultdict(list, {1: ["a"]})
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(update={"messages": [message], "ordered": ordered, "rows": rows})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["ordered"] == {
+        "kind": "mapping",
+        "type": "collections.OrderedDict",
+        "value": [
+            [{"kind": "json", "value": 1}, {"kind": "json", "value": "a"}],
+            [{"kind": "json", "value": "1"}, {"kind": "json", "value": "b"}],
+        ],
+    }
+    assert encoded["cache"]["replayable"] is False
+    assert codec.from_json(encoded) is result
+
+    update["ordered"]["value"].reverse()
+    update["ordered"]["value"][0][1] = {"kind": "json", "value": "c"}
+    update["rows"]["value"].append(
+        [{"kind": "json", "value": 2}, {"kind": "list", "value": [{"kind": "json", "value": "b"}]}]
+    )
+    restored = codec.from_json(encoded)
+
+    assert isinstance(restored, Command)
+    assert type(restored.update["ordered"]) is OrderedDict
+    assert list(restored.update["ordered"].items()) == [("1", "c"), (1, "a")]
+    assert type(restored.update["rows"]) is defaultdict
+    assert restored.update["rows"].default_factory is list
+    assert restored.update["rows"] == {1: ["a"], 2: ["b"]}
+    assert restored.update["rows"][1] is rows[1]
+    with pytest.raises(ValueError, match="Only the call that returned"):
+        LangChainToolResultCodec("call-1").from_json(encoded)
+
+
+def test_mappings_that_cannot_take_edited_entries_fail_the_edit() -> None:
+    from collections import ChainMap
+    from types import MappingProxyType
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class Lower(dict[str, int]):
+        def __setitem__(self, key: str, value: int) -> None:
+            super().__setitem__(key.lower(), value)
+
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    frozen = MappingProxyType({1: "a"})
+    layered = ChainMap({1: "a"}, {2: "b"})
+    lowered = Lower()
+    lowered["A"] = 1
+    result = Command(update={"messages": [message], "frozen": frozen, "layered": layered, "lowered": lowered})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert update["frozen"]["type"] == "builtins.mappingproxy"
+    assert [entry[0]["value"] for entry in update["layered"]["value"]] == [2, 1]
+    assert codec.from_json(encoded) is result
+
+    for name in ("frozen", "layered"):
+        edited = json.loads(json.dumps(encoded))
+        edited["result"]["value"]["update"]["value"][name]["value"][0][1] = {"kind": "json", "value": "c"}
+        with pytest.raises(ValueError, match="cannot take edited entries"):
+            codec.from_json(edited)
+    assert dict(layered) == {1: "a", 2: "b"}
+    lowered_edit = json.loads(json.dumps(encoded))
+    lowered_edit["result"]["value"]["update"]["value"]["lowered"]["value"].append(
+        [{"kind": "json", "value": "B"}, {"kind": "json", "value": 2}]
+    )
+    with pytest.raises(ValueError, match="did not take the edited entries"):
+        codec.from_json(lowered_edit)
+    assert dict(lowered) == {"a": 1}
+
+
+def test_typed_values_whose_json_cannot_rebuild_them_stay_with_their_call() -> None:
+    from typing import NamedTuple
+
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+    from pydantic import RootModel
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class Mixed(RootModel[dict[int | str, str]]):
+        pass
+
+    class Ints(RootModel[dict[int, str]]):
+        pass
+
+    class Row(NamedTuple):
+        cells: dict[object, str]
+
+    class Cell(NamedTuple):
+        text: str
+
+    class Grid(NamedTuple):
+        cells: list[Cell]
+
+    mixed = Mixed({1: "a", "1": "b"})
+    row = Row({1: "a"})
+    grid = Grid([Cell("a")])
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(update={"messages": [message], "mixed": mixed, "ints": Ints({1: "a"}), "row": row, "grid": grid})
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    update = encoded["result"]["value"]["update"]["value"]
+    assert (update["mixed"]["kind"], update["mixed"]["type"]) == ("local", f"{__name__}.{Mixed.__qualname__}")
+    assert (update["row"]["kind"], update["row"]["type"]) == ("local", f"{__name__}.{Row.__qualname__}")
+    assert (update["grid"]["kind"], update["grid"]["type"]) == ("local", f"{__name__}.{Grid.__qualname__}")
+    assert update["ints"] == {"kind": "typed", "type": f"{__name__}.{Ints.__qualname__}", "value": {"1": "a"}}
+    assert codec.from_json(encoded) is result
+
+    update["ints"]["value"] = {"2": "b"}
+    restored = codec.from_json(encoded)
+
+    assert isinstance(restored, Command)
+    assert restored.update["ints"] == Ints({2: "b"})
+    assert restored.update["mixed"] is mixed
+    assert restored.update["row"] is row
+    assert restored.update["grid"] is grid
