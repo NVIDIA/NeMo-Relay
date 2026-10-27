@@ -31,6 +31,8 @@ Datadog path: OTLP → your Collector or Agent → Datadog APM
   [Hermes quickstart](/getting-started/quick-start/hermes), then check the **NeMo
   Relay Plugins** section of `hermes doctor`. Hermes manages its Relay version;
   a numeric minimum Hermes version has not been established for this example.
+  The verified public checkout was
+  [`91b17917`](https://github.com/NousResearch/hermes-agent/tree/91b17917e60500afc566d669bac9c065a48ed478).
 - A running destination and permission to send traces to its project. The
   Phoenix subsection includes a local server command; hosted destinations need
   their own credentials and project access.
@@ -67,6 +69,7 @@ on the feedback branch until the guide lands upstream. On your Linux host:
 ```bash
 git clone --branch topic/codex/user-guides-observability --single-branch https://github.com/NVIDIA/NeMo-Relay.git relay-observability
 cd relay-observability/docs/user-guides/_examples/observability
+export PATH="$HOME/.local/bin:$PATH"
 hermes doctor
 # Start Phoenix in another terminal using its subsection, then:
 python3.12 run.py --destination phoenix --output /tmp/relay-triage-phoenix

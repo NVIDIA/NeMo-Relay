@@ -11,13 +11,19 @@ required. Use a fresh directory for every run; the example creates its own files
 ## Prepare a host
 
 Use Python 3.12 and a Hermes installation with native Relay support and
-`chat --oneshot`. Install and authenticate Hermes using its installation guide,
+`chat --oneshot`. The measured public checkout was
+[`91b17917`](https://github.com/NousResearch/hermes-agent/tree/91b17917e60500afc566d669bac9c065a48ed478),
+with no local source changes. Install and authenticate Hermes using its installation guide,
 select a tool-capable model, and inspect the NeMo Relay Plugins section of
 `hermes doctor`. Hermes owns its Relay dependency; installing the Relay CLI is
 not required for this example. Use a dedicated Hermes installation/profile with
 no unrelated gateway session, and check that administrator plugin policy permits
 the selected exporter. A separately running Hermes gateway can retain an earlier
 configuration; do not stop a gateway used by other work.
+
+Make the installed executable available in the launching shell. For the default
+user-local installation, use `export PATH="$HOME/.local/bin:$PATH"`; non-login
+SSH commands may not load the installer's shell-profile update.
 
 In Brev, create an ordinary CPU VM, clone this guide branch, and use the same
 instructions below from this directory. The instance supplies the host; the
