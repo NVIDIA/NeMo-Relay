@@ -1243,8 +1243,8 @@ fn llm_call_end(
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
-///     model_name_follows_request: Record the model the request names after request
-///         intercepts run. Uses ``model_name`` when the request names none.
+///     model_name_follows_request: Record the model the annotated request names after
+///         request intercepts run. Uses ``model_name`` when it names none.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
@@ -1351,8 +1351,8 @@ fn llm_call_execute<'py>(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
-///     model_name_follows_request: Record the model the request names after request
-///         intercepts run. Uses ``model_name`` when the request names none.
+///     model_name_follows_request: Record the model the annotated request names after
+///         request intercepts run. Uses ``model_name`` when it names none.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.

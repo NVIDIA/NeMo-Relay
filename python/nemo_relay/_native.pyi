@@ -2023,8 +2023,8 @@ def llm_call_execute(
         request: Initial LLM request.
         func: Awaitable provider implementation called with the final request.
         **kwargs: Optional parent handle, attributes, data, metadata, model
-            name, whether model name follows the request, request codec, and
-            response codec.
+            name, whether model name follows the annotated request, request
+            codec, and response codec.
 
     Returns:
         Awaitable that resolves to a JSON-compatible LLM response.
@@ -2053,8 +2053,8 @@ def llm_stream_call_execute(
         collector: Callback invoked for each post-intercept chunk.
         finalizer: Callback that returns the aggregate final response.
         **kwargs: Optional parent handle, attributes, data, metadata, model
-            name, whether model name follows the request, request codec, and
-            response codec.
+            name, whether model name follows the annotated request, request
+            codec, and response codec.
 
     Returns:
         ``LlmStream`` async iterator of JSON-compatible chunks.

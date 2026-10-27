@@ -1759,7 +1759,7 @@ def _decode(payload: JsonObject) -> AnnotatedLLMRequest:
     return AnnotatedLLMRequest(
         messages,
         instructions=_instructions(config.get("system_instruction")),
-        model=_optional_text(payload.get("model"), field="ADK model"),
+        model=_optional_text(payload.get("model"), field="ADK model") or None,
         params=params or None,
         tools=_tools(config.get("tools")),
         tool_choice=_tool_choice(config.get("tool_config")),

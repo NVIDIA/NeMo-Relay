@@ -240,9 +240,8 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         model_name: Optional normalized model name to record separately from the
             provider-specific request payload.
-        model_name_follows_request: Record the model the request names after
-            request intercepts run. Uses ``model_name`` when the request names
-            none.
+        model_name_follows_request: Record the model the annotated request names
+            after request intercepts run. Uses ``model_name`` when it names none.
         codec: Optional request codec used to provide
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
@@ -337,9 +336,8 @@ def stream_execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         model_name: Optional normalized model name to record separately from the
             provider-specific request payload.
-        model_name_follows_request: Record the model the request names after
-            request intercepts run. Uses ``model_name`` when the request names
-            none.
+        model_name_follows_request: Record the model the annotated request names
+            after request intercepts run. Uses ``model_name`` when it names none.
         codec: Optional request codec used to provide
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
