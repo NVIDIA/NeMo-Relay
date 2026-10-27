@@ -18,7 +18,7 @@ NeMo Relay integrations for Deep Agents.
 ### `add_nemo_relay_integration`
 
 ```python
-def add_nemo_relay_integration(kwargs: Mapping[str, Any] | None = None, *, instrument_subagents: bool = True, **overrides: Any) -> dict[str, Any]
+def add_nemo_relay_integration(kwargs: Mapping[str, Any] | None = None, *, instrument_subagents: bool = True, position: Literal['outer', 'inner'] = 'inner', **overrides: Any) -> dict[str, Any]
 ```
 
 Attach NeMo Relay observability to `create_deep_agent` keyword arguments.
