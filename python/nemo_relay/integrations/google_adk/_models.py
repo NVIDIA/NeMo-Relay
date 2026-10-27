@@ -15,7 +15,7 @@ from google.adk.models.llm_response import LlmResponse
 
 import nemo_relay
 from nemo_relay import Json, JsonObject, LLMAttributes, LLMRequest
-from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, REQUEST_MODEL, Attempt, Backend, backend_of
+from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, Attempt, Backend, backend_of
 from nemo_relay.integrations.google_adk._context import integration_metadata, parent_handle, rejection_marked
 from nemo_relay.integrations.google_adk._serialization import (
     ProducedResponses,
@@ -83,17 +83,13 @@ def _methods(cls: type[BaseLlm]) -> Methods[BaseLlm]:
     original = cls.generate_content_async
 
     async def generate_content_async(self: BaseLlm, llm_request: LlmRequest, stream: bool = False) -> _Responses:
-        token = REQUEST_MODEL.set(llm_request.model)
-        try:
-            backend = await backend_of(self)
-        finally:
-            REQUEST_MODEL.reset(token)
+        backend = await backend_of(self, llm_request.model)
 
         def inner(request: LlmRequest, *, stream: bool) -> _Responses:
             return original(self, request, stream)
 
         async with contextlib.aclosing(
-            _run(llm_request, inner, backend=backend, model_name=self.model, model_type=cls.__name__, stream=stream)
+            _run(llm_request, inner, backend=backend, model_type=cls.__name__, stream=stream)
         ) as responses:
             async for response in responses:
                 yield response
@@ -131,14 +127,14 @@ def _tool_choice_edit(
 
 
 async def _run(
-    llm_request: LlmRequest, inner: _Inner, *, backend: Backend, model_name: str, model_type: str, stream: bool
+    llm_request: LlmRequest, inner: _Inner, *, backend: Backend, model_type: str, stream: bool
 ) -> _Responses:
     """Run one ADK model call as one managed LLM call.
 
     Non-streaming call yields one restored response. Streaming call yields one restored response per chunk.
     """
     parent = parent_handle()
-    with rejection_marked("adk.llm_request_rejected", parent, provider=backend.provider, model=model_name):
+    with rejection_marked("adk.llm_request_rejected", parent, provider=backend.provider, model=backend.model):
         payload = request_payload(llm_request)
     adk_tool_choice = _function_calling_config(llm_request)
     current = payload
@@ -208,11 +204,11 @@ async def _run(
             call,
             handle=parent,
             metadata=metadata,
-            model_name=model_name,
+            model_name=backend.model,
             codec=backend.codec,
             response_codec=backend.codec,
         )
-        with rejection_marked("adk.llm_response_rejected", parent, provider=backend.provider, model=model_name):
+        with rejection_marked("adk.llm_response_rejected", parent, provider=backend.provider, model=backend.model):
             response = produced.restore_result(result)
         yield response
         return
@@ -225,13 +221,13 @@ async def _run(
         handle=parent,
         attributes=LLMAttributes(LLMAttributes.STREAMING),
         metadata=metadata,
-        model_name=model_name,
+        model_name=backend.model,
         codec=backend.codec,
         response_codec=backend.codec,
     )
     try:
         async for chunk in llm_stream:
-            with rejection_marked("adk.llm_response_rejected", parent, provider=backend.provider, model=model_name):
+            with rejection_marked("adk.llm_response_rejected", parent, provider=backend.provider, model=backend.model):
                 response = produced.restore_chunk(chunk)
             yield response
     finally:

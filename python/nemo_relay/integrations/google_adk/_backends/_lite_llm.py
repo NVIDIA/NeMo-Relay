@@ -27,7 +27,6 @@ from typing_extensions import ReadOnly, TypedDict
 from nemo_relay.codecs import OpenAIChatCodec
 from nemo_relay.integrations.google_adk._backends._attempt import (
     CURRENT_ATTEMPT,
-    REQUEST_MODEL,
     Attempt,
     Backend,
     ToolChoiceApi,
@@ -171,22 +170,23 @@ def _carries(fields: JsonObject, keys: Sequence[str]) -> bool:
 _LITE_LLM_CODEC: Final = AdkCodec(_read)
 
 
-async def lite_llm_backend(model: LiteLlm) -> Backend:
+async def lite_llm_backend(model: LiteLlm, request_model: str | None) -> Backend:
     """Return backend for a `LiteLlm` model and swap its client.
 
     Returns:
-        Backend whose provider is LiteLLM's pick for request model, else for `model.model`, or class name when
+        Backend whose provider is LiteLLM's pick for `request_model`, else for `model.model`, or class name when
         LiteLLM finds none.
 
     Raises:
         TypeError: LiteLLM settings can switch provider mid-call.
     """
-    name = REQUEST_MODEL.get() or model.model
+    name = request_model or model.model
     options = _with_credential(cast("_LiteLlmArgs", model._additional_args))
     _require_fixed_route(name, options)
     swap_class(model.llm_client, _client_methods)
     route = await asyncio.to_thread(_route, name, options)
-    return Backend(type(model).__name__ if route is None else route, _LITE_LLM_CODEC, client_headers=False)
+    provider = type(model).__name__ if route is None else route
+    return Backend(provider, _LITE_LLM_CODEC, client_headers=False, model=name)
 
 
 def _with_credential(args: _LiteLlmArgs) -> _LiteLlmArgs:

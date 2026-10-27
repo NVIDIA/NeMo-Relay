@@ -110,7 +110,7 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
 ANTHROPIC_CODEC: Final = AdkCodec(_read)
 
 
-async def anthropic_backend(model: AnthropicLlm) -> Backend:
+async def anthropic_backend(model: AnthropicLlm, request_model: str | None) -> Backend:
     """Return Anthropic Messages backend for model's client, and swap client's messages resource.
 
     Provider: `vertex_ai` for Vertex AI client, `azure_ai` for Microsoft Foundry client, `anthropic` for any other,
@@ -118,7 +118,7 @@ async def anthropic_backend(model: AnthropicLlm) -> Backend:
     """
     client = await model._get_anthropic_client()
     swap_class(client.messages, _messages_methods)
-    return Backend(_provider(client), ANTHROPIC_CODEC, client_headers=True)
+    return Backend(_provider(client), ANTHROPIC_CODEC, client_headers=True, model=request_model or model.model)
 
 
 def _provider(client: AsyncAnthropic | AsyncAnthropicVertex) -> _Provider:

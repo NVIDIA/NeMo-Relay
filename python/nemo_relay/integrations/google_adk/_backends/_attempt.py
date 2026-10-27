@@ -43,7 +43,6 @@ class Attempt:
 
 
 CURRENT_ATTEMPT: Final[ContextVar[Attempt | None]] = ContextVar("nemo_relay_google_adk_attempt", default=None)
-REQUEST_MODEL: Final[ContextVar[str | None]] = ContextVar("nemo_relay_google_adk_request_model", default=None)
 
 
 class Backend(NamedTuple):
@@ -53,6 +52,7 @@ class Backend(NamedTuple):
         bool,
         "True when request headers travel as client extra headers, not ADK's HTTP options.",
     ]
+    model: Annotated[str | None, "LLM scope model name: model the class calls, or model's own name for unknown model."]
 
 
 def usage_fields(usage: BaseModel) -> JsonObject:

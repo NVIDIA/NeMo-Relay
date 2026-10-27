@@ -112,7 +112,8 @@ from google.adk.models.lite_llm import LiteLlm
 from nemo_relay.integrations.google_adk._backends import backend_of
 
 assert "litellm" not in sys.modules
-asyncio.run(backend_of(LiteLlm(model="openai/gpt-4o")))
+model = LiteLlm(model="openai/gpt-4o")
+asyncio.run(backend_of(model, model.model))
 import litellm
 
 print(litellm.litellm_mode)
@@ -143,8 +144,9 @@ class FutureLlm(BaseLlm):
         yield LlmResponse()
 
 
+model = FutureLlm()
 try:
-    asyncio.run(backend_of(FutureLlm()))
+    asyncio.run(backend_of(model, model.model))
 except TypeError as error:
     print(error)
 """
@@ -462,10 +464,15 @@ def _probe_environment() -> dict[str, str]:
     return environment
 
 
-def _gemini(response: types.GenerateContentResponse, monkeypatch: pytest.MonkeyPatch, *, model: str) -> Gemini:
+def _gemini(
+    response: types.GenerateContentResponse, monkeypatch: pytest.MonkeyPatch, *, model: str
+) -> tuple[Gemini, list[str]]:
+    """Return Gemini model with a canned client, plus the model name each call sends."""
     from google import genai
     from google.adk.models.google_llm import Gemini
     from google.genai.models import AsyncModels
+
+    sent: list[str] = []
 
     class CannedModels(AsyncModels):
         def __init__(self, canned: types.GenerateContentResponse) -> None:
@@ -478,11 +485,12 @@ def _gemini(response: types.GenerateContentResponse, monkeypatch: pytest.MonkeyP
             contents: types.ContentListUnion | types.ContentListUnionDict,
             config: types.GenerateContentConfigOrDict | None = None,
         ) -> types.GenerateContentResponse:
+            sent.append(model)
             return self.canned
 
     client = genai.Client(api_key="test-key")
     monkeypatch.setattr(client.aio, "_models", CannedModels(response))
-    return Gemini(model=model, client=client)
+    return Gemini(model=model, client=client), sent
 
 
 def _without_cost(usage: nemo_relay.JsonObject) -> nemo_relay.JsonObject:
@@ -1240,7 +1248,7 @@ async def test_closing_a_recorded_lite_llm_stream_early_closes_the_provider_stre
     body = _StreamBody(chunks, error=None)
     client = _openai_client(_Canned([httpx.Response(200, headers=_SSE, stream=body)]))
     model = LiteLlm(model="openai/gpt-4o", client=client)
-    await backend_of(model)
+    await backend_of(model, model.model)
     attempt = Attempt(tool_choice=None, headers={}, provider="openai")
     token = CURRENT_ATTEMPT.set(attempt)
     try:
@@ -1266,7 +1274,7 @@ async def test_cancelling_an_early_closed_lite_llm_stream_during_provider_close_
     body = _HeldCloseBody(chunks)
     client = _openai_client(_Canned([httpx.Response(200, headers=_SSE, stream=body)]))
     model = LiteLlm(model="openai/gpt-4o", client=client)
-    await backend_of(model)
+    await backend_of(model, model.model)
     token = CURRENT_ATTEMPT.set(Attempt(tool_choice=None, headers={}, provider="openai"))
     try:
         stream = await model.llm_client.acompletion(
@@ -1407,6 +1415,7 @@ async def test_a_lite_llm_call_is_named_after_the_provider_of_the_model_adk_requ
     assert final_text(adk_events) == "Sunny."
     (start,) = starts(subscribed_events, "llm")
     assert start.name == "anthropic"
+    assert present(start.category_profile)["model_name"] == f"anthropic/{_CLAUDE}"
     assert_balanced(subscribed_events)
 
 
@@ -1997,7 +2006,8 @@ async def test_a_lite_llm_provider_is_resolved_off_the_event_loop(monkeypatch: p
 
     monkeypatch.setattr(litellm, "get_llm_provider", get_llm_provider)
 
-    backend = await backend_of(LiteLlm(model="openai/gpt-4o"))
+    model = LiteLlm(model="openai/gpt-4o")
+    backend = await backend_of(model, model.model)
 
     assert backend.provider == "openai"
     assert threads
@@ -2246,13 +2256,9 @@ async def test_gemini_model_records_the_response_id(
         ],
     )
 
-    adk_events = await run_recorded(
-        LlmAgent(
-            name="weather_agent",
-            model=_gemini(response, monkeypatch, model="gemini-2.5-flash"),
-            instruction="Be brief.",
-        )
-    )
+    model, _ = _gemini(response, monkeypatch, model="gemini-2.5-flash")
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
 
     assert final_text(adk_events) == "Sunny."
     (start,) = starts(subscribed_events, "llm")
@@ -2378,6 +2384,60 @@ async def test_relay_request_headers_reach_models_whose_client_takes_them(
 
 
 @pytest.mark.parametrize(
+    ("build", "reply", "requested", "recorded", "sent"),
+    [
+        pytest.param(
+            _anthropic_model,
+            _claude_reply,
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5-20251001",
+            id="anthropic",
+        ),
+        pytest.param(_openai_chat_model, _chat_reply, "gpt-4o-mini", "gpt-4o", "gpt-4o", id="openai_chat"),
+        pytest.param(
+            _openai_responses_model, _responses_text_reply, "gpt-5-mini", "gpt-5-mini", "gpt-5-mini", id="responses"
+        ),
+        pytest.param(
+            _apigee_chat_model,
+            _chat_reply,
+            "apigee/openai/gpt-4o-mini",
+            "apigee/openai/gpt-4o-mini",
+            "gpt-4o-mini",
+            id="apigee_chat",
+        ),
+        pytest.param(
+            _lite_llm_model, _chat_reply, "openai/gpt-4o-mini", "openai/gpt-4o-mini", "gpt-4o-mini", id="lite_llm"
+        ),
+    ],
+)
+async def test_a_call_is_recorded_with_the_model_its_class_reads_after_a_callback_requests_another(
+    build: Callable[[_Canned], BaseLlm],
+    reply: Callable[[], httpx.Response],
+    requested: str,
+    recorded: str,
+    sent: str,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+
+    def request(callback_context: CallbackContext, llm_request: LlmRequest) -> LlmResponse | None:
+        llm_request.model = requested
+        return None
+
+    canned = _Canned([reply()])
+    agent = LlmAgent(name="weather_agent", model=build(canned), instruction="Be brief.", before_model_callback=request)
+
+    adk_events = await run_recorded(agent)
+
+    assert final_text(adk_events) == "Sunny."
+    assert canned.requests[0]["model"] == sent
+    (start,) = starts(subscribed_events, "llm")
+    assert present(start.category_profile)["model_name"] == recorded
+    assert_balanced(subscribed_events)
+
+
+@pytest.mark.parametrize(
     ("build", "reply", "provider"),
     [
         pytest.param(_foundry_model, _claude_reply, "azure_ai", id="anthropic_on_foundry"),
@@ -2417,13 +2477,42 @@ async def test_a_tuned_gemini_model_is_named_after_the_gemini_api(
             )
         ],
     )
-    model = _gemini(response, monkeypatch, model="tunedModels/weather-123")
+    model, _ = _gemini(response, monkeypatch, model="tunedModels/weather-123")
 
     await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
 
     (start,) = starts(subscribed_events, "llm")
     assert start.name == "gemini"
     assert present(start.category_profile)["model_name"] == "tunedModels/weather-123"
+
+
+async def test_a_gemini_call_is_recorded_with_the_model_a_callback_requests(
+    monkeypatch: pytest.MonkeyPatch, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents import LlmAgent
+    from google.genai import types
+
+    def to_pro(callback_context: CallbackContext, llm_request: LlmRequest) -> LlmResponse | None:
+        llm_request.model = "gemini-2.5-pro"
+        return None
+
+    response = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text="Sunny.")]),
+                finish_reason=types.FinishReason.STOP,
+            )
+        ],
+    )
+    model, sent = _gemini(response, monkeypatch, model="gemini-2.5-flash")
+    agent = LlmAgent(name="weather_agent", model=model, instruction="Be brief.", before_model_callback=to_pro)
+
+    await run_recorded(agent)
+
+    assert sent == ["gemini-2.5-pro"]
+    (start,) = starts(subscribed_events, "llm")
+    assert present(start.category_profile)["model_name"] == "gemini-2.5-pro"
+    assert_balanced(subscribed_events)
 
 
 def _usd(total: float) -> nemo_relay.JsonObject:
