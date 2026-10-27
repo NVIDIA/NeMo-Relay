@@ -9,7 +9,7 @@ import base64
 import copy
 import dataclasses
 import inspect
-from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Annotated, Any, Final, NamedTuple, TypeAlias, TypeGuard, cast
 
@@ -561,10 +561,10 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         name = cls.__qualname__
         if recorded is None or type(recorded.value) is not cls:
             raise ValueError(f"A {name} in a LangChain tool result is rebuilt only from the mapping it replaces")
-        if not isinstance(recorded.value, MutableMapping):
+        if not isinstance(recorded.value, dict):
             raise ValueError(f"A {name} in a LangChain tool result cannot take edited entries. Keep it unchanged.")
         entries = self._entries(value, recorded.items)
-        rebuilt = copy.copy(cast(MutableMapping[object, object], recorded.value))
+        rebuilt = copy.copy(cast(dict[object, object], recorded.value))
         rebuilt.clear()
         for key, item in entries:
             rebuilt[key] = item

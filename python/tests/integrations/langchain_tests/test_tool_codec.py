@@ -961,10 +961,16 @@ def test_mappings_that_cannot_take_edited_entries_fail_the_edit() -> None:
 
     from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
 
+    class Lower(dict[str, int]):
+        def __setitem__(self, key: str, value: int) -> None:
+            super().__setitem__(key.lower(), value)
+
     message = ToolMessage(content="answer", tool_call_id="call-1")
     frozen = MappingProxyType({1: "a"})
     layered = ChainMap({1: "a"}, {2: "b"})
-    result = Command(update={"messages": [message], "frozen": frozen, "layered": layered})
+    lowered = Lower()
+    lowered["A"] = 1
+    result = Command(update={"messages": [message], "frozen": frozen, "layered": layered, "lowered": lowered})
     codec = LangChainToolResultCodec("call-1")
     encoded = json.loads(json.dumps(codec.to_json(result)))
     update = encoded["result"]["value"]["update"]["value"]
@@ -972,14 +978,19 @@ def test_mappings_that_cannot_take_edited_entries_fail_the_edit() -> None:
     assert [entry[0]["value"] for entry in update["layered"]["value"]] == [2, 1]
     assert codec.from_json(encoded) is result
 
-    frozen_edit = json.loads(json.dumps(encoded))
-    frozen_edit["result"]["value"]["update"]["value"]["frozen"]["value"][0][1] = {"kind": "json", "value": "b"}
-    with pytest.raises(ValueError, match="cannot take edited entries"):
-        codec.from_json(frozen_edit)
-    layered_edit = json.loads(json.dumps(encoded))
-    del layered_edit["result"]["value"]["update"]["value"]["layered"]["value"][0]
+    for name in ("frozen", "layered"):
+        edited = json.loads(json.dumps(encoded))
+        edited["result"]["value"]["update"]["value"][name]["value"][0][1] = {"kind": "json", "value": "c"}
+        with pytest.raises(ValueError, match="cannot take edited entries"):
+            codec.from_json(edited)
+    assert dict(layered) == {1: "a", 2: "b"}
+    lowered_edit = json.loads(json.dumps(encoded))
+    lowered_edit["result"]["value"]["update"]["value"]["lowered"]["value"].append(
+        [{"kind": "json", "value": "B"}, {"kind": "json", "value": 2}]
+    )
     with pytest.raises(ValueError, match="did not take the edited entries"):
-        codec.from_json(layered_edit)
+        codec.from_json(lowered_edit)
+    assert dict(lowered) == {"a": 1}
 
 
 def test_typed_values_whose_json_cannot_rebuild_them_stay_with_their_call() -> None:
@@ -1000,15 +1011,23 @@ def test_typed_values_whose_json_cannot_rebuild_them_stay_with_their_call() -> N
     class Row(NamedTuple):
         cells: dict[object, str]
 
+    class Cell(NamedTuple):
+        text: str
+
+    class Grid(NamedTuple):
+        cells: list[Cell]
+
     mixed = Mixed({1: "a", "1": "b"})
     row = Row({1: "a"})
+    grid = Grid([Cell("a")])
     message = ToolMessage(content="answer", tool_call_id="call-1")
-    result = Command(update={"messages": [message], "mixed": mixed, "ints": Ints({1: "a"}), "row": row})
+    result = Command(update={"messages": [message], "mixed": mixed, "ints": Ints({1: "a"}), "row": row, "grid": grid})
     codec = LangChainToolResultCodec("call-1")
     encoded = json.loads(json.dumps(codec.to_json(result)))
     update = encoded["result"]["value"]["update"]["value"]
     assert (update["mixed"]["kind"], update["mixed"]["type"]) == ("local", f"{__name__}.{Mixed.__qualname__}")
     assert (update["row"]["kind"], update["row"]["type"]) == ("local", f"{__name__}.{Row.__qualname__}")
+    assert (update["grid"]["kind"], update["grid"]["type"]) == ("local", f"{__name__}.{Grid.__qualname__}")
     assert update["ints"] == {"kind": "typed", "type": f"{__name__}.{Ints.__qualname__}", "value": {"1": "a"}}
     assert codec.from_json(encoded) is result
 
@@ -1019,3 +1038,4 @@ def test_typed_values_whose_json_cannot_rebuild_them_stay_with_their_call() -> N
     assert restored.update["ints"] == Ints({2: "b"})
     assert restored.update["mixed"] is mixed
     assert restored.update["row"] is row
+    assert restored.update["grid"] is grid

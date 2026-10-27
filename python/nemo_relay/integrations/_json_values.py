@@ -15,7 +15,7 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias, TypeGuard, cast
 
 from pydantic import TypeAdapter, ValidationError
-from pydantic.errors import PydanticSchemaGenerationError
+from pydantic.errors import PydanticUserError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 if TYPE_CHECKING:
@@ -179,7 +179,7 @@ def typed_json(value: object) -> Json | None:
             return None
         dumped: Json = to_jsonable_python(value, round_trip=True)
         rebuilt = TypeAdapter(type(value)).validate_python(dumped)
-    except (PydanticSchemaGenerationError, PydanticSerializationError, ValidationError):
+    except (PydanticSerializationError, PydanticUserError, ValidationError):
         return None
     if type(rebuilt) is not type(value) or rebuilt != value:
         return None
