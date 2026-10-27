@@ -20,6 +20,9 @@ Rebuild Rust applications and native or worker plugins with the updated
 dependencies. Update the OpenClaw plugin if you use it. Its Node.js binding
 dependency must match the plugin version.
 
+Node.js applications and package workflows now require Node.js 24.13.1 or later.
+Update the runtime before installing the new binding or OpenClaw plugin.
+
 For package names and installation commands, refer to
 [Installation](/getting-started/installation). For a managed daemon deployment,
 follow [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
@@ -69,7 +72,7 @@ priorities so policy checks run before cache lookups, including on cache hits.
 The LLM cache does not run when remote NeMo Guardrails handles a call. Refer to
 [Response Cache](/configure-plugins/adaptive/response-cache).
 
-#### Review Logging Overrides
+#### Review Operational Logging
 
 Logging overrides now change only the fields they set. For example,
 `NEMO_RELAY_LOG=info` keeps file sinks, rotation settings, and the flush interval
@@ -77,7 +80,37 @@ from TOML configuration. Review scripts that relied on an override to replace
 the full logging configuration. Refer to
 [Operational Logging](/reference/operational-logging#choose-a-configuration-source).
 
+File sinks remain required by default. Set `failure_policy = "optional"` on an
+individual sink to let Relay start even if it cannot open that file.
+If Relay cannot open the file, it skips that sink and does not retry automatically.
+Records for that sink are lost.
+Fix the file access problem, then restart Relay to try again. Refer to
+[File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
+
+#### Review Adaptive Hint Injection
+
+Adaptive hints now use the settings in `inject_header` and `inject_body_path`.
+Previously, Relay always added the header and wrote body hints to `nvext.agent_hints`.
+Check settings that disable the header or choose another body path.
+These settings can now change the request sent to the provider.
+
+Separate body path keys with dots, such as `nvext.agent_hints`.
+Do not leave empty keys, as in `nvext..agent_hints`.
+The component's validation policy controls how Relay reports invalid paths.
+Relay creates missing objects along the path. If a parent value is not an
+object, Relay leaves the body unchanged. If the path points to metadata,
+Relay keeps the caller's other metadata fields. Refer to
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints#fields).
+
 ### API and Plugin Compatibility
+
+#### Update Rust Logging Configuration
+
+If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
+field. Set it to `FileLogSinkFailurePolicy::Required` to keep the default
+behavior. You can also use `..Default::default()` to fill in missing fields.
+Existing TOML files need no changes to keep sinks required. Refer to
+[Rust Library API](/reference/operational-logging#rust-library-api).
 
 #### Configure Python Object Decoding
 
@@ -173,6 +206,23 @@ When a worker call ends, Relay cancels its active provider futures and streams.
 Check custom providers that need separate cleanup for background work. Refer to
 [Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
 
+#### Review Worker Message Limits
+
+Relay now limits the size of messages sent to and received from workers.
+The default is 4 MiB per message. Check large histories, tool results, and
+stream chunks against this limit. It does not limit the total stream size
+or change the model's context limit.
+
+Set the default with `load.max_message_bytes.default_bytes` in `relay-plugin.toml`.
+To set a limit for one callback, add its exact registration name under
+`load.max_message_bytes.by_name`. Host environment settings take priority over
+the manifest.
+
+Upgrade the host and worker SDKs together before setting limits by callback name.
+Reactivate the plugin after changing settings. Custom workers must include the
+callback name in gRPC metadata so Relay can apply its limit. Refer to
+[Configure Execution Message Size](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
+
 #### Handle Worker SDK Errors
 
 Update Rust matches that list every `WorkerSdkError` variant. Handle the new
@@ -217,6 +267,22 @@ identifiable information (PII) filtering.
 | PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration). |
 | Gemini usage and cost | Estimates now include thinking tokens and supported tool-use prompt tokens. Unknown or mixed tool evidence can leave cost unset. Do not treat missing cost as zero. Refer to [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics). |
 
+Review cost estimates that include cached input. Relay now bills uncached input,
+cache reads, and cache writes separately. It counts all input tokens when choosing
+a pricing tier. If token counts conflict, Relay does not estimate a cost.
+Refer to [Model Pricing](/configure-plugins/model-pricing).
+
+Remote ATIF uploads and local recovery files now use compact JSON, with fewer
+spaces and line breaks. Use a JSON parser to read these files.
+The new `include_observed_events` and `include_llm_requests` options both default
+to `true`. Set both to `false` to remove both copies of full requests.
+Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
+
+For Deep Agents, set `position="outer"` in `add_nemo_relay_integration` to
+record tool results after your middleware changes them. The default remains
+`"inner"`. It records results before your middleware changes them.
+Refer to [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
+
 Daemon workers now pass request codecs to telemetry sanitizers. For manual Rust
 calls, supply a codec with `LlmCallParams::builder().codec(...)`. PII rules that
 target normalized fields omit the telemetry payload if no suitable codec is
@@ -229,6 +295,30 @@ Prefer HTTPS. Use `insecure_http_hosts` only when a destination needs an explici
 exception to the plaintext transport checks.
 Refer to [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls)
 and [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
+
+Automatic OTLP trace, log, and metric exporters now require HTTPS for remote
+destinations, even without headers. Check your `OTEL_*` endpoint variables.
+To allow HTTP for a trusted host, list it in
+`NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`. This setting applies only to automatic
+exporters. Prefer HTTPS because HTTP sends data without encryption. Refer to
+[Automatic OpenTelemetry Configuration](/configure-plugins/observability/opentelemetry#automatic-opentelemetry-configuration).
+
+Make TLS files available when Relay checks plugins and when exporters start.
+Relay checks that it can read the PEM files and that client certificates match
+their keys. A fatal TLS error stops an HTTP trace exporter. Fix the TLS problem,
+then recreate the exporter. Traces created while it is stopped are lost.
+Calls to `force_flush()` and plugin cleanup can now report this delivery error.
+Refer to
+[Trace Batch Processor Configuration](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
+
+Run `nemo-relay doctor` after checking exporter settings. It now checks file-sink
+paths, disabled components and destinations, references to credentials, and
+PII settings. Checks for files and credential references also run with `--offline`.
+A passing HTTP check only means the collector answered. It does not prove that
+the collector accepts your credentials or trace data. Doctor does not test
+whether redaction removed sensitive data. It also does not read `header_file`
+values. Refer to
+[CLI Configuration and Exporter Checks](/nemo-relay-cli/basic-usage).
 
 ### Enable and Protect Diagnostics
 
