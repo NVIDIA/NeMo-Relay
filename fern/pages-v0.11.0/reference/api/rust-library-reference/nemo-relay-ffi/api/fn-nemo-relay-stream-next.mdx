@@ -17,7 +17,7 @@ Poll the next chunk from a streaming LLM response. Blocks until a chunk is avail
 
 - `1`: A chunk was written to `*out_chunk`. Caller must free with `nemo_relay_string_free`.
 - `0`: The stream is complete (no more chunks).
-- `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+- `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call from inside this stream's own collector or finalizer fails this way instead of waiting on itself.
 
 ## Safety
 

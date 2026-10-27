@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Stop a stream producer and wait for cleanup to complete.
 
-This operation is idempotent. It does not free `stream`; callers must still release the handle with [`nemo_relay_stream_free`](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-free).
+This operation is idempotent. It does not free `stream`; callers must still release the handle with [`nemo_relay_stream_free`](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-free). A call from inside this stream's own collector or finalizer requests cancellation and returns `Ok` at once. Cleanup finishes after the callback returns, and a later call reports its result.
 
 ## Safety
 

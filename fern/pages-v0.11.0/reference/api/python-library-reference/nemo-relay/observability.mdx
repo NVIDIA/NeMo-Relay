@@ -125,6 +125,20 @@ def to_dict() -> JsonObject
 
 Serialize this endpoint to the canonical plugin shape.
 
+### `OpenTelemetryFileSinkConfig`
+
+One local file destination for projected OTLP spans.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this file sink to the canonical plugin shape.
+
 ### `OpenTelemetrySignalEndpointConfig`
 
 One signal-specific OTLP destination for logs or metrics.

@@ -45,8 +45,8 @@ coding-agent turn scope.
 
 ATIF contains agent interaction steps, tool calls, and observations. Relay mark
 events are point-in-time telemetry rather than trajectory steps, so the ATIF
-exporter omits them from `steps`. Plugin-managed files retain raw events that
-were associated with the trajectory under `extra.observed_events`.
+exporter omits them from `steps`. By default, files managed by the plugin keep the raw events for each trajectory
+in `extra.observed_events`. Set `include_observed_events = false` to omit them.
 
 Plugin-managed files also expose selected correlation fields under
 `extra.nemo_relay`: `session_id` is the logical harness session ID,
@@ -71,6 +71,40 @@ The following table describes the top-level ATIF settings:
 | `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain the historical `{session_id}` placeholder, which expands to the trajectory scope UUID. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
 | `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
+| `include_observed_events` | `true` | Keep raw events in `extra.observed_events`. |
+| `include_llm_requests` | `true` | Keep full provider requests in each step's `extra.llm_request` field. This setting also applies to embedded subagent trajectories. |
+
+### Reduce Output Size
+
+Relay sends compact JSON to HTTP and S3 destinations. Compact JSON removes
+extra spaces and line breaks. Local exports use indented JSON when no remote
+storage is configured. If every remote destination fails, Relay saves the
+compact payload in a local recovery file.
+
+To reduce repeated conversation history, set both options to `false`:
+
+```toml
+[components.config.atif]
+enabled = true
+include_observed_events = false
+include_llm_requests = false
+```
+
+These settings apply to exports managed by the plugin. They apply to local
+files, remote uploads, and shutdown exports. Relay keeps step messages, tool
+calls, tool results, and metrics. It also keeps lineage and correlation fields
+and raw LLM responses.
+
+If you disable only `include_llm_requests`, full requests remain in
+`extra.observed_events`. Set both options to `false` to remove both copies.
+
+Full requests can include data that step messages omit. This data can include
+conversation history, tool definitions, system instructions, and images.
+Keep `include_llm_requests = true` if you need to rebuild the original requests.
+
+These settings reduce file and upload sizes. Relay still keeps full events in
+memory while it builds each trajectory. These settings do not affect standalone
+`AtifExporter` instances.
 
 ### Run-Scoped Session IDs
 
@@ -356,6 +390,10 @@ When present, a step's `metrics` can carry `prompt_tokens`, `completion_tokens`,
 [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
 for the full mapping, including how ATIF sources these values from the codec
 annotation and the raw payload.
+
+The following sections describe the default settings. If you set
+`include_llm_requests = false`, Relay omits `extra.llm_request` from user and
+agent steps.
 
 ATIF is a trajectory projection over NeMo Relay events. It should preserve the
 meaning of scope parentage, event UUIDs, codec annotations, and exporter-local

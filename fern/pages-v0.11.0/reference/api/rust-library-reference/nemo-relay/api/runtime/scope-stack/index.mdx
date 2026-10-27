@@ -3,7 +3,7 @@ title: "Module scope_stack"
 sidebar-title: "scope_stack"
 slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack"
 description: "Scope stack storage and propagation helpers."
-position: 65
+position: 69
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -36,9 +36,13 @@ The runtime tracks the current scope hierarchy through a shared [`ScopeStack`](/
 - [create_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-create-scope-stack): Create a new scope stack handle with an implicit root scope.
 - [create_scope_stack_from_propagation](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-create-scope-stack-from-propagation): Create an isolated scope stack rooted below a supplied propagation context.
 - [current_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack): Return the scope stack visible to the current execution context.
+- [current_scope_stack_override](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack-override): Return the scope stack override installed on the current thread.
 - [current_scope_stack_snapshot](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack-snapshot): Return detached identities from the calling context's explicitly active stack.
+- [explicit_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-explicit-thread-scope-stack): Return the explicitly installed thread-local scope stack.
 - [fork_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-fork-scope-stack): Create an isolated scope stack below the current causal parent.
+- [install_scope_stack_override](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-install-scope-stack-override): Install `handle` as the scope stack override and return the previous one.
 - [propagate_scope_to_thread](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-propagate-scope-to-thread): Capture the current scope stack handle for use in another thread.
+- [restore_scope_stack_override](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-restore-scope-stack-override): Restore an override returned by [`install_scope_stack_override`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-install-scope-stack-override).
 - [restore_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-restore-thread-scope-stack): Restore a previously captured thread-local scope stack binding.
 - [scope_stack_active](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-scope-stack-active): Report whether the current context has an explicitly active scope stack.
 - [set_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-set-thread-scope-stack): Install an explicit scope stack for the current thread.

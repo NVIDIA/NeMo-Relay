@@ -1,0 +1,50 @@
+---
+title: "Struct Stream Callback State"
+sidebar-title: "StreamCallbackState"
+description: "Failure and callback-thread state shared by a stream's callbacks and its `FfiStream`."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct StreamCallbackState { /* private fields */ }
+```
+
+Failure and callback-thread state shared by a stream's callbacks and its `FfiStream`.
+
+## Implementations
+
+### `impl StreamCallbackState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-streamcallbackstate\">StreamCallbackState</a>"}} /></pre>
+
+#### `record_failure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn record_failure(&amp;self, message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+Record a finalizer failure for `nemo_relay_stream_close` to report.
+
+#### `take_failure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn take_failure(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Take the recorded finalizer failure.
+
+#### `on_callback_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn on_callback_thread(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Whether the calling thread is inside this stream's collector or finalizer.
+
+## Trait Implementations
+
+### `impl Default for StreamCallbackState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-streamcallbackstate\">StreamCallbackState</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-streamcallbackstate\">StreamCallbackState</a>"}} /></pre>

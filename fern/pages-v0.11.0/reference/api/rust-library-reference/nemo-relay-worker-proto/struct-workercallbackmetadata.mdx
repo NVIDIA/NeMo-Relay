@@ -1,0 +1,40 @@
+---
+title: "Struct Worker Callback Metadata"
+sidebar-title: "WorkerCallbackMetadata"
+description: "Metadata interceptor for callback-scoped worker-to-host runtime calls."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct WorkerCallbackMetadata(pub <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;);"}} /></pre>
+
+Metadata interceptor for callback-scoped worker-to-host runtime calls.
+
+## Tuple Fields
+
+### `0: Option<String>`
+
+## Trait Implementations
+
+### `impl Clone for WorkerCallbackMetadata`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-workercallbackmetadata\">WorkerCallbackMetadata</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-workercallbackmetadata\">WorkerCallbackMetadata</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Interceptor for WorkerCallbackMetadata`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl Interceptor for <a href=\"struct-workercallbackmetadata\">WorkerCallbackMetadata</a>"}} /></pre>
+
+#### `call`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn call(&amp;mut self, request: Request&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Request&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;, Status&gt;"}} /></pre>

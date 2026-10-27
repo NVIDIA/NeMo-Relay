@@ -570,6 +570,11 @@ execution guardrails, these response changes apply:
   formatting, stream comments, heartbeats, event IDs, or retry hints.
 - Provider HTTP errors keep their status, supported headers, and body.
 
+If an execution intercept rejects a streaming request before the first chunk,
+Relay returns the corresponding HTTP error and plugin message. Errors after
+streaming begins end the response without a successful completion marker, such
+as `[DONE]` for OpenAI Chat Completions.
+
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit
 how long a stream can run after Relay sends its response headers.

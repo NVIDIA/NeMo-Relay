@@ -58,7 +58,7 @@ Emit a validated group of OpenTelemetry metric recording operations.
 ### `scope`
 
 ```python
-def scope(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, timestamp: datetime | None = None, end_timestamp: datetime | None = None) -> Iterator[ScopeHandle]
+def scope(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, timestamp: datetime | None = None, end_timestamp: datetime | None = None) -> Generator[ScopeHandle]
 ```
 
 Create a scope for the duration of a `with` block.

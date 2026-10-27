@@ -140,12 +140,12 @@ The automatic exporter is created in addition to Relay-configured endpoints.
 Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
 
-Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
+Remote automatic trace, log, and metric endpoints must use HTTPS, regardless
+of whether headers are configured. Plaintext HTTP is allowed
 only for localhost, a loopback IP address, or a host listed in the
 not-recommended
 [`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
-setting. Automatic log and metric headers have the same transport requirement,
-so credentials reach a remote plaintext endpoint only when you list its host.
+setting.
 To allow a host only for automatic exporters created from `OTEL_*` environment
 variables, set `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS` to a comma-separated list
 of bare hostnames or IP addresses, such as `collector.example,10.0.0.4`.
