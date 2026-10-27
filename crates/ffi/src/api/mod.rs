@@ -163,7 +163,7 @@ use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, Too
 use nemo_relay::api::runtime::{
     ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
     current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
-    scope_stack_active, set_thread_scope_stack, with_scope_stack,
+    scope_stack_active, set_thread_scope_stack,
 };
 use nemo_relay::api::scope as core_scope_api;
 use nemo_relay::api::scope::ScopeAttributes;
@@ -232,8 +232,7 @@ where
     T: Send,
     F: Future<Output = FlowResult<T>> + Send,
 {
-    let scope_stack = entry_scope_stack();
-    let future = TASK_SCOPE_STACK.scope(scope_stack.clone(), future);
+    let future = TASK_SCOPE_STACK.scope(entry_scope_stack(), future);
     let outcome = match tokio::runtime::Handle::try_current() {
         Err(_) => catch_unwind(AssertUnwindSafe(|| tokio_runtime().block_on(future))),
         Ok(handle)
@@ -244,11 +243,9 @@ where
                 tokio::task::block_in_place(|| tokio_runtime().block_on(future))
             }))
         }
-        Ok(_) => std::thread::scope(|scope| {
-            scope
-                .spawn(move || with_scope_stack(scope_stack, || tokio_runtime().block_on(future)))
-                .join()
-        }),
+        Ok(_) => {
+            std::thread::scope(|scope| scope.spawn(move || tokio_runtime().block_on(future)).join())
+        }
     };
     outcome.unwrap_or_else(|payload| Err(FlowError::Internal(panic_message(payload.as_ref()))))
 }
