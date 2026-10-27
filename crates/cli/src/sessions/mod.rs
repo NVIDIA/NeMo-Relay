@@ -2381,12 +2381,14 @@ impl Session {
         let agent_name = scope_agent_name(&parent)
             .or_else(|| explicit_agent_name(&metadata))
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| parent.name.clone());
+            .or_else(|| (self.agent_kind != AgentKind::Gateway).then(|| parent.name.clone()));
         let mut turn_metadata = merge_metadata(
             self.scope_metadata(metadata),
             json!({ "nemo_relay_scope_role": "turn", "subagent_id": id }),
         );
-        turn_metadata["gen_ai.agent.name"] = json!(agent_name);
+        if let Some(agent_name) = agent_name {
+            turn_metadata["gen_ai.agent.name"] = json!(agent_name);
+        }
         let scope = nemo_relay::api::runtime::with_scope_stack(stack, || {
             push_scope(
                 PushScopeParams::builder()

@@ -4642,6 +4642,80 @@ async fn codex_child_turn_and_tool_inherit_delegated_agent_identity() {
 }
 
 #[tokio::test]
+async fn gateway_child_turn_uses_only_explicit_agent_identity() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-unnamed-gateway-child-turn";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "work" }),
+                    metadata: json!({ "subagent_id": "worker" }),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "gateway-child".into(),
+                    agent_kind: AgentKind::Gateway,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "more work" }),
+                    metadata: json!({
+                        "subagent_id": "worker",
+                        "gen_ai.agent.name": "named-worker",
+                    }),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let child = spans
+        .iter()
+        .find(|span| {
+            span.name == "invoke_agent subagent:worker"
+                && !attr_map(&span.attributes).contains_key("gen_ai.conversation.id")
+        })
+        .expect("expected child Agent span");
+    let turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == child.span_context.span_id()
+                && !attr_map(&span.attributes).contains_key("gen_ai.agent.name")
+        })
+        .expect("expected unnamed child turn span");
+    assert_eq!(turn.name, "invoke_agent");
+    assert!(!attr_map(&turn.attributes).contains_key("gen_ai.agent.name"));
+    let named_turn = spans
+        .iter()
+        .find(|span| {
+            span.parent_span_id == child.span_context.span_id()
+                && attr_map(&span.attributes).get("gen_ai.agent.name")
+                    == Some(&"named-worker".to_string())
+        })
+        .expect("expected explicitly named child turn span");
+    assert_eq!(named_turn.name, "invoke_agent named-worker");
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
 async fn coding_agent_gen_ai_llm_spans_carry_conversation_identity() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "cli-coding-agent-gen-ai-conversation-test";
