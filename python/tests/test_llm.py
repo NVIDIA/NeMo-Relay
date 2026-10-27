@@ -1408,51 +1408,6 @@ class TestLLMInterceptsAsync:
 
         intercepts.deregister_llm_request("py_llm_req_mod")
 
-    @pytest.mark.parametrize("follows_request", [False, True])
-    async def test_model_name_follows_request_only_when_asked(
-        self, subscribed_events: list[Event], follows_request: bool
-    ) -> None:
-        def rename(name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None) -> LLMRequestInterceptOutcome:
-            assert annotated is not None
-            annotated.model = "edited-model"
-            return LLMRequestInterceptOutcome(request, annotated)
-
-        async def provider(_request: LLMRequest) -> AsyncIterator[Json]:
-            yield {"ok": True}
-
-        codec = OpenAIChatCodec()
-        intercepts.register_llm_request("py_llm_model_name_rename", 1, False, rename)
-        try:
-            await llm.execute(
-                "py_llm_model_name",
-                make_request(),
-                lambda _request: {"ok": True},
-                model_name="given-model",
-                model_name_follows_request=follows_request,
-                codec=codec,
-            )
-            stream = await llm.stream_execute(
-                "py_llm_model_name_stream",
-                make_request(),
-                provider,
-                lambda _chunk: None,
-                lambda: {"ok": True},
-                model_name="given-model",
-                model_name_follows_request=follows_request,
-                codec=codec,
-            )
-            assert [chunk async for chunk in stream] == [{"ok": True}]
-            await subscribers.flush_async()
-        finally:
-            intercepts.deregister_llm_request("py_llm_model_name_rename")
-
-        expected = "edited-model" if follows_request else "given-model"
-        for name in ("py_llm_model_name", "py_llm_model_name_stream"):
-            for scope_category in ("start", "end"):
-                profile = _llm_event(subscribed_events, name, scope_category).category_profile
-                assert profile is not None
-                assert profile["model_name"] == expected
-
     async def test_execution_intercept_replaces(self) -> None:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",

@@ -212,7 +212,6 @@ def execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
-    model_name_follows_request: bool = False,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
 ) -> Awaitable[Json]:
@@ -240,9 +239,6 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         model_name: Optional normalized model name to record separately from the
             provider-specific request payload.
-        model_name_follows_request: Record the model the request names after
-            request intercepts run. Uses ``model_name`` when the request names
-            none.
         codec: Optional request codec used to provide
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
@@ -297,7 +293,6 @@ def execute(
         data=data,
         metadata=metadata,
         model_name=model_name,
-        model_name_follows_request=model_name_follows_request,
         codec=codec,
         response_codec=response_codec,
     )
@@ -315,7 +310,6 @@ def stream_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     model_name: str | None = None,
-    model_name_follows_request: bool = False,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
 ) -> Awaitable[LlmStream]:
@@ -337,9 +331,6 @@ def stream_execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         model_name: Optional normalized model name to record separately from the
             provider-specific request payload.
-        model_name_follows_request: Record the model the request names after
-            request intercepts run. Uses ``model_name`` when the request names
-            none.
         codec: Optional request codec used to provide
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
@@ -416,7 +407,6 @@ def stream_execute(
         data=data,
         metadata=metadata,
         model_name=model_name,
-        model_name_follows_request=model_name_follows_request,
         codec=codec,
         response_codec=response_codec,
     )

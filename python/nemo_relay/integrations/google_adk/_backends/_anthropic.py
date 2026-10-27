@@ -119,13 +119,7 @@ async def anthropic_backend(model: AnthropicLlm, request_model: str | None) -> B
     """
     client = await model._get_anthropic_client()
     swap_class(client.messages, _messages_methods)
-    return Backend(
-        _provider(client),
-        ANTHROPIC_CODEC,
-        client_headers=True,
-        model=request_model or model.model,
-        follows_request=True,
-    )
+    return Backend(_provider(client), ANTHROPIC_CODEC, client_headers=True, model=request_model or model.model)
 
 
 def _provider(client: AsyncAnthropic | AsyncAnthropicVertex) -> _Provider:

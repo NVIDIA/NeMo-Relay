@@ -55,7 +55,6 @@ class Backend(NamedTuple):
         "True when request headers travel as client extra headers, not ADK's HTTP options.",
     ]
     model: Annotated[str | None, "LLM scope model name: model the class calls, or model's own name for unknown model."]
-    follows_request: Annotated[bool, "True when the class calls the model the request specifies."]
 
 
 def usage_fields(usage: BaseModel) -> JsonObject:

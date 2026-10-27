@@ -1243,8 +1243,6 @@ fn llm_call_end(
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
-///     model_name_follows_request: Record the model the request names after request
-///         intercepts run. Uses ``model_name`` when the request names none.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
@@ -1264,10 +1262,9 @@ fn llm_call_end(
     data: "object | None"=None,
     metadata: "object | None"=None,
     model_name: "str | None"=None,
-    model_name_follows_request: "bool"=false,
     codec: "object | None"=None,
     response_codec: "object | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, model_name_follows_request: bool = False, codec: object | None = None, response_codec: object | None = None) -> object")]
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_call_execute<'py>(
     py: Python<'py>,
@@ -1279,7 +1276,6 @@ fn llm_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
-    model_name_follows_request: bool,
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -1312,7 +1308,6 @@ fn llm_call_execute<'py>(
                         .data_opt(data_json)
                         .metadata_opt(metadata_json)
                         .model_name_opt(model_name)
-                        .model_name_follows_request(model_name_follows_request)
                         .codec_opt(codec_arc)
                         .response_codec_opt(response_codec_arc)
                         .build();
@@ -1351,8 +1346,6 @@ fn llm_call_execute<'py>(
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
-///     model_name_follows_request: Record the model the request names after request
-///         intercepts run. Uses ``model_name`` when the request names none.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
@@ -1375,10 +1368,9 @@ fn llm_call_execute<'py>(
     data: "object | None"=None,
     metadata: "object | None"=None,
     model_name: "str | None"=None,
-    model_name_follows_request: "bool"=false,
     codec: "object | None"=None,
     response_codec: "object | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, model_name_follows_request: bool = False, codec: object | None = None, response_codec: object | None = None) -> object")]
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -1392,7 +1384,6 @@ fn llm_stream_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     model_name: Option<String>,
-    model_name_follows_request: bool,
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -1433,7 +1424,6 @@ fn llm_stream_call_execute<'py>(
                             .data_opt(data_json)
                             .metadata_opt(metadata_json)
                             .model_name_opt(model_name)
-                            .model_name_follows_request(model_name_follows_request)
                             .codec_opt(codec_arc)
                             .response_codec_opt(response_codec_arc)
                             .build();

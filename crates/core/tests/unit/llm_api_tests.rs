@@ -13,18 +13,16 @@ use tokio_stream::StreamExt;
 
 use super::{
     CreateLlmHandleParams, LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
-    LlmRequest, LlmRequestInterceptOutcome, LlmStreamCallExecuteParams, create_llm_handle,
-    emit_llm_start, emit_optimization_marks_with, enqueue_optimization_marks, llm_call,
-    llm_call_end, llm_call_execute, llm_stream_call_execute,
-    project_llm_request_to_current_user_turn, sanitize_context_for_request_codec,
-    sanitize_context_for_response_codec,
+    LlmRequest, LlmStreamCallExecuteParams, create_llm_handle, emit_llm_start,
+    emit_optimization_marks_with, enqueue_optimization_marks, llm_call, llm_call_end,
+    llm_call_execute, llm_stream_call_execute, project_llm_request_to_current_user_turn,
+    sanitize_context_for_request_codec, sanitize_context_for_response_codec,
 };
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::registry::{
-    deregister_llm_execution_intercept, deregister_llm_request_intercept,
-    deregister_llm_stream_execution_intercept, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_stream_execution_intercept,
+    deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
+    register_llm_execution_intercept, register_llm_stream_execution_intercept,
 };
 use crate::api::registry::{
     deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
@@ -2805,97 +2803,4 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
             .unwrap()
             .contains("collector boom")
     );
-}
-
-#[test]
-fn recorded_model_name_follows_the_request_only_when_asked() {
-    let _guard = lock_global_runtime();
-    reset_global();
-    set_thread_scope_stack(create_scope_stack());
-
-    register_llm_request_intercept(
-        "model-name-rename",
-        1,
-        false,
-        Arc::new(|_name, request, annotated| {
-            Box::pin(async move {
-                let mut annotated = annotated.expect("codec annotates the request");
-                if annotated.model.is_some() {
-                    annotated.model = Some("edited-model".into());
-                }
-                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
-            })
-        }),
-    )
-    .unwrap();
-    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
-    let event_capture = Arc::clone(&events);
-    register_subscriber(
-        "model-name-rename",
-        Arc::new(move |event| event_capture.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    let unnamed = LlmRequest {
-        headers: serde_json::Map::new(),
-        content: json!({"messages": []}),
-    };
-    let cases = [
-        ("model-name-given", request(), false, "given-model"),
-        ("model-name-follows", request(), true, "edited-model"),
-        ("model-name-follows-unnamed", unnamed, true, "given-model"),
-    ];
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime.block_on(async {
-        for (name, request, follows_request, _) in cases.clone() {
-            llm_call_execute(
-                LlmCallExecuteParams::builder()
-                    .name(name)
-                    .request(request.clone())
-                    .func(Arc::new(|_| Box::pin(async { Ok(json!({"ok": true})) })))
-                    .model_name("given-model")
-                    .model_name_follows_request(follows_request)
-                    .codec(Arc::new(OpenAIChatCodec))
-                    .build(),
-            )
-            .await
-            .unwrap();
-            let mut stream = llm_stream_call_execute(
-                LlmStreamCallExecuteParams::builder()
-                    .name(format!("{name}-stream"))
-                    .request(request)
-                    .func(Arc::new(|_| {
-                        Box::pin(async {
-                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
-                                json!({"ok": true}),
-                            )])))
-                        })
-                    }))
-                    .collector(Box::new(|_chunk| Ok(())))
-                    .finalizer(Box::new(|| json!({"ok": true})))
-                    .model_name("given-model")
-                    .model_name_follows_request(follows_request)
-                    .codec(Arc::new(OpenAIChatCodec))
-                    .build(),
-            )
-            .await
-            .unwrap();
-            while stream.next().await.is_some() {}
-        }
-    });
-    flush_subscribers().unwrap();
-
-    let events = events.lock().unwrap();
-    for (name, _, _, expected) in cases {
-        for name in [name.to_string(), format!("{name}-stream")] {
-            let recorded = events
-                .iter()
-                .filter(|event| event.name() == name && event.scope_category().is_some())
-                .map(Event::model_name)
-                .collect::<Vec<_>>();
-            assert_eq!(recorded, vec![Some(expected); 2], "{name}");
-        }
-    }
-    assert!(deregister_llm_request_intercept("model-name-rename").unwrap());
-    assert!(deregister_subscriber("model-name-rename").unwrap());
 }
