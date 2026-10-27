@@ -1914,6 +1914,82 @@ func TestLlmStreamCallbacksKeepScopeLocalGuardrails(t *testing.T) {
 	})
 }
 
+func TestLlmStreamCallbacksHonorExplicitScopeStackRun(t *testing.T) {
+	other, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf(scopeLocalNewScopeStackFailed, err)
+	}
+	defer other.Close()
+	var otherScope *ScopeHandle
+	other.Run(func() {
+		otherScope, err = PushScope("explicit_other_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf(scopeLocalPushScopeFailed, err)
+		}
+		reason := "explicit stack block"
+		if err := ScopeRegisterToolConditionalExecutionGuardrail(otherScope.UUID(), "explicit_other_gate", 1,
+			func(string, json.RawMessage) *string { return &reason },
+		); err != nil {
+			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
+		}
+	})
+	defer other.Run(func() { PopScope(otherScope) })
+
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf(scopeLocalNewScopeStackFailed, err)
+	}
+	defer stack.Close()
+	stack.Run(func() {
+		handle, err := PushScope("explicit_stream_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf(scopeLocalPushScopeFailed, err)
+		}
+		defer PopScope(handle)
+		reason := "stream stack block"
+		if err := ScopeRegisterToolConditionalExecutionGuardrail(handle.UUID(), "explicit_stream_gate", 1,
+			func(string, json.RawMessage) *string { return &reason },
+		); err != nil {
+			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
+		}
+
+		results := make(chan error, 4)
+		probe := func() {
+			other.Run(func() {
+				results <- ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
+			})
+			results <- ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
+		}
+		stream, err := LlmStreamCallExecute("explicit_stack_llm", makeRequest(),
+			func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
+			func(json.RawMessage) { probe() },
+			func() string {
+				probe()
+				return `{}`
+			},
+		)
+		if err != nil {
+			t.Fatalf(llmStreamCallExecuteFailed, err)
+		}
+		drainStream(t, stream)
+		if err := stream.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+		for _, callback := range []string{"collector", "finalizer"} {
+			for _, want := range []string{"explicit stack block", "stream stack block"} {
+				select {
+				case got := <-results:
+					if got == nil || !strings.Contains(got.Error(), want) {
+						t.Fatalf("nested call from the %s = %v, want %q", callback, got, want)
+					}
+				default:
+					t.Fatalf("the %s did not run before Close returned", callback)
+				}
+			}
+		}
+	})
+}
+
 func TestLlmStreamCallbacksWaitForFirstNext(t *testing.T) {
 	collected := make(chan struct{}, 1)
 	stream, err := LlmStreamCallExecute("callbacks_wait_llm", makeRequest(),

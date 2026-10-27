@@ -4373,6 +4373,236 @@ fn stream_callbacks_keep_the_scope_stack_of_their_call() {
     }
 }
 
+static EXPLICIT_OTHER_STACK: std::sync::atomic::AtomicPtr<FfiScopeStack> =
+    std::sync::atomic::AtomicPtr::new(ptr::null_mut());
+static EXPLICIT_RESULTS: Mutex<Vec<(NemoRelayStatus, String)>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn tool_reject_other_cb(
+    _user_data: *mut libc::c_void,
+    _name: *const c_char,
+    _args_json: *const c_char,
+) -> *mut c_char {
+    CString::new("blocked by the explicit stack")
+        .unwrap()
+        .into_raw()
+}
+
+fn last_error_text() -> String {
+    let pointer = nemo_relay_last_error();
+    if pointer.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(pointer) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn record_explicit_tool_conditional_execution() {
+    let tool = cstring("explicit-stream-tool");
+    let args = cstring("{}");
+    let status = unsafe { nemo_relay_tool_conditional_execution(tool.as_ptr(), args.as_ptr()) };
+    let message = last_error_text();
+    lock_unpoisoned(&EXPLICIT_RESULTS).push((status, message));
+}
+
+fn record_inside_other_stack_then_inherited() {
+    let other = EXPLICIT_OTHER_STACK.load(std::sync::atomic::Ordering::SeqCst);
+    let mut binding = ptr::null_mut();
+    let captured = unsafe { nemo_relay_scope_stack_capture_thread(&mut binding) };
+    if captured != NemoRelayStatus::Ok {
+        lock_unpoisoned(&EXPLICIT_RESULTS).push((captured, "capture failed".to_string()));
+        return;
+    }
+    let bound = unsafe { nemo_relay_scope_stack_set_thread(other) };
+    if bound != NemoRelayStatus::Ok {
+        lock_unpoisoned(&EXPLICIT_RESULTS).push((bound, "bind failed".to_string()));
+        return;
+    }
+    record_explicit_tool_conditional_execution();
+    let restored = unsafe { nemo_relay_scope_stack_restore_thread(binding) };
+    if restored != NemoRelayStatus::Ok {
+        lock_unpoisoned(&EXPLICIT_RESULTS).push((restored, "restore failed".to_string()));
+        return;
+    }
+    record_explicit_tool_conditional_execution();
+}
+
+unsafe extern "C" fn explicit_collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    _chunk_json: *const c_char,
+) -> i32 {
+    record_inside_other_stack_then_inherited();
+    0
+}
+
+unsafe extern "C" fn explicit_finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
+    record_inside_other_stack_then_inherited();
+    CString::new("{}").unwrap().into_raw()
+}
+
+#[test]
+fn stream_callbacks_honor_an_explicit_thread_binding() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    lock_unpoisoned(&EXPLICIT_RESULTS).clear();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("explicit-stream-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Function,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let gate = cstring("explicit-stream-gate");
+        assert_status!(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
+                scope_uuid.as_ptr(),
+                gate.as_ptr(),
+                1,
+                tool_reject_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut other = ptr::null_mut();
+        assert_status!(
+            nemo_relay_scope_stack_create(&mut other),
+            NemoRelayStatus::Ok
+        );
+        EXPLICIT_OTHER_STACK.store(other, std::sync::atomic::Ordering::SeqCst);
+        let mut binding = ptr::null_mut();
+        assert_status!(
+            nemo_relay_scope_stack_capture_thread(&mut binding),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_scope_stack_set_thread(other),
+            NemoRelayStatus::Ok
+        );
+        let other_scope_name = cstring("explicit-other-scope");
+        let mut other_scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                other_scope_name.as_ptr(),
+                NemoRelayScopeType::Function,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut other_scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let other_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(other_scope)).unwrap());
+        let other_gate = cstring("explicit-other-gate");
+        assert_status!(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
+                other_uuid.as_ptr(),
+                other_gate.as_ptr(),
+                1,
+                tool_reject_other_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_scope_stack_restore_thread(binding),
+            NemoRelayStatus::Ok
+        );
+
+        let name = cstring("explicit-stream");
+        let request = cstring(&json!({"headers": {}, "content": {"model": "m"}}).to_string());
+        let mut stream = ptr::null_mut();
+        assert_status!(
+            nemo_relay_llm_stream_call_execute(
+                name.as_ptr(),
+                request.as_ptr(),
+                llm_exec_cb,
+                ptr::null_mut(),
+                None,
+                Some(explicit_collector_cb),
+                Some(explicit_finalizer_cb),
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                None,
+                None,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                &mut stream,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
+        nemo_relay_string_free(chunk);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
+        nemo_relay_stream_free(stream);
+
+        let results = lock_unpoisoned(&EXPLICIT_RESULTS).clone();
+        let statuses: Vec<NemoRelayStatus> = results.iter().map(|(status, _)| *status).collect();
+        assert_eq!(statuses, vec![NemoRelayStatus::GuardrailRejected; 4]);
+        for (index, (_, message)) in results.iter().enumerate() {
+            let expected = if index % 2 == 0 {
+                "blocked by the explicit stack"
+            } else {
+                ": blocked"
+            };
+            assert!(
+                message.ends_with(expected),
+                "result {index} = {message:?}, want a rejection ending with {expected:?}"
+            );
+        }
+
+        let mut binding = ptr::null_mut();
+        assert_status!(
+            nemo_relay_scope_stack_capture_thread(&mut binding),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_scope_stack_set_thread(other),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(other_scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_scope_stack_restore_thread(binding),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(other_scope);
+        nemo_relay_scope_stack_free(other);
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
 static REENTRANT_STREAM: std::sync::atomic::AtomicPtr<FfiStream> =
     std::sync::atomic::AtomicPtr::new(ptr::null_mut());
 static REENTRANT_RESULTS: Mutex<Option<(i32, String, NemoRelayStatus)>> = Mutex::new(None);

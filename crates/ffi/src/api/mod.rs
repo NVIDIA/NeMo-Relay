@@ -161,8 +161,9 @@ use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack, current_scope_stack,
-    restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack, with_scope_stack,
+    ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
+    current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
+    scope_stack_active, set_thread_scope_stack, with_scope_stack,
 };
 use nemo_relay::api::scope as core_scope_api;
 use nemo_relay::api::scope::ScopeAttributes;
@@ -221,12 +222,18 @@ fn tokio_runtime() -> &'static Runtime {
     })
 }
 
+pub(crate) fn entry_scope_stack() -> ScopeStackHandle {
+    explicit_thread_scope_stack().unwrap_or_else(current_scope_stack)
+}
+
 /// Run a runtime future from an FFI entry point.
 pub(crate) fn block_on<T, F>(future: F) -> FlowResult<T>
 where
     T: Send,
     F: Future<Output = FlowResult<T>> + Send,
 {
+    let scope_stack = entry_scope_stack();
+    let future = TASK_SCOPE_STACK.scope(scope_stack.clone(), future);
     let outcome = match tokio::runtime::Handle::try_current() {
         Err(_) => catch_unwind(AssertUnwindSafe(|| tokio_runtime().block_on(future))),
         Ok(handle)
@@ -237,16 +244,11 @@ where
                 tokio::task::block_in_place(|| tokio_runtime().block_on(future))
             }))
         }
-        Ok(_) => {
-            let scope_stack = current_scope_stack();
-            std::thread::scope(|scope| {
-                scope
-                    .spawn(move || {
-                        with_scope_stack(scope_stack, || tokio_runtime().block_on(future))
-                    })
-                    .join()
-            })
-        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(move || with_scope_stack(scope_stack, || tokio_runtime().block_on(future)))
+                .join()
+        }),
     };
     outcome.unwrap_or_else(|payload| Err(FlowError::Internal(panic_message(payload.as_ref()))))
 }

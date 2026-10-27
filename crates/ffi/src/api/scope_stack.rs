@@ -30,7 +30,11 @@ pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
         return NemoRelayStatus::NullPointer;
     }
     unsafe { *out = std::ptr::null_mut() };
-    let result = nemo_relay::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
+    let snapshot = match nemo_relay::api::runtime::explicit_thread_scope_stack() {
+        Some(stack) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
+        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+    };
+    let result = snapshot.and_then(|snapshot| {
         snapshot
             .map(|snapshot| {
                 serde_json::to_string(&snapshot)

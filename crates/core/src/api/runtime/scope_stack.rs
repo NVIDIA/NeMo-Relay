@@ -1262,14 +1262,17 @@ pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot};
 /// or explicit thread binding exists. Includes implicit and synthetic entries.
 /// Lock poisoning returns an error; no live handles escape the read.
 pub fn current_scope_stack_snapshot() -> Result<Option<ScopeStackSnapshot>> {
-    let stack = current_context_scope_stack().or_else(|| {
-        THREAD_SCOPE_STACK_EXPLICIT.with(|explicit| {
-            explicit
-                .get()
-                .then(|| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
-        })
-    });
+    let stack = current_context_scope_stack().or_else(explicit_thread_scope_stack);
     stack.as_ref().map(scope_stack_snapshot).transpose()
+}
+
+/// Return the explicitly installed thread-local scope stack.
+pub fn explicit_thread_scope_stack() -> Option<ScopeStackHandle> {
+    THREAD_SCOPE_STACK_EXPLICIT.with(|explicit| {
+        explicit
+            .get()
+            .then(|| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
+    })
 }
 
 /// Project a selected binding to detached values under a single read lock.

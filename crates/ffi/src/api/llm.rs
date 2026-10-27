@@ -7,7 +7,7 @@ use super::{
     LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn,
     NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmExecCb,
     NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
-    clear_last_error, core_llm_api, current_scope_stack, json_to_c_string, set_last_error,
+    clear_last_error, core_llm_api, entry_scope_stack, json_to_c_string, set_last_error,
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
     wrap_llm_exec_fn, wrap_llm_stream_exec_fn, wrap_stream_callbacks,
 };
@@ -548,8 +548,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let scope_stack = current_scope_stack();
-    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(async {
         core_llm_api::llm_call_execute(
             core_llm_api::LlmCallExecuteParams::builder()
                 .name(parsed.name)
@@ -565,7 +564,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
                 .build(),
         )
         .await
-    }));
+    });
 
     match result {
         Ok(json) => {
@@ -734,8 +733,8 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
 
     let default_fn: LlmStreamExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let scope_stack = current_scope_stack();
-    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack.clone(), async {
+    let scope_stack = entry_scope_stack();
+    let result = super::block_on(async {
         core_llm_api::llm_stream_call_execute(
             core_llm_api::LlmStreamCallExecuteParams::builder()
                 .name(parsed.name)
@@ -753,7 +752,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                 .build(),
         )
         .await
-    }));
+    });
 
     match result {
         Ok(rust_stream) => {
