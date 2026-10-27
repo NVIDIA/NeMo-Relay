@@ -95,7 +95,7 @@ def gemini_backend(model: Gemini, request_model: str | None) -> Backend:
     if not model.use_interactions_api:
         swap_class(client.aio.models, _models_methods)
     provider = "vertex_ai" if client.vertexai else "gemini"
-    return Backend(provider, GEMINI_CODEC, client_headers=False, model=request_model)
+    return Backend(provider, GEMINI_CODEC, client_headers=False, model=request_model, follows_request=True)
 
 
 def _models_methods(cls: type[AsyncModels]) -> Methods[AsyncModels]:

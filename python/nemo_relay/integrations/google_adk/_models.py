@@ -208,6 +208,7 @@ async def _run(
             handle=parent,
             metadata=metadata,
             model_name=backend.model,
+            model_name_follows_request=backend.follows_request,
             codec=backend.codec,
             response_codec=backend.codec,
         )
@@ -225,6 +226,7 @@ async def _run(
         attributes=LLMAttributes(LLMAttributes.STREAMING),
         metadata=metadata,
         model_name=backend.model,
+        model_name_follows_request=backend.follows_request,
         codec=backend.codec,
         response_codec=backend.codec,
     )

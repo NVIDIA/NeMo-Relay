@@ -262,6 +262,9 @@ pub struct LlmCallExecuteParams {
     /// Optional normalized model name for observability output.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
+    /// Record optional model the request names after request intercepts run.
+    #[builder(default)]
+    pub model_name_follows_request: bool,
     /// Optional request codec used to produce annotated request data.
     #[builder(default)]
     pub codec: Option<Arc<dyn LlmCodec>>,
@@ -307,6 +310,9 @@ pub struct LlmStreamCallExecuteParams {
     /// Optional normalized model name for observability output.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
+    /// Record optional model the request names after request intercepts run.
+    #[builder(default)]
+    pub model_name_follows_request: bool,
     /// Optional request codec used to produce annotated request data.
     #[builder(default)]
     pub codec: Option<Arc<dyn LlmCodec>>,
@@ -350,6 +356,19 @@ fn create_llm_handle(params: CreateLlmHandleParams<'_>) -> Result<LlmHandle> {
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
     Ok(state.create_llm_handle(params))
+}
+
+fn recorded_model_name(
+    model_name: Option<String>,
+    follows_request: bool,
+    annotated_request: Option<&AnnotatedLlmRequest>,
+) -> Option<String> {
+    if !follows_request {
+        return model_name;
+    }
+    annotated_request
+        .and_then(|annotated| annotated.model.clone())
+        .or(model_name)
 }
 
 fn request_turn_projection_needed<T>(
@@ -1637,6 +1656,8 @@ impl Drop for ManagedLlmCompletion {
 ///   may be used on failure end events that have no output payload.
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 /// - `model_name`: Optional normalized model name for observability output.
+/// - `model_name_follows_request`: Record the model the request names after
+///   request intercepts run. Uses `model_name` when the request names none.
 /// - `codec`: Optional request codec used to produce annotated request data for
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
@@ -1670,6 +1691,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         data,
         metadata,
         model_name,
+        model_name_follows_request,
         codec,
         response_codec,
     } = params;
@@ -1753,7 +1775,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .attributes(attributes)
             .data_opt(data.clone())
             .metadata_opt(metadata.clone())
-            .model_name_opt(model_name)
+            .model_name_opt(recorded_model_name(
+                model_name,
+                model_name_follows_request,
+                annotated_request.as_deref(),
+            ))
             .build(),
     )?;
     handle.optimization_recorder = optimization_recorder;
@@ -1870,6 +1896,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 ///   may be used on failure end events that have no output payload.
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 /// - `model_name`: Optional normalized model name for observability output.
+/// - `model_name_follows_request`: Record the model the request names after
+///   request intercepts run. Uses `model_name` when the request names none.
 /// - `codec`: Optional request codec used to produce annotated request data for
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
@@ -1929,6 +1957,7 @@ async fn llm_stream_call_execute_inner(
         data,
         metadata,
         model_name,
+        model_name_follows_request,
         codec,
         response_codec,
     } = params;
@@ -2012,7 +2041,11 @@ async fn llm_stream_call_execute_inner(
             .attributes(attributes)
             .data_opt(data.clone())
             .metadata_opt(metadata.clone())
-            .model_name_opt(model_name)
+            .model_name_opt(recorded_model_name(
+                model_name,
+                model_name_follows_request,
+                annotated_request.as_deref(),
+            ))
             .build(),
     )?;
     handle.optimization_recorder = optimization_recorder;

@@ -194,7 +194,7 @@ async def lite_llm_backend(model: LiteLlm, request_model: str | None) -> Backend
     swap_class(model.llm_client, _client_methods)
     route = await asyncio.to_thread(_route, call)
     provider = type(model).__name__ if route is None else route
-    return Backend(provider, _LITE_LLM_CODEC, client_headers=False, model=call.model)
+    return Backend(provider, _LITE_LLM_CODEC, client_headers=False, model=call.model, follows_request=True)
 
 
 @dataclass(frozen=True, slots=True)

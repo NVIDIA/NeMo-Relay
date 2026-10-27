@@ -2775,34 +2775,34 @@ async def test_relay_request_headers_reach_models_whose_client_takes_them(
     assert_balanced(subscribed_events)
 
 
-@pytest.mark.parametrize(
-    ("build", "reply", "requested", "recorded", "sent"),
-    [
-        pytest.param(
-            _anthropic_model,
-            _claude_reply,
-            "claude-haiku-4-5-20251001",
-            "claude-haiku-4-5-20251001",
-            "claude-haiku-4-5-20251001",
-            id="anthropic",
-        ),
-        pytest.param(_openai_chat_model, _chat_reply, "gpt-4o-mini", "gpt-4o", "gpt-4o", id="openai_chat"),
-        pytest.param(
-            _openai_responses_model, _responses_text_reply, "gpt-5-mini", "gpt-5-mini", "gpt-5-mini", id="responses"
-        ),
-        pytest.param(
-            _apigee_chat_model,
-            _chat_reply,
-            "apigee/openai/gpt-4o-mini",
-            "apigee/openai/gpt-4o-mini",
-            "gpt-4o-mini",
-            id="apigee_chat",
-        ),
-        pytest.param(
-            _lite_llm_model, _chat_reply, "openai/gpt-4o-mini", "openai/gpt-4o-mini", "gpt-4o-mini", id="lite_llm"
-        ),
-    ],
-)
+_MODEL_EDITS: Final[Annotated[list[object], "Model class, reply, requested model, recorded model, sent model."]] = [
+    pytest.param(
+        _anthropic_model,
+        _claude_reply,
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001",
+        id="anthropic",
+    ),
+    pytest.param(_openai_chat_model, _chat_reply, "gpt-4o-mini", "gpt-4o", "gpt-4o", id="openai_chat"),
+    pytest.param(
+        _openai_responses_model, _responses_text_reply, "gpt-5-mini", "gpt-5-mini", "gpt-5-mini", id="responses"
+    ),
+    pytest.param(
+        _apigee_chat_model,
+        _chat_reply,
+        "apigee/openai/gpt-4o-mini",
+        "apigee/openai/gpt-4o-mini",
+        "gpt-4o-mini",
+        id="apigee_chat",
+    ),
+    pytest.param(
+        _lite_llm_model, _chat_reply, "openai/gpt-4o-mini", "openai/gpt-4o-mini", "gpt-4o-mini", id="lite_llm"
+    ),
+]
+
+
+@pytest.mark.parametrize(("build", "reply", "requested", "recorded", "sent"), _MODEL_EDITS)
 async def test_a_call_is_recorded_with_the_model_its_class_reads_after_a_callback_requests_another(
     build: Callable[[_Canned], BaseLlm],
     reply: Callable[[], httpx.Response],
@@ -2821,6 +2821,28 @@ async def test_a_call_is_recorded_with_the_model_its_class_reads_after_a_callbac
     agent = LlmAgent(name="weather_agent", model=build(canned), instruction="Be brief.", before_model_callback=request)
 
     adk_events = await run_recorded(agent)
+
+    assert final_text(adk_events) == "Sunny."
+    assert canned.requests[0]["model"] == sent
+    (start,) = starts(subscribed_events, "llm")
+    assert present(start.category_profile)["model_name"] == recorded
+    assert_balanced(subscribed_events)
+
+
+@pytest.mark.parametrize(("build", "reply", "requested", "recorded", "sent"), _MODEL_EDITS)
+async def test_a_call_is_recorded_with_the_model_its_class_reads_after_an_intercept_requests_another(
+    build: Callable[[_Canned], BaseLlm],
+    reply: Callable[[], httpx.Response],
+    requested: str,
+    recorded: str,
+    sent: str,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+
+    canned = _Canned([reply()])
+    with llm_request_intercept(_renaming(requested)):
+        adk_events = await run_recorded(LlmAgent(name="weather_agent", model=build(canned), instruction="Be brief."))
 
     assert final_text(adk_events) == "Sunny."
     assert canned.requests[0]["model"] == sent

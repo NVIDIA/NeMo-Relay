@@ -52,7 +52,7 @@ async def backend_of(model: BaseLlm, request_model: str | None) -> Backend:
     if isinstance(model, Gemini):
         return gemini_backend(model, request_model)
     if not any(_defined_in(cls, package) for package in _PROVIDER_PACKAGES):
-        return Backend(cls.__name__, GEMINI_CODEC, client_headers=False, model=model.model)
+        return Backend(cls.__name__, GEMINI_CODEC, client_headers=False, model=model.model, follows_request=False)
     if _defined_in(cls, adk_openai.__name__):
         if find_spec("openai") is not None:
             from google.adk.integrations.openai import OpenAILlm, OpenAIResponsesLlm

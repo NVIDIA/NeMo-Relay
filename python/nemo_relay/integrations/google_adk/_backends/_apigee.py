@@ -34,7 +34,7 @@ def apigee_backend(model: ApigeeLlm, request_model: str | None) -> Backend:
     if model._api_type is not ApigeeLlm.ApiType.CHAT_COMPLETIONS:
         return gemini_backend(model, request_model)
     swap_class(model._completions_http_client, _completions_methods)
-    return Backend("openai", CHAT_CODEC, client_headers=True, model=request_model)
+    return Backend("openai", CHAT_CODEC, client_headers=True, model=request_model, follows_request=True)
 
 
 def _completions_methods(cls: type[CompletionsHTTPClient]) -> Methods[CompletionsHTTPClient]:

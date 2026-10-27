@@ -46,7 +46,7 @@ def openai_chat_backend(model: OpenAILlm) -> Backend:
     """Return Chat Completions backend for model's client, and swap client's completions resource."""
     client = model._openai_client
     swap_class(client.chat.completions, _completions_methods)
-    return Backend(_provider(client), CHAT_CODEC, client_headers=True, model=model.model)
+    return Backend(_provider(client), CHAT_CODEC, client_headers=True, model=model.model, follows_request=False)
 
 
 def openai_responses_backend(model: OpenAIResponsesLlm, request_model: str | None) -> Backend:
@@ -57,7 +57,9 @@ def openai_responses_backend(model: OpenAIResponsesLlm, request_model: str | Non
     client = model._openai_client
     swap_class(client.responses, _responses_methods)
     provider = "azure" if isinstance(model, AzureOpenAIResponsesLlm) else _provider(client)
-    return Backend(provider, RESPONSES_CODEC, client_headers=True, model=request_model or model.model)
+    return Backend(
+        provider, RESPONSES_CODEC, client_headers=True, model=request_model or model.model, follows_request=True
+    )
 
 
 def _provider(client: AsyncOpenAI) -> _Provider:
