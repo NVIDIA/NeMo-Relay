@@ -25,14 +25,25 @@ TASKS = {
         "your own tests, including full-width INC-１２３４, Arabic-digit INC-١٢٣٤, and non-string "
         "inputs. The prefix letters must be ASCII I/N/C in either case; reject dotless-i ınc-1234 "
         "and dotted-I İNC-1234. Do not transliterate Unicode digits or letters. "
-        "Leave retry_delays unchanged."
+        "Leave every other function unchanged."
     ),
     "retry-policy": (
         "Implement retry_delays(attempts, base, cap) in service.py. Return a list with attempts "
         "delays: min(base * 2**i, cap) for i starting at zero. attempts must be a nonnegative "
         "integer (not bool); base and cap must be positive numbers. Raise ValueError for invalid "
         "inputs. Support fractional base and cap. Write and run your own tests. "
-        "Leave normalize_ticket_id unchanged."
+        "Leave every other function unchanged."
+    ),
+    "dependency-plan": (
+        "Implement deployment_plan(graph, blocked=()) in service.py. graph is a dict mapping nonempty "
+        "string service names to lists of dependency names; every dependency must be a graph key. "
+        "Allow duplicate edges. blocked is a list or tuple of known service names. Reject all malformed "
+        "input with ValueError. Reject cycles anywhere in the original graph, including self-cycles "
+        "and cycles in a blocked component. Exclude blocked services AND all services that transitively "
+        "depend on them. Return remaining services in topological order, choosing the lexicographically "
+        "smallest available name at EACH step (not just sorting levels). Do not mutate inputs. Handle "
+        "a 10000-node chain without recursion failure or quadratic rescanning. Write and run tests "
+        "for all these boundaries. Leave every other function unchanged."
     ),
 }
 

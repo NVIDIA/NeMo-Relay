@@ -8,3 +8,7 @@ def normalize_ticket_id(value):
 
 def retry_delays(attempts, base, cap):
     raise NotImplementedError
+
+
+def deployment_plan(graph, blocked=()):
+    raise NotImplementedError

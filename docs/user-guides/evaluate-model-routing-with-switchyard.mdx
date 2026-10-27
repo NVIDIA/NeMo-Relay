@@ -1,0 +1,275 @@
+---
+title: "Evaluate Model Routing with Switchyard"
+description: "Compare fixed-model and routed agent tasks using acceptance, model selection, usage, and latency."
+position: 7
+hide-nav-links: true
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Enterprise teams need evidence before moving agent work to a different model mix.
+A cheaper model may fail important tasks; a routing judge adds overhead and can
+make mistakes. This guide uses Relay and Switchyard to compare a routing policy
+against fixed-model baselines using the same tasks and acceptance checks.
+
+The optional Brev example uses pi, two NVIDIA model targets, and a judge.
+Switchyard runs as a native plugin inside the Relay process handling model calls.
+The outcome is a scorecard for your policy decision; monetary savings require
+validated prices as well as measured usage.
+
+## Before you start
+
+| Requirement | Your deployment | Brev example |
+| --- | --- | --- |
+| Capture path | Relay handles requests supported by Switchyard's routing contract | pi extension and an OpenAI Chat Completions provider |
+| Host | Supported native-plugin platform | Linux x86_64 glibc CPU VM, Python 3.12, Node.js 24.13.1+ |
+| Access | Two tool-capable model targets and a JSON-capable judge | NVIDIA API key with access to the selected models |
+| Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, pi 0.84.0, Switchyard plugin 0.3.2 |
+| Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, pi configuration, and plugin bundle; remove only those directories |
+
+<Warning title="Keep system policy separate">
+Use a host without the coding-agent example's system-wide Relay policy.
+An explicit plugin path still merges system configuration.
+</Warning>
+
+## 1. Define the decision and acceptance bar
+
+Choose tasks that represent your workload, including cases that may need a
+capable model. Hold inputs, tools, output limits, model versions, and acceptance
+checks constant. Retain failed attempts and include retries and judge overhead.
+
+| Policy | Purpose |
+| --- | --- |
+| Fixed capable | Establish the baseline acceptance and resource use. |
+| Fixed efficient | Check whether the efficient model alone meets the requirement. |
+| Routed | Evaluate whether the selected model mix preserves acceptance with useful resource changes. |
+
+<CardGroup cols={2}>
+<Card title="Choose the model-handling process" href="/reference/support-matrix" icon="fa-solid fa-diagram-project">
+Use an application, gateway, or managed worker whose requests match the plugin's
+supported API contract. Being supported by Relay does not establish Switchyard compatibility.
+</Card>
+<Card title="Choose model targets" href="https://build.nvidia.com/explore/discover" icon="fa-solid fa-microchip">
+Check endpoint access, tool support, context limits, and judge JSON output before
+running the comparison. The example uses NVIDIA-hosted inference.
+</Card>
+</CardGroup>
+
+The example uses OpenAI Chat Completions. pi's Relay integration is a proof of
+concept with version-sensitive hooks; it is one harness choice. Confirm the
+[Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
+before substituting another harness or API.
+
+## 2. Install and configure the route
+
+Install a compatible Switchyard bundle, enable its dynamic-plugin declaration,
+and load it in the Relay process that receives the model request.
+
+<Warning title="Native-plugin trust">
+The plugin executes native code inside Relay. The example's
+`attestation = "integrity_only"` accepts a digest-verified unsigned bundle.
+A checksum fetched beside an artifact establishes integrity, not independent
+publisher authenticity. Use `signature_required` with a signed bundle and your
+approved trust configuration for a stricter deployment.
+</Warning>
+
+Relay's `plugins.toml` points at the plugin manifest and route file:
+
+```toml
+version = 1
+
+[[plugins.dynamic]]
+manifest = "/opt/nemo-relay/plugins/switchyard/relay-plugin.toml"
+
+[plugins.dynamic.config]
+priority = 0
+switchyard_config_path = "/etc/switchyard/routes.toml"
+
+[plugins.policy.overrides."nvidia.switchyard"]
+attestation = "integrity_only"
+```
+
+Registering a declaration does not enable it. Enable `nvidia.switchyard`, validate
+the installed plugin, and restart the affected process. The companion performs
+those steps in its isolated configuration.
+
+The following `routes.toml` shows the routing decision explicitly.
+Replace the illustrative endpoint and model IDs with accessible targets:
+
+```toml
+schema_version = 1
+
+[llm_clients.provider]
+format = "openai_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+
+[targets.efficient]
+id = "YOUR_EFFICIENT_MODEL"
+llm_client = "provider"
+
+[targets.capable]
+id = "YOUR_CAPABLE_MODEL"
+llm_client = "provider"
+
+[targets.judge]
+id = "YOUR_JUDGE_MODEL"
+llm_client = "provider"
+
+[routes.baseline]
+id = "switchyard/baseline"
+type = "passthrough"
+target = "capable"
+
+[routes.efficient]
+id = "switchyard/efficient"
+type = "passthrough"
+target = "efficient"
+
+[routes.routed]
+id = "switchyard/routed"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "judge"
+strong_target = "capable"
+weak_target = "efficient"
+base_threshold = 0.8
+response_format_type = "json_object"
+max_output_tokens = 8192
+classify_trigger = "new_session"
+message_hash_fallback = true
+```
+
+The caller selects the virtual route `switchyard/routed`, rather than a real
+target model. The plugin reads the provider key from Relay's environment.
+Holding the selection for a session avoids changing targets at every tool
+continuation. Each independent task must have a distinct session identity.
+
+<Accordion title="Brev example: prepare pi and the native plugin">
+Use a disposable CPU VM and the persistent pi extension from the
+[pi quickstart](/getting-started/quick-start/pi):
+
+```bash
+npm install --global @earendil-works/pi-coding-agent@0.84.0
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
+NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
+export PATH="$HOME/.local/bin:$PATH"
+nemo-relay install pi
+git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
+cd relay-routing/docs/user-guides/_examples/model-routing
+SWITCHYARD_MANIFEST=$(bash install-plugin.sh /tmp/relay-switchyard-bundle)
+export SWITCHYARD_MANIFEST
+```
+
+The helper downloads the Linux x86_64 bundle and SHA-256 sidecar from
+[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2),
+then verifies before extraction. Other supported architectures can use the
+[Relay plugin installer](/configure-plugins/plugin-configuration-files).
+</Accordion>
+
+## 3. Run comparable work through all policies
+
+Use independent task acceptance checks. A successful model call or agent exit
+does not establish that the requested code works. Check the selected model,
+served model, classifier recovery, and truncated calls alongside task results.
+
+<Accordion title="Brev example: run the comparison">
+Check the [shared runtime setup](/user-guides/about#example-runtimes), then
+choose models that your key can access:
+
+```bash
+export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+export EFFICIENT_MODEL=YOUR_EFFICIENT_MODEL
+export CAPABLE_MODEL=YOUR_CAPABLE_MODEL
+export JUDGE_MODEL=YOUR_JSON_CAPABLE_JUDGE
+IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
+export NVIDIA_API_KEY
+python3.12 run.py --output /tmp/relay-routing --repeat 3
+python3.12 summarize.py /tmp/relay-routing
+```
+
+The runner uses fresh scaffolds for incident-ID validation, retry delays, and
+dependency planning. The latter includes cycles, transitive blocking, lexical
+topological order, and a 10,000-node chain. It tests a broader capability boundary;
+observe the judge's actual selection rather than assuming it chooses the capable model.
+
+Three tasks, three policies, and three repetitions produce 27 attempts, with
+policy order rotated between trials. Use `--repeat 1` for an initial check.
+External acceptance runs outside the agent's working directory. Every arm has
+the same tools and 16,384-token answer budget. Failures remain in `results.json`;
+the overall command returns nonzero if any arm fails.
+
+Choose available models from [build.nvidia.com](https://build.nvidia.com/explore/discover).
+The API base URL is `https://integrate.api.nvidia.com/v1`; requests use
+`/chat/completions`. Confirm that your key can access each target before starting.
+</Accordion>
+
+## 4. Interpret task quality and routing together
+
+A three-task Brev run with one attempt per policy produced this scorecard:
+
+| Policy | Accepted | Seconds | Answer tokens | Judge tokens |
+| --- | --- | --- | --- | --- |
+| Fixed capable | 2/3 | 540.6 | Unknown | No judge |
+| Fixed efficient | 2/3 | 260.6 | 158,206 | No judge |
+| Routed | 2/3 | 202.0 | 159,091 | 9,993 |
+
+<Note title="The harder task exposed a quality gap">
+All three policies failed the dependency-planning attempt. The capable model's
+code passed the external checks, but its session hit the 420-second timeout.
+The efficient and routed attempts left the function unimplemented. Each policy
+had a truncated model call. All three judge verdicts selected the efficient
+model, with no classifier recoveries or answer fallbacks. This does not establish
+valid selection of the capable target; inspect the forecasts and retest the judge
+before promoting this policy.
+</Note>
+
+The two simpler tasks passed under every policy. Keep the failed harder task in
+the result rather than accepting the policy from those successes alone. Missing
+capable-model usage remains unknown. Results depend on endpoint, models, and
+budgets; repeat with your selected catalog models and representative tasks.
+
+<Accordion title="Why repeat the comparison">
+An earlier two-task comparison repeated three times accepted 6/6 capable tasks,
+3/6 efficient tasks, and 6/6 routed tasks. Two judge verdicts were unusable and
+recovered to the capable model; every capable selection came from recovery.
+Those results did not demonstrate valid forecasts choosing both targets.
+The broader task set above exposed another acceptance boundary. Retain failed
+attempts, judge recoveries, and truncated calls when comparing policies.
+</Accordion>
+
+| Evidence | Inspect |
+| --- | --- |
+| Task acceptance | `results.json`, generated files, and `acceptance.log` |
+| Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
+| Judge recovery | `evidence.source` (`fail_open` or `fall_open` in 0.3.2) and `reason_code` |
+| Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
+| Usage and truncation | `summary.json`, answer/routing metrics, and incomplete model calls |
+
+Judge HTTP success does not establish a valid verdict. Review final JSON and
+recovery reasons before changing the judge model, its budget, or the threshold.
+Keep failed trials in the scorecard and repeat with representative work.
+
+### Add cost when prices are known
+
+Price input and output usage separately for each target, including judge calls
+and retries. Missing usage or pricing remains unknown. Token totals alone cannot
+establish savings when models and token types have different prices.
+
+```text
+Workload cost = answer-model cost + judge cost
+Cost per accepted task = workload cost / accepted tasks
+```
+
+Compare the result with the fixed-capable baseline using your validated
+[pricing catalog](/configure-plugins/model-pricing). Retain the quality gate:
+a low cost per failed task is not a successful deployment result.
+
+## Cleanup and next steps
+
+The runner stops each task gateway. Retain the scorecard and logs, then remove
+only your chosen output and plugin-bundle directories. Leave other users' pi
+settings and plugin installations in place.
+
+Promote a policy only after task acceptance, judge validity, routing stability,
+and the relevant resource improvement hold on your workload.

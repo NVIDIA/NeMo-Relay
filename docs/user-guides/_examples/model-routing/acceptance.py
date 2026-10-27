@@ -61,6 +61,25 @@ def main():
             (1, None, 10),
         ]:
             rejects(delays, *arguments)
+    elif task == "dependency-plan":
+        import copy
+
+        plan = service.deployment_plan
+        graph = {"web": ["api"], "api": ["db", "db"], "db": [], "auth": [], "z": []}
+        original = copy.deepcopy(graph)
+        assert plan(graph) == ["auth", "db", "api", "web", "z"]
+        assert plan(graph, ["db"]) == ["auth", "z"]
+        assert graph == original
+        assert plan({}) == []
+        for invalid in (None, [], {"a": "a"}, {"a": ["missing"]}, {1: []}, {"": []}, {"a": [1]}):
+            rejects(plan, invalid)
+        for blocked in ("a", ["missing"], [1], None):
+            rejects(plan, {"a": []}, blocked)
+        rejects(plan, {"a": ["a"]})
+        rejects(plan, {"a": ["b"], "b": ["a"]}, ["a"])
+        chain = {f"s{i:05}": [] if i == 0 else [f"s{i - 1:05}"] for i in range(10000)}
+        assert plan(chain) == list(chain)
+        assert plan(chain, ["s00001"]) == ["s00000"]
     else:
         raise SystemExit("Unknown task")
     print(f"Accepted: {task}")
