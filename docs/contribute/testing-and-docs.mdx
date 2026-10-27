@@ -207,6 +207,20 @@ the command's child processes so timeouts also clean up agent processes.
 The workflow runs focused helper tests on each platform before the guides,
 including native Windows tests for failure propagation and process cleanup.
 
+The manual workflow also runs document execution regressions: extracted Python
+verification code is checked against synthetic evidence, and documented Bash
+rerun commands are tested with failing host fixtures to check stale-output
+cleanup. These tests are excluded from `just check-quickstarts` and run in a step
+without GitHub token environment variables. The Bash rerun regression runs on
+Linux/macOS; it is skipped on Windows. Run this opt-in group locally after
+installing the dev dependencies:
+
+```bash
+uv run --no-sync python -m unittest \
+  scripts.tests.test_quickstart_programs \
+  scripts.tests.test_quickstart_reruns
+```
+
 The workflow must
 exist on the default branch before GitHub exposes its normal manual trigger;
 select the implementation branch after that workflow has been registered.

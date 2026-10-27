@@ -125,10 +125,19 @@ jobs:
             npm install --global @anthropic-ai/claude-code@2.1.285
           fi
 
-      - name: Check native execution helpers
+      - name: Check execution helpers and document regressions
+        env:
+          # Only the later asset-resolution step needs GitHub credentials.
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+          GH_ENTERPRISE_TOKEN: ''
+          GITHUB_ENTERPRISE_TOKEN: ''
         run: |
           uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
-          uv run --no-sync python -m unittest discover -s scripts/tests -p 'test_quickstart_execution.py'
+          uv run --no-sync python -m unittest \
+            scripts.tests.test_quickstart_execution \
+            scripts.tests.test_quickstart_programs \
+            scripts.tests.test_quickstart_reruns
 
       - name: Execute selected Quick Starts
         env:
