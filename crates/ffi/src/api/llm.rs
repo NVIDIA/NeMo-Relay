@@ -597,6 +597,7 @@ pub(crate) struct ForwarderParts {
     pub(crate) tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     pub(crate) cancel_rx: tokio::sync::watch::Receiver<bool>,
     pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    pub(crate) scope_stack: nemo_relay::api::runtime::ScopeStackHandle,
 }
 
 impl FfiStream {
@@ -607,11 +608,9 @@ impl FfiStream {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         if let Some(parts) = parts {
-            tokio_runtime().spawn(forward_stream_to_channel(
-                parts.stream,
-                parts.tx,
-                parts.cancel_rx,
-                parts.closed,
+            tokio_runtime().spawn(TASK_SCOPE_STACK.scope(
+                parts.scope_stack,
+                forward_stream_to_channel(parts.stream, parts.tx, parts.cancel_rx, parts.closed),
             ));
         }
     }
@@ -736,7 +735,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     let default_fn: LlmStreamExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let scope_stack = current_scope_stack();
-    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack.clone(), async {
         core_llm_api::llm_stream_call_execute(
             core_llm_api::LlmStreamCallExecuteParams::builder()
                 .name(parsed.name)
@@ -767,6 +766,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                     tx,
                     cancel_rx,
                     closed,
+                    scope_stack,
                 })),
                 receiver: tokio::sync::Mutex::new(rx),
                 cancel,
@@ -805,32 +805,10 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
     if stream.callbacks.on_callback_thread() {
         return NemoRelayStatus::Ok;
     }
-    let result = super::block_on(async {
-        let mut close_result = stream.close_result.lock().await;
-        if let Some(result) = close_result.as_ref() {
-            return result.clone();
-        }
-        let cleanup = stream
-            .closed
-            .clone()
-            .wait_for(Option::is_some)
-            .await
-            .map_err(|_| "stream close task ended early".to_string())?
-            .clone()
-            .expect("close state checked above");
-        let mut receiver = stream.receiver.lock().await;
-        receiver.close();
-        let mut undelivered = None;
-        while let Ok(item) = receiver.try_recv() {
-            if let Err(error) = item {
-                undelivered.get_or_insert(error.to_string());
-            }
-        }
-        let finalizer_error = stream.callbacks.take_failure();
-        let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
-        *close_result = Some(result.clone());
-        result
-    });
+    let result = match super::block_on(async { Ok(finish_close(stream).await) }) {
+        Ok(result) => result,
+        Err(error) => Err(error.to_string()),
+    };
     match result {
         Ok(()) => NemoRelayStatus::Ok,
         Err(message) => {
@@ -838,6 +816,33 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
             NemoRelayStatus::Internal
         }
     }
+}
+
+async fn finish_close(stream: &FfiStream) -> Result<(), String> {
+    let mut close_result = stream.close_result.lock().await;
+    if let Some(result) = close_result.as_ref() {
+        return result.clone();
+    }
+    let cleanup = stream
+        .closed
+        .clone()
+        .wait_for(Option::is_some)
+        .await
+        .map_err(|_| "stream close task ended early".to_string())?
+        .clone()
+        .expect("close state checked above");
+    let mut receiver = stream.receiver.lock().await;
+    receiver.close();
+    let mut undelivered = None;
+    while let Ok(item) = receiver.try_recv() {
+        if let Err(error) = item {
+            undelivered.get_or_insert(error.to_string());
+        }
+    }
+    let finalizer_error = stream.callbacks.take_failure();
+    let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
+    *close_result = Some(result.clone());
+    result
 }
 
 fn combine_close_errors(errors: [Option<String>; 3]) -> Result<(), String> {
@@ -882,15 +887,15 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
     stream.start();
     let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;
-        guard.recv().await
+        Ok(guard.recv().await)
     });
     match result {
-        None => 0, // stream done
-        Some(Ok(chunk)) => {
+        Ok(None) => 0, // stream done
+        Ok(Some(Ok(chunk))) => {
             unsafe { *out_chunk = json_to_c_string(&chunk) };
             1
         }
-        Some(Err(e)) => {
+        Ok(Some(Err(e))) | Err(e) => {
             set_last_error(&e.to_string());
             -1
         }

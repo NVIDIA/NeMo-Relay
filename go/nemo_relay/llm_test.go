@@ -1859,6 +1859,57 @@ func TestLlmStreamCollectorMayCallRelay(t *testing.T) {
 	}
 }
 
+func TestLlmStreamCallbacksKeepScopeLocalGuardrails(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf(scopeLocalNewScopeStackFailed, err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := PushScope("stream_callback_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf(scopeLocalPushScopeFailed, err)
+		}
+		defer PopScope(handle)
+
+		reason := "scope-local block"
+		if err := ScopeRegisterToolConditionalExecutionGuardrail(handle.UUID(), "stream_callback_gate", 1,
+			func(string, json.RawMessage) *string { return &reason },
+		); err != nil {
+			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
+		}
+		if err := ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`)); err == nil {
+			t.Fatal("expected the scope-local guardrail to reject outside the stream callbacks")
+		}
+
+		results := make(chan error, 2)
+		stream, err := LlmStreamCallExecute("stream_callback_scope_llm", makeRequest(),
+			func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
+			func(json.RawMessage) {
+				results <- ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`))
+			},
+			func() string {
+				results <- ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`))
+				return `{}`
+			},
+		)
+		if err != nil {
+			t.Fatalf(llmStreamCallExecuteFailed, err)
+		}
+		drainStream(t, stream)
+		if err := stream.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+		for _, callback := range []string{"collector", "finalizer"} {
+			got := <-results
+			if got == nil || !strings.Contains(got.Error(), scopeLocalGuardrailRejected) {
+				t.Fatalf("nested call from the %s = %v, want %q", callback, got, scopeLocalGuardrailRejected)
+			}
+		}
+	})
+}
+
 func TestLlmStreamCallbacksWaitForFirstNext(t *testing.T) {
 	collected := make(chan struct{}, 1)
 	stream, err := LlmStreamCallExecute("callbacks_wait_llm", makeRequest(),

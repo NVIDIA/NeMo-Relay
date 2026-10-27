@@ -7,8 +7,11 @@
 //! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`] to retrieve
 //! the error message.
 
+use std::any::Any;
+use std::cell::Cell;
 use std::ffi::CStr;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -203,27 +206,36 @@ pub use scope_stack::*;
 pub use tool_lifecycle::*;
 pub use tool_registry::*;
 
+thread_local! {
+    static RUNTIME_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
 fn tokio_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            .on_thread_start(|| RUNTIME_THREAD.with(|flag| flag.set(true)))
             .build()
             .expect("Failed to create tokio runtime")
     })
 }
 
-/// Block on the shared runtime from a foreign thread, a runtime worker, or an
-/// embedder's current-thread runtime.
-pub(crate) fn block_on<F>(future: F) -> F::Output
+/// Run a runtime future from an FFI entry point.
+pub(crate) fn block_on<T, F>(future: F) -> FlowResult<T>
 where
-    F: Future + Send,
-    F::Output: Send,
+    T: Send,
+    F: Future<Output = FlowResult<T>> + Send,
 {
-    match tokio::runtime::Handle::try_current() {
-        Err(_) => tokio_runtime().block_on(future),
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| tokio_runtime().block_on(future))
+    let outcome = match tokio::runtime::Handle::try_current() {
+        Err(_) => catch_unwind(AssertUnwindSafe(|| tokio_runtime().block_on(future))),
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+                && RUNTIME_THREAD.with(Cell::get) =>
+        {
+            catch_unwind(AssertUnwindSafe(|| {
+                tokio::task::block_in_place(|| tokio_runtime().block_on(future))
+            }))
         }
         Ok(_) => {
             let scope_stack = current_scope_stack();
@@ -234,8 +246,19 @@ where
                     })
                     .join()
             })
-            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
         }
+    };
+    outcome.unwrap_or_else(|payload| Err(FlowError::Internal(panic_message(payload.as_ref()))))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned());
+    match detail {
+        Some(message) => format!("runtime future panicked: {message}"),
+        None => "runtime future panicked".to_string(),
     }
 }
 

@@ -120,9 +120,6 @@ func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks) *LlmStream {
 	return s
 }
 
-// releaseStream frees the native stream of an unreachable handle. Relay
-// cancels the producer and emits the end event, and the Go callbacks report
-// the release instead of running.
 func releaseStream(ptr *C.FfiStream) {
 	C.nemo_relay_stream_free(ptr)
 }

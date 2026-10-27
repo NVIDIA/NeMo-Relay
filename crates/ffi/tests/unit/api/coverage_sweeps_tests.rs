@@ -4257,6 +4257,122 @@ fn stream_close_reports_undelivered_error_once() {
     }
 }
 
+static SCOPED_CALL_RESULTS: Mutex<Vec<NemoRelayStatus>> = Mutex::new(Vec::new());
+
+fn record_scoped_tool_conditional_execution() {
+    let tool = cstring("scoped-stream-tool");
+    let args = cstring("{}");
+    let status = unsafe { nemo_relay_tool_conditional_execution(tool.as_ptr(), args.as_ptr()) };
+    lock_unpoisoned(&SCOPED_CALL_RESULTS).push(status);
+}
+
+unsafe extern "C" fn scoped_collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    _chunk_json: *const c_char,
+) -> i32 {
+    record_scoped_tool_conditional_execution();
+    0
+}
+
+unsafe extern "C" fn scoped_finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
+    record_scoped_tool_conditional_execution();
+    CString::new("{}").unwrap().into_raw()
+}
+
+#[test]
+fn stream_callbacks_keep_the_scope_stack_of_their_call() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    lock_unpoisoned(&SCOPED_CALL_RESULTS).clear();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("scoped-stream-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Function,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let gate = cstring("scoped-stream-gate");
+        assert_status!(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
+                scope_uuid.as_ptr(),
+                gate.as_ptr(),
+                1,
+                tool_reject_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let tool = cstring("scoped-stream-tool");
+        let args = cstring("{}");
+        assert_status!(
+            nemo_relay_tool_conditional_execution(tool.as_ptr(), args.as_ptr()),
+            NemoRelayStatus::GuardrailRejected
+        );
+
+        let name = cstring("scoped-stream");
+        let request = cstring(&json!({"headers": {}, "content": {"model": "m"}}).to_string());
+        let mut stream = ptr::null_mut();
+        assert_status!(
+            nemo_relay_llm_stream_call_execute(
+                name.as_ptr(),
+                request.as_ptr(),
+                llm_exec_cb,
+                ptr::null_mut(),
+                None,
+                Some(scoped_collector_cb),
+                Some(scoped_finalizer_cb),
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                None,
+                None,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                &mut stream,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
+        nemo_relay_string_free(chunk);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
+        nemo_relay_stream_free(stream);
+        assert_eq!(
+            *lock_unpoisoned(&SCOPED_CALL_RESULTS),
+            vec![
+                NemoRelayStatus::GuardrailRejected,
+                NemoRelayStatus::GuardrailRejected
+            ]
+        );
+
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
 static REENTRANT_STREAM: std::sync::atomic::AtomicPtr<FfiStream> =
     std::sync::atomic::AtomicPtr::new(ptr::null_mut());
 static REENTRANT_RESULTS: Mutex<Option<(i32, String, NemoRelayStatus)>> = Mutex::new(None);

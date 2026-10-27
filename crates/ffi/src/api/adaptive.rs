@@ -165,8 +165,8 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
         Ok(config) => config,
         Err(status) => return status,
     };
-    match super::block_on(AdaptiveRuntime::new(config)) {
-        Ok(runtime) => {
+    match super::block_on(async { Ok(AdaptiveRuntime::new(config).await) }) {
+        Ok(Ok(runtime)) => {
             unsafe {
                 *out = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(Some(
                     runtime,
@@ -174,9 +174,13 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
             };
             NemoRelayStatus::Ok
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             set_last_error(&error.to_string());
             NemoRelayStatus::InvalidArg
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -191,10 +195,17 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_register(
 ) -> NemoRelayStatus {
     clear_last_error();
     match with_runtime_mut(runtime, |runtime| {
-        super::block_on(runtime.register()).map_err(|error| {
-            set_last_error(&error.to_string());
-            NemoRelayStatus::Internal
-        })
+        match super::block_on(async { Ok(runtime.register().await) }) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                set_last_error(&error.to_string());
+                Err(NemoRelayStatus::Internal)
+            }
+            Err(error) => {
+                set_last_error(&error.to_string());
+                Err(NemoRelayStatus::Internal)
+            }
+        }
     }) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(status) => status,
@@ -238,8 +249,12 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_shutdown(
         set_last_error("adaptive runtime already shut down");
         return NemoRelayStatus::InvalidArg;
     };
-    match super::block_on(runtime.shutdown()) {
-        Ok(()) => NemoRelayStatus::Ok,
+    match super::block_on(async { Ok(runtime.shutdown().await) }) {
+        Ok(Ok(())) => NemoRelayStatus::Ok,
+        Ok(Err(error)) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
+        }
         Err(error) => {
             set_last_error(&error.to_string());
             NemoRelayStatus::Internal

@@ -138,8 +138,6 @@ func recoverCallbackPanic(kind string, onPanic func()) {
 	}
 }
 
-// registerStreamCallbacks registers a stream's callbacks through a weak
-// pointer so a stream that its own callbacks capture stays collectable.
 func registerStreamCallbacks(callbacks *streamCallbacks) unsafe.Pointer {
 	return registerClosure(weak.Make(callbacks))
 }
@@ -380,8 +378,8 @@ type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExec
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
 // aggregation. The chunk JSON is only valid for the duration of the call.
-// It runs on a runtime worker thread during [LlmStream.Next]; a panic ends the
-// stream and is returned from Next.
+// It runs on a runtime worker thread. A panic ends the stream and is returned
+// from [LlmStream.Next].
 type CollectorFunc func(chunkJSON json.RawMessage)
 
 // FinalizerFunc is a callback invoked exactly once when a streaming LLM

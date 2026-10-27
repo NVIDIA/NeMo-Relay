@@ -1125,13 +1125,8 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-/// State shared by one stream's collector and finalizer callbacks and its
+/// Failure and callback-thread state shared by a stream's callbacks and its
 /// `FfiStream`.
-///
-/// The failure slot carries a finalizer failure to `nemo_relay_stream_close`,
-/// because the runtime's close result does not. The callback thread lets
-/// `nemo_relay_stream_close` and `nemo_relay_stream_next` recognize a call
-/// from inside the stream's own callback, which must not wait on itself.
 #[derive(Default)]
 pub struct StreamCallbackState {
     failure: std::sync::Mutex<Option<String>>,
@@ -1177,10 +1172,6 @@ fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
 }
 
 /// Wrap the C collector and finalizer callbacks.
-///
-/// A finalizer failure is returned to the runtime, which marks the LLM end
-/// event ERROR with a null aggregate, and recorded in the returned state for
-/// `nemo_relay_stream_close`.
 pub fn wrap_stream_callbacks(
     collector: Option<NemoRelayCollectorCb>,
     finalizer: Option<NemoRelayFinalizerCb>,

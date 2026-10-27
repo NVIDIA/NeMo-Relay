@@ -420,6 +420,21 @@ unsafe extern "C" fn failing_finalizer_cb(_user_data: *mut std::ffi::c_void) -> 
     std::ptr::null_mut()
 }
 
+unsafe extern "C" fn failing_collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    _chunk: *const c_char,
+) -> i32 {
+    set_last_error("collector boom");
+    1
+}
+
+unsafe extern "C" fn silent_failing_collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    _chunk: *const c_char,
+) -> i32 {
+    7
+}
+
 unsafe extern "C" fn subscriber_cb(user_data: *mut libc::c_void, event: *const FfiEvent) {
     let counter = unsafe { &*(user_data as *const Arc<AtomicUsize>) };
     if unsafe { (&*event).0.name() } == "ffi-event" {
@@ -907,6 +922,24 @@ fn assert_collector_and_finalizer_callbacks() {
         "internal error: stream finalizer callback panicked: finalizer boom"
     );
     assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+
+    let (mut collector, _, _) =
+        wrap_stream_callbacks(Some(failing_collector_cb), None, std::ptr::null_mut(), None);
+    assert_eq!(
+        collector(json!({})).unwrap_err().to_string(),
+        "internal error: collector boom"
+    );
+
+    let (mut collector, _, _) = wrap_stream_callbacks(
+        Some(silent_failing_collector_cb),
+        None,
+        std::ptr::null_mut(),
+        None,
+    );
+    assert_eq!(
+        collector(json!({})).unwrap_err().to_string(),
+        "internal error: stream collector callback failed with status 7"
+    );
 }
 
 fn assert_event_callbacks() {
