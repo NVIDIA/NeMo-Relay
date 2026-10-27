@@ -92,3 +92,47 @@ func TestConditionalMiddlewareGuardrailTogglesExistingRegistration(t *testing.T)
 		t.Fatalf("enabled target result: %s", enabled)
 	}
 }
+
+func TestConditionalMiddlewareGuardrailPanicFailsClosed(t *testing.T) {
+	suffix := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	targetName := "go-runtime-panic-target-" + suffix
+	gateName := "go-runtime-panic-gate-" + suffix
+
+	if err := RegisterToolRequestIntercept(targetName, 0, false, func(_ string, args json.RawMessage) json.RawMessage {
+		return json.RawMessage(`{"intercepted":true}`)
+	}); err != nil {
+		t.Fatalf("register target: %v", err)
+	}
+	defer DeregisterToolRequestIntercept(targetName)
+
+	registrations, err := ListRuntimeRegistrations([]RuntimeRegistrationKind{RuntimeRegistrationToolRequestIntercept})
+	if err != nil {
+		t.Fatalf("list registrations: %v", err)
+	}
+	var effectiveName string
+	for _, registration := range registrations {
+		if registration.LocalName == targetName {
+			effectiveName = registration.EffectiveName
+		}
+	}
+	if effectiveName == "" {
+		t.Fatalf("target registration %q was not discovered", targetName)
+	}
+	if err := RegisterConditionalMiddlewareGuardrail(
+		gateName,
+		[]RuntimeRegistrationKind{RuntimeRegistrationToolRequestIntercept},
+		effectiveName,
+		func([]RuntimeRegistrationKind, string) *string { panic("gate boom") },
+	); err != nil {
+		t.Fatalf("register gate: %v", err)
+	}
+	defer DeregisterConditionalMiddlewareGuardrail(gateName)
+
+	result, err := ToolRequestIntercepts("tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("resolve gated target: %v", err)
+	}
+	if string(result) != "{}" {
+		t.Fatalf("a panicking gate must disable its target, got %s", result)
+	}
+}

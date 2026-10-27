@@ -56,7 +56,10 @@ pub struct FfiEvent(pub Event);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub ScopeStackHandle);
 /// Opaque handle to a captured thread-local scope stack binding.
-pub struct FfiThreadScopeStackBinding(pub ThreadScopeStackBinding);
+pub struct FfiThreadScopeStackBinding {
+    pub(crate) thread: ThreadScopeStackBinding,
+    pub(crate) override_stack: Option<ScopeStackHandle>,
+}
 /// Opaque ATIF exporter handle.
 pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
 /// Opaque ATOF JSONL exporter handle.

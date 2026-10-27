@@ -158,8 +158,12 @@ unsafe extern "C" fn codec_encode_invalid_json_cb(
     CString::new("not-json").unwrap().into_raw()
 }
 
-unsafe extern "C" fn finalizer_null_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_null_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     ptr::null_mut()
+}
+
+unsafe extern "C" fn finalizer_invalid_json_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
+    CString::new("not-json").unwrap().into_raw()
 }
 
 fn make_request() -> LlmRequest {
@@ -256,8 +260,28 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     };
     assert!(stream_err.to_string().contains("stream next failed"));
 
-    let finalizer = wrap_finalizer_fn(finalizer_null_cb);
-    assert_eq!(finalizer(), Json::Null);
+    let (_, finalizer, error) =
+        wrap_stream_callbacks(None, Some(finalizer_null_cb), std::ptr::null_mut(), None);
+    let failure = finalizer().unwrap_err().to_string();
+    assert_eq!(failure, "internal error: stream finalizer callback failed");
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+
+    let (_, finalizer, error) = wrap_stream_callbacks(
+        None,
+        Some(finalizer_invalid_json_cb),
+        std::ptr::null_mut(),
+        None,
+    );
+    let failure = finalizer().unwrap_err().to_string();
+    assert_eq!(
+        failure,
+        "internal error: stream finalizer callback failed: invalid JSON: expected ident at line 1 column 2"
+    );
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+
+    let (_, finalizer, error) = wrap_stream_callbacks(None, None, std::ptr::null_mut(), None);
+    assert_eq!(finalizer().unwrap(), Json::Null);
+    assert!(error.take_failure().is_none());
 }
 
 #[test]

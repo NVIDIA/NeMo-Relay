@@ -7,8 +7,11 @@
 //! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`] to retrieve
 //! the error message.
 
+use std::any::Any;
+use std::cell::Cell;
 use std::ffi::CStr;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -21,11 +24,11 @@ use crate::callable::{
     NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
     NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayToolConditionalCb,
     NemoRelayToolExecCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn,
-    wrap_collector_fn, wrap_conditional_middleware_guardrail_fn, wrap_event_metadata_injector_fn,
-    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
-    wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn,
-    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_fn,
+    wrap_conditional_middleware_guardrail_fn, wrap_event_metadata_injector_fn,
+    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_stream_callbacks, wrap_tool_conditional_fn, wrap_tool_exec_fn,
     wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
@@ -158,8 +161,9 @@ use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 use nemo_relay::api::runtime::{
-    TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack, current_scope_stack,
-    restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack, with_scope_stack,
+    ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
+    current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
+    scope_stack_active, set_thread_scope_stack,
 };
 use nemo_relay::api::scope as core_scope_api;
 use nemo_relay::api::scope::ScopeAttributes;
@@ -203,14 +207,58 @@ pub use scope_stack::*;
 pub use tool_lifecycle::*;
 pub use tool_registry::*;
 
+thread_local! {
+    static RUNTIME_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
 fn tokio_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            .on_thread_start(|| RUNTIME_THREAD.with(|flag| flag.set(true)))
             .build()
             .expect("Failed to create tokio runtime")
     })
+}
+
+pub(crate) fn entry_scope_stack() -> ScopeStackHandle {
+    explicit_thread_scope_stack().unwrap_or_else(current_scope_stack)
+}
+
+/// Run a runtime future from an FFI entry point.
+pub(crate) fn block_on<T, F>(future: F) -> FlowResult<T>
+where
+    T: Send,
+    F: Future<Output = FlowResult<T>> + Send,
+{
+    let future = TASK_SCOPE_STACK.scope(entry_scope_stack(), future);
+    let outcome = match tokio::runtime::Handle::try_current() {
+        Err(_) => catch_unwind(AssertUnwindSafe(|| tokio_runtime().block_on(future))),
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+                && RUNTIME_THREAD.with(Cell::get) =>
+        {
+            catch_unwind(AssertUnwindSafe(|| {
+                tokio::task::block_in_place(|| tokio_runtime().block_on(future))
+            }))
+        }
+        Ok(_) => {
+            std::thread::scope(|scope| scope.spawn(move || tokio_runtime().block_on(future)).join())
+        }
+    };
+    outcome.unwrap_or_else(|payload| Err(FlowError::Internal(panic_message(payload.as_ref()))))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned());
+    match detail {
+        Some(message) => format!("runtime future panicked: {message}"),
+        None => "runtime future panicked".to_string(),
+    }
 }
 
 /// Prevents a closed Unix worker socket from terminating the embedding process.
@@ -312,34 +360,6 @@ pub unsafe extern "C" fn nemo_relay_log(
     }
 }
 
-fn block_on_sync_ffi<T, F>(future: F) -> FlowResult<T>
-where
-    T: Send,
-    F: Future<Output = FlowResult<T>> + Send,
-{
-    // These legacy helpers remain synchronous for source compatibility. When
-    // called from Tokio, the caller thread waits while Relay polls the chain on
-    // its runtime. Middleware must not depend on work driven exclusively by
-    // that blocked caller thread.
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let effective_scope_stack = current_scope_stack();
-        return std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    with_scope_stack(effective_scope_stack, || tokio_runtime().block_on(future))
-                })
-                .join()
-        })
-        .map_err(|_| {
-            FlowError::Internal(
-                "synchronous FFI middleware helper thread panicked while awaiting middleware"
-                    .into(),
-            )
-        })?;
-    }
-    tokio_runtime().block_on(future)
-}
-
 // ---------------------------------------------------------------------------
 // Standalone middleware chains
 // ---------------------------------------------------------------------------
@@ -385,7 +405,7 @@ pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match block_on_sync_ffi(core_tool_api::tool_request_intercepts(&name, args)) {
+    match block_on(core_tool_api::tool_request_intercepts(&name, args)) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
             NemoRelayStatus::Ok
@@ -426,7 +446,7 @@ pub unsafe extern "C" fn nemo_relay_tool_conditional_execution(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match block_on_sync_ffi(core_tool_api::tool_conditional_execution(&name, &args)) {
+    match block_on(core_tool_api::tool_conditional_execution(&name, &args)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -483,7 +503,7 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match block_on_sync_ffi(core_llm_api::llm_request_intercepts(name_str, request)) {
+    match block_on(core_llm_api::llm_request_intercepts(name_str, request)) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
@@ -649,7 +669,7 @@ pub unsafe extern "C" fn nemo_relay_llm_conditional_execution(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match block_on_sync_ffi(core_llm_api::llm_conditional_execution(&request)) {
+    match block_on(core_llm_api::llm_conditional_execution(&request)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
