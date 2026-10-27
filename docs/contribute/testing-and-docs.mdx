@@ -20,8 +20,8 @@ sharing the root environment.
 The quick starts store commands and expected output in their MDX pages. Sample
 files are committed beside the pages and displayed with Fern's `Code` component.
 The checker reads the referenced files, so displayed and tested content share
-the same source. From the repository root, validate contracts, check Relay
-version pins, and run the checker unit tests:
+the same source. From the repository root, validate contracts and run the checker
+unit tests:
 
 ```bash
 just check-quickstarts
@@ -47,15 +47,13 @@ The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
 output and artifacts after a successful run. These modes do not execute commands,
 provision credentials, or test operating-system compatibility.
 
-Relay installation version pins follow the Cargo workspace version through
-`just set-version`. Check for version drift with this command:
-
-```bash
-uv run --no-sync python scripts/docs/docs_version_pins.py check
-```
-
-The external Switchyard bundle and its tested Relay version are pinned
-independently.
+Review documentation in the same PR as a version bump, including early
+development bumps. Ask a coding agent to review affected installation
+instructions and examples, then have a maintainer review its proposed changes.
+Choose documentation versions according to the intended audience and available
+packages; contract checks do not require them to match the Cargo workspace
+version. The documentation maintenance process is described in
+[`RELEASING.md`](../../RELEASING.md#documentation-maintenance).
 
 With `jq` installed, the unit tests also exercise the four agent-runtime guides'
 copyable JSON verification expressions against complete and invalid fixtures.
