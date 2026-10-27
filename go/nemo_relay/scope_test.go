@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -900,5 +901,65 @@ func TestPushScopeKeepsGoroutineOnScopeThread(t *testing.T) {
 	}
 	if err := PopScope(outer); err != nil {
 		t.Fatalf("PopScope outer failed: %v", err)
+	}
+}
+
+func TestPopScopeRejectsOtherGoroutineOnSharedStack(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	pushed := make(chan *ScopeHandle, 1)
+	release := make(chan struct{})
+	ownerResult := make(chan error, 1)
+	go func() {
+		stack.Run(func() {
+			handle, err := PushScope("shared_owner", ScopeTypeAgent)
+			if err != nil {
+				ownerResult <- err
+				return
+			}
+			pushed <- handle
+			<-release
+			ownerResult <- PopScope(handle)
+		})
+	}()
+
+	var handle *ScopeHandle
+	select {
+	case handle = <-pushed:
+	case err := <-ownerResult:
+		t.Fatalf("PushScope in owner goroutine failed: %v", err)
+	}
+
+	stack.Run(func() {
+		if err := PopScope(handle); !errors.Is(err, ErrPopScopeGoroutine) {
+			t.Fatalf("PopScope from another goroutine = %v, want %v", err, ErrPopScopeGoroutine)
+		}
+		crossSchedulerBoundary(64)
+		current, err := GetHandle()
+		if err != nil {
+			t.Fatalf("GetHandle failed: %v", err)
+		}
+		if current.UUID() != handle.UUID() {
+			t.Fatalf("shared stack top after rejected pop = %s, want %s", current.UUID(), handle.UUID())
+		}
+		own, err := PushScope("shared_other", ScopeTypeFunction)
+		if err != nil {
+			t.Fatalf(pushScopeFailed, err)
+		}
+		if own.ParentUUID() != handle.UUID() {
+			t.Fatalf("own scope parent = %s, want %s", own.ParentUUID(), handle.UUID())
+		}
+		if err := PopScope(own); err != nil {
+			t.Fatalf("PopScope own failed: %v", err)
+		}
+	})
+
+	close(release)
+	if err := <-ownerResult; err != nil {
+		t.Fatalf("PopScope in owner goroutine failed: %v", err)
 	}
 }

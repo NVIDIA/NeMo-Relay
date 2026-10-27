@@ -355,6 +355,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -484,6 +485,13 @@ func callStatus(call func() C.int32_t) error {
 	return checkStatus(call())
 }
 
+var ErrPopScopeGoroutine = errors.New("scope must be popped by the goroutine that pushed it")
+
+var (
+	scopeOwnersMu sync.Mutex
+	scopeOwners   = map[string]uint64{}
+)
+
 func pushPinned(call func() C.int32_t) error {
 	runtime.LockOSThread()
 	if err := callStatus(call); err != nil {
@@ -493,12 +501,31 @@ func pushPinned(call func() C.int32_t) error {
 	return nil
 }
 
-func popPinned(call func() C.int32_t) error {
-	if err := callStatus(call); err != nil {
-		return err
+func claimScope(uuid string) {
+	owner := currentGoroutineID()
+	scopeOwnersMu.Lock()
+	scopeOwners[uuid] = owner
+	scopeOwnersMu.Unlock()
+}
+
+func scopeOwnedHere(uuid string) (bool, error) {
+	scopeOwnersMu.Lock()
+	owner, pinned := scopeOwners[uuid]
+	scopeOwnersMu.Unlock()
+	if !pinned {
+		return false, nil
 	}
+	if owner != currentGoroutineID() {
+		return false, ErrPopScopeGoroutine
+	}
+	return true, nil
+}
+
+func releaseScope(uuid string) {
+	scopeOwnersMu.Lock()
+	delete(scopeOwners, uuid)
+	scopeOwnersMu.Unlock()
 	runtime.UnlockOSThread()
-	return nil
 }
 
 // callPointer is callStatus for FFI calls that return null on failure.
@@ -815,7 +842,9 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 	}); err != nil {
 		return nil, err
 	}
-	return newScopeHandle(out), nil
+	handle := newScopeHandle(out)
+	claimScope(handle.UUID())
+	return handle, nil
 }
 
 // PopScope removes the given scope from the scope stack and emits an End event
@@ -841,7 +870,17 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return popPinned(func() C.int32_t { return C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp) })
+	pinned, err := scopeOwnedHere(handle.UUID())
+	if err != nil {
+		return err
+	}
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp) }); err != nil {
+		return err
+	}
+	if pinned {
+		releaseScope(handle.UUID())
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
