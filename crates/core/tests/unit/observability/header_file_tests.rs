@@ -110,7 +110,7 @@ fn insecure_http_hosts_trust_only_exact_listed_hosts() {
             "{endpoint}"
         );
         assert!(
-            validate_trace_transport(endpoint, &trusted).is_ok(),
+            validate_otlp_transport(endpoint, &trusted, "trace").is_ok(),
             "{endpoint}"
         );
     }
@@ -128,7 +128,7 @@ fn insecure_http_hosts_trust_only_exact_listed_hosts() {
             "{error}"
         );
         assert!(
-            validate_trace_transport(endpoint, &trusted).is_err(),
+            validate_otlp_transport(endpoint, &trusted, "trace").is_err(),
             "{endpoint}"
         );
     }
@@ -157,7 +157,8 @@ fn plaintext_rejections_name_the_redacted_origin_and_the_remedy() {
     }
 
     for endpoint in ["ftp://collector.example/", "https://collector.example/v1 "] {
-        let error = validate_trace_transport(endpoint, &PlaintextPolicy::AnyHost).unwrap_err();
+        let error =
+            validate_otlp_transport(endpoint, &PlaintextPolicy::AnyHost, "trace").unwrap_err();
         assert!(error.contains("valid https:// or http:// URI"), "{error}");
         assert!(!error.contains("insecure_http_hosts"), "{error}");
         assert!(!error.contains("collector.example"), "{error}");
@@ -167,7 +168,7 @@ fn plaintext_rejections_name_the_redacted_origin_and_the_remedy() {
 #[test]
 fn any_host_policy_allows_plaintext_everywhere_and_listed_hosts_cover_websockets() {
     for endpoint in ["http://collector.example/v1/traces", "http://10.0.0.6:4318"] {
-        assert!(validate_trace_transport(endpoint, &PlaintextPolicy::AnyHost).is_ok());
+        assert!(validate_otlp_transport(endpoint, &PlaintextPolicy::AnyHost, "trace").is_ok());
         assert!(validate_header_http_endpoint(endpoint, &PlaintextPolicy::AnyHost).is_ok());
     }
     assert!(
@@ -524,4 +525,58 @@ async fn http_client_resolves_file_backed_headers_in_a_tokio_runtime() {
         .await
         .unwrap();
     server.join().unwrap();
+}
+
+#[test]
+fn transport_errors_preserve_policy_and_endpoint_causes_without_secrets() {
+    for signal in ["trace", "log", "metric"] {
+        let plaintext = PlaintextPolicy::default();
+        let endpoint = "http://private-user:private-password@collector.example:4318/private-path?token=private-query";
+        let transport_error =
+            validate_otlp_transport_typed(endpoint, &plaintext, signal).unwrap_err();
+        assert!(
+            transport_error
+                .to_string()
+                .contains(&format!("OTLP {signal} endpoints require HTTPS"))
+        );
+        for error in [
+            transport_error,
+            validate_header_http_endpoint_typed(endpoint, &plaintext).unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                EndpointTransportError::PlaintextRejected(_)
+            ));
+            let message = error.to_string();
+            assert!(message.contains("http://collector.example:4318"));
+            for secret in [
+                "private-user",
+                "private-password",
+                "private-path",
+                "private-query",
+            ] {
+                assert!(!message.contains(secret));
+            }
+            assert!(matches!(
+                crate::observability::otel::ExporterInitializationError::from(error),
+                crate::observability::otel::ExporterInitializationError::PlaintextRejected(_),
+            ));
+        }
+        for endpoint in ["not an endpoint", "ftp://collector.example:4318"] {
+            assert!(matches!(
+                validate_otlp_transport_typed(endpoint, &plaintext, signal).unwrap_err(),
+                EndpointTransportError::InvalidEndpoint(_),
+            ));
+            assert!(matches!(
+                validate_header_http_endpoint_typed(endpoint, &plaintext).unwrap_err(),
+                EndpointTransportError::InvalidEndpoint(_),
+            ));
+        }
+        assert_eq!(
+            validate_otlp_transport(endpoint, &plaintext, signal).unwrap_err(),
+            validate_otlp_transport_typed(endpoint, &plaintext, signal)
+                .unwrap_err()
+                .to_string(),
+        );
+    }
 }

@@ -258,96 +258,7 @@ impl NativePlugin for FixtureNativePlugin {
         })?;
         register_fixture_tool_execution(ctx, &runtime)?;
 
-        ctx.register_llm_sanitize_request_guardrail(
-            "fixture_llm_sanitize_request",
-            0,
-            |request, context| async move {
-                let request = if let Some(codec) = context.resolve_codec() {
-                    let annotated = codec.decode(&request)?;
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    codec.encode(&annotated, &request)?
-                } else {
-                    request
-                };
-                Ok(Some(mark_llm_request(
-                    request,
-                    "native_plugin_llm_sanitize_request",
-                )))
-            },
-        )?;
-        ctx.register_llm_sanitize_response_guardrail(
-            "fixture_llm_sanitize_response",
-            0,
-            |response, context| async move {
-                if let Some(codec) = context.resolve_codec() {
-                    codec.decode(&response)?;
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    codec.decode(&response)?;
-                }
-                Ok(Some(mark_json(
-                    response,
-                    "native_plugin_llm_sanitize_response",
-                )))
-            },
-        )?;
-        ctx.register_llm_conditional_execution_guardrail(
-            "fixture_llm_conditional",
-            0,
-            |_request| async move { Ok(None) },
-        )?;
-        ctx.register_llm_request_intercept(
-            "fixture_llm_request_intercept",
-            0,
-            false,
-            |_name, request, annotated| async move {
-                Ok(LlmRequestInterceptOutcome::new(
-                    mark_llm_request(request, "native_plugin_llm_request_intercept"),
-                    annotated,
-                )
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("fixture.native.llm_request.mark")
-                        .category(EventCategory::custom())
-                        .category_profile(CategoryProfile {
-                            subtype: Some("fixture.native.pending".into()),
-                            ..CategoryProfile::default()
-                        })
-                        .data(json!({ "source": "native_request_intercept" }))
-                        .metadata(json!({ "fixture": true }))
-                        .build(),
-                ))
-            },
-        )?;
-        ctx.register_llm_execution_intercept("fixture_llm_execution", 0, {
-            let runtime = runtime.clone();
-            move |_name, request, _context, next| {
-                let runtime = runtime.clone();
-                async move {
-                    if request.content["native_http_error"].as_bool() == Some(true) {
-                        return Err(nemo_relay_plugin::http_error_message(
-                            403,
-                            "provider denied access",
-                        )?);
-                    }
-                    let inspect_snapshot =
-                        request.content["inspect_scope_stack"].as_bool() == Some(true);
-                    let response = next
-                        .call(mark_llm_request(
-                            request,
-                            "native_plugin_llm_execution_request",
-                        ))
-                        .await?;
-                    let mut response = mark_json(response, "native_plugin_llm_execution");
-                    if inspect_snapshot {
-                        tokio::task::yield_now().await;
-                        response["scope_stack_snapshot"] =
-                            serde_json::to_value(runtime.current_scope_stack_snapshot()?)
-                                .map_err(|error| error.to_string())?;
-                    }
-                    Ok(response)
-                }
-            }
-        })?;
+        register_fixture_llm_guardrails(ctx, &runtime)?;
         register_fixture_llm_stream_execution(ctx, &runtime)?;
         ctx.register_llm_execution_intercept("fixture_llm_execution_cancellation", -1, {
             let runtime = runtime.clone();
@@ -2062,4 +1973,101 @@ fn register_diagnostics_fixture(
             Ok(args)
         }
     })
+}
+
+fn register_fixture_llm_guardrails(
+    ctx: &mut PluginContext<'_>,
+    runtime: &PluginRuntime,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_llm_sanitize_request_guardrail(
+        "fixture_llm_sanitize_request",
+        0,
+        |request, context| async move {
+            let request = if let Some(codec) = context.resolve_codec() {
+                let annotated = codec.decode(&request)?;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                codec.encode(&annotated, &request)?
+            } else {
+                request
+            };
+            Ok(Some(mark_llm_request(
+                request,
+                "native_plugin_llm_sanitize_request",
+            )))
+        },
+    )?;
+    ctx.register_llm_sanitize_response_guardrail(
+        "fixture_llm_sanitize_response",
+        0,
+        |response, context| async move {
+            if let Some(codec) = context.resolve_codec() {
+                codec.decode(&response)?;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                codec.decode(&response)?;
+            }
+            Ok(Some(mark_json(
+                response,
+                "native_plugin_llm_sanitize_response",
+            )))
+        },
+    )?;
+    ctx.register_llm_conditional_execution_guardrail(
+        "fixture_llm_conditional",
+        0,
+        |_request| async move { Ok(None) },
+    )?;
+    ctx.register_llm_request_intercept(
+        "fixture_llm_request_intercept",
+        0,
+        false,
+        |_name, request, annotated| async move {
+            Ok(LlmRequestInterceptOutcome::new(
+                mark_llm_request(request, "native_plugin_llm_request_intercept"),
+                annotated,
+            )
+            .with_pending_mark(
+                PendingMarkSpec::builder()
+                    .name("fixture.native.llm_request.mark")
+                    .category(EventCategory::custom())
+                    .category_profile(CategoryProfile {
+                        subtype: Some("fixture.native.pending".into()),
+                        ..CategoryProfile::default()
+                    })
+                    .data(json!({ "source": "native_request_intercept" }))
+                    .metadata(json!({ "fixture": true }))
+                    .build(),
+            ))
+        },
+    )?;
+    ctx.register_llm_execution_intercept("fixture_llm_execution", 0, {
+        let runtime = runtime.clone();
+        move |_name, request, _context, next| {
+            let runtime = runtime.clone();
+            async move {
+                if request.content["native_http_error"].as_bool() == Some(true) {
+                    return Err(nemo_relay_plugin::http_error_message(
+                        403,
+                        "provider denied access",
+                    )?);
+                }
+                let inspect_snapshot =
+                    request.content["inspect_scope_stack"].as_bool() == Some(true);
+                let response = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_execution_request",
+                    ))
+                    .await?;
+                let mut response = mark_json(response, "native_plugin_llm_execution");
+                if inspect_snapshot {
+                    tokio::task::yield_now().await;
+                    response["scope_stack_snapshot"] =
+                        serde_json::to_value(runtime.current_scope_stack_snapshot()?)
+                            .map_err(|error| error.to_string())?;
+                }
+                Ok(response)
+            }
+        }
+    })?;
+    Ok(())
 }

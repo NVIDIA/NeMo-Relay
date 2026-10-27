@@ -9,6 +9,8 @@
 use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Utc};
+use napi::bindgen_prelude::FromNapiValue;
+use napi::{Env, JsObject, JsUnknown, NapiRaw, ValueType};
 use serde_json::Value as Json;
 
 use nemo_relay::error::FlowError;
@@ -55,6 +57,41 @@ pub fn opt_json(val: Option<Json>) -> Option<Json> {
 /// Normalize a callback return into JSON, treating omitted/`undefined` as `null`.
 pub fn callback_json(val: Option<Json>) -> Json {
     val.unwrap_or(Json::Null)
+}
+
+/// Convert JSON input without passing BigInt to napi-rs's panicking converter.
+/// Read each property once so getters cannot bypass the BigInt check.
+pub(crate) fn checked_json(env: &Env, value: JsUnknown) -> napi::Result<Json> {
+    match value.get_type()? {
+        ValueType::BigInt => {
+            env.throw_type_error("BigInt cannot be represented as JSON", None)?;
+            Err(napi::Error::new(
+                napi::Status::PendingException,
+                "BigInt cannot be represented as JSON",
+            ))
+        }
+        ValueType::Object => {
+            // The type was checked above; recursive conversion guards every child.
+            let object = unsafe { value.cast::<JsObject>() };
+            if object.is_array()? {
+                let mut values = Vec::new();
+                for index in 0..object.get_array_length()? {
+                    values.push(checked_json(env, object.get_element(index)?)?);
+                }
+                Ok(Json::Array(values))
+            } else {
+                let mut values = serde_json::Map::new();
+                for key in JsObject::keys(&object)? {
+                    if let Some(value) = object.get::<_, JsUnknown>(&key)? {
+                        values.insert(key, checked_json(env, value)?);
+                    }
+                }
+                Ok(Json::Object(values))
+            }
+        }
+        // Only primitive values reach napi-rs; BigInt was rejected above.
+        _ => unsafe { Json::from_napi_value(env.raw(), value.raw()) },
+    }
 }
 
 /// Parse optional Unix microseconds since epoch into a UTC timestamp.

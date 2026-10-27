@@ -393,11 +393,23 @@ fn register_fixture_tool_hooks(
         "fixture_tool_execution",
         0,
         |context, next: ToolNext| async move {
+            if context.tool_name() == "large-worker-response" {
+                let mib = context.args()["response_mib"].as_u64().unwrap() as usize;
+                return Ok(ToolExecutionInterceptOutcome::from(
+                    nemo_relay_worker::ToolExecutionResult::new(json!({
+                        "text": "x".repeat(mib * 1024 * 1024),
+                        "worker_plugin_tool_execution": true,
+                    })),
+                ));
+            }
+            let generated_request = context.tool_name() == "large-continuation-request";
+            let mut args = context.into_args();
+            if generated_request {
+                let mib = args["response_mib"].as_u64().unwrap() as usize;
+                args["text"] = json!("x".repeat(mib * 1024 * 1024));
+            }
             let result = next
-                .call(mark_json(
-                    context.into_args(),
-                    "worker_plugin_tool_execution_request",
-                ))
+                .call(mark_json(args, "worker_plugin_tool_execution_request"))
                 .await?;
             let mut result = result;
             result.result = mark_json(result.result, "worker_plugin_tool_execution");

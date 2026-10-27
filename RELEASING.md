@@ -129,6 +129,10 @@ When a release branch no longer needs nightly alpha tags, open a PR against
 `main` to remove that branch from
 [`.github/nightly-alpha-branches.yaml`](.github/nightly-alpha-branches.yaml).
 
+The nightly alpha workflow deletes tags matching `<version>-alpha.YYYYMMDD`
+whose UTC date is older than 30 days, across all release lines. Tags dated
+exactly 30 days ago or newer are retained.
+
 ## Before You Cut A Release
 
 Before you create a release tag, confirm the following:

@@ -1148,3 +1148,30 @@ fn canonical_memory_fixture_preserves_complete_wire_shape_and_precision() {
     assert!(sample.memory.system_available.is_none());
     assert_eq!(serde_json::to_value(page).unwrap(), value);
 }
+
+#[test]
+fn exporter_initialization_failure_has_plugin_common_ownership_and_explicit_causes() {
+    let code = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ExporterInitializationFailed,
+    )));
+    assert_eq!(
+        code.canonical_name(),
+        "plugin.exporter_initialization_failed"
+    );
+    assert_eq!(
+        BuiltinDiagnosticCode::from_canonical_name(code.canonical_name()),
+        Some(code)
+    );
+    assert_eq!(code.domain(), DiagnosticDomain::Plugin);
+    assert_eq!(code.plugin_family(), Some(PluginDiagnosticFamily::Common));
+    for class in [
+        FailureClass::InvalidInput,
+        FailureClass::PolicyRejected,
+        FailureClass::Io,
+        FailureClass::Unknown,
+    ] {
+        assert!(code.allows_class(Some(class)));
+    }
+    assert!(!code.allows_class(None));
+    assert!(!code.allows_class(Some(FailureClass::Internal)));
+}

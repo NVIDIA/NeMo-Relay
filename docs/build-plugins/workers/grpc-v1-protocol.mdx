@@ -470,6 +470,32 @@ workers:
 | `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
 | `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
 | `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host fallback override, replacing plugin `default_bytes` and `by_name` limits. When unset: plugin `default_bytes`, then 4 MiB. Relay forwards the resolved fallback to the worker. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact callback registration names to byte limits. Relay forwards resolved per-callback overrides to the worker. |
+
+### Configure Execution Message Size
+
+Configure these tables in `relay-plugin.toml`, separate from the component
+configuration in `plugins.toml`. For timeout settings and a combined example,
+refer to [Worker Timeouts and Payload Limits](/configure-plugins/plugin-configuration-files#worker-timeouts-and-payload-limits).
+
+Use exact callback registration names, as shown in the following example:
+
+<Code src="../_code/worker-message-limits/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-8" showLineNumbers={false} />
+
+Relay uses the following settings in order, from highest to lowest priority:
+
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON callback-to-bytes map, such as `{"input_guardrail":16777216}`.
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
+- Plugin `load.max_message_bytes.by_name`: exact callback registration name.
+- Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
+
+Limits must be whole numbers from 1 through 2,147,483,647 bytes. They apply to
+each sent or received message for that callback, including stream chunks and
+calls to continuations. They do not limit the total stream size. Control RPCs
+use the default limit. Zero is invalid. These limits do not change model
+context limits or provide automatic compaction. Reactivate the plugin after changing the manifest or host
+environment.
 
 ## JSON Envelopes and Errors
 

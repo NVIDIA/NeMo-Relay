@@ -125,8 +125,10 @@ func adaptiveOptionsCString(value any) (*C.char, error) {
 	return C.CString(string(payload)), nil
 }
 
-func adaptiveJSONString(status C.int32_t, out *C.char) (string, error) {
-	return checkedJSONString(int32(status), func() string { return C.GoString(out) }, func() {
+func adaptiveJSONString(call func(out **C.char) C.int32_t) (string, error) {
+	var out *C.char
+	err := callStatus(func() C.int32_t { return call(&out) })
+	return checkedJSONString(err, func() string { return C.GoString(out) }, func() {
 		C.nemo_relay_string_free(out)
 	})
 }
@@ -139,8 +141,7 @@ func ValidateAdaptiveConfig(config AdaptiveConfig) (ConfigReport, error) {
 	}
 	defer C.free(unsafe.Pointer(cConfig))
 
-	var out *C.char
-	raw, err := adaptiveJSONString(C.nemo_relay_adaptive_validate_config(cConfig, &out), out)
+	raw, err := adaptiveJSONString(func(out **C.char) C.int32_t { return C.nemo_relay_adaptive_validate_config(cConfig, out) })
 	if err != nil {
 		return ConfigReport{}, err
 	}
@@ -160,7 +161,7 @@ func NewAdaptiveRuntime(config AdaptiveConfig) (*AdaptiveRuntime, error) {
 	defer C.free(unsafe.Pointer(cConfig))
 
 	var out *C.FfiAdaptiveRuntime
-	if err := checkStatus(C.nemo_relay_adaptive_runtime_create(cConfig, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_adaptive_runtime_create(cConfig, &out) }); err != nil {
 		return nil, err
 	}
 	r := &AdaptiveRuntime{ptr: out}
@@ -179,7 +180,7 @@ func (r *AdaptiveRuntime) Register() error {
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
-	return checkStatus(C.nemo_relay_adaptive_runtime_register(r.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_adaptive_runtime_register(r.ptr) })
 }
 
 // Deregister removes all adaptive runtime registrations owned by this runtime.
@@ -188,7 +189,7 @@ func (r *AdaptiveRuntime) Deregister() error {
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
-	return checkStatus(C.nemo_relay_adaptive_runtime_deregister(r.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_adaptive_runtime_deregister(r.ptr) })
 }
 
 // Shutdown deregisters the adaptive runtime and consumes its Rust runtime state.
@@ -197,7 +198,7 @@ func (r *AdaptiveRuntime) Shutdown() error {
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
-	err := checkStatus(C.nemo_relay_adaptive_runtime_shutdown(r.ptr))
+	err := callStatus(func() C.int32_t { return C.nemo_relay_adaptive_runtime_shutdown(r.ptr) })
 	C.nemo_relay_adaptive_runtime_free(r.ptr)
 	r.ptr = nil
 	runtime.SetFinalizer(r, nil)
@@ -210,7 +211,7 @@ func (r *AdaptiveRuntime) WaitForIdle() error {
 	if r == nil || r.ptr == nil {
 		return errNilAdaptiveRuntime()
 	}
-	return checkStatus(C.nemo_relay_adaptive_runtime_wait_for_idle(r.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_adaptive_runtime_wait_for_idle(r.ptr) })
 }
 
 // Report returns the runtime validation report captured during construction.
@@ -219,8 +220,7 @@ func (r *AdaptiveRuntime) Report() (ConfigReport, error) {
 	if r == nil || r.ptr == nil {
 		return ConfigReport{}, errNilAdaptiveRuntime()
 	}
-	var out *C.char
-	raw, err := adaptiveJSONString(C.nemo_relay_adaptive_runtime_report_json(r.ptr, &out), out)
+	raw, err := adaptiveJSONString(func(out **C.char) C.int32_t { return C.nemo_relay_adaptive_runtime_report_json(r.ptr, out) })
 	if err != nil {
 		return ConfigReport{}, err
 	}
@@ -241,10 +241,12 @@ func (r *AdaptiveRuntime) BindScope(scope *ScopeHandle) error {
 	if scope == nil || scope.ptr == nil {
 		return errNilScopeHandle()
 	}
-	return checkStatus(C.nemo_relay_adaptive_runtime_bind_scope(
-		r.ptr,
-		(*C.FfiScopeHandle)(unsafe.Pointer(scope.ptr)),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_adaptive_runtime_bind_scope(
+			r.ptr,
+			(*C.FfiScopeHandle)(unsafe.Pointer(scope.ptr)),
+		)
+	})
 }
 
 // BuildCacheRequestFacts derives cache request facts from an annotated request.
@@ -259,8 +261,9 @@ func (r *AdaptiveRuntime) BuildCacheRequestFacts(input CacheRequestFactsInput) (
 	}
 	defer C.free(unsafe.Pointer(cOptions))
 
-	var out *C.char
-	raw, err := adaptiveJSONString(C.nemo_relay_adaptive_runtime_build_cache_request_facts(r.ptr, cOptions, &out), out)
+	raw, err := adaptiveJSONString(func(out **C.char) C.int32_t {
+		return C.nemo_relay_adaptive_runtime_build_cache_request_facts(r.ptr, cOptions, out)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -282,8 +285,7 @@ func BuildCacheTelemetryEvent(input CacheTelemetryEventInput) (*CacheTelemetryEv
 	}
 	defer C.free(unsafe.Pointer(cOptions))
 
-	var out *C.char
-	raw, err := adaptiveJSONString(C.nemo_relay_adaptive_build_cache_telemetry_event(cOptions, &out), out)
+	raw, err := adaptiveJSONString(func(out **C.char) C.int32_t { return C.nemo_relay_adaptive_build_cache_telemetry_event(cOptions, out) })
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +301,7 @@ func BuildCacheTelemetryEvent(input CacheTelemetryEventInput) (*CacheTelemetryEv
 
 // SetLatencySensitivity sets manual latency sensitivity on the current scope.
 func SetLatencySensitivity(value uint32) error {
-	return checkStatus(C.nemo_relay_adaptive_set_latency_sensitivity(C.uint32_t(value)))
+	return callStatus(func() C.int32_t { return C.nemo_relay_adaptive_set_latency_sensitivity(C.uint32_t(value)) })
 }
 
 func errNilAdaptiveRuntime() error {

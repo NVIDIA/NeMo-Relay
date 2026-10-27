@@ -16,6 +16,7 @@ use crate::api::runtime::{
 use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::{EditorConfig, EditorFieldKind, EditorSchema};
+use crate::observability::otel::ExporterInitializationError;
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
@@ -510,47 +511,82 @@ fn automatic_otel_subscribers_accept_global_otlp_headers() {
 }
 
 #[test]
-fn automatic_otel_headers_require_protected_log_and_metric_endpoints() {
+fn automatic_otel_requires_protected_log_and_metric_endpoints_with_or_without_headers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
-    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
-    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
-    let _environment = EnvironmentGuard::capture([endpoint, headers]);
-
-    // SAFETY: the observability mutex serializes test-only environment changes.
-    unsafe {
-        std::env::set_var(endpoint, "http://collector.example:4318");
-        std::env::set_var(headers, "authorization=Bearer%20environment-token");
+    let _environment = plaintext_preflight_environment();
+    for headers in [None, Some("authorization=Bearer%20environment-token")] {
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::set_var(
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://collector.example:4318",
+            );
+            match headers {
+                Some(value) => std::env::set_var("OTEL_EXPORTER_OTLP_HEADERS", value),
+                None => std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS"),
+            }
+        }
+        let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+            PlaintextPolicy::default(),
+        );
+        assert!(matches!(
+            logs,
+            Err(ExporterInitializationError::PlaintextRejected(message))
+                if message.contains("OTLP log endpoints require HTTPS")
+        ));
+        let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+            PlaintextPolicy::default(),
+        );
+        assert!(matches!(
+            metrics,
+            Err(ExporterInitializationError::PlaintextRejected(message))
+                if message.contains("OTLP metric endpoints require HTTPS")
+        ));
     }
-
-    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
-        PlaintextPolicy::default(),
-    );
-    assert!(logs.is_err());
-    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
-        PlaintextPolicy::default(),
-    );
-    assert!(metrics.is_err());
 }
 
 #[test]
-fn automatic_otel_skips_an_invalid_trace_endpoint_without_blocking_other_signals() {
+fn automatic_otel_skips_all_disallowed_plaintext_signals_without_headers() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
-    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
-    let headers = "OTEL_EXPORTER_OTLP_HEADERS";
-    let _environment = EnvironmentGuard::capture([endpoint, headers]);
-
+    let _environment = plaintext_preflight_environment();
     // SAFETY: the observability mutex serializes test-only environment changes.
     unsafe {
-        std::env::set_var(endpoint, "http://collector.example:4318");
-        std::env::remove_var(headers);
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://collector.example:4318",
+        );
     }
 
     let config = plugin_config(json!({"version": 4}));
-    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
-
-    let state = global_context();
-    assert_eq!(state.read().unwrap().event_subscribers.len(), 1);
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    let skipped = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 3, "diagnostics: {:?}", report.diagnostics);
+    for signal in ["traces", "logs", "metrics"] {
+        assert!(
+            skipped.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains(&format!("OpenTelemetry {signal} exporter"))
+                    && diagnostic.field.as_deref() == Some("OTEL_EXPORTER_OTLP_ENDPOINT")
+                    && diagnostic
+                        .message
+                        .contains("plaintext destination rejected by transport policy")
+            }),
+            "{signal}: {skipped:?}"
+        );
+    }
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .is_empty()
+    );
     crate::plugin::test_close_plugin_host().unwrap();
 }
 
@@ -604,7 +640,11 @@ fn automatic_otel_rejection_reports_redacted_trace_source_and_keeps_valid_metric
     );
     assert!(diagnostic.message.contains("traces"));
     assert!(diagnostic.message.contains("http://collector.example:4318"));
-    assert!(diagnostic.message.contains("insecure_http_hosts"));
+    assert!(
+        diagnostic
+            .message
+            .contains("insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS")
+    );
     for secret in [
         "relay-user",
         "relay-secret",
@@ -651,8 +691,6 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
             "OTEL_EXPORTER_OTLP_ENDPOINT",
             "http://collector.example:4318/private?token=relay-query-secret",
         );
-        std::env::set_var("OTEL_LOGS_EXPORTER", "none");
-        std::env::set_var("OTEL_METRICS_EXPORTER", "none");
     }
     let config = plugin_config(json!({"version": 4, "opentelemetry": {"enabled": true}}));
     let report =
@@ -662,9 +700,8 @@ fn automatic_otel_reports_generic_source_and_accepts_allowlisted_named_host() {
         .iter()
         .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
         .collect::<Vec<_>>();
-    assert_eq!(skipped.len(), 1, "diagnostics: {:?}", report.diagnostics);
+    assert_eq!(skipped.len(), 3, "diagnostics: {:?}", report.diagnostics);
     for diagnostic in skipped {
-        assert!(diagnostic.message.contains("traces"));
         assert_eq!(
             diagnostic.field.as_deref(),
             Some("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -2463,7 +2500,7 @@ fn plaintext_preflight_checks_automatic_destinations_and_honors_exporter_disabli
             std::env::remove_var(&endpoint_variable);
         }
     }
-    // A generic endpoint selects all three signals; headerless logs and metrics remain permitted.
+    // A generic endpoint applies the same transport policy to all three signals without headers.
     // SAFETY: the observability mutex serializes test-only environment changes.
     unsafe {
         std::env::set_var(
@@ -2473,11 +2510,13 @@ fn plaintext_preflight_checks_automatic_destinations_and_honors_exporter_disabli
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
     }
     let diagnostics = plaintext_preflight_diagnostics(&configuration);
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!(
-        diagnostics[0].component.as_deref(),
-        Some("opentelemetry.automatic.traces")
-    );
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+    for signal in ["traces", "logs", "metrics"] {
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.component.as_deref()
+                == Some(format!("opentelemetry.automatic.{signal}").as_str())
+        }));
+    }
 }
 
 #[test]
@@ -3161,33 +3200,7 @@ fn automatic_grpc_skips_tls_for_http_and_rejects_certificate_settings() {
                 "{signal}: HTTP must not load trusted certificates"
             );
 
-            for prefix in [String::new(), format!("{signal}_")] {
-                for fields in [
-                    &["CERTIFICATE"][..],
-                    &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
-                ] {
-                    unsafe {
-                        for field in fields {
-                            std::env::set_var(
-                                format!("OTEL_EXPORTER_OTLP_{prefix}{field}"),
-                                "unused.pem",
-                            );
-                        }
-                    }
-                    let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
-                        .unwrap_err()
-                        .to_string();
-                    unsafe {
-                        for field in fields {
-                            std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
-                        }
-                    }
-                    assert!(
-                        error.contains("TLS settings require an HTTPS endpoint"),
-                        "{error}"
-                    );
-                }
-            }
+            assert_http_rejects_tls_settings(signal);
         }
         unsafe {
             std::env::remove_var(endpoint_variable);
@@ -5706,6 +5719,7 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
             session_instance_id: Some("instance-id".to_string()),
             user_id: Some("alice".to_string()),
         },
+        AtifOutputOptions::from(&AtifSectionConfig::default()),
     )
     .unwrap();
     let value: Json = serde_json::from_slice(&write.payload).unwrap();
@@ -5724,6 +5738,181 @@ fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
     );
     assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
     assert_eq!(value["extra"]["observed_events"], json!([]));
+}
+
+#[test]
+fn atif_retention_defaults_preserve_existing_payloads() {
+    let deserialized: AtifSectionConfig = serde_json::from_value(json!({})).unwrap();
+    for config in [AtifSectionConfig::default(), deserialized] {
+        assert!(config.include_observed_events);
+        assert!(config.include_llm_requests);
+    }
+}
+
+#[test]
+fn atif_compact_payload_preserves_json_and_reduced_history_grows_linearly() {
+    let payload = |calls: usize, compact: bool, include_llm_requests: bool| {
+        let mut history = Vec::new();
+        let mut steps = Vec::new();
+        for index in 0..calls {
+            history.push(json!({"role": "user", "content": "x".repeat(2048)}));
+            steps.push(json!({
+                "step_id": index + 1,
+                "source": "user",
+                "message": "x".repeat(2048),
+                "extra": {
+                    "llm_request": {"messages": history},
+                    "ancestry": {"function_id": index.to_string(), "function_name": "llm"}
+                }
+            }));
+        }
+        let trajectory = serde_json::from_value(json!({
+            "schema_version": "ATIF-v1.7",
+            "session_id": "size-test",
+            "agent": {"name": "size-test", "version": "1"},
+            "steps": steps
+        }))
+        .unwrap();
+        let write = prepare_atif_payload(
+            Uuid::nil(),
+            "trajectory.json".into(),
+            None,
+            None,
+            trajectory,
+            Vec::new(),
+            AtifCorrelation {
+                session_id: None,
+                session_instance_id: None,
+                user_id: None,
+            },
+            AtifOutputOptions {
+                include_observed_events: false,
+                include_llm_requests,
+                compact,
+            },
+        )
+        .unwrap();
+        write.payload
+    };
+    let compact = payload(8, true, true);
+    let pretty = payload(8, false, true);
+    assert!(compact.len() < pretty.len());
+    assert_eq!(
+        serde_json::from_slice::<Json>(&compact).unwrap(),
+        serde_json::from_slice::<Json>(&pretty).unwrap()
+    );
+    let full_large = payload(32, true, true);
+    let reduced_small = payload(8, true, false);
+    let reduced_large = payload(32, true, false);
+    assert!(
+        full_large.len() > compact.len() * 10,
+        "full histories accumulate quadratically"
+    );
+    assert!(
+        reduced_large.len() < reduced_small.len() * 5,
+        "omitting histories keeps this fixture linear"
+    );
+    assert!(reduced_large.len() * 10 < full_large.len());
+}
+
+#[test]
+fn atif_retention_options_cover_nested_steps_and_open_agent_teardown() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for (include_observed_events, include_llm_requests, close_agent) in [false, true]
+        .into_iter()
+        .flat_map(|include_observed_events| {
+            [false, true]
+                .map(|include_llm_requests| (include_observed_events, include_llm_requests))
+        })
+        .flat_map(|(include_observed_events, include_llm_requests)| {
+            [false, true]
+                .map(|close_agent| (include_observed_events, include_llm_requests, close_agent))
+        })
+    {
+        reset_runtime();
+        let dir = temp_dir("observability-atif-retention");
+        let config = plugin_config(json!({
+            "policy": {"unknown_field": "error"},
+            "atif": {
+                "enabled": true,
+                "output_directory": dir,
+                "include_observed_events": include_observed_events,
+                "include_llm_requests": include_llm_requests
+            }
+        }));
+        futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+        let agent = push_agent("retention-agent");
+        // Test a fresh user request and a continuation of the same turn.
+        // They store requests on user and agent steps, respectively.
+        for nested in [false, true] {
+            let child = nested.then(|| push_agent("nested-retention-agent"));
+            for continuation in [false, true] {
+                let messages = if continuation {
+                    json!([{"role": "tool", "tool_call_id": "call-1", "content": "result"}])
+                } else {
+                    json!([{"role": "user", "content": "hello"}])
+                };
+                let llm = crate::api::scope::push_scope(
+                    PushScopeParams::builder()
+                        .name("retention-llm")
+                        .scope_type(ScopeType::Llm)
+                        .input(json!({"messages": messages, "request_marker": "full-request"}))
+                        .build(),
+                )
+                .unwrap();
+                crate::api::scope::pop_scope(
+                    PopScopeParams::builder()
+                        .handle_uuid(&llm.uuid)
+                        .output(json!({"content": "answer", "usage": {"prompt_tokens": 3, "completion_tokens": 1}}))
+                        .build(),
+                ).unwrap();
+            }
+            if let Some(child) = child {
+                pop(&child);
+            }
+        }
+        if close_agent {
+            pop(&agent);
+        }
+        test_close_plugin_host().unwrap();
+        let payload = fs::read(dir.join(format!("nemo-relay-atif-{}.json", agent.uuid))).unwrap();
+        let value: Json = serde_json::from_slice(&payload).unwrap();
+        assert!(payload.contains(&b'\n'), "local-only output stays pretty");
+        assert_eq!(
+            value["extra"].get("observed_events").is_some(),
+            include_observed_events
+        );
+        let child = &value["subagent_trajectories"][0];
+        assert!(child.is_object());
+        for trajectory in [&value, child] {
+            assert_atif_retention_projection(trajectory, include_llm_requests);
+        }
+        if !close_agent {
+            pop(&agent);
+        }
+    }
+}
+
+fn assert_atif_retention_projection(trajectory: &Json, include_llm_requests: bool) {
+    let steps = trajectory["steps"].as_array().unwrap();
+    for source in ["user", "agent"] {
+        assert!(steps.iter().any(|step| step["source"] == source));
+    }
+    assert!(steps.iter().any(|step| step["message"] == "answer"));
+    assert_eq!(trajectory["final_metrics"]["total_prompt_tokens"], 6);
+    for step in steps.iter().filter(|step| step["message"] == "answer") {
+        assert!(step["extra"].get("ancestry").is_some());
+    }
+    let requests = steps
+        .iter()
+        .filter(|step| step["extra"].get("llm_request").is_some())
+        .count();
+    assert_eq!(requests, if include_llm_requests { 2 } else { 0 });
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["extra"].get("llm_response").is_some())
+    );
 }
 
 #[test]
@@ -8551,6 +8740,647 @@ fn signal_shutdown_distinguishes_delivery_failures_from_provider_failures() {
         }
         OpenTelemetryShutdownFailure::Delivery(_) => {
             panic!("provider failure must not imply lost records")
+        }
+    }
+}
+
+fn assert_automatic_exporter_signal_counter(
+    diagnostics: &crate::diagnostics::Diagnostics,
+    component_key: &str,
+) {
+    use crate::diagnostics::DiagnosticQuery;
+    let selected = diagnostics
+        .snapshot(&DiagnosticQuery {
+            component_key: Some(component_key.to_string()),
+            code: Some("plugin.exporter_initialization_failed".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(selected.events.len(), 1);
+    assert_eq!(selected.components.len(), 1);
+    assert!(selected.components[0].closed_at.is_some());
+    assert_eq!(
+        selected.components[0].counters[0].occurrences.value.get(),
+        1
+    );
+}
+
+fn assert_automatic_exporter_observations(
+    diagnostics: &crate::diagnostics::Diagnostics,
+    reports: &[ConfigDiagnostic],
+) {
+    use crate::diagnostics::{DiagnosticQuery, PluginPhase};
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 3);
+    let signal_keys = [
+        "opentelemetry.automatic.traces",
+        "opentelemetry.automatic.logs",
+        "opentelemetry.automatic.metrics",
+    ];
+    for ((event, report), component_key) in snapshot.events.iter().zip(reports).zip(signal_keys) {
+        assert_eq!(event.component.key, component_key);
+        assert_automatic_exporter_signal_counter(diagnostics, component_key);
+        assert_eq!(event.code(), "plugin.exporter_initialization_failed");
+        assert_eq!(event.classification.failure_class(), Some("invalid_input"));
+        assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
+        assert_eq!(
+            event.severity,
+            crate::diagnostics::DiagnosticSeverity::Warning
+        );
+        assert_eq!(event.detail.as_ref().unwrap().message, report.message);
+    }
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    for secret in ["user", "secret", "/private", "%ZZ"] {
+        assert!(!serialized.contains(secret), "diagnostics exposed {secret}");
+    }
+}
+
+#[test]
+fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once() {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variables = [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_SDK_DISABLED",
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE,
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "https://user:secret@collector.example/private?token=secret-query",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "authorization=secret-header%ZZ",
+        );
+    }
+    for enabled in [true, false] {
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let projected = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&projected);
+        let _projection = diagnostics
+            .subscribe_projection(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        let config = serde_json::from_value(json!({"version": 4})).unwrap();
+        register_observability(config, &mut ctx).unwrap();
+        let reports = ctx.activation_diagnostics();
+        assert_eq!(reports.len(), 3);
+        for report in reports {
+            assert!(report.message.contains("invalid exporter headers"));
+            assert_eq!(report.code, "observability.automatic_otel_signal_skipped");
+        }
+        if enabled {
+            assert_automatic_exporter_observations(&diagnostics, reports);
+        }
+        // Existing operational logging owns output; the adapter must not duplicate it.
+        assert_eq!(projected.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchanged() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let failed = automatic_subscriber::<()>(
+        true,
+        "traces",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        &mut ctx,
+        || {
+            Err(
+                crate::observability::otel::OpenTelemetryError::ExporterBuild(
+                    "TLS private-key secret: invalid input unavailable".to_string(),
+                )
+                .into(),
+            )
+        },
+    );
+    assert!(failed.is_empty());
+    let healthy = automatic_subscriber(
+        true,
+        "metrics",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        &mut ctx,
+        || Ok(()),
+    );
+    assert_eq!(healthy.len(), 1);
+    let disabled = automatic_subscriber::<()>(
+        false,
+        "logs",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        &mut ctx,
+        || panic!("disabled exporter built"),
+    );
+    assert!(disabled.is_empty());
+    assert_eq!(ctx.activation_diagnostics().len(), 1);
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].component.key,
+        "opentelemetry.automatic.traces"
+    );
+    assert_eq!(
+        snapshot.events[0].classification.failure_class(),
+        Some("unknown")
+    );
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("private-key secret")
+    );
+}
+
+// Host-level coverage uses the production initialization API with ambient config
+// disabled so an embedding application's files cannot affect the assertions.
+#[cfg(feature = "__skip-implicit-config")]
+fn automatic_host_diagnostics_environment() -> EnvironmentGuard {
+    let mut variables = vec![
+        "OTEL_SDK_DISABLED".to_string(),
+        "OTEL_TRACES_EXPORTER".to_string(),
+        "OTEL_LOGS_EXPORTER".to_string(),
+        "OTEL_METRICS_EXPORTER".to_string(),
+        AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE.to_string(),
+        "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG".to_string(),
+    ];
+    for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
+        for suffix in [
+            "ENDPOINT",
+            "HEADERS",
+            "PROTOCOL",
+            "CERTIFICATE",
+            "CLIENT_CERTIFICATE",
+            "CLIENT_KEY",
+        ] {
+            variables.push(format!("OTEL_EXPORTER_OTLP_{signal}{suffix}"));
+        }
+    }
+    let guard = EnvironmentGuard::capture(&variables);
+    // SAFETY: callers hold the observability/runtime-owner test mutex.
+    unsafe {
+        for variable in variables {
+            std::env::remove_var(variable);
+        }
+        std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1");
+    }
+    guard
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn automatic_host_failure_query(signal: &str) -> crate::diagnostics::DiagnosticQuery {
+    crate::diagnostics::DiagnosticQuery {
+        component_key: Some(format!("opentelemetry.automatic.{signal}")),
+        code: Some("plugin.exporter_initialization_failed".into()),
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_redacted(message: &str) {
+    for secret in [
+        "relay-user",
+        "relay-secret",
+        "/private",
+        "relay-query-secret",
+        "relay-private-missing-certificate",
+        "relay-private-invalid-certificate",
+        "relay-private-invalid-PEM",
+    ] {
+        assert!(!message.contains(secret), "diagnostic exposed {secret}");
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_rejection_report(diagnostics: &[ConfigDiagnostic]) -> &ConfigDiagnostic {
+    let skipped = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 1, "{diagnostics:?}");
+    let legacy = skipped[0];
+    assert_eq!(legacy.level, DiagnosticLevel::Warning);
+    assert_eq!(
+        legacy.field.as_deref(),
+        Some("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    );
+    assert!(!legacy.message.contains("underlying cause is unavailable"));
+    assert!(
+        legacy
+            .message
+            .contains("insecure_http_hosts or NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS")
+    );
+    assert_automatic_host_redacted(&legacy.message);
+    legacy
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_rejection_evidence(
+    service: &crate::diagnostics::Diagnostics,
+    legacy: &ConfigDiagnostic,
+) {
+    use crate::diagnostics::{DiagnosticSeverity, PluginPhase};
+    // The production registration context has already been dropped here.
+    let snapshot = service
+        .snapshot(&automatic_host_failure_query("traces"))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(snapshot.components.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.exporter_initialization_failed");
+    assert_eq!(
+        event.classification.failure_class(),
+        Some("policy_rejected")
+    );
+    assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
+    assert_eq!(event.severity, DiagnosticSeverity::Warning);
+    assert_eq!(
+        event.origin.ownership.responsibility.as_deref(),
+        Some("nemo-relay-plugin.v1.observability:1:")
+    );
+    assert_eq!(event.detail.as_ref().unwrap().message, legacy.message);
+    let row = &snapshot.components[0];
+    assert!(row.closed_at.is_some());
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(row.counters.len(), 1);
+    assert_eq!(row.counters[0].occurrences.value.get(), 1);
+    assert_automatic_host_redacted(&serde_json::to_string(&snapshot).unwrap());
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_healthy_metrics(service: &crate::diagnostics::Diagnostics) {
+    let healthy = service
+        .snapshot(&automatic_host_failure_query("metrics"))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(healthy.events.is_empty());
+    assert!(
+        healthy
+            .components
+            .iter()
+            .all(|row| row.lifetime.totals.failures_total.value.get() == 0)
+    );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_retains_rejection_after_activation_and_preserves_healthy_signal() {
+    use crate::diagnostics::{DiagnosticError, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://relay-user:relay-secret@collector.example:4318/private?token=relay-query-secret",
+        );
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "http://127.0.0.1:4318/v1/metrics",
+        );
+    }
+    for enabled in [true, false] {
+        let service = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut activation =
+            futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+                plugin_config(json!({"version": 4})),
+                None,
+                &service,
+            ))
+            .expect("a rejected automatic trace exporter must not fail host activation");
+        let report = activation.report();
+        let legacy = assert_automatic_host_rejection_report(&report.config.diagnostics);
+        assert!(
+            global_context()
+                .read()
+                .unwrap()
+                .event_subscribers
+                .contains_key("nemo-relay-plugin.v1.observability:1:opentelemetry.automatic",)
+        );
+        let query = automatic_host_failure_query("traces");
+        if enabled {
+            assert_automatic_host_rejection_evidence(&service, legacy);
+            assert_automatic_host_healthy_metrics(&service);
+        } else {
+            assert!(matches!(
+                service.snapshot(&query),
+                Err(DiagnosticError::Disabled)
+            ));
+        }
+        activation.close().unwrap();
+        if enabled {
+            let retained = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+            assert_eq!(retained.events.len(), 1);
+            assert_eq!(
+                retained.components[0].counters[0].occurrences.value.get(),
+                1
+            );
+        }
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_signal_counters_survive_without_recent_evidence() {
+    use crate::diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example");
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "authorization=relay-header-secret%ZZ",
+        );
+    }
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_events: 0,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let mut activation =
+        futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+            plugin_config(json!({"version": 4})),
+            None,
+            &service,
+        ))
+        .unwrap();
+    let report = activation.report();
+    assert_eq!(
+        report
+            .config
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "observability.automatic_otel_signal_skipped"
+            })
+            .count(),
+        3
+    );
+    activation.close().unwrap();
+    for signal in ["traces", "logs", "metrics"] {
+        assert_automatic_host_counter_without_evidence(&service, signal);
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_counter_without_evidence(
+    service: &crate::diagnostics::Diagnostics,
+    signal: &str,
+) {
+    let query = automatic_host_failure_query(signal);
+    let snapshot = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+    assert!(snapshot.events.is_empty());
+    assert_eq!(snapshot.components.len(), 1, "{signal}");
+    let row = &snapshot.components[0];
+    assert!(row.closed_at.is_some());
+    assert_eq!(
+        row.identity.key,
+        format!("opentelemetry.automatic.{signal}")
+    );
+    assert_eq!(
+        row.since_refresh.ownership.responsibility.as_deref(),
+        Some("nemo-relay-plugin.v1.observability:1:")
+    );
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(row.counters.len(), 1);
+    assert_eq!(
+        row.counters[0].code,
+        "plugin.exporter_initialization_failed"
+    );
+    assert_eq!(row.counters[0].occurrences.value.get(), 1);
+    let reread = service.snapshot(&query).unwrap().to_snapshot().unwrap();
+    assert_eq!(reread.sequence, snapshot.sequence);
+    assert_eq!(reread.lifetime.totals, snapshot.lifetime.totals);
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn automatic_exporter_host_classifies_endpoint_and_tls_failures_without_secrets() {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let _environment = automatic_host_diagnostics_environment();
+    let directory = tempfile::tempdir().unwrap();
+    let missing_certificate = directory
+        .path()
+        .join("relay-private-missing-certificate.pem");
+    let invalid_certificate = directory
+        .path()
+        .join("relay-private-invalid-certificate.pem");
+    std::fs::write(&invalid_certificate, "relay-private-invalid-PEM").unwrap();
+    // All three errors occur before an exporter can make a network request.
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            " https://relay-user:relay-secret@collector.example/private?token=relay-query-secret",
+        );
+        for signal in ["LOGS", "METRICS"] {
+            std::env::set_var(
+                format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"),
+                "https://relay-user:relay-secret@collector.example/private?token=relay-query-secret",
+            );
+            std::env::set_var(
+                format!("OTEL_EXPORTER_OTLP_{signal}_PROTOCOL"),
+                "http/protobuf",
+            );
+        }
+        std::env::set_var("OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE", &missing_certificate);
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+            &invalid_certificate,
+        );
+    }
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut activation =
+        futures::executor::block_on(crate::plugin::dynamic::initialize_with_diagnostics(
+            plugin_config(json!({"version": 4})),
+            None,
+            &service,
+        ))
+        .expect("invalid automatic exporters must not prevent host activation");
+    let report = activation.report();
+    let skipped = report
+        .config
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.automatic_otel_signal_skipped")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 3, "{:?}", report.config.diagnostics);
+    activation.close().unwrap();
+    for (signal, field, expected_class, expected_reason) in [
+        (
+            "traces",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "invalid_input",
+            "invalid OTLP endpoint",
+        ),
+        (
+            "logs",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "io",
+            "cannot read a configured TLS certificate or key file",
+        ),
+        (
+            "metrics",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "invalid_input",
+            "invalid TLS configuration or certificate/key material",
+        ),
+    ] {
+        let legacy = skipped
+            .iter()
+            .find(|diagnostic| diagnostic.field.as_deref() == Some(field))
+            .unwrap();
+        assert_automatic_host_source_failure(
+            &service,
+            legacy,
+            signal,
+            expected_class,
+            expected_reason,
+            directory.path(),
+        );
+    }
+    reset_runtime();
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn assert_automatic_host_source_failure(
+    service: &crate::diagnostics::Diagnostics,
+    legacy: &ConfigDiagnostic,
+    signal: &str,
+    expected_class: &str,
+    expected_reason: &str,
+    directory: &std::path::Path,
+) {
+    assert!(
+        legacy.message.contains(expected_reason),
+        "{}",
+        legacy.message
+    );
+    let snapshot = service
+        .snapshot(&automatic_host_failure_query(signal))
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1, "{signal}");
+    assert_eq!(
+        snapshot.events[0].classification.failure_class(),
+        Some(expected_class)
+    );
+    assert_eq!(
+        snapshot.events[0].detail.as_ref().unwrap().message,
+        legacy.message
+    );
+    assert_eq!(snapshot.components.len(), 1);
+    assert_eq!(
+        snapshot.components[0]
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        1
+    );
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert_automatic_host_redacted(&serialized);
+    assert_automatic_host_redacted(&legacy.message);
+    assert!(!serialized.contains(&directory.to_string_lossy().to_string()));
+}
+
+fn assert_http_rejects_tls_settings(signal: &str) {
+    for prefix in [String::new(), format!("{signal}_")] {
+        for fields in [
+            &["CERTIFICATE"][..],
+            &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
+        ] {
+            unsafe {
+                for field in fields {
+                    std::env::set_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"), "unused.pem");
+                }
+            }
+            let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                .unwrap_err()
+                .to_string();
+            unsafe {
+                for field in fields {
+                    std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
+                }
+            }
+            assert!(
+                error.contains("TLS settings require an HTTPS endpoint"),
+                "{error}"
+            );
         }
     }
 }

@@ -36,6 +36,11 @@ pub use catalogue::{
 };
 mod reason;
 pub use reason::DiagnosticReadReason;
+mod http;
+pub use http::{
+    DiagnosticHttpError, DiagnosticHttpErrorDetails, DiagnosticHttpReason,
+    MAX_DIAGNOSTIC_HTTP_ERROR_BYTES,
+};
 mod recording;
 pub use recording::{EvidenceDisposition, RecordOutcome, RecordReceipt};
 mod number;

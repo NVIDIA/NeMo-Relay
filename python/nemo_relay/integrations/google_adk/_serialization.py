@@ -7,12 +7,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-from bisect import bisect_left
 from collections import Counter, deque
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, cast
 
 from google.adk.models.llm_request import LlmRequest
@@ -25,6 +23,7 @@ from typing_extensions import TypeIs, override
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, Json, JsonObject, LLMRequest
 from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+from nemo_relay.integrations._json_values import canonical, paired_items, same_json
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -404,48 +403,6 @@ def _response_from_fields(values: Mapping[str, object]) -> LlmResponse:
     return response
 
 
-def canonical(value: _Content | _Message) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def same_json(left: _Content | _Message, right: _Content | _Message) -> bool:
-    """Return whether two values have identical canonical JSON text.
-
-    Unlike `==`, tells 1, 1.0, and true apart.
-    """
-    return canonical(left) == canonical(right)
-
-
-def paired_items(edited: Sequence[Json], projected: Sequence[Json]) -> list[int | None]:
-    """Return, per edited item, position of original item it pairs with, or None.
-
-    Pair each item with earliest equal original after previous match. Pair an item with no equal original to the
-    original at same offset in the gap between matches, when gap has one.
-    """
-    positions: dict[str, list[int]] = {}
-    for position, item in enumerate(projected):
-        positions.setdefault(canonical(item), []).append(position)
-    matches: list[tuple[int, int]] = []
-    cursor = 0
-    for index, item in enumerate(edited):
-        candidates = positions.get(canonical(item), [])
-        slot = bisect_left(candidates, cursor)
-        if slot < len(candidates):
-            matches.append((index, candidates[slot]))
-            cursor = candidates[slot] + 1
-    paired: list[int | None] = [None] * len(edited)
-    for (edited_start, original_start), (edited_end, original_end) in pairwise(
-        [(-1, -1), *matches, (len(edited), len(projected))]
-    ):
-        gap = range(original_start + 1, original_end)
-        for offset, index in enumerate(range(edited_start + 1, edited_end)):
-            if offset < len(gap):
-                paired[index] = gap[offset]
-        if edited_end < len(edited):
-            paired[edited_end] = original_end
-    return paired
-
-
 def is_ordered(value: object) -> TypeIs[Sequence[object] | AbstractSet[object]]:
     return isinstance(value, AbstractSet) or (
         isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray)
@@ -802,10 +759,7 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
             text = part.get("text")
             function = part.get("function_call")
             if isinstance(text, str) and function is None:
-                if run is not None and run.part.get("thought") == part.get("thought"):
-                    run.pieces.append(text)
-                    if "thought_signature" in part and "thought_signature" not in run.part:
-                        run.part["thought_signature"] = part["thought_signature"]
+                if _append_text_run(run, part, text):
                     continue
                 run = _TextRun(dict(part), [text])
                 runs.append(run)
@@ -813,8 +767,7 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                 continue
             run = None
             if function is not None:
-                if not _is_object(function):
-                    raise TypeError("ADK function_call must be an object")
+                function = _object(function, field="ADK function_call")
                 if not _joins_call(function, call):
                     _flush_call(parts, call)
                     call = None
@@ -823,6 +776,10 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                     continue
             parts.append(part)
     _flush_call(parts, call)
+    return _finish_aggregate(dumps, runs, parts)
+
+
+def _finish_aggregate(dumps: list[JsonObject], runs: list[_TextRun], parts: list[JsonObject | None]) -> JsonObject:
     for merged in runs:
         merged.part["text"] = "".join(merged.pieces)
     aggregate = _last_seen(dumps)
@@ -831,6 +788,15 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
         aggregate["content"] = {"role": "model", "parts": kept}
     aggregate["partial"] = False
     return aggregate
+
+
+def _append_text_run(run: _TextRun | None, part: JsonObject, text: str) -> bool:
+    if run is None or run.part.get("thought") != part.get("thought"):
+        return False
+    run.pieces.append(text)
+    if "thought_signature" in part and "thought_signature" not in run.part:
+        run.part["thought_signature"] = part["thought_signature"]
+    return True
 
 
 def _dump(chunk: Json) -> JsonObject:

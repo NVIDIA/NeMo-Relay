@@ -4551,6 +4551,7 @@ command = "nemo-relay-test-agent-that-does-not-exist"
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
+        .args(["--log-stderr-format", "human"])
         .args([
             "--config",
             config.to_str().unwrap(),

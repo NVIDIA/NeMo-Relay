@@ -82,7 +82,9 @@ class PrefixCodec(Codec[str]):
         return {"text": f"pfx:{value}"}
 
     def from_json(self, data: Json) -> str:
-        return data["text"].removeprefix("pfx:")
+        text = data["text"]
+        assert isinstance(text, str)
+        return text.removeprefix("pfx:")
 
 
 class SumCodec(Codec[int]):
@@ -92,7 +94,9 @@ class SumCodec(Codec[int]):
         return {"total": value}
 
     def from_json(self, data: Json) -> int:
-        return data["total"]
+        total = data["total"]
+        assert isinstance(total, int)
+        return total
 
 
 prefix_codec = PrefixCodec()
@@ -192,7 +196,9 @@ class TestCustomCodec:
                 return {"value": value}
 
             def from_json(self, data: Json) -> int:
-                return data["value"]
+                value = data["value"]
+                assert isinstance(value, int)
+                return value
 
         codec = EnvelopeCodec()
         assert codec.to_json(42) == {"value": 42}
@@ -464,9 +470,10 @@ class TestTypedToolExecute:
         async def echo(args: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult({"echoed": args})
 
+        args: Json = {"key": "value"}
         result = await typed.tool_execute(
             "echo",
-            {"key": "value"},
+            args,
             echo,
             passthrough,
             passthrough,

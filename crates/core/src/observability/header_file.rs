@@ -145,17 +145,39 @@ pub(crate) fn redacted_origin(endpoint: &str) -> Option<String> {
     Some(format!("{}://{host}:{port}", url.scheme()))
 }
 
+/// Typed cause retained by exporter construction before legacy string formatting.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EndpointTransportError {
+    #[error("{0}")]
+    InvalidEndpoint(String),
+    #[error("{0}")]
+    PlaintextRejected(String),
+}
+
+impl EndpointTransportError {
+    fn with_context(self, context: &str) -> Self {
+        match self {
+            Self::InvalidEndpoint(message) => {
+                Self::InvalidEndpoint(format!("{context}; {message}"))
+            }
+            Self::PlaintextRejected(message) => {
+                Self::PlaintextRejected(format!("{context}; {message}"))
+            }
+        }
+    }
+}
+
 /// Explain why an endpoint may not carry protected traffic, or return `None` when it may.
 fn plaintext_rejection(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
     plaintext: &PlaintextPolicy,
-) -> Option<String> {
+) -> Option<EndpointTransportError> {
     let invalid = || {
-        Some(format!(
+        Some(EndpointTransportError::InvalidEndpoint(format!(
             "the endpoint must be a valid {protected_scheme}:// or {plaintext_scheme}:// URI"
-        ))
+        )))
     };
     let (Ok(url), Ok(uri)) = (reqwest::Url::parse(endpoint), endpoint.parse::<http::Uri>()) else {
         return invalid();
@@ -172,20 +194,30 @@ fn plaintext_rejection(
         return None;
     }
     let origin = redacted_origin(endpoint).unwrap_or_else(|| "this endpoint".to_string());
-    Some(format!(
+    Some(EndpointTransportError::PlaintextRejected(format!(
         "{plaintext_scheme} to {origin} is allowed only for {}",
         plaintext.allowance()
-    ))
+    )))
 }
 
-/// Require HTTPS, or plain HTTP to a destination the policy allows, for OTLP trace export.
-pub(crate) fn validate_trace_transport(
+/// Require HTTPS, or plain HTTP to a destination the policy allows, for OTLP export.
+pub(crate) fn validate_otlp_transport(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
+    signal: &str,
 ) -> Result<(), String> {
+    validate_otlp_transport_typed(endpoint, plaintext, signal).map_err(|error| error.to_string())
+}
+
+/// Preserve the distinction between invalid endpoints and denied plaintext destinations.
+pub(crate) fn validate_otlp_transport_typed(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+    signal: &str,
+) -> Result<(), EndpointTransportError> {
     match plaintext_rejection(endpoint, "https", "http", plaintext) {
         None => Ok(()),
-        Some(reason) => Err(format!("OTLP trace endpoints require HTTPS; {reason}")),
+        Some(reason) => Err(reason.with_context(&format!("OTLP {signal} endpoints require HTTPS"))),
     }
 }
 
@@ -203,12 +235,12 @@ fn validate_header_destination(
     protected_scheme: &str,
     plaintext_scheme: &str,
     plaintext: &PlaintextPolicy,
-) -> Result<(), String> {
+) -> Result<(), EndpointTransportError> {
     match plaintext_rejection(endpoint, protected_scheme, plaintext_scheme, plaintext) {
         None => Ok(()),
-        Some(reason) => Err(format!(
-            "configured headers require {protected_scheme} for remote endpoints; {reason}"
-        )),
+        Some(reason) => Err(reason.with_context(&format!(
+            "configured headers require {protected_scheme} for remote endpoints"
+        ))),
     }
 }
 
@@ -217,6 +249,14 @@ pub(crate) fn validate_header_http_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
+    validate_header_http_endpoint_typed(endpoint, plaintext).map_err(|error| error.to_string())
+}
+
+/// Preserve transport rejection causes for OTLP log and metric construction.
+pub(crate) fn validate_header_http_endpoint_typed(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+) -> Result<(), EndpointTransportError> {
     validate_header_destination(endpoint, "https", "http", plaintext)
 }
 
@@ -226,7 +266,7 @@ pub(crate) fn validate_header_websocket_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
-    validate_header_destination(endpoint, "wss", "ws", plaintext)
+    validate_header_destination(endpoint, "wss", "ws", plaintext).map_err(|error| error.to_string())
 }
 
 /// Validate header source names and require configured files to exist.

@@ -287,28 +287,7 @@ pub(super) fn register_extension(
         return Err(note_admission(state, DiagnosticError::MetadataCapacity));
     }
     ensure_revision(state)?;
-    loop {
-        let error = if !state.extensions.iter().any(Option::is_none)
-            || !state.counters.iter().any(Option::is_none)
-        {
-            Some(DiagnosticError::KeyCapacity)
-        } else if state
-            .metadata_used
-            .checked_add(metadata)
-            .is_none_or(|n| n > inner.limits.max_metadata_bytes)
-        {
-            Some(DiagnosticError::MetadataCapacity)
-        } else {
-            None
-        };
-        let Some(error) = error else {
-            break;
-        };
-        if state.evict_closed_component() {
-            continue;
-        }
-        return Err(note_admission(state, error));
-    }
+    admit_extension(state, inner, metadata)?;
     let slot = state
         .extensions
         .iter()
@@ -496,4 +475,34 @@ pub(super) fn register_extension_class(
         .opaque_classes[index] = Some(text);
     state.metadata_used += name.len();
     Ok(ExtensionClassHandle { extension, index })
+}
+
+fn admit_extension(
+    state: &mut State,
+    inner: &Inner,
+    metadata: usize,
+) -> Result<(), DiagnosticError> {
+    loop {
+        let error = if !state.extensions.iter().any(Option::is_none)
+            || !state.counters.iter().any(Option::is_none)
+        {
+            Some(DiagnosticError::KeyCapacity)
+        } else if state
+            .metadata_used
+            .checked_add(metadata)
+            .is_none_or(|n| n > inner.limits.max_metadata_bytes)
+        {
+            Some(DiagnosticError::MetadataCapacity)
+        } else {
+            None
+        };
+        let Some(error) = error else {
+            break;
+        };
+        if state.evict_closed_component() {
+            continue;
+        }
+        return Err(note_admission(state, error));
+    }
+    Ok(())
 }

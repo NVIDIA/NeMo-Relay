@@ -11,6 +11,83 @@ struct Inspector {
 }
 
 #[test]
+fn inspector_distinguishes_missing_workers_from_unrecognized_endpoints() {
+    use crate::gateway::client::VerifiedHttpResponse;
+    for (worker, body, expected) in [
+        (
+            true,
+            br#"{"error":{"reason":"missing"}}"#.as_slice(),
+            "worker not found",
+        ),
+        (
+            false,
+            br#"{"error":{"reason":"missing"}}"#,
+            "listener diagnostics endpoint unavailable (HTTP 404)",
+        ),
+        (
+            true,
+            b"",
+            "listener diagnostics endpoint unavailable (HTTP 404)",
+        ),
+        (
+            true,
+            b"unknown endpoint",
+            "listener diagnostics endpoint unavailable (HTTP 404)",
+        ),
+        (
+            true,
+            br#"{"error":{"reason":"future_reason"}}"#,
+            "listener diagnostics endpoint unavailable (HTTP 404)",
+        ),
+        (
+            true,
+            br#"{"error":{"reason":"disabled"}}"#,
+            "listener diagnostics endpoint unavailable (HTTP 404)",
+        ),
+    ] {
+        let mut output = Vec::new();
+        let error = write_inspection(
+            VerifiedHttpResponse {
+                status: 404,
+                body: body.to_vec(),
+            },
+            worker,
+            &mut output,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), format!("launcher error: {expected}"));
+        assert!(output.is_empty());
+    }
+    for (status, body, expected) in [
+        (
+            200,
+            br#"{"snapshot":null,"collection":{"freshness":"missing"}}"#.as_slice(),
+            ExitCode::SUCCESS,
+        ),
+        (
+            503,
+            br#"{"error":{"reason":"shutting_down"}}"#,
+            ExitCode::FAILURE,
+        ),
+    ] {
+        let mut output = Vec::new();
+        assert_eq!(
+            write_inspection(
+                VerifiedHttpResponse {
+                    status,
+                    body: body.to_vec()
+                },
+                true,
+                &mut output
+            )
+            .unwrap(),
+            expected
+        );
+        assert_eq!(output, [body, b"\n"].concat());
+    }
+}
+
+#[test]
 fn inspector_defaults_and_response_bounds_are_enforced_by_parser() {
     let command = Inspector::try_parse_from(["inspect"]).unwrap().command;
     assert_eq!(command.gateway_url, crate::bootstrap::DEFAULT_URL);

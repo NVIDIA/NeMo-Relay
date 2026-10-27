@@ -84,9 +84,9 @@ extern int32_t nemo_relay_tool_call_execute_v2(
 	const char* tool_call_id, char** out);
 
 // LLM lifecycle
-typedef void (*NemoRelayCollectorCb)(const char* chunk_json);
+typedef int32_t (*NemoRelayCollectorCb)(void* user_data, const char* chunk_json);
 typedef struct Option_NemoRelayCollectorCb { NemoRelayCollectorCb cb; } Option_NemoRelayCollectorCb;
-typedef char* (*NemoRelayFinalizerCb)();
+typedef char* (*NemoRelayFinalizerCb)(void* user_data);
 typedef struct Option_NemoRelayFinalizerCb { NemoRelayFinalizerCb cb; } Option_NemoRelayFinalizerCb;
 
 static inline Option_NemoRelayCollectorCb makeOptCollectorCb(NemoRelayCollectorCb cb) {
@@ -121,6 +121,7 @@ extern int32_t nemo_relay_llm_stream_call_execute(
 	const char* name, const char* native_json,
 	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
 	Option_NemoRelayCollectorCb collector, Option_NemoRelayFinalizerCb finalizer,
+	void* callback_user_data, NemoRelayFreeFn callback_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
@@ -333,6 +334,8 @@ extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRe
 extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeResponseContext);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
+extern int32_t goStreamCollectorTrampoline(void*, const char*);
+extern char* goStreamFinalizerTrampoline(void*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmExecNextFn, void*);
@@ -352,6 +355,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -359,7 +363,7 @@ import (
 const defaultServiceName = "nemo-relay"
 
 func init() {
-	if err := checkStatus(C.nemo_relay_initialize_default_logging()); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_initialize_default_logging() }); err != nil {
 		panic(fmt.Sprintf("failed to initialize NeMo Relay operational logging: %v", err))
 	}
 }
@@ -367,7 +371,7 @@ func init() {
 // ShutdownLogging drains pending operational log records and releases the default logging runtime.
 // Callers that configure file sinks should defer ShutdownLogging from main.
 func ShutdownLogging() error {
-	return checkStatus(C.nemo_relay_shutdown_default_logging())
+	return callStatus(func() C.int32_t { return C.nemo_relay_shutdown_default_logging() })
 }
 
 // Log emits a structured operational record through Relay's configured sinks.
@@ -377,7 +381,7 @@ func Log(level, target, message string, fields map[string]any) error {
 		defer C.free(unsafe.Pointer(levelC))
 		defer C.free(unsafe.Pointer(targetC))
 		defer C.free(unsafe.Pointer(messageC))
-		return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, nil))
+		return callStatus(func() C.int32_t { return C.nemo_relay_log(levelC, targetC, messageC, nil) })
 	}
 	encoded, err := json.Marshal(fields)
 	if err != nil {
@@ -388,7 +392,7 @@ func Log(level, target, message string, fields map[string]any) error {
 	defer C.free(unsafe.Pointer(targetC))
 	defer C.free(unsafe.Pointer(messageC))
 	defer C.free(unsafe.Pointer(fieldsC))
-	return checkStatus(C.nemo_relay_log(levelC, targetC, messageC, fieldsC))
+	return callStatus(func() C.int32_t { return C.nemo_relay_log(levelC, targetC, messageC, fieldsC) })
 }
 
 func Trace(target, message string, fields map[string]any) error {
@@ -407,8 +411,8 @@ func Error(target, message string, fields map[string]any) error {
 	return Log("error", target, message, fields)
 }
 
-func checkedValue[T any](status int32, value T) (T, error) {
-	if err := checkStatus(C.int32_t(status)); err != nil {
+func checkedValue[T any](err error, value T) (T, error) {
+	if err != nil {
 		var zero T
 		return zero, err
 	}
@@ -418,13 +422,11 @@ func checkedValue[T any](status int32, value T) (T, error) {
 var (
 	getHandleFunc = func() (*ScopeHandle, error) {
 		var out *C.FfiScopeHandle
-		status := C.nemo_relay_get_handle(&out)
-		return checkedValue(int32(status), newScopeHandle(out))
+		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_get_handle(&out) }), newScopeHandle(out))
 	}
 	newScopeStackFunc = func() (*ScopeStack, error) {
 		var ptr *C.FfiScopeStack
-		status := C.nemo_relay_scope_stack_create(&ptr)
-		return checkedValue(int32(status), &ScopeStack{ptr: ptr})
+		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create(&ptr) }), &ScopeStack{ptr: ptr})
 	}
 	newAtifExporterFunc = func(sessionID, agentName, agentVersion, modelName string) (*AtifExporter, error) {
 		cSessionID := C.CString(sessionID)
@@ -441,8 +443,9 @@ var (
 		}
 
 		var ptr unsafe.Pointer
-		status := C.nemo_relay_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, &ptr)
-		return checkedValue(int32(status), &AtifExporter{ptr: ptr})
+		return checkedValue(callStatus(func() C.int32_t {
+			return C.nemo_relay_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, &ptr)
+		}), &AtifExporter{ptr: ptr})
 	}
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
 		payload, err := json.Marshal(config)
@@ -452,8 +455,7 @@ var (
 		cConfig := C.CString(string(payload))
 		defer C.free(unsafe.Pointer(cConfig))
 		var ptr unsafe.Pointer
-		status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
-		return checkedValue(int32(status), &AtofExporter{ptr: ptr})
+		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr) }), &AtofExporter{ptr: ptr})
 	}
 )
 
@@ -474,6 +476,68 @@ func checkStatus(status C.int32_t) error {
 		return nil
 	}
 	return lastError()
+}
+
+// callStatus keeps an FFI call and its thread-local error read on one OS thread.
+func callStatus(call func() C.int32_t) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	return checkStatus(call())
+}
+
+var ErrPopScopeGoroutine = errors.New("scope must be popped by the goroutine that pushed it")
+
+var (
+	scopeOwnersMu sync.Mutex
+	scopeOwners   = map[string]uint64{}
+)
+
+func pushPinned(call func() C.int32_t) error {
+	runtime.LockOSThread()
+	if err := callStatus(call); err != nil {
+		runtime.UnlockOSThread()
+		return err
+	}
+	return nil
+}
+
+func claimScope(uuid string) {
+	owner := currentGoroutineID()
+	scopeOwnersMu.Lock()
+	scopeOwners[uuid] = owner
+	scopeOwnersMu.Unlock()
+}
+
+func scopeOwnedHere(uuid string) (bool, error) {
+	scopeOwnersMu.Lock()
+	owner, pinned := scopeOwners[uuid]
+	scopeOwnersMu.Unlock()
+	if !pinned {
+		return false, nil
+	}
+	if owner != currentGoroutineID() {
+		return false, ErrPopScopeGoroutine
+	}
+	return true, nil
+}
+
+func releaseScope(uuid string) {
+	scopeOwnersMu.Lock()
+	delete(scopeOwners, uuid)
+	scopeOwnersMu.Unlock()
+	runtime.UnlockOSThread()
+}
+
+// callPointer is callStatus for FFI calls that return null on failure.
+func callPointer[P comparable](call func() P) (P, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ptr := call()
+	var null P
+	if ptr == null {
+		return null, lastError()
+	}
+	return ptr, nil
 }
 
 func cTimestampMicros(timestamp time.Time) *C.int64_t {
@@ -565,14 +629,16 @@ func RegisterConditionalMiddlewareGuardrail(name string, kinds []RuntimeRegistra
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cKinds))
 	defer C.free(unsafe.Pointer(cRegistrationName))
-	return checkStatus(C.nemo_relay_register_conditional_middleware_guardrail(
-		cName,
-		cKinds,
-		cRegistrationName,
-		C.NemoRelayConditionalMiddlewareGuardrailFn(C.goConditionalMiddlewareGuardrailTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_conditional_middleware_guardrail(
+			cName,
+			cKinds,
+			cRegistrationName,
+			C.NemoRelayConditionalMiddlewareGuardrailFn(C.goConditionalMiddlewareGuardrailTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterConditionalMiddlewareGuardrail removes a gate and reports whether it existed.
@@ -580,7 +646,7 @@ func DeregisterConditionalMiddlewareGuardrail(name string) (bool, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	var removed C.bool
-	if err := checkStatus(C.nemo_relay_deregister_conditional_middleware_guardrail(cName, &removed)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_deregister_conditional_middleware_guardrail(cName, &removed) }); err != nil {
 		return false, err
 	}
 	return bool(removed), nil
@@ -598,7 +664,7 @@ func ListRuntimeRegistrations(kinds []RuntimeRegistrationKind) ([]RuntimeRegistr
 		defer C.free(unsafe.Pointer(cKinds))
 	}
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_list_runtime_registrations(cKinds, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_list_runtime_registrations(cKinds, &out) }); err != nil {
 		return nil, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -746,6 +812,8 @@ func GetHandle() (*ScopeHandle, error) {
 // observability; see [ScopeType] constants for valid values. [WithData] stores
 // application data on the returned handle, while [WithInput] supplies the
 // semantic data payload for the Start event.
+//
+// Pins calling goroutine to its OS thread until [PopScope].
 func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHandle, error) {
 	o := &scopeOptions{}
 	for _, opt := range opts {
@@ -769,11 +837,14 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 	}
 
 	var out *C.FfiScopeHandle
-	status := C.nemo_relay_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.input, o.timestamp, &out)
-	if err := checkStatus(status); err != nil {
+	if err := pushPinned(func() C.int32_t {
+		return C.nemo_relay_push_scope(cName, C.int32_t(scopeType), o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.input, o.timestamp, &out)
+	}); err != nil {
 		return nil, err
 	}
-	return newScopeHandle(out), nil
+	handle := newScopeHandle(out)
+	claimScope(handle.UUID())
+	return handle, nil
 }
 
 // PopScope removes the given scope from the scope stack and emits an End event
@@ -782,6 +853,8 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // error. Optional end payloads can be attached via [WithOutput] and
 // [WithScopeEndMetadata], and an explicit event timestamp can be supplied with
 // [WithScopeEndTimestamp].
+//
+// Releases the [PushScope] pin on success.
 func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	defer runtime.KeepAlive(handle)
 	o := &scopeEndOptions{}
@@ -797,7 +870,17 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return checkStatus(C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp))
+	pinned, err := scopeOwnedHere(handle.UUID())
+	if err != nil {
+		return err
+	}
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp) }); err != nil {
+		return err
+	}
+	if pinned {
+		releaseScope(handle.UUID())
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -939,7 +1022,9 @@ func EmitEvent(name string, opts ...EventOption) error {
 		defer C.free(unsafe.Pointer(severity))
 	}
 
-	return checkStatus(C.nemo_relay_event_v2(cName, o.parent, o.data, o.dataSchema, o.metadata, severity, o.timestamp))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_event_v2(cName, o.parent, o.data, o.dataSchema, o.metadata, severity, o.timestamp)
+	})
 }
 
 // MetricKind selects the OpenTelemetry instrument used for a measurement.
@@ -1029,9 +1114,11 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	status := C.nemo_relay_metric_json(cName, o.parent, cMeasurements, o.metadata, o.timestamp)
+	err = callStatus(func() C.int32_t {
+		return C.nemo_relay_metric_json(cName, o.parent, cMeasurements, o.metadata, o.timestamp)
+	})
 	runtime.KeepAlive(o.parentHandle)
-	return checkStatus(status)
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,8 +1241,9 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.FfiToolHandle
-	status := C.nemo_relay_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.toolCallID, o.timestamp, &out)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_tool_call(cName, cArgs, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.toolCallID, o.timestamp, &out)
+	}); err != nil {
 		return nil, err
 	}
 	return newToolHandle(out), nil
@@ -1184,7 +1272,9 @@ func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCal
 	cResult := C.CString(string(resultJSON))
 	defer C.free(unsafe.Pointer(cResult))
 
-	return checkStatus(C.nemo_relay_tool_call_end(handle.ptr, cResult, o.data, o.metadata, o.timestamp))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_tool_call_end(handle.ptr, cResult, o.data, o.metadata, o.timestamp)
+	})
 }
 
 // ToolCallExecute runs a complete tool call lifecycle through the full
@@ -1213,16 +1303,17 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.char
-	status := C.nemo_relay_tool_call_execute_v2(
-		cName, cArgs,
-		C.NemoRelayToolExecFn(C.goToolExecTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-		o.parent, C.uint32_t(o.attributes),
-		o.data, o.metadata,
-		o.toolCallID, &out,
-	)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_tool_call_execute_v2(
+			cName, cArgs,
+			C.NemoRelayToolExecFn(C.goToolExecTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+			o.parent, C.uint32_t(o.attributes),
+			o.data, o.metadata,
+			o.toolCallID, &out,
+		)
+	}); err != nil {
 		return ToolExecutionResult{}, err
 	}
 	result, err := decodeToolExecutionResult([]byte(C.GoString(out)))
@@ -1467,8 +1558,9 @@ func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandl
 	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.FfiLLMHandle
-	status := C.nemo_relay_llm_call(cName, cRequest, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, o.timestamp, &out)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_call(cName, cRequest, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, o.timestamp, &out)
+	}); err != nil {
 		return nil, err
 	}
 	return newLLMHandle(out), nil
@@ -1491,7 +1583,9 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
 
-	return checkStatus(C.nemo_relay_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, o.timestamp))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, o.timestamp)
+	})
 }
 
 // LlmCallExecute runs a complete LLM call lifecycle through the full
@@ -1524,21 +1618,23 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.char
-	status := C.nemo_relay_llm_call_execute(
-		cName, cRequest,
-		C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-		o.parent, C.uint32_t(o.attributes),
-		o.data, o.metadata,
-		o.modelName,
-		o.codecDecode, o.codecEncode,
-		o.codecUserData, o.codecFreeFn,
-		o.responseCodec,
-		&out,
-	)
+	err = callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_call_execute(
+			cName, cRequest,
+			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+			o.parent, C.uint32_t(o.attributes),
+			o.data, o.metadata,
+			o.modelName,
+			o.codecDecode, o.codecEncode,
+			o.codecUserData, o.codecFreeFn,
+			o.responseCodec,
+			&out,
+		)
+	})
 	runtime.KeepAlive(o.responseCodecHandle)
-	if err := checkStatus(status); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	result := json.RawMessage(C.GoString(out))
@@ -1582,36 +1678,42 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	// Pass nil collector/finalizer to the FFI. The FFI collector/finalizer
-	// callbacks lack user_data parameters, making them unsuitable for
-	// concurrent streams (all streams would share a single global
-	// callback). Instead, we store the collector/finalizer on the
-	// returned LlmStream and invoke them from LlmStream.Next(), which
-	// provides natural per-stream isolation.
+	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer}
+	callbackID := registerStreamCallbacks(callbacks)
 	cCollector := C.makeOptCollectorCb(nil)
+	if collector != nil {
+		cCollector = C.makeOptCollectorCb(C.NemoRelayCollectorCb(C.goStreamCollectorTrampoline))
+	}
 	cFinalizer := C.makeOptFinalizerCb(nil)
+	if finalizer != nil {
+		cFinalizer = C.makeOptFinalizerCb(C.NemoRelayFinalizerCb(C.goStreamFinalizerTrampoline))
+	}
 
 	var out *C.FfiStream
-	status := C.nemo_relay_llm_stream_call_execute(
-		cName, cRequest,
-		C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-		cCollector,
-		cFinalizer,
-		o.parent, C.uint32_t(o.attributes),
-		o.data, o.metadata,
-		o.modelName,
-		o.codecDecode, o.codecEncode,
-		o.codecUserData, o.codecFreeFn,
-		o.responseCodec,
-		&out,
-	)
+	err = callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_stream_call_execute(
+			cName, cRequest,
+			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+			cCollector,
+			cFinalizer,
+			callbackID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+			o.parent, C.uint32_t(o.attributes),
+			o.data, o.metadata,
+			o.modelName,
+			o.codecDecode, o.codecEncode,
+			o.codecUserData, o.codecFreeFn,
+			o.responseCodec,
+			&out,
+		)
+	})
 	runtime.KeepAlive(o.responseCodecHandle)
-	if err := checkStatus(status); err != nil {
+	if err != nil {
 		return nil, err
 	}
-	return newLlmStream(out, collector, finalizer), nil
+	return newLlmStream(out, callbacks), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1628,36 +1730,38 @@ func RegisterEventMetadataInjector(name string, priority int32, fn EventMetadata
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_event_metadata_injector(
-		cName,
-		C.int32_t(priority),
-		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_event_metadata_injector(
+			cName,
+			C.int32_t(priority),
+			C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterEventMetadataInjector removes a global event metadata injector.
 func DeregisterEventMetadataInjector(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_event_metadata_injector(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_event_metadata_injector(cName) })
 }
 
 func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	var status C.int32_t
-	switch kind {
-	case 0:
-		status = C.nemo_relay_register_mark_sanitize_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
-	case 1:
-		status = C.nemo_relay_register_scope_sanitize_start_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
-	default:
-		status = C.nemo_relay_register_scope_sanitize_end_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
-	}
-	return checkStatus(status)
+	return callStatus(func() C.int32_t {
+		switch kind {
+		case 0:
+			return C.nemo_relay_register_mark_sanitize_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+		case 1:
+			return C.nemo_relay_register_scope_sanitize_start_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+		default:
+			return C.nemo_relay_register_scope_sanitize_end_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+		}
+	})
 }
 
 // RegisterMarkSanitizeGuardrail registers a global mark event sanitizer.
@@ -1669,7 +1773,7 @@ func RegisterMarkSanitizeGuardrail(name string, priority int32, fn EventSanitize
 func DeregisterMarkSanitizeGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_mark_sanitize_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_mark_sanitize_guardrail(cName) })
 }
 
 // RegisterScopeSanitizeStartGuardrail registers a global scope-start event sanitizer.
@@ -1681,7 +1785,7 @@ func RegisterScopeSanitizeStartGuardrail(name string, priority int32, fn EventSa
 func DeregisterScopeSanitizeStartGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_scope_sanitize_start_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_scope_sanitize_start_guardrail(cName) })
 }
 
 // RegisterScopeSanitizeEndGuardrail registers a global scope-end event sanitizer.
@@ -1693,7 +1797,7 @@ func RegisterScopeSanitizeEndGuardrail(name string, priority int32, fn EventSani
 func DeregisterScopeSanitizeEndGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_scope_sanitize_end_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_scope_sanitize_end_guardrail(cName) })
 }
 
 // RegisterToolSanitizeRequestGuardrail registers a guardrail that sanitizes
@@ -1706,12 +1810,14 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_sanitize_request_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_tool_sanitize_request_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterToolSanitizeRequestGuardrail removes a previously registered tool
@@ -1720,7 +1826,7 @@ func RegisterToolSanitizeRequestGuardrail(name string, priority int32, fn ToolSa
 func DeregisterToolSanitizeRequestGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_tool_sanitize_request_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_tool_sanitize_request_guardrail(cName) })
 }
 
 // RegisterToolSanitizeResponseGuardrail registers a guardrail that sanitizes
@@ -1731,12 +1837,14 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_sanitize_response_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_tool_sanitize_response_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterToolSanitizeResponseGuardrail removes a previously registered tool
@@ -1745,7 +1853,7 @@ func RegisterToolSanitizeResponseGuardrail(name string, priority int32, fn ToolS
 func DeregisterToolSanitizeResponseGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_tool_sanitize_response_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_tool_sanitize_response_guardrail(cName) })
 }
 
 // RegisterToolConditionalExecutionGuardrail registers a guardrail that
@@ -1758,12 +1866,14 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_conditional_execution_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayToolConditionalFn(C.goToolConditionalTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_tool_conditional_execution_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayToolConditionalFn(C.goToolConditionalTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterToolConditionalExecutionGuardrail removes a previously registered
@@ -1772,7 +1882,7 @@ func RegisterToolConditionalExecutionGuardrail(name string, priority int32, fn T
 func DeregisterToolConditionalExecutionGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_tool_conditional_execution_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_tool_conditional_execution_guardrail(cName) })
 }
 
 // RegisterToolRequestIntercept registers an intercept that transforms tool
@@ -1784,12 +1894,14 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_request_intercept(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_tool_request_intercept(
+			cName, C.int32_t(priority), C._Bool(breakChain),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterToolRequestIntercept removes a previously registered tool request
@@ -1797,7 +1909,7 @@ func RegisterToolRequestIntercept(name string, priority int32, breakChain bool, 
 func DeregisterToolRequestIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_tool_request_intercept(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_tool_request_intercept(cName) })
 }
 
 // RegisterToolExecutionIntercept registers an execution intercept following
@@ -1808,12 +1920,14 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_tool_execution_intercept(
-		cName, C.int32_t(priority),
-		C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_tool_execution_intercept(
+			cName, C.int32_t(priority),
+			C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterToolExecutionIntercept removes a previously registered tool
@@ -1821,7 +1935,7 @@ func RegisterToolExecutionIntercept(name string, priority int32, execFn ToolExec
 func DeregisterToolExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_tool_execution_intercept(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_tool_execution_intercept(cName) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1834,12 +1948,14 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_sanitize_request_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_sanitize_request_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmSanitizeRequestGuardrail removes a previously registered LLM
@@ -1847,7 +1963,7 @@ func RegisterLlmSanitizeRequestGuardrail(name string, priority int32, fn LLMRequ
 func DeregisterLlmSanitizeRequestGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_sanitize_request_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_sanitize_request_guardrail(cName) })
 }
 
 // RegisterLlmSanitizeResponseGuardrail registers a codec-aware LLM response
@@ -1856,12 +1972,14 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMRes
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_sanitize_response_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_sanitize_response_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmSanitizeResponseGuardrail removes a previously registered LLM
@@ -1869,7 +1987,7 @@ func RegisterLlmSanitizeResponseGuardrail(name string, priority int32, fn LLMRes
 func DeregisterLlmSanitizeResponseGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_sanitize_response_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_sanitize_response_guardrail(cName) })
 }
 
 // RegisterLlmConditionalExecutionGuardrail registers a guardrail that
@@ -1882,12 +2000,14 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_conditional_execution_guardrail(
-		cName, C.int32_t(priority),
-		C.NemoRelayLlmConditionalCb(C.goLlmConditionalTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_conditional_execution_guardrail(
+			cName, C.int32_t(priority),
+			C.NemoRelayLlmConditionalCb(C.goLlmConditionalTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmConditionalExecutionGuardrail removes a previously registered
@@ -1895,7 +2015,7 @@ func RegisterLlmConditionalExecutionGuardrail(name string, priority int32, fn LL
 func DeregisterLlmConditionalExecutionGuardrail(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_conditional_execution_guardrail(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_conditional_execution_guardrail(cName) })
 }
 
 // RegisterLlmRequestIntercept registers an intercept that transforms the LLM
@@ -1908,12 +2028,14 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_request_intercept(
-		cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_request_intercept(
+			cName, C.int32_t(priority), C._Bool(breakChain),
+			C.NemoRelayLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmRequestIntercept removes a previously registered LLM request
@@ -1921,7 +2043,7 @@ func RegisterLlmRequestIntercept(name string, priority int32, breakChain bool, f
 func DeregisterLlmRequestIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_request_intercept(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_request_intercept(cName) })
 }
 
 // RegisterLlmExecutionIntercept registers an execution intercept following
@@ -1933,12 +2055,14 @@ func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecut
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_execution_intercept(
-		cName, C.int32_t(priority),
-		C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_execution_intercept(
+			cName, C.int32_t(priority),
+			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmExecutionIntercept removes a previously registered LLM
@@ -1946,7 +2070,7 @@ func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecut
 func DeregisterLlmExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_execution_intercept(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_execution_intercept(cName) })
 }
 
 // RegisterLlmStreamExecutionIntercept registers an execution intercept for
@@ -1958,12 +2082,14 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLM
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_llm_stream_execution_intercept(
-		cName, C.int32_t(priority),
-		C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_llm_stream_execution_intercept(
+			cName, C.int32_t(priority),
+			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterLlmStreamExecutionIntercept removes a previously registered LLM
@@ -1971,7 +2097,7 @@ func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLM
 func DeregisterLlmStreamExecutionIntercept(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_llm_stream_execution_intercept(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_llm_stream_execution_intercept(cName) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1988,12 +2114,14 @@ func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_register_subscriber(
-		cName,
-		C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_subscriber(
+			cName,
+			C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterSubscriber removes a named event subscriber for future emissions.
@@ -2002,7 +2130,7 @@ func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 func DeregisterSubscriber(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_deregister_subscriber(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_subscriber(cName) })
 }
 
 // FlushSubscribers waits for subscriber callbacks queued before this call and
@@ -2012,7 +2140,7 @@ func DeregisterSubscriber(name string) error {
 // A re-entrant call returns without waiting to avoid blocking the dispatcher,
 // so callbacks later in the same dispatch snapshot can still run.
 func FlushSubscribers() error {
-	return checkStatus(C.nemo_relay_flush_subscribers())
+	return callStatus(func() C.int32_t { return C.nemo_relay_flush_subscribers() })
 }
 
 // ---------------------------------------------------------------------------
@@ -2087,7 +2215,9 @@ func (entry *ScopeStackEntry) UnmarshalJSON(payload []byte) error {
 // needs a stable OS-thread binding across CGo calls.
 func CurrentScopeStackSnapshot() (*ScopeStackSnapshot, error) {
 	var output *C.char
-	if err := checkStatus(C.nemo_relay_current_scope_stack_snapshot_json(&output)); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_current_scope_stack_snapshot_json(&output)
+	}); err != nil {
 		return nil, err
 	}
 	if output == nil {
@@ -2127,7 +2257,7 @@ func (context PropagationContext) ToTraceparent() (string, error) {
 	cPayload := C.CString(payload)
 	defer C.free(unsafe.Pointer(cPayload))
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_propagation_context_to_traceparent(cPayload, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_propagation_context_to_traceparent(cPayload, &out) }); err != nil {
 		return "", err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2151,7 +2281,7 @@ func normalizePropagationContextJSON(value string) (string, error) {
 	payload := C.CString(value)
 	defer C.free(unsafe.Pointer(payload))
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_propagation_context_normalize_json(payload, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_propagation_context_normalize_json(payload, &out) }); err != nil {
 		return "", err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2170,7 +2300,7 @@ func validatePropagationContext(context PropagationContext) error {
 // CapturePropagationContext captures the current Relay causal parent and root.
 func CapturePropagationContext() (PropagationContext, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_capture_propagation_context_json(&out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_capture_propagation_context_json(&out) }); err != nil {
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2181,7 +2311,7 @@ func CapturePropagationContext() (PropagationContext, error) {
 // a propagation root, so a receiver starts a new observability trace.
 func CaptureRootlessPropagationContext() (PropagationContext, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_capture_rootless_propagation_context_json(&out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_capture_rootless_propagation_context_json(&out) }); err != nil {
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2197,7 +2327,7 @@ func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, er
 		defer C.free(unsafe.Pointer(cRoot))
 	}
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_capture_propagation_context_with_root_json(cRoot, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_capture_propagation_context_with_root_json(cRoot, &out) }); err != nil {
 		return PropagationContext{}, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2207,7 +2337,7 @@ func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, er
 // CaptureTraceparent captures the current Relay context as a W3C traceparent value.
 func CaptureTraceparent() (string, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_capture_traceparent(&out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_capture_traceparent(&out) }); err != nil {
 		return "", err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -2230,8 +2360,7 @@ func NewScopeStackFromPropagation(context PropagationContext) (*ScopeStack, erro
 	cPayload := C.CString(string(payload))
 	defer C.free(unsafe.Pointer(cPayload))
 	var ptr *C.FfiScopeStack
-	status := C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr)
-	return checkedValue(int32(status), &ScopeStack{ptr: ptr})
+	return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr) }), &ScopeStack{ptr: ptr})
 }
 
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.
@@ -2250,19 +2379,18 @@ func (s *ScopeStack) Close() {
 func (s *ScopeStack) Run(fn func()) {
 	runtime.LockOSThread()
 	var binding *C.FfiThreadScopeStackBinding
-	if err := checkStatus(C.nemo_relay_scope_stack_capture_thread(&binding)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_capture_thread(&binding) }); err != nil {
 		runtime.UnlockOSThread()
 		panic(err)
 	}
 	defer func() {
-		status := C.nemo_relay_scope_stack_restore_thread(binding)
-		if err := checkStatus(status); err != nil {
+		if err := callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_restore_thread(binding) }); err != nil {
 			runtime.UnlockOSThread()
 			panic(err)
 		}
 		runtime.UnlockOSThread()
 	}()
-	if err := checkStatus(C.nemo_relay_scope_stack_set_thread(s.ptr)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_set_thread(s.ptr) }); err != nil {
 		panic(err)
 	}
 	fn()
@@ -2297,23 +2425,20 @@ func NewAtifExporter(sessionID, agentName, agentVersion, modelName string) (*Ati
 func (e *AtifExporter) Register(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_atif_exporter_register(e.ptr, cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atif_exporter_register(e.ptr, cName) })
 }
 
 // Deregister removes the exporter subscriber by name.
 func (e *AtifExporter) Deregister(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_atif_exporter_deregister(cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atif_exporter_deregister(cName) })
 }
 
 // ExportJSON exports collected events as an ATIF trajectory JSON string.
 func (e *AtifExporter) ExportJSON() (json.RawMessage, error) {
 	var cOut *C.char
-	status := C.nemo_relay_atif_exporter_export(e.ptr, &cOut)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_atif_exporter_export(e.ptr, &cOut) }); err != nil {
 		return nil, err
 	}
 	defer C.nemo_relay_string_free(cOut)
@@ -2478,8 +2603,7 @@ func NewAtofExporter(config AtofExporterConfig) (*AtofExporter, error) {
 // Path returns the JSONL output path, or nil for a stream-backed exporter.
 func (e *AtofExporter) Path() (*string, error) {
 	var cOut *C.char
-	status := C.nemo_relay_atof_exporter_path(e.ptr, &cOut)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_path(e.ptr, &cOut) }); err != nil {
 		return nil, err
 	}
 	if cOut == nil {
@@ -2494,16 +2618,14 @@ func (e *AtofExporter) Path() (*string, error) {
 func (e *AtofExporter) Register(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_atof_exporter_register(e.ptr, cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_register(e.ptr, cName) })
 }
 
 // Deregister removes the exporter subscriber by name.
 func (e *AtofExporter) Deregister(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_atof_exporter_deregister(cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_deregister(cName) })
 }
 
 // ForceFlush, outside a native subscriber callback, waits for queued subscriber delivery and then
@@ -2511,8 +2633,7 @@ func (e *AtofExporter) Deregister(name string) error {
 // A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
 // not by itself return an error.
 func (e *AtofExporter) ForceFlush() error {
-	status := C.nemo_relay_atof_exporter_force_flush(e.ptr)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_force_flush(e.ptr) })
 }
 
 // Shutdown, outside a native subscriber callback, waits for queued subscriber delivery and then
@@ -2520,8 +2641,7 @@ func (e *AtofExporter) ForceFlush() error {
 // timeout. A re-entrant call does not establish the delivery barrier. A stream timeout is logged
 // and does not by itself return an error.
 func (e *AtofExporter) Shutdown() error {
-	status := C.nemo_relay_atof_exporter_shutdown(e.ptr)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_shutdown(e.ptr) })
 }
 
 // Close frees the exporter handle.
@@ -2774,28 +2894,29 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cTLSJSON := C.CString(string(tlsJSON))
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
-		cType,
-		cTransport,
-		cEndpoint,
-		cHeadersJSON,
-		cHeaderEnvJSON,
-		cResourceAttrsJSON,
-		cServiceName,
-		cServiceNamespace,
-		cServiceVersion,
-		cInstrumentationScope,
-		C.uint64_t(config.Timeout/time.Millisecond),
-		cMarkProjection,
-		cMarkExcludeNamesJSON,
-		cAttributeMappingsJSON,
-		cPromoteMetadataPrefixesJSON,
-		cPromoteResourceMetadataPrefixesJSON,
-		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
-		cTLSJSON,
-		&ptr,
-	)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
+			cType,
+			cTransport,
+			cEndpoint,
+			cHeadersJSON,
+			cHeaderEnvJSON,
+			cResourceAttrsJSON,
+			cServiceName,
+			cServiceNamespace,
+			cServiceVersion,
+			cInstrumentationScope,
+			C.uint64_t(config.Timeout/time.Millisecond),
+			cMarkProjection,
+			cMarkExcludeNamesJSON,
+			cAttributeMappingsJSON,
+			cPromoteMetadataPrefixesJSON,
+			cPromoteResourceMetadataPrefixesJSON,
+			C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+			cTLSJSON,
+			&ptr,
+		)
+	}); err != nil {
 		return nil, err
 	}
 	return &OpenTelemetrySubscriber{ptr: ptr}, nil
@@ -2939,26 +3060,27 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 	defer C.free(unsafe.Pointer(cPromoteResourceMetadataPrefixesJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_file_sink(
-		cType,
-		cOutputDirectory,
-		cFilename,
-		cFormat,
-		cMode,
-		cResourceAttrsJSON,
-		cServiceName,
-		cServiceNamespace,
-		cServiceVersion,
-		cInstrumentationScope,
-		cMarkProjection,
-		cMarkExcludeNamesJSON,
-		cAttributeMappingsJSON,
-		cPromoteMetadataPrefixesJSON,
-		cPromoteResourceMetadataPrefixesJSON,
-		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
-		&ptr,
-	)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_otel_subscriber_create_file_sink(
+			cType,
+			cOutputDirectory,
+			cFilename,
+			cFormat,
+			cMode,
+			cResourceAttrsJSON,
+			cServiceName,
+			cServiceNamespace,
+			cServiceVersion,
+			cInstrumentationScope,
+			cMarkProjection,
+			cMarkExcludeNamesJSON,
+			cAttributeMappingsJSON,
+			cPromoteMetadataPrefixesJSON,
+			cPromoteResourceMetadataPrefixesJSON,
+			C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+			&ptr,
+		)
+	}); err != nil {
 		return nil, err
 	}
 	return &OpenTelemetrySubscriber{ptr: ptr}, nil
@@ -2968,29 +3090,26 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 func (s *OpenTelemetrySubscriber) Register(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_otel_subscriber_register(s.ptr, cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_register(s.ptr, cName) })
 }
 
 // Deregister removes the subscriber by name.
 func (s *OpenTelemetrySubscriber) Deregister(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	status := C.nemo_relay_otel_subscriber_deregister(cName)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_deregister(cName) })
 }
 
 // ForceFlush flushes finished spans through the underlying exporter. A successful flush updates
 // RuntimeDiagnostics with queue drops observed so far.
 func (s *OpenTelemetrySubscriber) ForceFlush() error {
-	status := C.nemo_relay_otel_subscriber_force_flush(s.ptr)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_force_flush(s.ptr) })
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
 func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_otel_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
 	return decodeOpenTelemetryRuntimeDiagnostics(out)
@@ -2998,8 +3117,7 @@ func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDi
 
 // Shutdown shuts down the underlying tracer provider.
 func (s *OpenTelemetrySubscriber) Shutdown() error {
-	status := C.nemo_relay_otel_subscriber_shutdown(s.ptr)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_shutdown(s.ptr) })
 }
 
 // Close frees the subscriber handle.
@@ -3256,26 +3374,27 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	cTLSJSON := C.CString(string(tlsJSON))
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_log_subscriber_create_with_tls(
-		common.transport,
-		common.endpoint,
-		common.headers,
-		common.headerEnv,
-		common.resourceAttributes,
-		common.serviceName,
-		common.serviceNamespace,
-		common.serviceVersion,
-		common.instrumentationScope,
-		C.uint64_t(config.Timeout/time.Millisecond),
-		cSeverity,
-		C.uint64_t(config.MaxQueueSize),
-		C.uint64_t(config.MaxExportBatchSize),
-		C.uint64_t(config.ScheduledDelay/time.Millisecond),
-		C.uint64_t(config.CompletedSpanContextTTL/time.Millisecond),
-		cTLSJSON,
-		&ptr,
-	)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_otel_log_subscriber_create_with_tls(
+			common.transport,
+			common.endpoint,
+			common.headers,
+			common.headerEnv,
+			common.resourceAttributes,
+			common.serviceName,
+			common.serviceNamespace,
+			common.serviceVersion,
+			common.instrumentationScope,
+			C.uint64_t(config.Timeout/time.Millisecond),
+			cSeverity,
+			C.uint64_t(config.MaxQueueSize),
+			C.uint64_t(config.MaxExportBatchSize),
+			C.uint64_t(config.ScheduledDelay/time.Millisecond),
+			C.uint64_t(config.CompletedSpanContextTTL/time.Millisecond),
+			cTLSJSON,
+			&ptr,
+		)
+	}); err != nil {
 		return nil, err
 	}
 	return &OpenTelemetryLogSubscriber{ptr: ptr}, nil
@@ -3285,26 +3404,26 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 func (s *OpenTelemetryLogSubscriber) Register(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_otel_log_subscriber_register(s.ptr, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_register(s.ptr, cName) })
 }
 
 // Deregister removes the log subscriber by name.
 func (s *OpenTelemetryLogSubscriber) Deregister(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_otel_log_subscriber_deregister(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_deregister(cName) })
 }
 
 // ForceFlush drains Relay delivery and queued log batches. A successful flush updates
 // RuntimeDiagnostics with queue drops observed so far.
 func (s *OpenTelemetryLogSubscriber) ForceFlush() error {
-	return checkStatus(C.nemo_relay_otel_log_subscriber_force_flush(s.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_force_flush(s.ptr) })
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
 func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_otel_log_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
 	return decodeOpenTelemetryRuntimeDiagnostics(out)
@@ -3312,7 +3431,7 @@ func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntim
 
 // Shutdown drains and shuts down the logger provider.
 func (s *OpenTelemetryLogSubscriber) Shutdown() error {
-	return checkStatus(C.nemo_relay_otel_log_subscriber_shutdown(s.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_shutdown(s.ptr) })
 }
 
 // Close frees the log subscriber handle.
@@ -3395,25 +3514,26 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	cTLSJSON := C.CString(string(tlsJSON))
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_metric_subscriber_create_with_tls(
-		common.transport,
-		common.endpoint,
-		common.headers,
-		common.headerEnv,
-		common.resourceAttributes,
-		common.serviceName,
-		common.serviceNamespace,
-		common.serviceVersion,
-		common.instrumentationScope,
-		C.uint64_t(config.Timeout/time.Millisecond),
-		C.uint64_t(config.ExportInterval/time.Millisecond),
-		cTemporality,
-		C.uint64_t(config.MaxInstruments),
-		C.uint64_t(config.CardinalityLimit),
-		cTLSJSON,
-		&ptr,
-	)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_otel_metric_subscriber_create_with_tls(
+			common.transport,
+			common.endpoint,
+			common.headers,
+			common.headerEnv,
+			common.resourceAttributes,
+			common.serviceName,
+			common.serviceNamespace,
+			common.serviceVersion,
+			common.instrumentationScope,
+			C.uint64_t(config.Timeout/time.Millisecond),
+			C.uint64_t(config.ExportInterval/time.Millisecond),
+			cTemporality,
+			C.uint64_t(config.MaxInstruments),
+			C.uint64_t(config.CardinalityLimit),
+			cTLSJSON,
+			&ptr,
+		)
+	}); err != nil {
 		return nil, err
 	}
 	return &OpenTelemetryMetricSubscriber{ptr: ptr}, nil
@@ -3423,25 +3543,25 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 func (s *OpenTelemetryMetricSubscriber) Register(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_otel_metric_subscriber_register(s.ptr, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_register(s.ptr, cName) })
 }
 
 // Deregister removes the metric subscriber by name.
 func (s *OpenTelemetryMetricSubscriber) Deregister(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_otel_metric_subscriber_deregister(cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_deregister(cName) })
 }
 
 // ForceFlush drains Relay delivery and collects current metric aggregates.
 func (s *OpenTelemetryMetricSubscriber) ForceFlush() error {
-	return checkStatus(C.nemo_relay_otel_metric_subscriber_force_flush(s.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_force_flush(s.ptr) })
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
 func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
 	var out *C.char
-	if err := checkStatus(C.nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
 	return decodeOpenTelemetryRuntimeDiagnostics(out)
@@ -3449,7 +3569,7 @@ func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRun
 
 // Shutdown performs final collection and shuts down the meter provider.
 func (s *OpenTelemetryMetricSubscriber) Shutdown() error {
-	return checkStatus(C.nemo_relay_otel_metric_subscriber_shutdown(s.ptr))
+	return callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_shutdown(s.ptr) })
 }
 
 // Close frees the metric subscriber handle.
@@ -3475,14 +3595,16 @@ func ScopeRegisterEventMetadataInjector(scopeUUID, name string, priority int32, 
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_event_metadata_injector(
-		cScopeUUID,
-		cName,
-		C.int32_t(priority),
-		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_event_metadata_injector(
+			cScopeUUID,
+			cName,
+			C.int32_t(priority),
+			C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterEventMetadataInjector removes an event metadata injector
@@ -3492,10 +3614,12 @@ func ScopeDeregisterEventMetadataInjector(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_event_metadata_injector(
-		cScopeUUID,
-		cName,
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_event_metadata_injector(
+			cScopeUUID,
+			cName,
+		)
+	})
 }
 
 func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
@@ -3506,16 +3630,16 @@ func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn Even
 	defer C.free(unsafe.Pointer(cName))
 	callback := C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline)
 	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
-	var status C.int32_t
-	switch kind {
-	case 0:
-		status = C.nemo_relay_scope_register_mark_sanitize_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
-	case 1:
-		status = C.nemo_relay_scope_register_scope_sanitize_start_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
-	default:
-		status = C.nemo_relay_scope_register_scope_sanitize_end_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
-	}
-	return checkStatus(status)
+	return callStatus(func() C.int32_t {
+		switch kind {
+		case 0:
+			return C.nemo_relay_scope_register_mark_sanitize_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+		case 1:
+			return C.nemo_relay_scope_register_scope_sanitize_start_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+		default:
+			return C.nemo_relay_scope_register_scope_sanitize_end_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+		}
+	})
 }
 
 // ScopeRegisterMarkSanitizeGuardrail registers a scope-local mark sanitizer.
@@ -3529,7 +3653,7 @@ func ScopeDeregisterMarkSanitizeGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_mark_sanitize_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_mark_sanitize_guardrail(cScopeUUID, cName) })
 }
 
 // ScopeRegisterScopeSanitizeStartGuardrail registers a scope-local scope-start sanitizer.
@@ -3543,7 +3667,9 @@ func ScopeDeregisterScopeSanitizeStartGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_scope_sanitize_start_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_scope_sanitize_start_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterScopeSanitizeEndGuardrail registers a scope-local scope-end sanitizer.
@@ -3557,7 +3683,7 @@ func ScopeDeregisterScopeSanitizeEndGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_scope_sanitize_end_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_scope_sanitize_end_guardrail(cScopeUUID, cName) })
 }
 
 // ScopeRegisterToolSanitizeRequestGuardrail registers a scope-local guardrail
@@ -3569,12 +3695,14 @@ func ScopeRegisterToolSanitizeRequestGuardrail(scopeUUID, name string, priority 
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_sanitize_request_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_tool_sanitize_request_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterToolSanitizeRequestGuardrail removes a scope-local tool
@@ -3584,7 +3712,9 @@ func ScopeDeregisterToolSanitizeRequestGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_tool_sanitize_request_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_tool_sanitize_request_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterToolSanitizeResponseGuardrail registers a scope-local guardrail
@@ -3595,12 +3725,14 @@ func ScopeRegisterToolSanitizeResponseGuardrail(scopeUUID, name string, priority
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_sanitize_response_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_tool_sanitize_response_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterToolSanitizeResponseGuardrail removes a scope-local tool
@@ -3610,7 +3742,9 @@ func ScopeDeregisterToolSanitizeResponseGuardrail(scopeUUID, name string) error 
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_tool_sanitize_response_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_tool_sanitize_response_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterToolConditionalExecutionGuardrail registers a scope-local
@@ -3622,12 +3756,14 @@ func ScopeRegisterToolConditionalExecutionGuardrail(scopeUUID, name string, prio
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_conditional_execution_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayToolConditionalFn(C.goToolConditionalTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_tool_conditional_execution_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayToolConditionalFn(C.goToolConditionalTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterToolConditionalExecutionGuardrail removes a scope-local tool
@@ -3637,7 +3773,9 @@ func ScopeDeregisterToolConditionalExecutionGuardrail(scopeUUID, name string) er
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_tool_conditional_execution_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_tool_conditional_execution_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterToolRequestIntercept registers a scope-local intercept that
@@ -3648,12 +3786,14 @@ func ScopeRegisterToolRequestIntercept(scopeUUID, name string, priority int32, b
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_request_intercept(
-		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_tool_request_intercept(
+			cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
+			C.NemoRelayToolSanitizeFn(C.goToolSanitizeTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterToolRequestIntercept removes a scope-local tool request
@@ -3663,7 +3803,7 @@ func ScopeDeregisterToolRequestIntercept(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_tool_request_intercept(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_tool_request_intercept(cScopeUUID, cName) })
 }
 
 // ScopeRegisterToolExecutionIntercept registers a scope-local tool execution
@@ -3674,12 +3814,14 @@ func ScopeRegisterToolExecutionIntercept(scopeUUID, name string, priority int32,
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_tool_execution_intercept(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_tool_execution_intercept(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayToolExecInterceptCb(C.goToolExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterToolExecutionIntercept removes a scope-local tool execution
@@ -3689,7 +3831,7 @@ func ScopeDeregisterToolExecutionIntercept(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_tool_execution_intercept(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_tool_execution_intercept(cScopeUUID, cName) })
 }
 
 // ---------------------------------------------------------------------------
@@ -3704,12 +3846,14 @@ func ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, name string, priority i
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_sanitize_request_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_sanitize_request_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayLlmSanitizeRequestCb(C.goLlmRequestTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmSanitizeRequestGuardrail removes a scope-local LLM
@@ -3719,7 +3863,9 @@ func ScopeDeregisterLlmSanitizeRequestGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_sanitize_request_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_llm_sanitize_request_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterLlmSanitizeResponseGuardrail registers a scope-local guardrail
@@ -3730,12 +3876,14 @@ func ScopeRegisterLlmSanitizeResponseGuardrail(scopeUUID, name string, priority 
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_sanitize_response_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_sanitize_response_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayLlmSanitizeResponseCb(C.goLlmResponseTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmSanitizeResponseGuardrail removes a scope-local LLM
@@ -3745,7 +3893,9 @@ func ScopeDeregisterLlmSanitizeResponseGuardrail(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_sanitize_response_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_llm_sanitize_response_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterLlmConditionalExecutionGuardrail registers a scope-local
@@ -3756,12 +3906,14 @@ func ScopeRegisterLlmConditionalExecutionGuardrail(scopeUUID, name string, prior
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_conditional_execution_guardrail(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmConditionalCb(C.goLlmConditionalTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_conditional_execution_guardrail(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayLlmConditionalCb(C.goLlmConditionalTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmConditionalExecutionGuardrail removes a scope-local LLM
@@ -3771,7 +3923,9 @@ func ScopeDeregisterLlmConditionalExecutionGuardrail(scopeUUID, name string) err
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_conditional_execution_guardrail(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_llm_conditional_execution_guardrail(cScopeUUID, cName)
+	})
 }
 
 // ScopeRegisterLlmRequestIntercept registers a scope-local intercept that
@@ -3782,12 +3936,14 @@ func ScopeRegisterLlmRequestIntercept(scopeUUID, name string, priority int32, br
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_request_intercept(
-		cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
-		C.NemoRelayLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_request_intercept(
+			cScopeUUID, cName, C.int32_t(priority), C._Bool(breakChain),
+			C.NemoRelayLlmRequestInterceptCb(C.goLlmRequestInterceptTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmRequestIntercept removes a scope-local LLM request
@@ -3797,7 +3953,7 @@ func ScopeDeregisterLlmRequestIntercept(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_request_intercept(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_llm_request_intercept(cScopeUUID, cName) })
 }
 
 // ScopeRegisterLlmExecutionIntercept registers a scope-local LLM execution
@@ -3808,12 +3964,14 @@ func ScopeRegisterLlmExecutionIntercept(scopeUUID, name string, priority int32, 
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_execution_intercept(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_execution_intercept(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmExecutionIntercept removes a scope-local LLM execution
@@ -3823,7 +3981,7 @@ func ScopeDeregisterLlmExecutionIntercept(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_execution_intercept(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_llm_execution_intercept(cScopeUUID, cName) })
 }
 
 // ScopeRegisterLlmStreamExecutionIntercept registers a scope-local streaming
@@ -3834,12 +3992,14 @@ func ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name string, priority i
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_llm_stream_execution_intercept(
-		cScopeUUID, cName, C.int32_t(priority),
-		C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
-		execID,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_llm_stream_execution_intercept(
+			cScopeUUID, cName, C.int32_t(priority),
+			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			execID,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterLlmStreamExecutionIntercept removes a scope-local LLM stream
@@ -3849,7 +4009,9 @@ func ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_llm_stream_execution_intercept(cScopeUUID, cName))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_deregister_llm_stream_execution_intercept(cScopeUUID, cName)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -3865,12 +4027,14 @@ func ScopeRegisterSubscriber(scopeUUID, name string, fn EventSubscriberFunc) err
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_register_subscriber(
-		cScopeUUID, cName,
-		C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
-		id,
-		C.NemoRelayFreeFn(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_scope_register_subscriber(
+			cScopeUUID, cName,
+			C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
+			id,
+			C.NemoRelayFreeFn(C.goFreeTrampoline),
+		)
+	})
 }
 
 // ScopeDeregisterSubscriber removes a scope-local event subscriber by name.
@@ -3879,7 +4043,7 @@ func ScopeDeregisterSubscriber(scopeUUID, name string) error {
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	return checkStatus(C.nemo_relay_scope_deregister_subscriber(cScopeUUID, cName))
+	return callStatus(func() C.int32_t { return C.nemo_relay_scope_deregister_subscriber(cScopeUUID, cName) })
 }
 
 // ---------------------------------------------------------------------------
@@ -3895,8 +4059,7 @@ func ToolRequestIntercepts(name string, args json.RawMessage) (json.RawMessage, 
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.char
-	status := C.nemo_relay_tool_request_intercepts(cName, cArgs, &out)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_tool_request_intercepts(cName, cArgs, &out) }); err != nil {
 		return nil, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -3912,8 +4075,7 @@ func ToolConditionalExecution(name string, args json.RawMessage) error {
 	cArgs := C.CString(string(args))
 	defer C.free(unsafe.Pointer(cArgs))
 
-	status := C.nemo_relay_tool_conditional_execution(cName, cArgs)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_tool_conditional_execution(cName, cArgs) })
 }
 
 // LlmRequestIntercepts runs the registered LLM request intercept chain on the
@@ -3925,8 +4087,7 @@ func LlmRequestIntercepts(name string, request json.RawMessage) (LLMRequestInter
 	defer C.free(unsafe.Pointer(cRequest))
 
 	var out *C.char
-	status := C.nemo_relay_llm_request_intercepts(cName, cRequest, &out)
-	if err := checkStatus(status); err != nil {
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_llm_request_intercepts(cName, cRequest, &out) }); err != nil {
 		return LLMRequestInterceptOutcome{}, err
 	}
 	defer C.nemo_relay_string_free(out)
@@ -3945,6 +4106,5 @@ func LlmConditionalExecution(request json.RawMessage) error {
 	cRequest := C.CString(string(request))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	status := C.nemo_relay_llm_conditional_execution(cRequest)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t { return C.nemo_relay_llm_conditional_execution(cRequest) })
 }

@@ -12,6 +12,7 @@ use axum::{
     routing::get,
 };
 use nemo_relay::diagnostics::*;
+use nemo_relay_types::diagnostics::{DiagnosticHttpError, DiagnosticHttpReason as HttpReason};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const PREFIX: &str = "/_nemo_relay/v1/diagnostics";
@@ -90,11 +91,23 @@ impl DiagnosticsHttp {
     /// The existing bootstrap TLS upgrade supplies the bounded authorized transport.
     pub(crate) fn unsecured_router(self) -> Router {
         Router::new()
-            .route(PREFIX, get(tls_required))
-            .route(&format!("{PREFIX}/components"), get(tls_required))
-            .route(&format!("{PREFIX}/events"), get(tls_required))
-            .route(&format!("{PREFIX}/memory"), get(tls_required))
-            .route(&format!("{PREFIX}/capabilities"), get(tls_required))
+            .route(PREFIX, get(authenticated_transport_required))
+            .route(
+                &format!("{PREFIX}/components"),
+                get(authenticated_transport_required),
+            )
+            .route(
+                &format!("{PREFIX}/events"),
+                get(authenticated_transport_required),
+            )
+            .route(
+                &format!("{PREFIX}/memory"),
+                get(authenticated_transport_required),
+            )
+            .route(
+                &format!("{PREFIX}/capabilities"),
+                get(authenticated_transport_required),
+            )
     }
     pub(crate) fn router(self) -> Router {
         Router::new()
@@ -126,19 +139,19 @@ impl DiagnosticsHttp {
     }
     pub(crate) fn authorize(&self, headers: &HeaderMap) -> Result<(), ReadError> {
         if headers.contains_key(header::ORIGIN) {
-            return Err(ReadError(StatusCode::FORBIDDEN, "forbidden"));
+            return Err(ReadError(HttpReason::Forbidden));
         }
         let value = headers
             .get(AUTH_HEADER)
-            .ok_or(ReadError(StatusCode::UNAUTHORIZED, "unauthorized"))?;
+            .ok_or(ReadError(HttpReason::Unauthorized))?;
         if headers.get_all(AUTH_HEADER).iter().count() != 1
             || value.len() > 128
             || !value.to_str().is_ok_and(|v| self.authority.verify(v))
         {
-            return Err(ReadError(StatusCode::FORBIDDEN, "forbidden"));
+            return Err(ReadError(HttpReason::Forbidden));
         }
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(ReadError(StatusCode::SERVICE_UNAVAILABLE, "shutting_down"));
+            return Err(ReadError(HttpReason::ShuttingDown));
         }
         Ok(())
     }
@@ -148,7 +161,7 @@ impl DiagnosticsHttp {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pop()
-            .ok_or(ReadError(StatusCode::TOO_MANY_REQUESTS, "busy"))?;
+            .ok_or(ReadError(HttpReason::Busy))?;
         Ok(ResponseSlot {
             bytes,
             pool: self.pool.clone(),
@@ -201,22 +214,16 @@ fn response(slot: ResponseSlot) -> Response {
         .insert("x-content-type-options", "nosniff".parse().unwrap());
     response
 }
-pub(crate) struct ReadError(StatusCode, &'static str);
+pub(crate) struct ReadError(HttpReason);
 impl IntoResponse for ReadError {
     fn into_response(self) -> Response {
-        error(self.0, self.1)
+        error(self.0)
     }
 }
-pub(crate) fn error(status: StatusCode, reason: &'static str) -> Response {
-    let mut response = (
-        status,
-        axum::Json(if reason == "unsupported_schema" {
-            serde_json::json!({"error": {"reason": reason, "supported_schema_version": DIAGNOSTIC_SCHEMA_VERSION}})
-        } else {
-            serde_json::json!({"error": {"reason": reason}})
-        }),
-    )
-        .into_response();
+pub(crate) fn error(reason: HttpReason) -> Response {
+    let status =
+        StatusCode::from_u16(reason.http_status()).expect("canonical diagnostic HTTP status");
+    let mut response = (status, axum::Json(DiagnosticHttpError::new(reason))).into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
@@ -227,25 +234,11 @@ pub(crate) fn error(status: StatusCode, reason: &'static str) -> Response {
     }
     response
 }
-fn read_status(reason: DiagnosticReadReason) -> StatusCode {
-    match reason {
-        DiagnosticReadReason::Disabled | DiagnosticReadReason::QueryDisabled => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-        DiagnosticReadReason::UnsupportedSchema => StatusCode::NOT_ACCEPTABLE,
-        DiagnosticReadReason::InvalidQuery => StatusCode::BAD_REQUEST,
-        DiagnosticReadReason::InvalidCursor => StatusCode::CONFLICT,
-        DiagnosticReadReason::Busy => StatusCode::TOO_MANY_REQUESTS,
-        DiagnosticReadReason::SnapshotCapacity => StatusCode::UNPROCESSABLE_ENTITY,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
 fn reader_error(value: DiagnosticError) -> Response {
-    let reason = value.read_reason();
-    error(read_status(reason), reason.as_str())
+    error(value.read_reason().into())
 }
 fn decode(uri: &http::Uri) -> Result<DiagnosticQuery, ReadError> {
-    let invalid = || ReadError(StatusCode::BAD_REQUEST, "invalid_query");
+    let invalid = || ReadError(HttpReason::InvalidQuery);
     let raw = uri.query().unwrap_or("");
     if raw.len() > MAX_QUERY_BYTES {
         return Err(invalid());
@@ -258,8 +251,7 @@ fn decode(uri: &http::Uri) -> Result<DiagnosticQuery, ReadError> {
             .decode_utf8()
             .map_err(|_| invalid())?
     };
-    decode_diagnostic_query(&decoded)
-        .map_err(|reason| ReadError(read_status(reason), reason.as_str()))
+    decode_diagnostic_query(&decoded).map_err(|reason| ReadError(reason.into()))
 }
 async fn snapshot(
     State(adapter): State<DiagnosticsHttp>,
@@ -315,7 +307,7 @@ async fn discovery(
         return response.into_response();
     }
     if uri.query().is_some() {
-        return error(StatusCode::BAD_REQUEST, "invalid_query");
+        return error(HttpReason::InvalidQuery);
     }
     let mut slot = match adapter.reserve() {
         Ok(slot) => slot,
@@ -357,11 +349,8 @@ mod tests;
 #[path = "../tests/coverage/shared/diagnostic_cursor_tests.rs"]
 mod cursor_tests;
 
-async fn tls_required() -> Response {
-    error(
-        StatusCode::UPGRADE_REQUIRED,
-        "authenticated_transport_required",
-    )
+pub(crate) async fn authenticated_transport_required() -> Response {
+    error(HttpReason::AuthenticatedTransportRequired)
 }
 
 #[cfg(test)]

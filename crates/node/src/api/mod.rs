@@ -2210,7 +2210,7 @@ impl PersistentJsFunction {
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
 
-    fn call_json(&self, argument: Json) -> napi::Result<Json> {
+    pub(crate) fn call_json(&self, argument: Json) -> napi::Result<Json> {
         let mut value = ptr::null_mut();
         // SAFETY: `self.reference` is a live N-API reference created in
         // `self.env`, and `value` is writable storage for the borrowed
@@ -2384,65 +2384,17 @@ fn node_llm_codec(
     decode: &JsFunction,
     encode: &JsFunction,
 ) -> napi::Result<NodeLlmCodec> {
-    let direct_decode = Arc::new(PersistentJsFunction::new(env, decode)?);
-    let direct_encode = Arc::new(PersistentJsFunction::new(env, encode)?);
-    let references = vec![direct_decode.clone(), direct_encode.clone()];
-    let register_thread = std::thread::current().id();
-
-    let mut decode_tsfn = decode.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-    )?;
-    decode_tsfn.unref(env)?;
-    let mut encode_tsfn = encode.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-    )?;
-    encode_tsfn.unref(env)?;
-
-    Ok((
-        callable::wrap_js_codec(
-            decode_tsfn,
-            encode_tsfn,
-            register_thread,
-            Arc::new(move |argument| {
-                direct_decode.call_json(argument).map_err(|error| {
-                    FlowError::Internal(format!("JS codec decode callback failed: {error}"))
-                })
-            }),
-            Arc::new(move |argument| {
-                direct_encode.call_json(argument).map_err(|error| {
-                    FlowError::Internal(format!("JS codec encode callback failed: {error}"))
-                })
-            }),
-        ),
-        references,
-    ))
+    let decode = callable::JsCodecCallback::new(env, decode, "JS codec decode callback failed")?;
+    let encode = callable::JsCodecCallback::new(env, encode, "JS codec encode callback failed")?;
+    let references = vec![decode.reference(), encode.reference()];
+    Ok((callable::wrap_js_codec(decode, encode), references))
 }
 
 fn node_llm_response_codec(env: &Env, decode: &JsFunction) -> napi::Result<NodeLlmResponseCodec> {
-    let direct_decode = Arc::new(PersistentJsFunction::new(env, decode)?);
-    let references = vec![direct_decode.clone()];
-    let register_thread = std::thread::current().id();
-    let mut decode_tsfn = decode.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-    )?;
-    decode_tsfn.unref(env)?;
-    Ok((
-        callable::wrap_js_response_codec(
-            decode_tsfn,
-            register_thread,
-            Arc::new(move |argument| {
-                direct_decode.call_json(argument).map_err(|error| {
-                    FlowError::Internal(format!(
-                        "JS response codec decode callback failed: {error}"
-                    ))
-                })
-            }),
-        ),
-        references,
-    ))
+    let decode =
+        callable::JsCodecCallback::new(env, decode, "JS response codec decode callback failed")?;
+    let references = vec![decode.reference()];
+    Ok((callable::wrap_js_response_codec(decode), references))
 }
 
 impl Drop for PersistentJsFunction {
@@ -3552,6 +3504,8 @@ pub fn tool_call_execute_async(
 /// Optional `codecDecode` and `codecEncode` callbacks help sanitize and annotate
 /// the telemetry copy. Supply both callbacks together. The caller's request stays
 /// unchanged. `codecEncode` receives an object with `annotated` and `original` fields.
+/// If `codecDecode` throws or returns an invalid value, Relay skips the annotation, still
+/// publishes the event, and records the error for `getLastCallbackError()`.
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub fn llm_call(

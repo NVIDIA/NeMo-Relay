@@ -67,22 +67,35 @@ func captureScopeEndMetadata(t *testing.T, subscriberName, scopeName string, fn 
 	return captured
 }
 
+func runWithTestScopeStack(t *testing.T, fn func(*testing.T)) {
+	t.Helper()
+
+	stack, err := nemo_relay.NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() { fn(t) })
+}
+
 // ============================================================================
 // WithScope
 // ============================================================================
 
 func TestWithScopeNormalReturn(t *testing.T) {
-	// Capture the current top-of-stack before pushing.
+	runWithTestScopeStack(t, testWithScopeNormalReturn)
+}
+
+func testWithScopeNormalReturn(t *testing.T) {
 	before, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf("GetHandle before: %v", err)
 	}
 
-	// WithScope pushes and returns a cleanup function.
 	cleanup := scope.WithScope("with_scope_test", nemo_relay.ScopeTypeAgent)
 	defer cleanup()
 
-	// While inside the scope, the top-of-stack should be our new scope.
 	during, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf("GetHandle during: %v", err)
@@ -91,10 +104,8 @@ func TestWithScopeNormalReturn(t *testing.T) {
 		t.Fatalf("expected 'with_scope_test', got '%s'", during.Name())
 	}
 
-	// Call cleanup explicitly to verify double-cleanup is safe (defer will call it again).
 	cleanup()
 
-	// After cleanup the scope should be popped.
 	after, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf(getHandleAfterFailed, err)
@@ -105,6 +116,10 @@ func TestWithScopeNormalReturn(t *testing.T) {
 }
 
 func TestWithScopeDeferCleanup(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeDeferCleanup)
+}
+
+func testWithScopeDeferCleanup(t *testing.T) {
 	before, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf(getHandleFailed, err)
@@ -132,6 +147,10 @@ func TestWithScopeDeferCleanup(t *testing.T) {
 }
 
 func TestWithScopeRecordsOKStatusMetadata(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeRecordsOKStatusMetadata)
+}
+
+func testWithScopeRecordsOKStatusMetadata(t *testing.T) {
 	metadata := captureScopeEndMetadata(t, "go_scope_with_status_ok_sub", "with_scope_ok_status", func() {
 		cleanup := scope.WithScope("with_scope_ok_status", nemo_relay.ScopeTypeFunction)
 		cleanup()
@@ -143,6 +162,10 @@ func TestWithScopeRecordsOKStatusMetadata(t *testing.T) {
 }
 
 func TestWithScopeCleanupOnPanic(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeCleanupOnPanic)
+}
+
+func testWithScopeCleanupOnPanic(t *testing.T) {
 	before, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf(getHandleFailed, err)
@@ -156,8 +179,10 @@ func TestWithScopeCleanupOnPanic(t *testing.T) {
 		}()
 		defer scope.WithScope("panic_scope", nemo_relay.ScopeTypeTool)()
 
-		// Verify the scope is pushed.
-		current, _ := nemo_relay.GetHandle()
+		current, err := nemo_relay.GetHandle()
+		if err != nil {
+			t.Fatalf("GetHandle inside: %v", err)
+		}
 		if current.Name() != "panic_scope" {
 			t.Fatalf("expected 'panic_scope', got '%s'", current.Name())
 		}
@@ -165,7 +190,6 @@ func TestWithScopeCleanupOnPanic(t *testing.T) {
 		panic("test panic")
 	}()
 
-	// After recovering from panic, scope should be popped.
 	after, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf("GetHandle after panic: %v", err)
@@ -176,6 +200,10 @@ func TestWithScopeCleanupOnPanic(t *testing.T) {
 }
 
 func TestWithScopeRecordsErrorStatusMetadataOnPanic(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeRecordsErrorStatusMetadataOnPanic)
+}
+
+func testWithScopeRecordsErrorStatusMetadataOnPanic(t *testing.T) {
 	metadata := captureScopeEndMetadata(t, "go_scope_with_status_error_sub", "with_scope_error_status", func() {
 		func() {
 			defer func() {
@@ -201,6 +229,10 @@ func TestWithScopeRecordsErrorStatusMetadataOnPanic(t *testing.T) {
 // ============================================================================
 
 func TestWithScopeHandleNormalReturn(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeHandleNormalReturn)
+}
+
+func testWithScopeHandleNormalReturn(t *testing.T) {
 	handle, cleanup := scope.WithScopeHandle("handle_test", nemo_relay.ScopeTypeAgent)
 	defer cleanup()
 
@@ -219,6 +251,10 @@ func TestWithScopeHandleNormalReturn(t *testing.T) {
 }
 
 func TestWithScopeHandleCleanupOnPanic(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeHandleCleanupOnPanic)
+}
+
+func testWithScopeHandleCleanupOnPanic(t *testing.T) {
 	before, err := nemo_relay.GetHandle()
 	if err != nil {
 		t.Fatalf(getHandleFailed, err)
@@ -250,6 +286,10 @@ func TestWithScopeHandleCleanupOnPanic(t *testing.T) {
 }
 
 func TestWithScopeWithOptions(t *testing.T) {
+	runWithTestScopeStack(t, testWithScopeWithOptions)
+}
+
+func testWithScopeWithOptions(t *testing.T) {
 	handle, cleanup := scope.WithScopeHandle(
 		"opts_test",
 		nemo_relay.ScopeTypeFunction,
@@ -266,33 +306,50 @@ func TestWithScopeWithOptions(t *testing.T) {
 }
 
 func TestWithScopeNested(t *testing.T) {
-	before, _ := nemo_relay.GetHandle()
+	runWithTestScopeStack(t, testWithScopeNested)
+}
 
-	h1, cleanup1 := scope.WithScopeHandle("outer", nemo_relay.ScopeTypeAgent)
-	defer cleanup1()
+func testWithScopeNested(t *testing.T) {
+	before, err := nemo_relay.GetHandle()
+	if err != nil {
+		t.Fatalf(getHandleFailed, err)
+	}
 
-	h2, cleanup2 := scope.WithScopeHandle("inner", nemo_relay.ScopeTypeFunction)
-	defer cleanup2()
+	outer, cleanupOuter := scope.WithScopeHandle("outer", nemo_relay.ScopeTypeAgent)
+	defer cleanupOuter()
+	if outer == nil {
+		t.Fatal(expectedNonNilHandle)
+	}
 
-	current, _ := nemo_relay.GetHandle()
+	inner, cleanupInner := scope.WithScopeHandle("inner", nemo_relay.ScopeTypeFunction)
+	defer cleanupInner()
+	if inner == nil {
+		t.Fatal(expectedNonNilHandle)
+	}
+
+	current, err := nemo_relay.GetHandle()
+	if err != nil {
+		t.Fatalf(getHandleFailed, err)
+	}
 	if current.Name() != "inner" {
 		t.Fatalf("expected 'inner', got '%s'", current.Name())
 	}
 
-	// Pop inner
-	cleanup2()
-	current, _ = nemo_relay.GetHandle()
+	cleanupInner()
+	current, err = nemo_relay.GetHandle()
+	if err != nil {
+		t.Fatalf(getHandleFailed, err)
+	}
 	if current.Name() != "outer" {
 		t.Fatalf("expected 'outer', got '%s'", current.Name())
 	}
 
-	// Pop outer
-	cleanup1()
-	current, _ = nemo_relay.GetHandle()
+	cleanupOuter()
+	current, err = nemo_relay.GetHandle()
+	if err != nil {
+		t.Fatalf(getHandleAfterFailed, err)
+	}
 	if current.UUID() != before.UUID() {
 		t.Fatalf("expected root scope")
 	}
-
-	_ = h1
-	_ = h2
 }

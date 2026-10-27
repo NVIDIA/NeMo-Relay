@@ -823,3 +823,29 @@ func TestOpenTelemetryTLSConfigAcrossPluginAndDirectSurfaces(t *testing.T) {
 		}
 	}
 }
+
+func TestObservabilityAtifRetentionSerialization(t *testing.T) {
+	config := NewObservabilityAtifConfig()
+	enabled := true
+	for _, value := range []*bool{nil, new(bool), &enabled} {
+		config.IncludeObservedEvents = value
+		config.IncludeLLMRequests = value
+		encoded, err := json.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"include_observed_events", "include_llm_requests"} {
+			actual, present := fields[key]
+			if value == nil && present {
+				t.Fatalf("%s should defer to core defaults", key)
+			}
+			if value != nil && (!present || actual != *value) {
+				t.Fatalf("%s must retain explicit boolean: %s", key, encoded)
+			}
+		}
+	}
+}

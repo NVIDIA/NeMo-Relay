@@ -23,6 +23,47 @@ fn make_request(content: Json) -> LlmRequest {
     }
 }
 
+#[test]
+fn owned_encode_reuses_unchanged_image_buffers() {
+    let codec = OpenAIChatCodec;
+    for change_model in [false, true] {
+        let original = make_request(json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": [{
+                "type": "image_url",
+                "image_url": {"url": format!("data:image/jpeg;base64,{}", "A".repeat(1024 * 1024))}
+            }]}],
+            "vendor_payload": "preserve me"
+        }));
+        let image_pointer = original.content["messages"][0]["content"][0]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .as_ptr();
+        let baseline = codec.decode(&original).unwrap();
+        let mut annotated = baseline.clone();
+        if change_model {
+            annotated.model = Some("gpt-4.1".into());
+        }
+        let expected = codec
+            .encode_with_baseline(&annotated, &original, &baseline)
+            .unwrap();
+
+        let encoded = codec
+            .encode_owned_with_baseline(&annotated, original, &baseline)
+            .unwrap();
+
+        assert_eq!(encoded, expected);
+        assert_eq!(
+            encoded.content["messages"][0]["content"][0]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            image_pointer,
+            "owned encoding must retain the original image allocation"
+        );
+    }
+}
+
 /// Full Chat Completions response with text + tool calls + usage + cached tokens.
 fn full_chat_response() -> Json {
     json!({
@@ -1681,6 +1722,53 @@ fn openai_chat_streaming_codec_assembles_text_response() {
     assert_eq!(usage.prompt_tokens, Some(10));
     assert_eq!(usage.completion_tokens, Some(4));
     assert_eq!(usage.total_tokens, Some(14));
+}
+
+#[test]
+fn openai_chat_streaming_codec_skips_empty_metadata_from_azure_filter_chunk() {
+    // Azure OpenAI sends a prompt-filter chunk first, with empty metadata and no choices.
+    // The real id, model and created arrive on the next chunk.
+    let codec = OpenAIChatStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "choices": [],
+        "created": 0,
+        "id": "",
+        "model": "",
+        "object": "",
+        "prompt_filter_results": [{"prompt_index": 0, "content_filter_results": {}}]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-azure",
+        "object": "chat.completion.chunk",
+        "created": 1_730_000_000,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": null}]
+    }))
+    .unwrap();
+    collector(json!({
+        "id": "chatcmpl-azure", "object": "chat.completion.chunk",
+        "created": 1_730_000_000, "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    assert_eq!(assembled["id"], json!("chatcmpl-azure"));
+    assert_eq!(assembled["object"], json!("chat.completion"));
+    assert_eq!(assembled["created"], json!(1_730_000_000));
+    assert_eq!(assembled["model"], json!("gpt-4o-mini"));
+    let annotated = OpenAIChatCodec
+        .decode_response(&assembled)
+        .expect("assembled response should decode");
+    assert_eq!(annotated.model.as_deref(), Some("gpt-4o-mini"));
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("hi".to_string()))
+    );
 }
 
 #[test]

@@ -181,9 +181,21 @@ impl LogLevel {
             "info" => Ok(Self::Info),
             "debug" => Ok(Self::Debug),
             "trace" => Ok(Self::Trace),
-            other => Err(FlowError::InvalidArgument(format!(
-                "invalid logging level '{other}'; expected error, warn, info, debug, or trace"
+            _ => Err(FlowError::InvalidArgument(format!(
+                "invalid logging level '{raw}'; expected error, warn, info, debug, or trace"
             ))),
+        }
+    }
+}
+
+impl From<LogLevel> for log::Level {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Error => Self::Error,
+            LogLevel::Warn => Self::Warn,
+            LogLevel::Info => Self::Info,
+            LogLevel::Debug => Self::Debug,
+            LogLevel::Trace => Self::Trace,
         }
     }
 }

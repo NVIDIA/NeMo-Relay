@@ -3,6 +3,7 @@
 
 use crate::error::CliError;
 use clap::Args;
+use nemo_relay_types::diagnostics::{DiagnosticHttpError, DiagnosticHttpReason};
 use std::{io::Write, process::ExitCode};
 
 const DEFAULT_INSPECTOR_RESPONSE_BYTES: u32 = crate::daemon::broker::collection::PAGE_BYTES as u32;
@@ -68,13 +69,27 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
                 "diagnostic inspection unavailable ({error}); an existing listener, private operator credentials, HTTP read policy, and a sufficient --max-response-bytes are required"
             ))
         })?;
-    if response.status == 404 {
-        return Err(CliError::Launch(
-            "listener diagnostics unsupported or not exposed".into(),
-        ));
-    }
     // Explicit inspection alone may print restricted evidence. No logging of the body.
     let mut stdout = std::io::stdout().lock();
+    write_inspection(response, command.worker.is_some(), &mut stdout)
+}
+
+fn write_inspection(
+    response: crate::gateway::client::VerifiedHttpResponse,
+    worker: bool,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, CliError> {
+    if response.status == 404 {
+        let error = DiagnosticHttpError::from_response(response.status, &response.body);
+        let message =
+            if worker && error.is_some_and(|e| e.error.reason == DiagnosticHttpReason::Missing) {
+                "worker not found"
+            } else {
+                // Older listeners and unknown error envelopes cannot establish why the route is missing.
+                "listener diagnostics endpoint unavailable (HTTP 404)"
+            };
+        return Err(CliError::Launch(message.into()));
+    }
     stdout.write_all(&response.body)?;
     stdout.write_all(b"\n")?;
     Ok(if response.status == 200 {

@@ -1203,37 +1203,37 @@ async fn model_catalog_workers_keep_provider_credentials_on_the_selected_upstrea
                 );
             }
             let app = router(state.clone());
-            for provider in ["openai", "anthropic"] {
-                for path in ["/models", "/v1/models"] {
-                    let mut request = Request::get(format!("{path}?limit=1"))
-                        .header(WORKER_TOKEN_HEADER, "data-secret");
-                    if provider == "anthropic" {
-                        request = request.header("anthropic-version", "2023-06-01");
-                    }
-                    let response = app
-                        .clone()
-                        .oneshot(request.body(Body::empty()).unwrap())
-                        .await
-                        .unwrap();
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let body = response.into_body().collect().await.unwrap().to_bytes();
-                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(observed["provider"], provider, "managed={managed}");
-                    assert_eq!(observed["uri"], "/v1/models?limit=1");
-                    let auth = if configured {
-                        Some(format!("Bearer configured-{provider}"))
-                    } else {
-                        (provider == "openai").then(|| "Bearer environment-openai".into())
-                    };
-                    assert_eq!(observed["authorization"], json!(auth));
-                    assert_eq!(
-                        observed["key"],
-                        json!(
-                            (!configured && provider == "anthropic")
-                                .then_some("environment-anthropic")
-                        )
-                    );
+            for (provider, path) in ["openai", "anthropic"]
+                .into_iter()
+                .flat_map(|provider| ["/models", "/v1/models"].map(|path| (provider, path)))
+            {
+                let mut request = Request::get(format!("{path}?limit=1"))
+                    .header(WORKER_TOKEN_HEADER, "data-secret");
+                if provider == "anthropic" {
+                    request = request.header("anthropic-version", "2023-06-01");
                 }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(observed["provider"], provider, "managed={managed}");
+                assert_eq!(observed["uri"], "/v1/models?limit=1");
+                let auth = if configured {
+                    Some(format!("Bearer configured-{provider}"))
+                } else {
+                    (provider == "openai").then(|| "Bearer environment-openai".into())
+                };
+                assert_eq!(observed["authorization"], json!(auth));
+                assert_eq!(
+                    observed["key"],
+                    json!(
+                        (!configured && provider == "anthropic").then_some("environment-anthropic")
+                    )
+                );
             }
             if let Some(runtime) = &state.managed {
                 runtime.close().await.unwrap();

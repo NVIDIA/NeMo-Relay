@@ -64,6 +64,9 @@ function queryJson(query = {}) {
       }
       return out;
     }
+    return normalizeScalar(value, key);
+  }
+  function normalizeScalar(value, key) {
     if (queryContract.NUMERIC_QUERY_FIELDS.has(key) && typeof value === 'bigint') {
       if (value < 0n || value > 18446744073709551615n) throw new DiagnosticsError('invalid_query');
       return value.toString();

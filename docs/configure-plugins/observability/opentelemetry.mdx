@@ -140,12 +140,12 @@ The automatic exporter is created in addition to Relay-configured endpoints.
 Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
 
-Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
+Remote automatic trace, log, and metric endpoints must use HTTPS, regardless
+of whether headers are configured. Plaintext HTTP is allowed
 only for localhost, a loopback IP address, or a host listed in the
 not-recommended
 [`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
-setting. Automatic log and metric headers have the same transport requirement,
-so credentials reach a remote plaintext endpoint only when you list its host.
+setting.
 To allow a host only for automatic exporters created from `OTEL_*` environment
 variables, set `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS` to a comma-separated list
 of bare hostnames or IP addresses, such as `collector.example,10.0.0.4`.
@@ -872,6 +872,35 @@ credentials, paths, and queries. Check the endpoint and exporter settings; for
 plain HTTP, add the intended host to `insecure_http_hosts`.
 For an automatic exporter alone, you can instead list the host in
 `NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`.
+
+Skipped automatic exporters do not prevent plugin activation or mark the process
+unhealthy. Their diagnostic effects depend on collection and retention:
+
+- **Diagnostics enabled and recorder admitted:** Each skipped exporter records one
+  `plugin.exporter_initialization_failed` observation with activation phase and
+  warning severity.
+- **Diagnostics disabled or admission denied:** The activation warning remains
+  available. Admission loss is reflected in diagnostics coverage.
+- **Recent event detail unavailable:** Retained per-signal counters remain
+  selectable, subject to shared retention budgets.
+
+Component keys identify the signal: `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, or `opentelemetry.automatic.metrics`. They retain
+plugin owner attribution and never contain endpoint values. Each recorder closes
+after the attempt. Its evidence describes initialization history rather than
+current exporter health. Component and event evidence share retention budgets.
+
+Failure causes are classified as follows:
+
+- **`invalid_input`:** Header validation, invalid endpoints, or invalid TLS
+  configuration.
+- **`policy_rejected`:** Rejected plaintext destinations.
+- **`io`:** TLS file-read failures.
+- **`unknown`:** Backend failures whose typed causes are no longer available.
+
+Optional detail uses the activation report's redacted explanation, excluding
+backend error text and TLS file paths. Relay does not infer causes from error
+strings.
 
 A configured endpoint skipped because of process-global headers does not prevent
 activation when at least one automatic exporter is active. The automatic

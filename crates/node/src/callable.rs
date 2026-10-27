@@ -29,6 +29,7 @@ use nemo_relay::api::runtime::{
     LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -672,18 +673,6 @@ fn recv_option_string_result(
             "{error_prefix}: expected string or null, got {other:?}",
         ))),
     }
-}
-
-fn recv_llm_request_result(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-) -> Result<LlmRequest> {
-    let result = recv_json_result(rx, error_prefix)?;
-    serde_json::from_value(result).map_err(|e| {
-        FlowError::Internal(format!(
-            "{error_prefix}: failed to deserialize LlmRequest: {e}"
-        ))
-    })
 }
 
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
@@ -1719,154 +1708,142 @@ fn record_js_subscriber_callback_error(ctx: &napi::CallContext, callback_name: &
 // Codec wrappers
 // ---------------------------------------------------------------------------
 
-/// A NAPI-RS wrapper that implements the core [`LlmCodec`] trait by delegating
-/// `decode` and `encode` to JavaScript functions via `ThreadsafeFunction`.
+/// Argument for a JavaScript `codecEncode` callback.
+#[derive(Serialize)]
+struct JsCodecEncodeArgument<'a> {
+    annotated: &'a AnnotatedLlmRequest,
+    original: &'a LlmRequest,
+}
+
+/// A JavaScript codec callback that any thread can call.
+///
+/// A throw or an unreadable return value comes back as an error.
+pub(crate) struct JsCodecCallback {
+    direct: Arc<PersistentJsFunction>,
+    queued: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    registration_thread: std::thread::ThreadId,
+    error_prefix: &'static str,
+}
+
+impl JsCodecCallback {
+    pub(crate) fn new(
+        env: &Env,
+        func: &JsFunction,
+        error_prefix: &'static str,
+    ) -> napi::Result<Self> {
+        let wrapper = callback_factory::wrap_execution_callback(env, func)?;
+        let direct = Arc::new(PersistentJsFunction::new(env, &wrapper)?);
+        let mut queued = wrapper
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<Json>| {
+                Ok(vec![ctx.value])
+            })?;
+        queued.unref(env)?;
+        Ok(Self {
+            direct,
+            queued,
+            registration_thread: std::thread::current().id(),
+            error_prefix,
+        })
+    }
+
+    pub(crate) fn reference(&self) -> Arc<PersistentJsFunction> {
+        Arc::clone(&self.direct)
+    }
+
+    fn call<A: Serialize, T: DeserializeOwned>(&self, argument: &A, expected: &str) -> Result<T> {
+        serde_json::to_value(argument)
+            .map_err(|error| {
+                FlowError::Internal(format!(
+                    "{}: could not serialize the argument: {error}",
+                    self.error_prefix
+                ))
+            })
+            .and_then(|argument| self.invoke(argument))
+            .and_then(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "{}: expected {expected}: {error}",
+                        self.error_prefix
+                    ))
+                })
+            })
+            .inspect_err(|error| record_callback_error(error.to_string()))
+    }
+
+    fn invoke(&self, argument: Json) -> Result<Json> {
+        let envelope = if std::thread::current().id() == self.registration_thread {
+            self.direct
+                .call_json(argument)
+                .map_err(|error| FlowError::Internal(format!("{}: {error}", self.error_prefix)))?
+        } else {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let status = self.queued.call_with_return_value(
+                argument,
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "{}: could not queue the callback: {status:?}",
+                    self.error_prefix
+                )));
+            }
+            recv_json_result(rx, self.error_prefix)?
+        };
+        unwrap_middleware_result(envelope, self.error_prefix)
+    }
+}
+
+/// Request codec backed by JavaScript `decode` and `encode` callbacks.
 struct NapiCodec {
-    decode: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    encode: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    register_thread: std::thread::ThreadId,
-    direct_decode: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
-    direct_encode: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
+    decode: JsCodecCallback,
+    encode: JsCodecCallback,
 }
 
 impl LlmCodec for NapiCodec {
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-        let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
-        if std::thread::current().id() == self.register_thread {
-            let result = (self.direct_decode)(req_json)?;
-            return serde_json::from_value(result).map_err(|e| {
-                FlowError::Internal(format!(
-                    "JS codec decode callback: failed to deserialize AnnotatedLlmRequest: {e}"
-                ))
-            });
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = self.decode.call_with_return_value(
-            req_json,
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "failed to queue JS codec decode callback: {status:?}",
-            )));
-        }
-        let result = recv_json_result(rx, "JS codec decode callback failed")?;
-        serde_json::from_value(result).map_err(|e| {
-            FlowError::Internal(format!(
-                "JS codec decode callback: failed to deserialize AnnotatedLlmRequest: {e}"
-            ))
-        })
+        self.decode.call(request, "AnnotatedLlmRequest")
     }
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
-        let annotated_json = serde_json::to_value(annotated).unwrap_or(Json::Null);
-        let original_json = serde_json::to_value(original).unwrap_or(Json::Null);
-        let arg = serde_json::json!({"annotated": annotated_json, "original": original_json});
-        if std::thread::current().id() == self.register_thread {
-            return serde_json::from_value((self.direct_encode)(arg)?).map_err(|e| {
-                FlowError::Internal(format!(
-                    "JS codec encode callback: failed to deserialize LlmRequest: {e}"
-                ))
-            });
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = self.encode.call_with_return_value(
-            arg,
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
+        self.encode.call(
+            &JsCodecEncodeArgument {
+                annotated,
+                original,
             },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "failed to queue JS codec encode callback: {status:?}",
-            )));
-        }
-        recv_llm_request_result(rx, "JS codec encode callback failed")
+            "LlmRequest",
+        )
     }
 }
 
-/// Wrap two JS functions (decode, encode) into an `Arc<dyn LlmCodec>` suitable
-/// for registration with the core codec registry.
-pub fn wrap_js_codec(
-    decode: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    encode: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    register_thread: std::thread::ThreadId,
-    direct_decode: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
-    direct_encode: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
-) -> Arc<dyn LlmCodec> {
-    Arc::new(NapiCodec {
-        decode: Arc::new(decode),
-        encode: Arc::new(encode),
-        register_thread,
-        direct_decode,
-        direct_encode,
-    })
+/// Build a request codec from JavaScript `decode` and `encode` callbacks.
+pub(crate) fn wrap_js_codec(decode: JsCodecCallback, encode: JsCodecCallback) -> Arc<dyn LlmCodec> {
+    Arc::new(NapiCodec { decode, encode })
 }
 
 // ---------------------------------------------------------------------------
 // Response codec wrapper
 // ---------------------------------------------------------------------------
 
-/// A NAPI-RS wrapper that implements the core [`LlmResponseCodec`] trait by
-/// delegating `decode_response` to a JavaScript function via `ThreadsafeFunction`.
+/// Response codec backed by a JavaScript `decodeResponse` callback.
 struct NapiResponseCodec {
-    decode_response: Arc<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    register_thread: std::thread::ThreadId,
-    direct_decode_response: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
+    decode_response: JsCodecCallback,
 }
 
 impl LlmResponseCodec for NapiResponseCodec {
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        if std::thread::current().id() == self.register_thread {
-            let result = (self.direct_decode_response)(response.clone())?;
-            return serde_json::from_value(result).map_err(|e| {
-                FlowError::Internal(format!(
-                    "decode_response returned invalid AnnotatedLlmResponse: {e}"
-                ))
-            });
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = self.decode_response.call_with_return_value(
-            response.clone(),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |v: Option<Json>| {
-                tx.send(callback_json(v)).ok();
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            return Err(FlowError::Internal(format!(
-                "decode_response call failed: {status:?}"
-            )));
-        }
-        let result = rx
-            .recv()
-            .map_err(|_| FlowError::Internal("decode_response callback did not return".into()))?;
-        serde_json::from_value(result).map_err(|e| {
-            FlowError::Internal(format!(
-                "decode_response returned invalid AnnotatedLlmResponse: {e}"
-            ))
-        })
+        self.decode_response.call(response, "AnnotatedLlmResponse")
     }
 }
 
-/// Wrap a JS decode_response function into an `Arc<dyn LlmResponseCodec>`.
-pub fn wrap_js_response_codec(
-    decode_response: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    register_thread: std::thread::ThreadId,
-    direct_decode_response: Arc<dyn Fn(Json) -> Result<Json> + Send + Sync>,
+/// Build a response codec from a JavaScript `decodeResponse` callback.
+pub(crate) fn wrap_js_response_codec(
+    decode_response: JsCodecCallback,
 ) -> Arc<dyn LlmResponseCodec> {
-    Arc::new(NapiResponseCodec {
-        decode_response: Arc::new(decode_response),
-        register_thread,
-        direct_decode_response,
-    })
+    Arc::new(NapiResponseCodec { decode_response })
 }
 
 /// Wrap a JS function `(context, next) => outcome` for tool execution intercepts.

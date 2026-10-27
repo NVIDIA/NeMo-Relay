@@ -38,18 +38,19 @@ use sha2::{Digest, Sha256};
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    has_configured_headers, validate_header_files, validate_header_http_endpoint,
+    has_configured_headers, validate_header_files, validate_header_http_endpoint_typed,
+    validate_otlp_transport_typed,
 };
 use super::otel::{
-    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
-    normalize_shutdown_result,
+    DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, ExporterInitializationError, ExporterInitializationResult,
+    OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result,
 };
 use super::otel_signal::{
     MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, SignalExporterRuntime,
     SignalResourceLineage, SignalRuntimeDiagnostics, automatic_otlp_http_client,
     automatic_protocol_is_grpc, automatic_protocol_is_unset, automatic_signal_endpoint,
-    automatic_signal_headers_configured, build_grpc_metadata, build_in_owned_runtime,
-    classify_metric_mark, promoted_signal_resource_attributes, record_resource_pipeline_limit,
+    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    promoted_signal_resource_attributes, record_resource_pipeline_limit,
     reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
     should_relog_runtime_diagnostic, signal_resource, telemetry_resource, validate_signal_headers,
     validate_telemetry_sdk_resource_attributes,
@@ -285,50 +286,52 @@ impl OpenTelemetryMetricConfig {
         self
     }
 
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> ExporterInitializationResult<()> {
         if self.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "endpoint must be a nonblank string".to_string(),
-            ));
+            )
+            .into());
         }
         if self.timeout.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "timeout must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.export_interval.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "export_interval must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.max_instruments == 0 {
             return Err(OpenTelemetryError::ExporterBuild(
                 "max_instruments must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.cardinality_limit == 0 {
             return Err(OpenTelemetryError::ExporterBuild(
                 "cardinality_limit must be greater than 0".to_string(),
-            ));
+            )
+            .into());
         }
         if self.cardinality_limit == usize::MAX {
             return Err(OpenTelemetryError::ExporterBuild(
                 "cardinality_limit must be less than usize::MAX".to_string(),
-            ));
+            )
+            .into());
         }
         if self.automatic {
-            if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_METRICS_HEADERS") {
-                let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
-                    .map_err(OpenTelemetryError::ExporterBuild)?
-                    .ok_or_else(|| {
-                        OpenTelemetryError::ExporterBuild(
-                            "automatic metric exporter requires a nonblank OTLP endpoint"
-                                .to_string(),
-                        )
-                    })?;
-                validate_header_http_endpoint(&endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
-            }
+            let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")?
+                .ok_or_else(|| {
+                    ExporterInitializationError::InvalidEndpoint(
+                        "automatic metric exporter requires a nonblank OTLP endpoint".to_string(),
+                    )
+                })?;
+            validate_otlp_transport_typed(&endpoint, &self.plaintext, "metric")
+                .map_err(ExporterInitializationError::from)?;
         } else {
             validate_metadata_promotion_prefixes(&self.promote_resource_metadata_prefixes)
                 .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
@@ -336,8 +339,8 @@ impl OpenTelemetryMetricConfig {
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint, &self.plaintext)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_header_http_endpoint_typed(&self.endpoint, &self.plaintext)
+                    .map_err(ExporterInitializationError::from)?;
             }
         }
         Ok(())
@@ -481,7 +484,7 @@ impl MetricRouter {
 impl OpenTelemetryMetricSubscriber {
     /// Build an OTLP metric subscriber with an independently owned provider.
     pub fn new(config: OpenTelemetryMetricConfig) -> Result<Self> {
-        Self::new_with_runtime_diagnostics(config)
+        Self::new_with_runtime_diagnostics(config).map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_for_plugin(
@@ -491,12 +494,12 @@ impl OpenTelemetryMetricSubscriber {
         config.diagnostic_field = Some(format!(
             "opentelemetry.metrics.endpoints[{endpoint_index}].endpoint"
         ));
-        Self::new_with_runtime_diagnostics(config)
+        Self::new_with_runtime_diagnostics(config).map_err(OpenTelemetryError::from)
     }
 
     pub(crate) fn new_from_automatic_configuration_for_plugin(
         plaintext: PlaintextPolicy,
-    ) -> Result<Self> {
+    ) -> ExporterInitializationResult<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
         )?;
@@ -506,7 +509,9 @@ impl OpenTelemetryMetricSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    fn new_with_runtime_diagnostics(mut config: OpenTelemetryMetricConfig) -> Result<Self> {
+    fn new_with_runtime_diagnostics(
+        mut config: OpenTelemetryMetricConfig,
+    ) -> ExporterInitializationResult<Self> {
         config.validate()?;
         if !config.automatic {
             validate_header_files(&config.headers, &config.header_env, &config.header_file)
@@ -675,13 +680,9 @@ fn shutdown_metric_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-fn build_metric_provider(
-    config: &OpenTelemetryMetricConfig,
-    diagnostics: Arc<MetricDeliveryDiagnostics>,
-    resource_attributes: Option<Vec<KeyValue>>,
-) -> Result<SdkMeterProvider> {
-    let exporter = if config.automatic {
-        let builder = OtlpMetricExporter::builder();
+fn build_automatic_metric_exporter() -> ExporterInitializationResult<OtlpMetricExporter> {
+    let builder = OtlpMetricExporter::builder();
+    Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
             builder
                 .with_http()
@@ -703,7 +704,15 @@ fn build_metric_provider(
                 .with_http_client(automatic_otlp_http_client("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
-        }
+        },
+    )
+}
+
+fn build_metric_exporter(
+    config: &OpenTelemetryMetricConfig,
+) -> ExporterInitializationResult<OtlpMetricExporter> {
+    let exporter = if config.automatic {
+        build_automatic_metric_exporter()?
     } else {
         let temporality = config.temporality.sdk();
         match config.transport {
@@ -772,6 +781,15 @@ fn build_metric_provider(
             }
         }
     };
+    Ok(exporter)
+}
+
+fn build_metric_provider(
+    config: &OpenTelemetryMetricConfig,
+    diagnostics: Arc<MetricDeliveryDiagnostics>,
+    resource_attributes: Option<Vec<KeyValue>>,
+) -> ExporterInitializationResult<SdkMeterProvider> {
+    let exporter = build_metric_exporter(config)?;
 
     let exporter = DiagnosticMetricExporter {
         inner: exporter,

@@ -1604,7 +1604,7 @@ test-python-plugin-e2e:
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
         cargo nextest run --locked -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
-        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs)' \
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs) + test(python_worker_message_limits_follow_plugin_defaults)' \
         --no-capture \
         --profile ci
     kill "$gateway_pid" 2>/dev/null || true

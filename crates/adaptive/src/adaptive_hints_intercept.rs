@@ -86,31 +86,78 @@ fn manual_agent_hints(manual: u32, effective_agent_id: &str, scope_depth: usize)
     }
 }
 
+/// Where [`AgentHints`] are written on each request.
+#[derive(Debug, Clone)]
+struct HintInjection {
+    header: bool,
+    /// Object keys leading to the body field; empty skips body injection.
+    body_path: Vec<String>,
+}
+
+impl Default for HintInjection {
+    fn default() -> Self {
+        Self::new(true, "nvext.agent_hints")
+    }
+}
+
+impl HintInjection {
+    fn new(header: bool, body_path: &str) -> Self {
+        let body_path: Vec<String> = body_path.split('.').map(str::to_string).collect();
+        // Validation rejects empty segments; skip body injection rather than write an empty key.
+        let body_path = if body_path.iter().any(String::is_empty) {
+            Vec::new()
+        } else {
+            body_path
+        };
+        Self { header, body_path }
+    }
+}
+
 fn inject_agent_hints(
     request: &mut LlmRequest,
     annotated: &mut Option<AnnotatedLlmRequest>,
     hints: &AgentHints,
+    injection: &HintInjection,
 ) {
     let Ok(serialized_hints) = serde_json::to_value(hints) else {
         return;
     };
 
-    let body = annotated
-        .as_mut()
-        .map(|annotated| &mut annotated.extra)
-        .or_else(|| request.content.as_object_mut());
-    if let Some(body) = body {
-        let nvext = body
-            .entry("nvext".to_string())
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if let Some(nvext) = nvext.as_object_mut() {
-            nvext.insert("agent_hints".to_string(), serialized_hints.clone());
+    let path = injection.body_path.as_slice();
+    let root = match annotated.as_mut() {
+        // `metadata` is a modeled request field. Write through it so the codec keeps the
+        // caller's existing metadata; an `extra["metadata"]` entry would replace it on encode.
+        Some(annotated) if path.len() > 1 && path[0] == "metadata" => annotated
+            .metadata
+            .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .map(|metadata| (metadata, &path[1..])),
+        Some(annotated) => Some((&mut annotated.extra, path)),
+        None => request.content.as_object_mut().map(|body| (body, path)),
+    };
+    if let Some((body, path)) = root
+        && let Some((field, parents)) = path.split_last()
+    {
+        // Missing parents are created; a parent that is not an object leaves the body unchanged.
+        let mut target = Some(body);
+        for key in parents {
+            target = target.and_then(|object| {
+                object
+                    .entry(key.clone())
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+                    .as_object_mut()
+            });
+        }
+        if let Some(target) = target {
+            target.insert(field.clone(), serialized_hints.clone());
         }
     }
 
-    request
-        .headers
-        .insert(AGENT_HINTS_HEADER_KEY.to_string(), serialized_hints);
+    if injection.header {
+        request
+            .headers
+            .insert(AGENT_HINTS_HEADER_KEY.to_string(), serialized_hints);
+    }
 }
 
 /// Opt-in LLM request intercept that injects [`AgentHints`] into request
@@ -123,16 +170,26 @@ pub struct AdaptiveHintsIntercept {
     hot_cache: Arc<RwLock<HotCache>>,
     agent_id: String,
     call_counter: AtomicU32,
+    injection: HintInjection,
 }
 
 impl AdaptiveHintsIntercept {
-    /// Creates a new `AdaptiveHintsIntercept`.
+    /// Creates a new `AdaptiveHintsIntercept` that writes hints to the request header and to
+    /// `nvext.agent_hints` in the body.
     pub fn new(hot_cache: Arc<RwLock<HotCache>>, agent_id: String) -> Self {
         Self {
             hot_cache,
             agent_id,
             call_counter: AtomicU32::new(1),
+            injection: HintInjection::default(),
         }
+    }
+
+    /// Sets whether hints are added as a request header and the dot-separated body path they
+    /// are written to.
+    pub fn with_injection(mut self, inject_header: bool, inject_body_path: &str) -> Self {
+        self.injection = HintInjection::new(inject_header, inject_body_path);
+        self
     }
 
     fn effective_agent_id(&self) -> String {
@@ -193,7 +250,7 @@ impl AdaptiveHintsIntercept {
                 );
 
                 if let Some(hints) = final_hints {
-                    inject_agent_hints(&mut request, &mut annotated, &hints);
+                    inject_agent_hints(&mut request, &mut annotated, &hints, &this.injection);
                 }
 
                 let outcome =

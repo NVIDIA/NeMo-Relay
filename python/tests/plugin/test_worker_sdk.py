@@ -1047,7 +1047,7 @@ async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() ->
     class CallablePluginId(WorkerPlugin):
         allows_multiple_components = True
 
-        def plugin_id(self) -> str:
+        def plugin_id(self) -> str:  # ty: ignore[invalid-attribute-override]
             return "tests.callable_id"
 
         def register(self, ctx: PluginContext, config: Json) -> None:
@@ -3155,24 +3155,34 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
 
 
 def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    """Retain Unix authority while configuring send/receive limits for both transports."""
+    calls: list[tuple[str, tuple[tuple[str, str | int], ...]]] = []
 
     def insecure_channel(
         target: str,
         *,
-        options: tuple[tuple[str, str], ...] = (),
+        options: tuple[tuple[str, str | int], ...] = (),
     ) -> object:
+        """Capture channel options without opening a network connection."""
         calls.append((target, options))
         return object()
 
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", insecure_channel)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES", "8388608")
 
     _open_host_channel("unix:///tmp/relay-host.sock")
     _open_host_channel("http://127.0.0.1:50051")
 
     assert calls == [
-        ("unix:/tmp/relay-host.sock", (("grpc.default_authority", "localhost"),)),
-        ("127.0.0.1:50051", ()),
+        (
+            "unix:/tmp/relay-host.sock",
+            (
+                ("grpc.max_receive_message_length", 8388608),
+                ("grpc.max_send_message_length", 8388608),
+                ("grpc.default_authority", "localhost"),
+            ),
+        ),
+        ("127.0.0.1:50051", (("grpc.max_receive_message_length", 8388608), ("grpc.max_send_message_length", 8388608))),
     ]
 
 
@@ -3358,29 +3368,34 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Do not publish the bound endpoint until the gRPC server accepts requests."""
     endpoint_file = tmp_path / "endpoint.txt"
     start_entered = asyncio.Event()
     allow_start = asyncio.Event()
 
     class FakeChannel:
         async def close(self) -> None:
+            """Allow startup-cancellation cleanup without opening a real channel."""
             pass
 
     class FakeServer:
         def add_insecure_port(self, target: str) -> int:
+            """Return a resolved loopback port without publishing it yet."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Pause startup so the test can inspect endpoint publication ordering."""
             start_entered.set()
             await allow_start.wait()
 
         async def stop(self, grace: int) -> None:
+            """Check the configured grace period during cancellation cleanup."""
             assert grace == 2
 
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: FakeChannel())
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: FakeChannel())
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3407,30 +3422,37 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
 
 
 async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close both channels and the server when the gRPC server cannot start."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that startup failure closed the host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Bind successfully so this test isolates the later startup failure."""
             assert target == "127.0.0.1:0"
             return 43123
 
         async def start(self) -> None:
+            """Simulate a startup failure after resource allocation."""
             raise RuntimeError("start failed")
 
         async def stop(self, grace: int) -> None:
+            """Record server cleanup while checking its grace period."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3443,31 +3465,37 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     with pytest.raises(RuntimeError, match="start failed"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Release both channels and the server when endpoint binding returns no port."""
+
     class FakeChannel:
         closed = False
 
         async def close(self) -> None:
+            """Record that bind failure closed the allocated host channel."""
             self.closed = True
 
     class FakeServer:
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
+            """Simulate gRPC reporting that no loopback port could be bound."""
             assert target == "127.0.0.1:0"
             return 0
 
         async def stop(self, grace: int) -> None:
+            """Record cleanup even though the server never started listening."""
             assert grace == 2
             self.stopped = True
 
-    fake_channel = FakeChannel()
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
     fake_server = FakeServer()
-    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
-    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
@@ -3480,7 +3508,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     with pytest.raises(WorkerSdkError, match="failed to bind worker endpoint"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
-    assert fake_channel.closed
+    assert all(channel.closed for channel in channels)
 
 
 async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
@@ -3939,65 +3967,74 @@ def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: st
     assert not plugin_api._sdk_error_to_worker(WorkerSdkError(str(first))).HasField("downstream_continuation_id")
 
 
+class ProvenanceHost(RecordingHostStub):
+    def __init__(self, surface: str) -> None:
+        super().__init__()
+        self.surface = surface
+
+    def failure(self, request: Any) -> Any:
+        return pb.WorkerError(
+            code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
+        )
+
+    async def ToolNext(self, request: Any) -> Any:
+        return pb.ToolExecutionResultResponse(error=self.failure(request))
+
+    async def LlmNext(self, request: Any) -> Any:
+        return pb.JsonResult(error=self.failure(request))
+
+    async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
+        if self.surface == "stream_setup":
+            raise grpc.aio.AioRpcError(
+                grpc.StatusCode.INTERNAL,
+                grpc.aio.Metadata(),
+                grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
+                "provider failed",
+            )
+        yield pb.StreamChunk(error=self.failure(request))
+
+
+class ProvenancePlugin(WorkerPlugin):
+    def __init__(self, replace_error: bool) -> None:
+        self.replace_error = replace_error
+
+    plugin_id = "provenance"
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        async def tool(context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(context.args)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                return await next_call.call(request)
+            except WorkerSdkError:
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
+            try:
+                async for value in next_call.call(request):
+                    yield value
+            except (WorkerSdkError, grpc.RpcError):
+                if self.replace_error:
+                    raise WorkerSdkError("independent plugin failure") from None
+                raise
+
+        ctx.register_tool_execution_intercept("tool", tool)
+        ctx.register_llm_execution_intercept("llm", llm)
+        ctx.register_llm_stream_execution_intercept("stream", stream)
+
+
 @pytest.mark.parametrize("surface", ["tool", "llm", "stream", "stream_setup"])
 @pytest.mark.parametrize("replace_error", [False, True])
 async def test_continuation_provenance_survives_worker_callbacks(surface: str, replace_error: bool) -> None:
-    class Host(RecordingHostStub):
-        def failure(self, request: Any) -> Any:
-            return pb.WorkerError(
-                code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
-            )
-
-        async def ToolNext(self, request: Any) -> Any:
-            return pb.ToolExecutionResultResponse(error=self.failure(request))
-
-        async def LlmNext(self, request: Any) -> Any:
-            return pb.JsonResult(error=self.failure(request))
-
-        async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
-            if surface == "stream_setup":
-                raise grpc.aio.AioRpcError(
-                    grpc.StatusCode.INTERNAL,
-                    grpc.aio.Metadata(),
-                    grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
-                    "provider failed",
-                )
-            yield pb.StreamChunk(error=self.failure(request))
-
-    class Plugin(WorkerPlugin):
-        plugin_id = "provenance"
-
-        def register(self, ctx: PluginContext, config: Json) -> None:
-            async def tool(context: Any, next_call: Any) -> Any:
-                try:
-                    return await next_call.call(context.args)
-                except WorkerSdkError:
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
-                try:
-                    return await next_call.call(request)
-                except WorkerSdkError:
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
-                try:
-                    async for value in next_call.call(request):
-                        yield value
-                except (WorkerSdkError, grpc.RpcError):
-                    if replace_error:
-                        raise WorkerSdkError("independent plugin failure") from None
-                    raise
-
-            ctx.register_tool_execution_intercept("tool", tool)
-            ctx.register_llm_execution_intercept("llm", llm)
-            ctx.register_llm_stream_execution_intercept("stream", stream)
-
-    service = _service(Plugin(), Host())
+    service = _service(ProvenancePlugin(replace_error), ProvenanceHost(surface))
     await _register(service)
 
     async def invoke(index: int) -> Any:

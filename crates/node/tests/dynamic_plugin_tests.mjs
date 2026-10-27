@@ -351,7 +351,7 @@ enabled = true
           const request = nativeRequest();
           request.content.marker_path = markerPath;
           request.content.mode = mode;
-          stream = await lib.llmStreamCallExecute('native-fixture-cleanup-stream', request, async function* () {
+          stream = await lib.llmStreamCallExecute('native-fixture-cleanup-stream', request, () => {
             throw new Error('native fixture should replace the provider');
           });
           assert.deepEqual(await stream.next(), { token: 'first' });
@@ -389,7 +389,7 @@ enabled = true
         const request = nativeRequest();
         request.content.marker_path = markerPath;
         request.content.mode = mode;
-        stream = await lib.llmStreamCallExecute('worker-fixture-cleanup-stream', request, async function* () {
+        stream = await lib.llmStreamCallExecute('worker-fixture-cleanup-stream', request, () => {
           throw new Error('worker fixture should replace the provider');
         });
         assert.deepEqual(await stream.next(), { token: 'first' });

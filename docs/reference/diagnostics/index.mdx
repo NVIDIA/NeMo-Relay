@@ -368,8 +368,25 @@ Diagnostic retention remains independent of these delivery policies. Refer to
 [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
-OpenTelemetry subscriber diagnostics and OTel-dependent plugin reports remain
-legacy-only. They are not projections of this canonical store.
+OpenTelemetry subscriber delivery diagnostics remain legacy-only. Skipped automatic
+exporters contribute initialization evidence to runtime diagnostics:
+
+- **Diagnostics enabled and recorder admitted:** Each skipped exporter records
+  `plugin.exporter_initialization_failed` with activation phase, warning severity,
+  and the activation report's safe explanation.
+- **Diagnostics disabled or admission denied:** The legacy activation report remains
+  available. It is maintained independently and is never replayed from snapshots.
+- **Capacity limits reached:** Recording and retention are best effort. Coverage
+  reports admission and retention loss.
+
+The component keys `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, and `opentelemetry.automatic.metrics` support
+signal-specific queries and counters without parsing optional detail. They retain
+the originating plugin's Plugin/Common ownership and leave the execution mechanism
+unset.
+
+Each recorder closes after its initialization attempt. Retained evidence describes
+that attempt rather than current exporter health.
 
 ## Classifiers and Producer Coverage
 
@@ -432,7 +449,8 @@ integrations. It outlives individual plugin activations.
 | Surface | Production Coverage |
 | --- | --- |
 | Logging adapter and sinks | Typed recording and optional log projection |
-| Common component activation | Registration failures and activation unwinds, recorded once at the owning operation |
+| Common component activation | Registration failures and activation unwinds, recorded once at the owning operation when diagnostics are enabled and admission succeeds |
+| Automatic OTel exporter initialization | Nonfatal construction failures under bounded per-signal keys, recorded once per failed attempt when diagnostics are enabled and admission succeeds; legacy activation warnings remain independent |
 | Shared host configuration | One canonical inheritance notice per contributing ambient file, preserving existing warnings/reports |
 | Native ABI and dynamic trust/policy | Records failures in policy, artifact, and schema checks. Also records native load, validation, registration, and callback failures. |
 | Worker host lifecycle and execution | Launch, handshake, validation, registration, callback and transport failures, cancellation, shutdown, exit, and process cleanup |
@@ -467,7 +485,7 @@ caller. Transport adapters must check metadata and payload limits before creatin
 those values. A supported snapshot version can contain future names. Unsupported
 snapshot versions fail compatibility checks.
 
-The common catalogue includes logging failures and successes, six common plugin
+The common catalogue includes logging failures and successes, seven common plugin
 failures, and `ConfigurationInherited`. CLI, daemon, and dynamic plugin integrations
 add their own operation codes.
 

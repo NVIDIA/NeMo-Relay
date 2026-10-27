@@ -379,8 +379,12 @@ def test_encode_writes_back_a_config_edit_between_equal_numbers_and_booleans() -
     annotated = GEMINI_CODEC.decode(raw)
     api_specific = as_object(annotated.api_specific)
     data = as_object(api_specific["data"])
-    edited_config = {**as_object(data["config"]), "response_json_schema": {"type": "integer", "default": True}}
-    annotated.api_specific = {**api_specific, "data": {**data, "config": edited_config}}
+    edited_config: nemo_relay.JsonObject = {
+        **as_object(data["config"]),
+        "response_json_schema": {"type": "integer", "default": True},
+    }
+    edited_data: nemo_relay.JsonObject = {**data, "config": edited_config}
+    annotated.api_specific = {**api_specific, "data": edited_data}
 
     encoded = GEMINI_CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
@@ -1728,8 +1732,9 @@ def test_the_extra_request_body_reaches_api_specific_and_an_edit_there_comes_bac
     data = as_object(api_specific["data"])
     config = as_object(data["config"])
     assert config["http_options"] == {"extra_body": {"labels": {"team": "a"}}}
-    edited_config = {**config, "http_options": {"extra_body": {"labels": {"team": "b"}}}}
-    annotated.api_specific = {**api_specific, "data": {**data, "config": edited_config}}
+    edited_config: nemo_relay.JsonObject = {**config, "http_options": {"extra_body": {"labels": {"team": "b"}}}}
+    edited_data: nemo_relay.JsonObject = {**data, "config": edited_config}
+    annotated.api_specific = {**api_specific, "data": edited_data}
 
     assert write_back_request(
         request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content

@@ -70,6 +70,16 @@ cargo add nemo-relay-worker
 cargo add tokio --features macros,rt-multi-thread
 ```
 
+## Configuration
+
+Use `[load.max_message_bytes]` in `relay-plugin.toml` with `default_bytes` and
+`by_name` overrides for exact callback registration names, just like callback
+timeouts. A callback's limit also applies to its continuations; unrelated
+callbacks and control RPCs retain their fallback. Host environment overrides
+take precedence; the fallback defaults to 4 MiB. Restart
+the host and workers after changes and upgrade both sides together. See
+[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
+
 ## Getting Started
 
 Implement a worker and serve it from an async entrypoint:

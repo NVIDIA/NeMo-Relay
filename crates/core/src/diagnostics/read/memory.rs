@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Derive occupancy during capture. Scratch and rows share the existing query lease.
+
 use super::*;
 use crate::diagnostics::{
     ComponentMemoryFootprint, DIAGNOSTIC_MEMORY_VERSION, DiagnosticMemoryPage,
@@ -393,7 +394,7 @@ pub(in crate::diagnostics) fn capture(
     "memory".hash(&mut hasher);
     let scope = hasher.finish();
     let state = super::super::lock(&backend.state);
-    let (mut next_c, mut next_e) = positions(inner, query, &state, scope)?;
+    let (next_c, mut next_e) = positions(inner, query, &state, scope)?;
     let component_limit = query
         .max_components
         .map_or(inner.limits.max_query_components, |n| n as usize);
@@ -464,48 +465,8 @@ pub(in crate::diagnostics) fn capture(
         });
         next_e = i + 1;
     }
-    let mut occupied = 0;
-    let mut component_blocked = false;
-    if component_limit == 0 {
-        next_c = state.components.len();
-    }
-    for (i, c) in state.components.iter().enumerate() {
-        let Some(c) = c else {
-            if i >= next_c && !component_blocked {
-                next_c = i + 1;
-            }
-            continue;
-        };
-        let charge = page.memory.charges[i];
-        let total = charge.total()?;
-        occupied = add(occupied, total)?;
-        if !component_matches(c, query) {
-            if i >= next_c && !component_blocked {
-                next_c = i + 1;
-            }
-            continue;
-        }
-        selection.components = (selection.components.get() + 1).into();
-        selection.component_occupied_bytes =
-            (selection.component_occupied_bytes.get() + total as u64).into();
-        if i < next_c || component_blocked {
-            continue;
-        }
-        if page.memory.components.len() == component_limit {
-            component_blocked = true;
-            continue;
-        }
-        let Some(identity) = copy_identity(page, c) else {
-            component_blocked = true;
-            continue;
-        };
-        page.memory.components.push(ComponentRow {
-            position: i,
-            identity,
-            footprint: charge.footprint()?,
-        });
-        next_c = i + 1;
-    }
+    let (occupied, next_c, component_blocked) =
+        capture_components(&state, query, page, next_c, component_limit, &mut selection)?;
     if (component_blocked || entry_blocked)
         && page.memory.components.is_empty()
         && page.memory.entries.is_empty()
@@ -644,4 +605,57 @@ fn fit(
             Ok(!exceeded.get())
         },
     )
+}
+
+fn capture_components(
+    state: &state::State,
+    query: &DiagnosticQuery,
+    page: &mut PageWorkspace,
+    mut next_c: usize,
+    component_limit: usize,
+    selection: &mut MemorySelectionTotals,
+) -> Result<(usize, usize, bool), DiagnosticError> {
+    let mut occupied = 0;
+    let mut component_blocked = false;
+    if component_limit == 0 {
+        next_c = state.components.len();
+    }
+    for (i, c) in state.components.iter().enumerate() {
+        let Some(c) = c else {
+            if i >= next_c && !component_blocked {
+                next_c = i + 1;
+            }
+            continue;
+        };
+        let charge = page.memory.charges[i];
+        let total = charge.total()?;
+        occupied = add(occupied, total)?;
+        if !component_matches(c, query) {
+            if i >= next_c && !component_blocked {
+                next_c = i + 1;
+            }
+            continue;
+        }
+        selection.components = (selection.components.get() + 1).into();
+        selection.component_occupied_bytes =
+            (selection.component_occupied_bytes.get() + total as u64).into();
+        if i < next_c || component_blocked {
+            continue;
+        }
+        if page.memory.components.len() == component_limit {
+            component_blocked = true;
+            continue;
+        }
+        let Some(identity) = copy_identity(page, c) else {
+            component_blocked = true;
+            continue;
+        };
+        page.memory.components.push(ComponentRow {
+            position: i,
+            identity,
+            footprint: charge.footprint()?,
+        });
+        next_c = i + 1;
+    }
+    Ok((occupied, next_c, component_blocked))
 }

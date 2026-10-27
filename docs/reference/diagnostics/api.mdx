@@ -251,6 +251,15 @@ The HTTP error body has this form:
 ```
 
 An `unsupported_schema` response also includes `supported_schema_version`.
+Rust HTTP integrations can share `DiagnosticHttpError` and `DiagnosticHttpReason`
+from `nemo_relay_types::diagnostics`. These types define the error envelope and
+numeric HTTP status mapping without depending on an HTTP framework. They are
+separate from the snapshot-only `DiagnosticReadReason` contract. Consumers must
+check the reason as well as the status: different failures share a status.
+`DiagnosticHttpError::from_response` accepts at most 1024 bytes, recognizes known
+reasons whose status agrees, and ignores additional fields. Unknown reasons,
+malformed bodies, and status mismatches require a conservative fallback.
+
 Startup can fail with `invalid_limits` or `allocation_failed`. Binding lifecycle
 errors such as `not_initialized`, `configuration_conflict`, and
 `fork_requires_exec` are separate from snapshot failures.
@@ -314,8 +323,16 @@ These existing interfaces retain their own contracts:
 - Native legacy callbacks.
 - Worker `GetRuntimeDiagnostics`.
  Snapshot
-readers do not fall back to those reports. OTel diagnostics integration, CPU
-attribution, and durable restart history are not supported.
+readers do not fall back to those reports. With runtime diagnostics enabled and
+recorder admission successful, skipped automatic OTel exporters are recorded
+directly as activation-phase `plugin.exporter_initialization_failed` observations.
+Select a signal using component key `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, or `opentelemetry.automatic.metrics`; retained
+counters remain attributable to the signal even without event detail. Recording
+is best effort under the shared admission and retention limits, with loss reported
+in coverage. Activation warnings remain in plugin reports independently. Broader OTel
+pipeline diagnostics integration, CPU attribution, and durable restart history
+are not supported.
 
 ## Detailed Memory Inspection
 

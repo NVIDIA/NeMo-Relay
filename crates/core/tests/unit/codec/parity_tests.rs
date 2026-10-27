@@ -72,6 +72,122 @@ fn req(content: Json) -> LlmRequest {
     }
 }
 
+#[test]
+fn owned_encoding_reuses_payloads_across_provider_codecs() {
+    use super::anthropic::AnthropicMessagesCodec;
+    use super::gemini_generate_content::GeminiGenerateContentCodec;
+    use super::oci_genai::OCIGenAIChatCodec;
+    use super::openai_responses::OpenAIResponsesCodec;
+    use super::traits::LlmCodec;
+
+    let payload = "A".repeat(1024 * 1024);
+    let mut cases: Vec<(&dyn LlmCodec, Json, &str, &str)> = vec![
+        (
+            &OpenAIResponsesCodec,
+            json!({"model": "gpt-4.1", "input": [{"role": "user", "content": [
+                {"type": "input_image", "image_url": payload}
+            ]}]}),
+            "/input/0/content/0/image_url",
+            "/temperature",
+        ),
+        (
+            &AnthropicMessagesCodec,
+            json!({"model": "claude-sonnet-4", "messages": [{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": payload}}
+            ]}]}),
+            "/messages/0/content/0/source/data",
+            "/temperature",
+        ),
+        (
+            &GeminiGenerateContentCodec,
+            json!({"contents": [{"role": "user", "parts": [
+                {"inlineData": {"mimeType": "image/jpeg", "data": payload}}
+            ]}]}),
+            "/contents/0/parts/0/inlineData/data",
+            "/generationConfig/temperature",
+        ),
+    ];
+    // OCI accepts both an envelope and a bare body, with multiple API formats.
+    for api_format in ["GENERIC", "COHERE", "COHEREV2"] {
+        let (body, payload_path) = if api_format == "COHERE" {
+            (
+                json!({"apiFormat": api_format, "message": payload}),
+                "/message",
+            )
+        } else {
+            (
+                json!({"apiFormat": api_format, "messages": [{"role": "USER", "content": [
+                    {"type": "IMAGE", "imageUrl": {"url": payload}}
+                ]}]}),
+                "/messages/0/content/0/imageUrl/url",
+            )
+        };
+        cases.push((
+            &OCIGenAIChatCodec,
+            body.clone(),
+            payload_path,
+            "/temperature",
+        ));
+        cases.push((
+            &OCIGenAIChatCodec,
+            json!({"compartmentId": "test", "servingMode": {"servingType": "ON_DEMAND", "modelId": "test"}, "chatRequest": body}),
+            if api_format == "COHERE" { "/chatRequest/message" } else { "/chatRequest/messages/0/content/0/imageUrl/url" },
+            "/chatRequest/temperature",
+        ));
+    }
+
+    for (codec, content, payload_path, temperature_path) in cases {
+        for change_temperature in [false, true] {
+            let mut original = req(content.clone());
+            original.headers.insert("x-test".into(), json!("preserve"));
+            let payload_pointer = original
+                .content
+                .pointer(payload_path)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .as_ptr();
+            let baseline = codec.decode(&original).unwrap();
+            let mut annotated = baseline.clone();
+            if change_temperature {
+                annotated
+                    .params
+                    .get_or_insert_with(GenerationParams::default)
+                    .temperature = Some(0.25);
+            }
+            let expected = codec
+                .encode_with_baseline(&annotated, &original, &baseline)
+                .unwrap();
+
+            let encoded = codec
+                .encode_owned_with_baseline(&annotated, original, &baseline)
+                .unwrap();
+
+            assert_eq!(encoded, expected);
+            assert_eq!(encoded.headers["x-test"], json!("preserve"));
+            if change_temperature {
+                assert_eq!(
+                    encoded.content.pointer(temperature_path),
+                    Some(&json!(0.25))
+                );
+            } else {
+                assert_eq!(encoded.content, content);
+            }
+            assert_eq!(
+                encoded
+                    .content
+                    .pointer(payload_path)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .as_ptr(),
+                payload_pointer,
+                "owned encoding copied the payload at {payload_path}"
+            );
+        }
+    }
+}
+
 fn decode(raw: &Json) -> AnnotatedLlmResponse {
     normalize_response(raw).unwrap_or_else(|| panic!("response should detect and decode: {raw}"))
 }
@@ -523,11 +639,12 @@ fn test_estimated_cost_parity_for_identical_model_and_usage() {
 
     // Each codec infers its own default provider ("openai" vs "anthropic"),
     // but pricing lookup falls back to the model-only key, so an identical
-    // model + normalized usage must estimate identically everywhere.
+    // model + request must estimate identically everywhere.
+    // Anthropic counts cache reads separately from input tokens.
     let chat = decode(&chat_response_with_usage("parity-priced-model", json!({})));
     let anthropic = decode(&anthropic_response_with_usage(
         "parity-priced-model",
-        json!({}),
+        json!({"input_tokens": 800}),
     ));
     let responses = decode(&responses_response_with_usage(
         "parity-priced-model",

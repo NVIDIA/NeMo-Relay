@@ -88,18 +88,65 @@ struct RawContent {
 
 #[derive(Deserialize)]
 struct RawUsageMetadata {
-    #[serde(rename = "promptTokenCount")]
+    #[serde(
+        rename = "promptTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     prompt_token_count: Option<u64>,
-    #[serde(rename = "candidatesTokenCount")]
+    #[serde(
+        rename = "candidatesTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     candidates_token_count: Option<u64>,
-    #[serde(rename = "totalTokenCount")]
+    #[serde(
+        rename = "totalTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     total_token_count: Option<u64>,
-    #[serde(rename = "cachedContentTokenCount")]
+    #[serde(
+        rename = "cachedContentTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     cached_content_token_count: Option<u64>,
-    #[serde(rename = "thoughtsTokenCount")]
+    #[serde(
+        rename = "thoughtsTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     thoughts_token_count: Option<u64>,
-    #[serde(rename = "toolUsePromptTokenCount")]
+    #[serde(
+        rename = "toolUsePromptTokenCount",
+        default,
+        deserialize_with = "deserialize_token_count"
+    )]
     tool_use_prompt_token_count: Option<u64>,
+}
+
+// NAPI represents JavaScript numbers above u32::MAX as JSON floats. Accept
+// integral floats without weakening the unsigned integer range checks.
+fn deserialize_token_count<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(number) = Option::<serde_json::Number>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if let Some(count) = number.as_u64() {
+        return Ok(Some(count));
+    }
+    if let Some(count) = number.as_f64() {
+        // u64::MAX rounds up to 2^64 as f64, so the upper bound is exclusive.
+        if count.is_finite() && (0.0..u64::MAX as f64).contains(&count) && count.fract() == 0.0 {
+            return Ok(Some(count as u64));
+        }
+    }
+    Err(serde::de::Error::custom(
+        "token count must be an integer in the u64 range",
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1335,7 +1382,7 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw = RawGeminiGenerateContentResponse::deserialize(response)
-            .map_err(|e| FlowError::Internal(format!("Gemini response decode: {e}")))?;
+            .map_err(|e| FlowError::InvalidArgument(format!("Gemini response decode: {e}")))?;
 
         let candidate = raw.candidates.and_then(|c| c.into_iter().next());
 
@@ -1472,9 +1519,18 @@ impl LlmCodec for GeminiGenerateContentCodec {
         original: &LlmRequest,
         baseline: &AnnotatedLlmRequest,
     ) -> Result<LlmRequest> {
+        self.encode_owned_with_baseline(annotated, original.clone(), baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        mut original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
         validate_gemini_supported_fields(annotated, baseline)?;
-        let mut content = original.content.clone();
-        let obj = content
+        let obj = original
+            .content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
 
@@ -1503,10 +1559,7 @@ impl LlmCodec for GeminiGenerateContentCodec {
 
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
-        Ok(LlmRequest {
-            headers: original.headers.clone(),
-            content,
-        })
+        Ok(original)
     }
 }
 

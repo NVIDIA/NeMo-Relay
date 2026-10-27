@@ -467,7 +467,7 @@ class TestAtifExporterType:
             exported = exporter.export()
             exported_json_all = json.loads(exporter.export_json())
             exported_json = json.loads(exporter.export_json())
-            agent = cast(JsonObject, cast(JsonObject, exported)["agent"])
+            agent = cast(JsonObject, exported["agent"])
 
             assert exported_all["session_id"] == "session-types"
             assert exported["session_id"] == "session-types"

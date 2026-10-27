@@ -15,14 +15,12 @@ from google.adk.code_executors.code_execution_utils import CodeExecutionInput, C
 import nemo_relay
 from nemo_relay import ToolExecutionResult
 from nemo_relay.integrations.google_adk._context import integration_metadata, parent_handle, rejection_marked
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 from nemo_relay.integrations.google_adk._tool_codec import AdkArgumentsCodec, AdkCodeInputCodec, ProducedResults
 from nemo_relay.typed import JsonPassthrough
 from nemo_relay.utils import run_sync
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.code_executors import BaseCodeExecutor
     from google.adk.tools import BaseTool
@@ -41,7 +39,7 @@ def wrap_code_executor(executor: BaseCodeExecutor) -> None:
     swap_class(executor, _executor_methods)
 
 
-def _tool_methods(cls: type[BaseTool]) -> Mapping[str, object]:
+def _tool_methods(cls: type[BaseTool]) -> Methods[BaseTool]:
     original = cls.run_async
 
     async def run_async(self: BaseTool, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
@@ -93,7 +91,7 @@ def _tool_methods(cls: type[BaseTool]) -> Mapping[str, object]:
     return {"run_async": run_async}
 
 
-def _executor_methods(cls: type[BaseCodeExecutor]) -> Mapping[str, object]:
+def _executor_methods(cls: type[BaseCodeExecutor]) -> Methods[BaseCodeExecutor]:
     original = cls.execute_code
 
     def execute_code(

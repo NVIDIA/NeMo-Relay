@@ -41,6 +41,7 @@ from nemo_relay.observability import (
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
+    OpenTelemetryFileSinkConfig,
     OpenTelemetryLogSectionConfig,
     OpenTelemetryMetricSectionConfig,
     OpenTelemetrySectionConfig,
@@ -114,6 +115,76 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    def test_file_sink_defaults_and_strict_validation(self, tmp_path: Path) -> None:
+        sink = OpenTelemetryFileSinkConfig(output_directory=str(tmp_path))
+        assert sink.to_dict() == {
+            "output_directory": str(tmp_path),
+            "type": "full",
+            "format": "json_lines",
+            "mode": "overwrite",
+            "mark_projection": "inherit",
+            "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
+            "promote_metadata_prefixes": [],
+            "promote_resource_metadata_prefixes": [],
+            "resource_attributes": {},
+            "service_name": "unknown_service",
+            "instrumentation_scope": "opentelemetry",
+        }
+        other = OpenTelemetryFileSinkConfig(output_directory=str(tmp_path))
+        sink.mark_exclude_names.append("custom.mark")
+        assert other.mark_exclude_names == ["llm.chunk"]
+        section = OpenTelemetrySectionConfig(enabled=True, file_sinks=[sink])
+        assert OpenTelemetrySectionConfig().file_sinks == []
+        config = ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error"))
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert report["diagnostics"] == []
+
+    @pytest.mark.parametrize("projection", ["full", "gen_ai", "openinference"])
+    async def test_typed_file_sink_writes_spans(
+        self, tmp_path: Path, projection: typing.Literal["full", "gen_ai", "openinference"]
+    ) -> None:
+        sink = OpenTelemetryFileSinkConfig(
+            output_directory=str(tmp_path),
+            type=projection,
+            filename="traces.jsonl",
+            mode="append",
+            mark_projection="event",
+            mark_exclude_names=[],
+            attribute_mappings=[{"key": "nemo_relay.scope.name", "alias": "scope_name"}],
+            promote_metadata_prefixes=["custom."],
+            promote_resource_metadata_prefixes=["deployment."],
+            resource_attributes={"environment": "test"},
+            service_name="python-file-sink",
+            service_namespace="tests",
+            service_version="1.0",
+            instrumentation_scope="python-test",
+            max_queue_size=32,
+            max_export_batch_size=16,
+            scheduled_delay_millis=60_000,
+            completed_span_context_ttl_millis=60_000,
+        )
+        config = ObservabilityConfig(
+            opentelemetry=OpenTelemetrySectionConfig(enabled=True, file_sinks=[sink]),
+            policy=ConfigPolicy(unknown_field="error"),
+        )
+        activation = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        try:
+            with scope.scope("python-file-agent", ScopeType.Agent):
+                pass
+        finally:
+            await activation.close()
+        records = [json.loads(line) for line in (tmp_path / "traces.jsonl").read_text().splitlines()]
+        spans = [
+            span
+            for record in records
+            for resource in record["resourceSpans"]
+            for instrumentation in resource["scopeSpans"]
+            for span in instrumentation["spans"]
+        ]
+        expected_name = "invoke_agent python-file-agent" if projection == "gen_ai" else "python-file-agent"
+        assert any(span["name"] == expected_name for span in spans)
+
     async def test_otlp_queue_overflow_is_accounted_per_endpoint_after_close(self) -> None:
         burst_size = 300
         projected_spans = burst_size + 2  # The seed child, burst children, and enclosing Agent.
@@ -268,10 +339,16 @@ class TestObservabilityConfigHelpers:
             "agent_name": "NeMo Relay",
             "model_name": "unknown",
             "filename_template": "nemo-relay-atif-{session_id}.json",
+            "include_observed_events": True,
+            "include_llm_requests": True,
         }
+        reduced = AtifConfig(include_observed_events=False, include_llm_requests=False).to_dict()
+        assert reduced["include_observed_events"] is False
+        assert reduced["include_llm_requests"] is False
         assert OpenTelemetrySectionConfig().to_dict() == {
             "enabled": False,
             "endpoints": [],
+            "file_sinks": [],
         }
         assert OpenTelemetryEndpointConfig(
             "gen_ai",

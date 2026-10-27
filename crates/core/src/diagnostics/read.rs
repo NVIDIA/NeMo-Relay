@@ -773,25 +773,7 @@ pub(super) fn capture(
     let state = super::lock(&backend.state);
     let captured_at = Utc::now();
     let tick = inner.tick();
-    let (mut component_position, mut event_position) = (0, 0);
-    if let Some(cursor) = &query.continuation {
-        if state.loss.sequence_saturated {
-            return Err(DiagnosticError::InvalidCursor);
-        }
-        if cursor.source_instance_id != inner.source.instance_id
-            || cursor.sequence.get() != state.sequence
-            || cursor.scope.get() != scope
-        {
-            return Err(DiagnosticError::InvalidCursor);
-        }
-        component_position = usize::try_from(cursor.component_offset.get())
-            .map_err(|_| DiagnosticError::InvalidCursor)?;
-        event_position = usize::try_from(cursor.event_offset.get())
-            .map_err(|_| DiagnosticError::InvalidCursor)?;
-        if component_position > state.components.len() || event_position > state.recent.len() {
-            return Err(DiagnosticError::InvalidCursor);
-        }
-    }
+    let (mut component_position, event_position) = snapshot_positions(inner, query, &state, scope)?;
     let component_limit = query
         .max_components
         .map_or(inner.limits.max_query_components, |n| {
@@ -827,32 +809,9 @@ pub(super) fn capture(
         }
         component_position += 1;
     }
-    if event_limit == 0 {
-        event_position = state.recent.len();
-    }
-    while event_position < state.recent.len() {
-        let position = event_position;
-        let event = state
-            .recent
-            .get(position)
-            .expect("retained history position");
-        if !event_matches(&state, event, query) {
-            event_position += 1;
-            continue;
-        }
-        if page.events.len() == event_limit {
-            truncated = true;
-            break;
-        }
-        if copy_event(page, &state, event, position).is_none() {
-            if page.components.is_empty() && page.events.is_empty() {
-                return Err(DiagnosticError::SnapshotCapacity);
-            }
-            truncated = true;
-            break;
-        }
-        event_position += 1;
-    }
+    let (event_position, events_truncated) =
+        capture_events(page, &state, query, event_position, event_limit)?;
+    truncated |= events_truncated;
     let capture = Capture {
         captured_at,
         sequence: state.sequence,
@@ -1457,6 +1416,71 @@ impl ComponentView<'_> {
     pub fn lifetime(&self) -> &DiagnosticLifetimeSummary {
         &self.component.lifetime
     }
+}
+
+fn snapshot_positions(
+    inner: &Inner,
+    query: &DiagnosticQuery,
+    state: &state::State,
+    scope: u64,
+) -> Result<(usize, usize), DiagnosticError> {
+    let (mut component_position, mut event_position) = (0, 0);
+    if let Some(cursor) = &query.continuation {
+        if state.loss.sequence_saturated {
+            return Err(DiagnosticError::InvalidCursor);
+        }
+        if cursor.source_instance_id != inner.source.instance_id
+            || cursor.sequence.get() != state.sequence
+            || cursor.scope.get() != scope
+        {
+            return Err(DiagnosticError::InvalidCursor);
+        }
+        component_position = usize::try_from(cursor.component_offset.get())
+            .map_err(|_| DiagnosticError::InvalidCursor)?;
+        event_position = usize::try_from(cursor.event_offset.get())
+            .map_err(|_| DiagnosticError::InvalidCursor)?;
+        if component_position > state.components.len() || event_position > state.recent.len() {
+            return Err(DiagnosticError::InvalidCursor);
+        }
+    }
+    Ok((component_position, event_position))
+}
+
+fn capture_events(
+    page: &mut PageWorkspace,
+    state: &state::State,
+    query: &DiagnosticQuery,
+    mut event_position: usize,
+    event_limit: usize,
+) -> Result<(usize, bool), DiagnosticError> {
+    let mut truncated = false;
+    if event_limit == 0 {
+        event_position = state.recent.len();
+    }
+    while event_position < state.recent.len() {
+        let position = event_position;
+        let event = state
+            .recent
+            .get(position)
+            .expect("retained history position");
+        if !event_matches(state, event, query) {
+            event_position += 1;
+            continue;
+        }
+        if page.events.len() == event_limit {
+            truncated = true;
+            break;
+        }
+        if copy_event(page, state, event, position).is_none() {
+            if page.components.is_empty() && page.events.is_empty() {
+                return Err(DiagnosticError::SnapshotCapacity);
+            }
+            truncated = true;
+            break;
+        }
+        event_position += 1;
+    }
+    Ok((event_position, truncated))
 }
 
 #[cfg(test)]

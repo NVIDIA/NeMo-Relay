@@ -4944,60 +4944,60 @@ async fn model_catalogs_use_the_selected_provider_credentials_and_destination() 
             (router(test_daemon_state(true, "", config.clone())), true),
             (crate::server::router(config), false),
         ] {
-            for provider in ["openai", "anthropic"] {
-                for path in ["/models", "/v1/models"] {
-                    let mut request =
-                        Request::get(format!("{path}?limit=1&after_id=cursor%2Ftest"))
-                            .header("x-nemo-relay-worker-token", "data-secret");
-                    if provider == "anthropic" {
-                        request = request.header("anthropic-version", "2023-06-01");
-                    }
-                    if source == "caller" {
-                        request = if provider == "anthropic" {
-                            request.header("x-api-key", "caller-anthropic")
-                        } else {
-                            request.header("authorization", "Bearer caller-openai")
-                        };
-                    }
-                    let response = app
-                        .clone()
-                        .oneshot(request.body(Body::empty()).unwrap())
-                        .await
-                        .unwrap();
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let body = response.into_body().collect().await.unwrap().to_bytes();
-                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(observed["provider"], provider, "{source}: {path}");
-                    assert_eq!(observed["uri"], "/v1/models?limit=1&after_id=cursor%2Ftest");
-                    let auth = match (source, allowed, provider) {
-                        ("configured", true, _) => Some(format!("Bearer configured-{provider}")),
-                        ("other-provider-only", true, "openai") => {
-                            Some("Bearer configured-openai".into())
-                        }
-                        ("environment", true, "openai") => Some("Bearer environment-openai".into()),
-                        ("caller", _, "openai") => Some("Bearer caller-openai".into()),
-                        _ => None,
-                    };
-                    let key = match (source, allowed, provider) {
-                        ("environment", true, "anthropic") => Some("environment-anthropic"),
-                        ("caller", _, "anthropic") => Some("caller-anthropic"),
-                        _ => None,
-                    };
-                    assert_eq!(
-                        observed["authorization"],
-                        serde_json::json!(auth),
-                        "{source}: {provider}"
-                    );
-                    assert_eq!(
-                        observed["key"],
-                        serde_json::json!(key),
-                        "{source}: {provider}"
-                    );
-                    assert_eq!(
-                        observed["version"],
-                        serde_json::json!((provider == "anthropic").then_some("2023-06-01"))
-                    );
+            for (provider, path) in ["openai", "anthropic"]
+                .into_iter()
+                .flat_map(|provider| ["/models", "/v1/models"].map(|path| (provider, path)))
+            {
+                let mut request = Request::get(format!("{path}?limit=1&after_id=cursor%2Ftest"))
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if provider == "anthropic" {
+                    request = request.header("anthropic-version", "2023-06-01");
                 }
+                if source == "caller" {
+                    request = if provider == "anthropic" {
+                        request.header("x-api-key", "caller-anthropic")
+                    } else {
+                        request.header("authorization", "Bearer caller-openai")
+                    };
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(observed["provider"], provider, "{source}: {path}");
+                assert_eq!(observed["uri"], "/v1/models?limit=1&after_id=cursor%2Ftest");
+                let auth = match (source, allowed, provider) {
+                    ("configured", true, _) => Some(format!("Bearer configured-{provider}")),
+                    ("other-provider-only", true, "openai") => {
+                        Some("Bearer configured-openai".into())
+                    }
+                    ("environment", true, "openai") => Some("Bearer environment-openai".into()),
+                    ("caller", _, "openai") => Some("Bearer caller-openai".into()),
+                    _ => None,
+                };
+                let key = match (source, allowed, provider) {
+                    ("environment", true, "anthropic") => Some("environment-anthropic"),
+                    ("caller", _, "anthropic") => Some("caller-anthropic"),
+                    _ => None,
+                };
+                assert_eq!(
+                    observed["authorization"],
+                    serde_json::json!(auth),
+                    "{source}: {provider}"
+                );
+                assert_eq!(
+                    observed["key"],
+                    serde_json::json!(key),
+                    "{source}: {provider}"
+                );
+                assert_eq!(
+                    observed["version"],
+                    serde_json::json!((provider == "anthropic").then_some("2023-06-01"))
+                );
             }
         }
     }
@@ -5112,6 +5112,42 @@ async fn http_model_hosts_daemon_pass_through_is_credential_free_and_does_not_fo
 }
 
 #[tokio::test]
+async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error() {
+    let mut state = test_daemon_state(false, "route-token", GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().diagnostics_http = Some(
+        crate::diagnostics_http::DiagnosticsHttp::new(
+            nemo_relay::diagnostics::Diagnostics::default().reader(),
+            crate::configuration::BootstrapChallengeKey::from_bytes(b"transport-error"),
+            vec![],
+        )
+        .unwrap(),
+    );
+    let app = router_with_diagnostics(state, false);
+    for path in [
+        "/_nemo_relay/v1/diagnostics",
+        "/_nemo_relay/v1/diagnostics/components",
+        "/_nemo_relay/v1/diagnostics/events",
+        "/_nemo_relay/v1/diagnostics/memory",
+        "/_nemo_relay/v1/diagnostics/capabilities",
+        "/_nemo_relay/v1/workers/00000000-0000-4000-8000-000000000000/diagnostics",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED, "{path}");
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({"error":{"reason":"authenticated_transport_required"}}),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_mutate_state() {
     use nemo_relay::diagnostics::*;
     let context = Diagnostics::from_settings(
@@ -5223,4 +5259,170 @@ async fn diagnostic_activation_deadline_revokes_expired_route_and_is_idempotent(
     ));
     expire_activation_routes(&state, 102);
     assert!(lock(&state.activations).is_empty());
+}
+
+#[tokio::test]
+async fn worker_stream_application_errors_preserve_the_route_and_next_request() {
+    use nemo_relay::api::registry::{
+        deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
+        register_llm_execution_intercept, register_llm_stream_execution_intercept,
+    };
+    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+    use serde_json::json;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "broker-stream-application-error";
+    struct Registration;
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            let _ = deregister_llm_execution_intercept(INTERCEPT);
+            let _ = deregister_llm_stream_execution_intercept(INTERCEPT);
+        }
+    }
+    let _registration = Registration;
+    fn denied() -> FlowError {
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(403),
+            body: "denied by worker middleware".into(),
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })
+    }
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, _, _, _| Box::pin(async { Err(denied()) })),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(INTERCEPT, 1,
+        Arc::new(|_, request, _, _| Box::pin(async move {
+            let after_first = request.content["error_after_first"].as_bool().unwrap_or(false);
+            Ok(LlmJsonStream::new(async_stream::stream! {
+                if after_first {
+                    yield Ok(json!({"id":"broker-stream-denial","object":"chat.completion.chunk","model":"test","choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]}));
+                }
+                yield Err(denied());
+            }))
+        })),
+    ).unwrap();
+
+    for require_worker in [false, true] {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x79_u8; 32]);
+        let credential = RouteCredential::parse(token.clone()).unwrap();
+        let mut state = test_daemon_state(false, &token, GatewayConfig::default());
+        Arc::get_mut(&mut state).unwrap().registry =
+            Registry::new(false).with_require_worker(require_worker);
+        let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+        let launch = fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap();
+        let activation_id = launch.activation_id.clone();
+        state
+            .registry
+            .register_mcp(
+                McpRegistration {
+                    fingerprint,
+                    token_digest: credential.digest(),
+                    session_id: McpSessionId::new("stream-error-mcp").unwrap(),
+                    lease_expires_at_unix_ms: u64::MAX,
+                },
+                launch,
+            )
+            .unwrap();
+        let gateway = crate::server::AppState::new(GatewayConfig {
+            openai_base_url: "http://127.0.0.1:1".into(),
+            ..GatewayConfig::default()
+        });
+        let gateway_for_worker = gateway.clone();
+        let worker = Router::new().fallback(move |request: Request<Body>| {
+            let gateway = gateway_for_worker.clone();
+            async move {
+                match crate::gateway::daemon_execute(
+                    gateway,
+                    request,
+                    crate::operational::OperationalContext::new(),
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => error.into_response(),
+                }
+            }
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker_task = tokio::spawn(async move { axum::serve(listener, worker).await.unwrap() });
+        state
+            .registry
+            .mark_worker_ready(
+                fingerprint,
+                &activation_id,
+                Arc::new(
+                    WorkerTarget::new(
+                        "stream-error-worker",
+                        endpoint,
+                        SensitiveString::new("worker-token").unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let app = router(state.clone());
+        let request = |streaming, after_first| {
+            Request::post("/v1/chat/completions")
+                .header(CLIENT_TOKEN_HEADER, &token).header("content-type", "application/json")
+                .body(Body::from(json!({"model":"test","messages":[],"stream":streaming,"error_after_first":after_first}).to_string())).unwrap()
+        };
+        for after_first in [false, true] {
+            let response = app
+                .clone()
+                .oneshot(request(true, after_first))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if after_first {
+                    StatusCode::OK
+                } else {
+                    StatusCode::FORBIDDEN
+                }
+            );
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("request failure must not break worker framing")
+                .to_bytes();
+            let body = String::from_utf8_lossy(&bytes);
+            if after_first {
+                assert!(body.contains("broker-stream-denial"));
+                assert!(!body.contains("[DONE]"));
+            } else {
+                assert!(body.contains("denied by worker middleware"));
+            }
+            let assigned = state.registry.resolve_target(&credential.digest()).unwrap();
+            let ResolvedTarget::Worker(assigned) = assigned else {
+                panic!("application failure changed the worker route")
+            };
+            assert_eq!(
+                assigned.target().shared_worker_id().as_ref(),
+                "stream-error-worker"
+            );
+            drop(assigned);
+            let next_response = app.clone().oneshot(request(false, false)).await.unwrap();
+            assert_eq!(next_response.status(), StatusCode::FORBIDDEN);
+            let next_bytes = next_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes();
+            assert!(String::from_utf8_lossy(&next_bytes).contains("denied by worker middleware"));
+        }
+        worker_task.abort();
+        gateway
+            .sessions
+            .close_all("stream_error_route_test")
+            .await
+            .unwrap();
+    }
 }

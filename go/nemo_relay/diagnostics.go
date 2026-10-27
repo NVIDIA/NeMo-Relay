@@ -79,7 +79,7 @@ func (reader *DiagnosticsReader) Close() {
 	}
 }
 
-func (reader *DiagnosticsReader) read(query string, mode string) (string, error) {
+func (reader *DiagnosticsReader) read(query, mode string) (string, error) {
 	if reader == nil || reader.state == nil {
 		return "", &DiagnosticsError{Reason: "closed"}
 	}

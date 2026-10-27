@@ -200,15 +200,16 @@ def _completion(text: str, *, completion_id: str = "chatcmpl-1") -> httpx.Respon
 
 
 def _completion_stream(pieces: Sequence[str], *, completion_id: str, usage: nemo_relay.JsonObject) -> httpx.Response:
-    def chunk(choices: list[nemo_relay.JsonObject], **fields: nemo_relay.Json) -> nemo_relay.JsonObject:
-        return {
+    def chunk(choices: list[nemo_relay.Json], **fields: nemo_relay.Json) -> nemo_relay.JsonObject:
+        body: nemo_relay.JsonObject = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": 1,
             "model": _GPT,
             "choices": choices,
-            **fields,
         }
+        body.update(fields)
+        return body
 
     chunks = [
         chunk([{"index": 0, "delta": {"role": "assistant", "content": piece}, "finish_reason": None}])

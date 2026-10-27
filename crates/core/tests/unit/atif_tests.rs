@@ -7466,41 +7466,46 @@ fn raw_provider_display_preserves_images_and_request_signatures() {
         json!({"inlineData": {"mimeType": "image/png", "data": "YQ=="}}),
         json!({"fileData": {"mimeType": "image/png", "fileUri": "gs://bucket/a.png"}}),
     ] {
-        for role in [Some("user"), None] {
-            for text in [true, false] {
-                let mut content = json!({"parts": [image.clone()]});
-                if let Some(role) = role {
-                    content["role"] = json!(role);
-                }
-                if text {
-                    content["parts"].as_array_mut().unwrap().extend([
-                        json!({"text": "inspect"}),
-                        json!({"text": "hidden", "thought": true}),
-                        json!({"text": "carefully"}),
-                    ]);
-                }
-                let request = json!({"contents": [
-                    {"role": "user", "parts": [{"text": "older question"}]}, content
-                ]});
-                let mut different = request.clone();
-                different["contents"][1]["parts"][0] = json!({"inlineData": {
-                    "mimeType": "image/png", "data": "Yg=="
-                }});
-                assert_ne!(
-                    llm_request_signature(&request),
-                    llm_request_signature(&different)
-                );
-                assert_raw_provider_projection(
-                    &request,
-                    if text {
-                        Some("inspect\ncarefully")
-                    } else {
-                        Some("")
-                    },
-                );
+        for (role, text) in [Some("user"), None]
+            .into_iter()
+            .flat_map(|role| [true, false].map(|text| (role, text)))
+        {
+            let mut content = json!({"parts": [image.clone()]});
+            if let Some(role) = role {
+                content["role"] = json!(role);
             }
+            if text {
+                content["parts"].as_array_mut().unwrap().extend([
+                    json!({"text": "inspect"}),
+                    json!({"text": "hidden", "thought": true}),
+                    json!({"text": "carefully"}),
+                ]);
+            }
+            let request = json!({"contents": [
+                {"role": "user", "parts": [{"text": "older question"}]}, content
+            ]});
+            let mut different = request.clone();
+            different["contents"][1]["parts"][0] = json!({"inlineData": {
+                "mimeType": "image/png", "data": "Yg=="
+            }});
+            assert_ne!(
+                llm_request_signature(&request),
+                llm_request_signature(&different)
+            );
+            assert_raw_provider_projection(
+                &request,
+                if text {
+                    Some("inspect\ncarefully")
+                } else {
+                    Some("")
+                },
+            );
         }
     }
+}
+
+#[test]
+fn raw_oci_provider_display_preserves_images_and_request_signatures() {
     for text in [true, false] {
         let mut parts =
             vec![json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,YQ=="}})];

@@ -25,9 +25,9 @@ The lifecycle hooks use the same logical shape in every binding. These implement
 all validate `tag` and install one component-owned subscriber. The callback spelling is
 different, but the identity, validation, and ownership rules are the same.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from typing import Any
 
 from nemo_relay.plugin import PluginContext
@@ -48,9 +48,8 @@ class AuditPlugin:
     def register(self, _config: dict[str, Any], context: PluginContext) -> None:
         context.register_subscriber("events", lambda event: print(event.name))
 ```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
+
+```js title="Node.js"
 const auditPlugin = {
   validate(config) {
     if (config.tag === undefined || typeof config.tag === 'string') return [];
@@ -68,9 +67,8 @@ const auditPlugin = {
   },
 };
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use nemo_relay::plugin::{
@@ -114,8 +112,8 @@ impl Plugin for AuditPlugin {
     }
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Rust carries the kind on the `Plugin` implementation. Python and Node.js supply it when
 the application calls `plugin.register("audit", implementation)`. In all three cases,

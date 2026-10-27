@@ -417,6 +417,8 @@ pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     activation_diagnostics: Vec<ConfigDiagnostic>,
     namespace: Option<PluginRegistrationNamespace>,
+    diagnostics: Diagnostics,
+    diagnostic_ownership: ComponentOwnership,
     // Best-effort admission is separate from the enabled/disabled recorder facade.
     diagnostic_recorder: Option<ComponentRecorder>,
 }
@@ -444,6 +446,11 @@ const PLUGIN_ACTIVATION_CODES: &[BuiltinDiagnosticCode] = &[
         CommonPluginFailureCode::RegistrationFailed,
     ))),
 ];
+
+const PLUGIN_EXPORTER_INITIALIZATION_CODES: &[BuiltinDiagnosticCode] =
+    &[BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
+        PluginFailureCode::Common(CommonPluginFailureCode::ExporterInitializationFailed),
+    ))];
 
 impl Default for PluginRegistrationContext {
     fn default() -> Self {
@@ -486,17 +493,20 @@ impl PluginRegistrationContext {
             }
             name[..end].to_owned()
         });
+        let diagnostic_ownership = ComponentOwnership {
+            responsibility,
+            ..ComponentOwnership::default()
+        };
         let registration = ComponentRegistration {
-            ownership: ComponentOwnership {
-                responsibility,
-                ..ComponentOwnership::default()
-            },
+            ownership: diagnostic_ownership.clone(),
             ..ComponentRegistration::new("plugin.activation", PLUGIN_ACTIVATION_CODES)
         };
         Self {
             registrations: vec![],
             activation_diagnostics: vec![],
             namespace,
+            diagnostics: diagnostics.clone(),
+            diagnostic_ownership,
             diagnostic_recorder: diagnostics.register_component(registration).ok(),
         }
     }
@@ -576,6 +586,8 @@ impl PluginRegistrationContext {
             registrations: vec![],
             activation_diagnostics: vec![],
             namespace: Some(namespace),
+            diagnostics: self.diagnostics.clone(),
+            diagnostic_ownership: self.diagnostic_ownership.clone(),
             diagnostic_recorder: self.diagnostic_recorder.clone(),
         }
     }
@@ -1123,6 +1135,37 @@ impl PluginRegistrationContext {
 
     pub(crate) fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
         self.activation_diagnostics.push(diagnostic);
+    }
+
+    /// Record a nonfatal exporter failure under its stable, bounded signal key.
+    /// Keep the plugin owner attribution; endpoint values never enter the identity.
+    /// This scoped recorder closes after the attempt, retaining bounded history.
+    /// Admission failure or disabled diagnostics never suppresses the legacy warning.
+    pub(crate) fn record_nonfatal_activation_failure(
+        &mut self,
+        component_key: &'static str,
+        classification: Classification,
+        diagnostic: ConfigDiagnostic,
+    ) {
+        let registration = ComponentRegistration {
+            ownership: self.diagnostic_ownership.clone(),
+            ..ComponentRegistration::new(component_key, PLUGIN_EXPORTER_INITIALIZATION_CODES)
+        };
+        if let Ok(recorder) = self.diagnostics.register_component(registration) {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    classification,
+                    DiagnosticDetailRef::Text(&diagnostic.message),
+                    NonZeroU64::MIN,
+                )
+                .with_severity(DiagnosticSeverity::Warning)
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation.into()),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+        self.record_activation_diagnostic(diagnostic);
     }
 
     pub(crate) fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
@@ -2516,7 +2559,10 @@ fn platform_system_config_dir() -> PathBuf {
 /// `HOME`/`USERPROFILE`. `pub` only for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn user_config_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+    // The XDG Base Directory spec treats an empty value as unset and a relative path as invalid.
+    if let Some(base) =
+        std::env::var_os("XDG_CONFIG_HOME").filter(|base| Path::new(base).is_absolute())
+    {
         return Some(PathBuf::from(base).join("nemo-relay"));
     }
     std::env::var_os("HOME")

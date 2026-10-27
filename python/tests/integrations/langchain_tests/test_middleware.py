@@ -118,8 +118,18 @@ def nemo_relay_middleware_fixture() -> NemoRelayMiddleware:
 
 class RecordingMiddleware(Protocol):
     calls: list[dict[str, Any]]
-    wrap_model_call: Callable
-    awrap_model_call: Callable
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]: ...
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]: ...
 
 
 @pytest.fixture(name="recording_middleware")
@@ -785,7 +795,7 @@ def test_langchain_request_codec_uses_canonical_blocks_after_bare_string_content
     message = dict(annotated.messages[0])
     content = [dict(part) for part in cast(list[dict[str, Any]], message["content"])]
     content[0]["text"] = "first from intercept"
-    message["content"] = content
+    message["content"] = [*content]
     annotated.messages = [message]
     rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
 
@@ -914,7 +924,7 @@ def test_model_call_applies_edit_to_one_system_content_block(
         system_message = dict(messages[0])
         system_content = [dict(part) for part in cast(list[dict[str, Any]], system_message["content"])]
         system_content[1]["text"] = "second from intercept"
-        system_message["content"] = system_content
+        system_message["content"] = [*system_content]
         annotated.messages = [system_message, *messages[1:]]
         return nemo_relay.LLMRequestInterceptOutcome(llm_request, annotated)
 

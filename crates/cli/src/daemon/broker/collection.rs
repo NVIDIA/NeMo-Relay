@@ -293,6 +293,7 @@ pub(super) enum PollOutcome {
     Timeout,
     Unsupported,
     Disabled,
+    ShuttingDown,
     Unauthorized,
     Busy,
     Oversized,
