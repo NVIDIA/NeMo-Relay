@@ -49,10 +49,12 @@ def require(condition: Any, message: str) -> None:
 
 def validate_metadata(value: Any, kind: str, location: str) -> None:
     """The committed schema owns field types; Python owns cross-file relationships."""
-    error = next(VALIDATORS[kind].iter_errors(value), None)
-    if error is not None:
+    messages = []
+    for error in VALIDATORS[kind].iter_errors(value):
         path = ".".join(str(part) for part in error.absolute_path) or "<root>"
-        raise ValueError(f"{location}: {kind}.{path}: {error.message}")
+        messages.append(f"{location}: {kind}.{path}: {error.message}")
+    if messages:
+        raise ValueError("\n".join(messages))
 
 
 def relative_path(value: str) -> bool:
@@ -248,7 +250,18 @@ def main() -> int:
         pages = [args.page] if args.page else sorted(page for page in PAGES.glob("*.mdx") if page.stem != "index")
         require(args.action == "check" or args.page is not None, "this action requires one page")
         require(bool(pages), "no quickstart guides found")
-        scenarios = [extract(page, args.shell) for page in pages]
+        scenarios = []
+        failures = []
+        # A bad guide must not hide failures in the remaining guides. Invalid
+        # metadata still stops extraction of that page before dependent lookups.
+        for page in pages:
+            try:
+                scenarios.append(extract(page, args.shell))
+            except (ValueError, OSError, KeyError, IndexError, TypeError) as error:
+                for message in (str(error) or type(error).__name__).splitlines():
+                    failures.append(message if message.startswith(f"{page.name}:") else f"{page.name}: {message}")
+        if failures:
+            raise ValueError("\n".join(failures))
         if args.action == "check":
             print(f"Validated {len(scenarios)} quickstart contracts (no commands executed)")
             return 0

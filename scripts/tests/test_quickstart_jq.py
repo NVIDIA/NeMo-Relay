@@ -5,7 +5,6 @@
 
 import copy
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -43,16 +42,10 @@ def events_for(guide: str) -> list[dict]:
 class QuickstartJqTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        configured = os.environ.get("QUICKSTART_JQ_BINARIES")
-        if configured is not None:
-            cls.binaries = configured.split(os.pathsep)
-            if not all(cls.binaries):
-                raise ValueError("QUICKSTART_JQ_BINARIES must contain executable paths")
-        else:
-            binary = shutil.which("jq")
-            if binary is None:
-                raise unittest.SkipTest("Install jq to run the documented verification-expression tests")
-            cls.binaries = [binary]
+        binary = shutil.which("jq")
+        if binary is None:
+            raise RuntimeError("jq is required for Quick Start checks; install jq and rerun just check-quickstarts")
+        cls.binary = binary
 
     def expressions(self, guide):
         """Read the copyable expressions rather than maintain a second verifier."""
@@ -64,9 +57,9 @@ class QuickstartJqTests(unittest.TestCase):
         self.assertEqual(len(events), 1, page)
         return markers[0], events[0]
 
-    def run_jq(self, binary, flags, expression, content):
+    def run_jq(self, flags, expression, content):
         return subprocess.run(
-            [binary, flags, expression], input=content, capture_output=True, text=True, timeout=10, check=False
+            [self.binary, flags, expression], input=content, capture_output=True, text=True, timeout=10, check=False
         )
 
     def test_event_verifiers_accept_complete_scopes_and_reject_bad_evidence(self):
@@ -97,31 +90,29 @@ class QuickstartJqTests(unittest.TestCase):
                     event["name"] = "unrelated-turn"
                 cases["wrong-turn-name"] = (broken, 1)
 
-            for binary in self.binaries:
-                for label, (fixture, expected) in cases.items():
-                    with self.subTest(guide=guide, jq=binary, fixture=label):
-                        content = "".join(json.dumps(event) + "\n" for event in fixture)
-                        result = self.run_jq(binary, "-se", expression, content)
-                        self.assertEqual(result.returncode, expected, result.stderr)
-                        self.assertEqual(result.stdout.strip(), "true" if expected == 0 else "false")
-                with self.subTest(guide=guide, jq=binary, fixture="malformed-json"):
-                    result = self.run_jq(binary, "-se", expression, "{broken json")
-                    self.assertNotEqual(result.returncode, 0)
+            for label, (fixture, expected) in cases.items():
+                with self.subTest(guide=guide, fixture=label):
+                    content = "".join(json.dumps(event) + "\n" for event in fixture)
+                    result = self.run_jq("-se", expression, content)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    self.assertEqual(result.stdout.strip(), "true" if expected == 0 else "false")
+            with self.subTest(guide=guide, fixture="malformed-json"):
+                result = self.run_jq("-se", expression, "{broken json")
+                self.assertNotEqual(result.returncode, 0)
 
     def test_marker_verifiers_require_the_exact_tool_marker(self):
         for guide in GUIDES:
             expression, _ = self.expressions(guide)
-            for binary in self.binaries:
-                for content, expected in (
-                    ("RELAY_QUICKSTART_TOOL_OK", 0),
-                    ("  RELAY_QUICKSTART_TOOL_OK\n", 0),
-                    ("", 1),
-                    ("wrong marker", 1),
-                    ("RELAY_QUICKSTART_TOOL_OK extra", 1),
-                ):
-                    with self.subTest(guide=guide, jq=binary, content=content):
-                        result = self.run_jq(binary, "-eRs", expression, content)
-                        self.assertEqual(result.returncode, expected, result.stderr)
+            for content, expected in (
+                ("RELAY_QUICKSTART_TOOL_OK", 0),
+                ("  RELAY_QUICKSTART_TOOL_OK\n", 0),
+                ("", 1),
+                ("wrong marker", 1),
+                ("RELAY_QUICKSTART_TOOL_OK extra", 1),
+            ):
+                with self.subTest(guide=guide, content=content):
+                    result = self.run_jq("-eRs", expression, content)
+                    self.assertEqual(result.returncode, expected, result.stderr)
 
 
 if __name__ == "__main__":

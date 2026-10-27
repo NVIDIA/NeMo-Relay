@@ -211,6 +211,32 @@ class QuickstartContractTests(unittest.TestCase):
                 self.page.write_text(changed, encoding="utf-8")
                 QS.extract(self.page)
 
+    def test_check_reports_multiple_schema_errors_and_failing_pages(self):
+        alpha = (
+            example_page()
+            .replace('"id": "demo"', '"id": "alpha"')
+            .replace('"schema": 1', '"schema": true')
+            .replace('">=3.11"', "false")
+        )
+        beta = example_page().replace('"id": "demo"', '"id": "beta"').replace('"cwd":"project"', '"cwd":"../escape"')
+        (self.root / "alpha.mdx").write_text(alpha, encoding="utf-8")
+        (self.root / "beta.mdx").write_text(beta, encoding="utf-8")
+        (self.root / "gamma.mdx").write_text("# Missing contract\n", encoding="utf-8")
+        with (
+            mock.patch.object(QS, "PAGES", self.root),
+            mock.patch.object(sys, "argv", ["check-quickstarts", "check"]),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(QS.main(), 1)
+        report = errors.getvalue()
+        self.assertIn("alpha.mdx: scenario.schema:", report)
+        self.assertIn("alpha.mdx: scenario.requires.python:", report)
+        self.assertIn("beta.mdx: unsafe block cwd", report)
+        self.assertIn("gamma.mdx: expected one scenario", report)
+        self.assertNotIn("gamma.mdx: gamma.mdx:", report)
+        self.assertNotIn("Validated", output.getvalue())
+
     def test_default_check_rejects_missing_and_partial_contracts(self):
         (self.root / "legacy.mdx").write_text("# Legacy guide\n", encoding="utf-8")
         (self.root / "index.mdx").write_text("# Overview\n", encoding="utf-8")
