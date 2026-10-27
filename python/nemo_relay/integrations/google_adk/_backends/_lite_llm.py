@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from inspect import signature
 from types import MethodType
@@ -269,21 +269,40 @@ def _moving_callback(args: _LiteLlmArgs) -> CustomLogger | None:
 
 
 def _prompt_integration(call: _Call) -> str | None:
-    """Return the prompt integration LiteLLM hands `call` to once its prompt management gate is open, or None.
-
-    LiteLLM starts the integration a model prefix names and hands the call to it, else to the first registered
-    `CustomPromptManagement` whose `should_run_prompt_management` accepts the call's `prompt_id`. Only one that
-    compiles prompts for the call can change its model.
-    """
+    """Return the prompt integration LiteLLM hands `call` to once its prompt management gate is open, or None."""
     prompt_id = call.options.get("prompt_id") or None
     if (found := _prefix_logger(call.model)) is not None:
         integration, logger = found
         return f"LiteLLM prompt integration {integration}" if _compiles(logger, prompt_id, call.dynamic) else None
-    registered = [*litellm.logging_callback_manager.get_all_callbacks(), *(call.options.get("callbacks") or [])]
+    managers = _prompt_managers(call.options)
+    selected = next((manager for manager in managers if _accepts(manager, prompt_id, call.dynamic)), None)
+    if selected is None and prompt_id is not None and managers:
+        selected = managers[0] if _rewrites_prompt(managers[0], CustomPromptManagement) else None
+    return None if selected is None else f"LiteLLM callback {type(selected).__name__}"
+
+
+def _prompt_managers(options: _LiteLlmArgs) -> list[CustomPromptManagement]:
+    registered = [
+        *litellm.callbacks,
+        *litellm.success_callback,
+        *(options.get("callbacks") or []),
+        *litellm.failure_callback,
+        *litellm._async_success_callback,
+        *litellm._async_failure_callback,
+    ]
+    managers: list[CustomPromptManagement] = []
     for callback in registered:
-        if isinstance(callback, CustomPromptManagement) and _accepts(callback, prompt_id, call.dynamic):
-            return f"LiteLLM callback {type(callback).__name__}"
-    return None
+        if isinstance(callback, CustomPromptManagement) and callback not in managers:
+            managers.append(callback)
+    return managers
+
+
+def _rewrites_prompt(logger: CustomLogger, base: type[CustomLogger]) -> bool:
+    cls = type(logger)
+    return (
+        cls.get_chat_completion_prompt is not base.get_chat_completion_prompt
+        or cls.async_get_chat_completion_prompt is not base.async_get_chat_completion_prompt
+    )
 
 
 def _prefix_logger(name: str) -> tuple[str, CustomLogger] | None:
@@ -298,11 +317,7 @@ def _prefix_logger(name: str) -> tuple[str, CustomLogger] | None:
 def _compiles(logger: CustomLogger, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
     if isinstance(logger, PromptManagementBase):
         return prompt_id is not None and _accepts(logger, prompt_id, params)
-    cls = type(logger)
-    return (
-        cls.get_chat_completion_prompt is not CustomLogger.get_chat_completion_prompt
-        or cls.async_get_chat_completion_prompt is not CustomLogger.async_get_chat_completion_prompt
-    )
+    return _rewrites_prompt(logger, CustomLogger)
 
 
 def _accepts(manager: PromptManagementBase, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
@@ -440,12 +455,16 @@ def _client_methods(cls: type[LiteLLMClient]) -> Methods[LiteLLMClient]:
             if (usage := _usage(result)) is not None:
                 record_usage(attempt, usage.model_copy(update={"cost": _cost(usage)}))
             return result
-        return _recorded_completions(result, attempt)
+        recorded = _recorded_completions(result, attempt)
+        attempt.streams.append(recorded)
+        return recorded
 
     return {"acompletion": acompletion}
 
 
-async def _recorded_completions(stream: CustomStreamWrapper, attempt: Attempt) -> AsyncIterator[ModelResponseStream]:
+async def _recorded_completions(
+    stream: CustomStreamWrapper, attempt: Attempt
+) -> AsyncGenerator[ModelResponseStream, None]:
     try:
         async for chunk in stream:
             if chunk.id:

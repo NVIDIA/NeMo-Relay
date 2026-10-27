@@ -110,7 +110,10 @@ async def _attempted(responses: _Responses, attempt: Attempt) -> _Responses:
                 CURRENT_ATTEMPT.reset(token)
             yield response
     finally:
-        await responses.aclose()
+        async with contextlib.AsyncExitStack() as closing:
+            for stream in attempt.streams:
+                closing.push_async_callback(stream.aclose)
+            await responses.aclose()
 
 
 def _function_calling_config(request: LlmRequest) -> types.FunctionCallingConfig | None:

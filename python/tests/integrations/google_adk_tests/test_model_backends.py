@@ -187,13 +187,17 @@ class _StreamBody(httpx.AsyncByteStream):
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self.chunks:
-            yield f"data: {json.dumps(chunk)}\n\n".encode()
+            yield _sse(chunk)
         if self.error is not None:
             raise self.error
 
     @override
     async def aclose(self) -> None:
         self.closed = True
+
+
+def _sse(chunk: nemo_relay.JsonObject) -> bytes:
+    return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
 class _HeldCloseBody(_StreamBody):
@@ -217,6 +221,20 @@ class _HeldCloseBody(_StreamBody):
         await self.release.wait()
         await super().aclose()
         self.closed_event.set()
+
+
+class _HeldReadBody(_HeldCloseBody):
+    def __init__(self, chunks: Sequence[nemo_relay.JsonObject]) -> None:
+        super().__init__(chunks)
+        self.next_chunk = asyncio.Event()
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        first, *rest = self.chunks
+        yield _sse(first)
+        await self.next_chunk.wait()
+        for chunk in rest:
+            yield _sse(chunk)
 
 
 def _text(text: str) -> nemo_relay.JsonObject:
@@ -1335,6 +1353,75 @@ async def test_cancelling_an_early_closed_lite_llm_stream_during_provider_close_
     assert body.closed
 
 
+async def test_closing_a_lite_llm_model_stream_early_waits_for_the_provider_stream_to_close() -> None:
+    from google.adk.models.lite_llm import LiteLlm
+    from google.adk.models.llm_request import LlmRequest
+    from google.genai import types
+
+    from nemo_relay.integrations.google_adk._models import wrap_model
+
+    chunks = [_content_chunk(text, completion_id="chatcmpl-lite-s") for text in ("Sunny ", "streamed.")]
+    body = _HeldReadBody(chunks)
+    client = _openai_client(_Canned([httpx.Response(200, headers=_SSE, stream=body)]))
+    model = LiteLlm(model="openai/gpt-4o", client=client)
+    wrap_model(model)
+    request = LlmRequest(model="openai/gpt-4o", contents=[types.UserContent("Hi.")])
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        responses = model.generate_content_async(request, stream=True)
+        await anext(responses)
+        closing = asyncio.create_task(responses.aclose())
+        try:
+            async with asyncio.timeout(HANG_TIMEOUT):
+                await body.closing.wait()
+            assert not closing.done()
+        finally:
+            body.release.set()
+        async with asyncio.timeout(HANG_TIMEOUT):
+            await closing
+            await body.closed_event.wait()
+
+    assert body.closed
+
+
+async def test_closing_an_attempt_closes_the_lite_llm_stream_adk_leaves_open() -> None:
+    from google.adk.models.lite_llm import LiteLlm
+    from google.adk.models.llm_response import LlmResponse
+
+    from nemo_relay.integrations.google_adk._backends import Attempt, backend_of
+    from nemo_relay.integrations.google_adk._models import _attempted
+
+    chunks = [_content_chunk(text, completion_id="chatcmpl-lite-s") for text in ("Sunny ", "streamed.")]
+    body = _HeldCloseBody(chunks)
+    client = _openai_client(_Canned([httpx.Response(200, headers=_SSE, stream=body)]))
+    model = LiteLlm(model="openai/gpt-4o", client=client)
+    await backend_of(model, model.model)
+    attempt = Attempt(tool_choice=None, headers={}, provider="openai")
+
+    async def read_like_adk() -> AsyncGenerator[LlmResponse, None]:
+        stream = await model.llm_client.acompletion(
+            model="openai/gpt-4o", messages=[{"role": "user", "content": "Hi."}], tools=None, stream=True, client=client
+        )
+        async for _ in as_instance(stream, AsyncGenerator):
+            yield LlmResponse(partial=True)
+
+    responses = _attempted(read_like_adk(), attempt)
+    await anext(responses)
+    assert len(attempt.streams) == 1
+    closing = asyncio.create_task(responses.aclose())
+    try:
+        async with asyncio.timeout(HANG_TIMEOUT):
+            await body.closing.wait()
+        assert not closing.done()
+    finally:
+        body.release.set()
+    async with asyncio.timeout(HANG_TIMEOUT):
+        await closing
+        await body.closed_event.wait()
+
+    assert body.closed
+
+
 @pytest.mark.parametrize(
     ("model_name", "arguments", "aliases", "provider"),
     [
@@ -1610,6 +1697,44 @@ def _failing_prompt_manager() -> CustomPromptManagement:
             raise RuntimeError("prompt store down")
 
     return Failing()
+
+
+def _declining_prompt_manager() -> CustomPromptManagement:
+    _import_litellm()
+    from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+    class Declining(CustomPromptManagement):
+        @override
+        def should_run_prompt_management(
+            self,
+            prompt_id: str | None,
+            prompt_spec: PromptSpec | None,
+            dynamic_callback_params: StandardCallbackDynamicParams,
+        ) -> bool:
+            return False
+
+    return Declining()
+
+
+def _rewriting_prompt_manager(name: str) -> CustomPromptManagement:
+    _import_litellm()
+    from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+    def decline(self: CustomPromptManagement, *args: object, **kwargs: object) -> bool:
+        return False
+
+    def rewrite(
+        self: CustomPromptManagement,
+        model: str,
+        messages: object,
+        non_default_params: object,
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[str, object, object]:
+        return f"anthropic/{_CLAUDE}", messages, non_default_params
+
+    hooks = {"should_run_prompt_management": decline, "get_chat_completion_prompt": rewrite}
+    return type(name, (CustomPromptManagement,), hooks)()
 
 
 def _prompt_id_manager() -> AnthropicCacheControlHook:
@@ -2026,9 +2151,9 @@ async def test_a_prompt_manager_fails_lite_llm_calls_litellm_seeds_anthropic_cac
         pytest.param(
             "openai/gpt-4o",
             "openai",
-            lambda: {"callbacks": [_prompt_id_manager()]},
+            lambda: {"callbacks": [_declining_prompt_manager()]},
             lambda: {"prompt_id": "weather"},
-            id="prompt_id_with_the_cache_control_hook",
+            id="prompt_id_with_a_declining_manager_that_keeps_the_prompt_hook",
         ),
         pytest.param(
             "openai/gpt-4o",
@@ -2086,6 +2211,27 @@ async def test_prompt_management_litellm_keeps_the_model_for_reaches_lite_llm_ca
             lambda: {"callbacks": [_prompt_manager()]},
             "callback CustomPromptManagement",
             id="callbacks_argument",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            lambda: {"callbacks": [_rewriting_prompt_manager("Rewriting")]},
+            dict,
+            "callback Rewriting",
+            id="first_declining_manager_rewrites_the_prompt_hook",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            lambda: {"_async_success_callback": [_rewriting_prompt_manager("Later")]},
+            lambda: {"callbacks": [_rewriting_prompt_manager("Earlier")]},
+            "callback Earlier",
+            id="callbacks_argument_precedes_async_managers",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            lambda: {"callbacks": [_prompt_id_manager()]},
+            dict,
+            "callback AnthropicCacheControlHook",
+            id="first_declining_manager_is_the_cache_control_hook",
         ),
         pytest.param("humanloop/weather", dict, dict, "prompt integration humanloop", id="prompt_integration_prefix"),
     ],

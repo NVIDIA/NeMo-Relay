@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, Generic, NamedTuple, TypeVar, cast
@@ -39,6 +39,9 @@ class Attempt:
         JsonObject, "Fields provider client reports and `LlmResponse` drops, carried under `RECORDED_KEY`."
     ] = field(default_factory=dict)
     response_model: Annotated[str | None, "Model named by latest response or chunk."] = None
+    streams: Annotated[list[AsyncGenerator[object, None]], "Provider streams handed to ADK, closed with attempt."] = (
+        field(default_factory=list)
+    )
 
 
 CURRENT_ATTEMPT: Final[ContextVar[Attempt | None]] = ContextVar("nemo_relay_google_adk_attempt", default=None)
