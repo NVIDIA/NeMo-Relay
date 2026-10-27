@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from inspect import signature
 from types import MethodType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, Unpack, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, Unpack, cast, get_args
 
 import litellm
 from google.genai import types
@@ -19,9 +19,11 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.litellm_agent.litellm_agent_model_resolver import LITELLM_AGENT_PREFIX
+from litellm.integrations.prompt_management_base import PromptManagementBase
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
+from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import DynamicPromptManagementParamLiteral, ModelResponse, Usage
 from pydantic import ValidationError
@@ -107,6 +109,7 @@ _CALLBACK_ARGS: Final[Annotated[frozenset[str], "Callback arguments LiteLLM read
 _DYNAMIC_PROMPT_ARGS: Final[
     Annotated[tuple[str, ...], "Call arguments that make LiteLLM run prompt management without `prompt_id`."]
 ] = tuple(DynamicPromptManagementParamLiteral.list_all_params())
+_INTEGRATIONS: Final = get_args(litellm._custom_logger_compatible_callbacks_literal)
 
 
 class _LiteLlmArgs(TypedDict, total=False):
@@ -268,14 +271,14 @@ def _moving_callback(args: _LiteLlmArgs) -> CustomLogger | None:
 def _prompt_integration(call: _Call) -> str | None:
     """Return the prompt integration LiteLLM hands `call` to once its prompt management gate is open, or None.
 
-    LiteLLM takes the integration a model prefix names first, else the first registered `CustomPromptManagement`
-    whose `should_run_prompt_management` accepts the call's `prompt_id`. A built-in integration keeps the model
-    without `prompt_id`.
+    LiteLLM starts the integration a model prefix names and hands the call to it, else to the first registered
+    `CustomPromptManagement` whose `should_run_prompt_management` accepts the call's `prompt_id`. Only one that
+    compiles prompts for the call can change its model.
     """
     prompt_id = call.options.get("prompt_id") or None
-    for integration in litellm._known_custom_logger_compatible_callbacks:
-        if call.model.startswith(integration):
-            return None if prompt_id is None else f"LiteLLM prompt integration {integration}"
+    if (found := _prefix_logger(call.model)) is not None:
+        integration, logger = found
+        return f"LiteLLM prompt integration {integration}" if _compiles(logger, prompt_id, call.dynamic) else None
     registered = [*litellm.logging_callback_manager.get_all_callbacks(), *(call.options.get("callbacks") or [])]
     for callback in registered:
         if isinstance(callback, CustomPromptManagement) and _accepts(callback, prompt_id, call.dynamic):
@@ -283,7 +286,26 @@ def _prompt_integration(call: _Call) -> str | None:
     return None
 
 
-def _accepts(manager: CustomPromptManagement, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
+def _prefix_logger(name: str) -> tuple[str, CustomLogger] | None:
+    for integration in _INTEGRATIONS:
+        if name.startswith(integration):
+            logger = _init_custom_logger_compatible_class(integration, internal_usage_cache=None, llm_router=None)
+            if logger is not None:
+                return integration, logger
+    return None
+
+
+def _compiles(logger: CustomLogger, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
+    if isinstance(logger, PromptManagementBase):
+        return prompt_id is not None and _accepts(logger, prompt_id, params)
+    cls = type(logger)
+    return (
+        cls.get_chat_completion_prompt is not CustomLogger.get_chat_completion_prompt
+        or cls.async_get_chat_completion_prompt is not CustomLogger.async_get_chat_completion_prompt
+    )
+
+
+def _accepts(manager: PromptManagementBase, prompt_id: str | None, params: StandardCallbackDynamicParams) -> bool:
     """Return whether `manager` runs for `prompt_id`. False when its check raises, as in LiteLLM."""
     try:
         return manager.should_run_prompt_management(

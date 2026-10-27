@@ -1997,9 +1997,23 @@ async def test_a_prompt_manager_fails_lite_llm_calls_litellm_seeds_anthropic_cac
         pytest.param(
             "prometheus-eval/prometheus-7b-v2.0",
             "hosted_vllm",
-            lambda: {"callbacks": [_prompt_manager()]},
+            dict,
             lambda: {"custom_llm_provider": "hosted_vllm", "cache_control_injection_points": _cache_control_points()},
             id="model_named_after_a_litellm_integration",
+        ),
+        pytest.param(
+            "prometheus-eval/prometheus-7b-v2.0",
+            "hosted_vllm",
+            dict,
+            lambda: {"custom_llm_provider": "hosted_vllm", "prompt_id": "weather"},
+            id="prompt_id_with_a_model_named_after_a_litellm_integration",
+        ),
+        pytest.param(
+            "langsmith/relay-model",
+            "hosted_vllm",
+            lambda: {"callbacks": [_prompt_manager()]},
+            lambda: {"custom_llm_provider": "hosted_vllm", "prompt_id": "weather"},
+            id="prompt_id_with_a_logger_prefix_before_a_prompt_manager",
         ),
         pytest.param(
             "openai/gpt-4o",
@@ -2073,7 +2087,7 @@ async def test_prompt_management_litellm_keeps_the_model_for_reaches_lite_llm_ca
             "callback CustomPromptManagement",
             id="callbacks_argument",
         ),
-        pytest.param("langfuse/weather", dict, dict, "prompt integration langfuse", id="prompt_integration_prefix"),
+        pytest.param("humanloop/weather", dict, dict, "prompt integration humanloop", id="prompt_integration_prefix"),
     ],
 )
 async def test_a_prompt_id_litellm_hands_to_a_prompt_integration_fails_lite_llm_calls(
