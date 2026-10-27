@@ -852,8 +852,16 @@ undercounting it. Set either rate to `0.0` when that category is intentionally
 free. Catalogs that define only input and output rates therefore emit no total
 for responses that report cached tokens.
 
-Run doctor to validate the active model pricing sources alongside exporter
-checks:
+Relay does not ship a canonical price catalog. Unknown models and missing token
+fields leave cost absent instead of defaulting to zero. For the catalog schema,
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+
+## Check Configuration and Exporters
+
+Run `nemo-relay doctor` to check your settings and exporter destinations.
+The following command also checks the Codex integration:
 
 ```bash
 nemo-relay doctor codex
@@ -862,6 +870,36 @@ nemo-relay doctor codex
 Doctor fails when an enabled model pricing source is unreadable or contains an
 invalid catalog, and it reports passing sources as `Model pricing source`.
 
+Doctor lists each OpenTelemetry file sink, its trace type, its destination, and
+whether it's enabled. File checks also run with `--offline`. For folder checks,
+doctor creates and removes a temporary probe file in the folder it checks.
+It does not create or change telemetry files. If an output folder is
+missing, it checks the nearest parent folder that exists. A missing folder
+triggers a warning when that parent is writable. An invalid path or a lack of
+write access causes the check to fail. Output-file symlinks also fail because
+the exporter does not allow them. Doctor also rejects paths that use `..` to
+refer to a parent folder.
+
+The `Plugin component` warning identifies each component with `enabled = false`.
+Doctor also warns when an OpenTelemetry section has trace endpoints or file
+sinks but is disabled. This includes sections that omit `enabled = true`.
+The warning identifies the setting to change. Empty disabled sections do not
+trigger this warning. Doctor skips all probes for disabled destinations.
+
+The `PII redaction` entry lists the enabled policies or profiles and the data
+they cover. It also shows whether the component is missing or disabled. It hides
+policy values and payloads. Doctor does not run redaction or test whether it
+removed sensitive data. Invalid PII settings still fail validation.
+
+For enabled trace endpoints, doctor checks headers and reads the environment
+variables named in `header_env`. Missing, blank, or invalid values fail the
+check. This check also runs with `--offline` and never prints credential values.
+Live HTTP checks send a `GET` request without configured headers or trace data.
+A passing check, including HTTP 405, only shows that the endpoint answered.
+It does not prove that the collector accepts credentials or trace data.
+Doctor does not check `header_file` values. The exporter reads those files when
+it sends data.
+
 For dynamic plugins, doctor also includes the full redacted core plugin-host
 preflight in JSON output under `configuration.plugin_host_validation`. This is
 the same non-activating validation exposed by
@@ -869,12 +907,6 @@ the same non-activating validation exposed by
 in Python: it reports per-plugin policy, integrity, authenticity, and
 configuration-schema failures. A dynamic validation failure makes doctor fail;
 live exporter and backend health checks remain separate doctor probes.
-
-Relay does not ship a canonical price catalog. Unknown models and missing token
-fields leave cost absent instead of defaulting to zero. For the catalog schema,
-provider-aware lookup behavior, threshold-based model pricing, and custom
-`PricingSource` integrations, refer to
-[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
 
 Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
 port is discovered by the wrapper and exposed to hooks through
