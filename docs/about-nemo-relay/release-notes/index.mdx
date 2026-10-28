@@ -112,9 +112,10 @@ configuration, and stream error handling. Review the
 The main compatibility changes affect these areas:
 
 - Node.js applications and package workflows require Node.js 24.13.1 or later.
-- LangChain and LangGraph tool results now record each value in `result` with
-  its type. Review how custom middleware and subscribers read tool calls
-  and results.
+- LangChain and LangGraph tool results use the `nemo.relay.tool_result@1`
+  JSON wrapper. It holds display content, failure status, and result values
+  with their types. Custom Python objects stay with the call that returned
+  them. Review how custom middleware and subscribers read tool calls and results.
   Refer to [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
 - Worker messages now have size limits for sending and receiving data.
   The default is 4 MiB per message. You can set limits by callback name.
@@ -160,9 +161,6 @@ The main fixes improve request handling, telemetry, and process cleanup:
 - Framework tool results retain content and handled error status. Manual LLM
   completion preserves an explicit error status. Cache replay keeps framework
   tool result objects and content intact.
-  LangChain and LangGraph results now include data from custom objects that
-  have a JSON form.
-  Objects that cannot be replayed stay with the call that returned them.
 - Tool classification now recognizes `load_skill` as a skill tool.
 - OpenAI Responses streams retain usage and report missing terminal events.
   Gemini cost estimates account for thinking and supported tool-use tokens.

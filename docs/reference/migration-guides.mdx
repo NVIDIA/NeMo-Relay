@@ -129,9 +129,6 @@ its constructor or validators on the input data.
 Use `JsonPassthrough` for tool arguments from a model. Use `DataclassCodec` or
 `PydanticCodec` for one known schema.
 
-The LangChain and LangGraph integrations still pass tool arguments as JSON.
-Their result codecs keep custom Python objects within the call that returned
-them. Later calls can restore built-in values and supported framework types.
 For LangChain structured responses, declare the expected classes in the
 request's `response_format`.
 
@@ -157,7 +154,7 @@ struct construction, convert synchronous callbacks with `.into()`. Set
 `borrowed_collector` to `None` unless you use the new borrowing callback.
 Refer to [Borrowing Stream Chunks in Rust](/integrate-into-frameworks/provider-response-codecs#borrowing-stream-chunks-in-rust).
 
-#### Review Request Intercepts and Tool Results
+#### Review Request Intercepts
 
 Relay now preserves provider fields across multiple request edits. It keeps
 fields on unchanged entries and on tool calls or results with a clear call-ID
@@ -171,6 +168,10 @@ unchanged. Check that the model adapter accepts the edited definitions.
 
 #### Review LangChain Tool-Call Shapes in Middleware
 
+In 0.11.0, managed LangChain and LangGraph tool results use the
+`nemo.relay.tool_result@1` JSON wrapper. It holds display content, failure status,
+and the result values with their types.
+
 Review custom Relay middleware that reads or changes LangChain and LangGraph
 tool calls. Check both the arguments it receives and the results it returns:
 
@@ -179,12 +180,14 @@ tool calls. Check both the arguments it receives and the results it returns:
 - Tool results use a wrapper with `schema`, `content`, `is_error`, and `result`
   fields. Set `schema` to `nemo.relay.tool_result@1`. Edit `content` to change the
   displayed result. Set `is_error` to `true` for failure or `false` for success.
-- Each value in `result` now includes its type. Update middleware and subscribers
+- Each value in `result` includes its type. Update middleware and subscribers
   that read or edit this field. Keep parts with no JSON form unchanged.
 - If an execution intercept returns a result without running the tool, return
   the full wrapper. The framework's codec must be able to decode its `result`.
 
-Custom Python objects stay with their original call.
+Later calls can restore built-in values and supported framework types.
+Custom Python objects stay with the call that returned them. Their data is
+visible in the wrapper when it has a JSON form.
 The response cache runs those tools again instead of replaying the objects.
 For the value format and replay rules, refer to
 [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
