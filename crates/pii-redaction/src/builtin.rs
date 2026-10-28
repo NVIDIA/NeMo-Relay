@@ -579,6 +579,9 @@ impl CompiledBuiltinBackend {
             && matched
             && matches!(self.action, BuiltinAction::Remove)
         {
+            if matches!(&value, Json::String(_)) {
+                counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+            }
             counts.affected_values = counts.affected_values.saturating_add(1);
             return None;
         }

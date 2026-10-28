@@ -95,6 +95,35 @@ fn selector_diagnostics_report_effectiveness_without_values() {
                 .contains("alice@example.com")
         );
     }
+
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec!["/messages/0/content/0/text".into()],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap()
+    .with_match_diagnostics(recorder, code);
+    let result = backend.sanitize_json_preorder_dfs(payload);
+    assert!(result["messages"][0]["content"][0].get("text").is_none());
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .events
+            .last()
+            .unwrap()
+            .detail
+            .as_ref()
+            .unwrap()
+            .message,
+        "matched_paths=1 eligible_string_leaves=1 affected_values=1"
+    );
 }
 
 #[test]
