@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use regex::Regex;
@@ -22,6 +23,9 @@ use nemo_relay::codec::resolve::{
     response_codec as build_response_codec,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::diagnostics::{
+    ComponentRecorder, DiagnosticDetailRef, DiagnosticOutcome, ExtensionHandle, Observation,
+};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
 use super::component::{
@@ -38,12 +42,31 @@ pub(super) struct CompiledBuiltinBackend {
     target_path_matcher: Arc<TargetPathMatcher>,
     legacy_surface: Option<ProviderSurface>,
     trajectory: Option<TrajectorySanitizer>,
+    match_diagnostics: Option<(ComponentRecorder, ExtensionHandle)>,
+}
+
+#[derive(Default)]
+struct MatchCounts {
+    matched_paths: u64,
+    eligible_string_leaves: u64,
+    affected_values: u64,
+}
+
+impl std::fmt::Display for MatchCounts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "matched_paths={} eligible_string_leaves={} affected_values={}",
+            self.matched_paths, self.eligible_string_leaves, self.affected_values
+        )
+    }
 }
 
 /// Compiled exact-pointer and single-segment glob selectors.
 #[derive(Clone)]
 struct TargetPathMatcher {
     selectors: Vec<TargetPathSelector>,
+    may_hide_descendant: bool,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -56,6 +79,35 @@ enum TargetPathSelector {
 enum TargetPathSegment {
     Exact(String),
     Any,
+}
+
+impl TargetPathSelector {
+    fn len(&self) -> usize {
+        match self {
+            Self::Exact(segments) => segments.len(),
+            Self::Glob(segments) => segments.len(),
+        }
+    }
+
+    fn segment_at(&self, index: usize) -> Option<&str> {
+        match self {
+            Self::Exact(segments) => Some(&segments[index]),
+            Self::Glob(segments) => match &segments[index] {
+                TargetPathSegment::Exact(value) => Some(value),
+                TargetPathSegment::Any => None,
+            },
+        }
+    }
+
+    fn may_hide(&self, other: &Self) -> bool {
+        self.len() < other.len()
+            && (0..self.len()).all(|index| {
+                match (self.segment_at(index), other.segment_at(index)) {
+                    (Some(left), Some(right)) => left == right,
+                    _ => true,
+                }
+            })
+    }
 }
 
 impl TargetPathMatcher {
@@ -88,12 +140,17 @@ impl TargetPathMatcher {
             })
             .collect::<Option<Vec<_>>>()?;
         let mut seen = BTreeSet::new();
+        let selectors: Vec<_> = exact
+            .into_iter()
+            .chain(globs)
+            .filter(|selector| seen.insert(selector.clone()))
+            .collect();
+        let may_hide_descendant = selectors
+            .iter()
+            .any(|shorter| selectors.iter().any(|longer| shorter.may_hide(longer)));
         Some(Self {
-            selectors: exact
-                .into_iter()
-                .chain(globs)
-                .filter(|selector| seen.insert(selector.clone()))
-                .collect(),
+            selectors,
+            may_hide_descendant,
         })
     }
 
@@ -106,6 +163,21 @@ impl TargetPathMatcher {
             TargetPathSelector::Exact(segments) => segments == path_segments,
             TargetPathSelector::Glob(segments) => {
                 segments.len() == path_segments.len()
+                    && segments.iter().zip(path_segments).all(|(selector, segment)| {
+                        matches!(selector, TargetPathSegment::Any)
+                            || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
+                    })
+            }
+        })
+    }
+
+    fn may_match_descendant(&self, path_segments: &[String]) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            TargetPathSelector::Exact(segments) => {
+                segments.len() > path_segments.len() && segments.starts_with(path_segments)
+            }
+            TargetPathSelector::Glob(segments) => {
+                segments.len() > path_segments.len()
                     && segments.iter().zip(path_segments).all(|(selector, segment)| {
                         matches!(selector, TargetPathSegment::Any)
                             || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
@@ -381,12 +453,84 @@ impl CompiledBuiltinBackend {
             target_path_matcher: Arc::new(target_paths),
             legacy_surface: surface,
             trajectory,
+            match_diagnostics: None,
         })
     }
 
+    pub(super) fn with_match_diagnostics(
+        mut self,
+        recorder: ComponentRecorder,
+        code: ExtensionHandle,
+    ) -> Self {
+        self.match_diagnostics = Some((recorder, code));
+        self
+    }
+
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
-        self.sanitize_json_preorder_dfs_at_path(value, &mut Vec::new())
-            .unwrap_or(Json::Null)
+        let selected = if self.match_diagnostics.is_some()
+            && matches!(self.action, BuiltinAction::Remove)
+            && self.target_path_matcher.may_hide_descendant
+        {
+            let mut selected = MatchCounts::default();
+            self.count_selections_at_path(&value, &mut Vec::new(), &mut selected);
+            Some(selected)
+        } else {
+            None
+        };
+        let mut counts = MatchCounts::default();
+        let result = self
+            .sanitize_json_preorder_dfs_at_path(value, &mut Vec::new(), &mut counts)
+            .unwrap_or(Json::Null);
+        if let Some(selected) = selected {
+            counts.matched_paths = selected.matched_paths;
+            counts.eligible_string_leaves = selected.eligible_string_leaves;
+        }
+        if let Some((recorder, code)) = &self.match_diagnostics {
+            let _ = recorder.record_lazy(|| {
+                Observation::extension(
+                    *code,
+                    None,
+                    DiagnosticOutcome::Success,
+                    DiagnosticDetailRef::Display(&counts),
+                    NonZeroU64::MIN,
+                )
+            });
+        }
+        result
+    }
+
+    fn count_selections_at_path(
+        &self,
+        value: &Json,
+        path_segments: &mut Vec<String>,
+        counts: &mut MatchCounts,
+    ) {
+        if self.target_path_matcher.matches(path_segments) {
+            counts.matched_paths = counts.matched_paths.saturating_add(1);
+            if value.is_string() {
+                counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+            }
+        }
+        if !self.target_path_matcher.may_match_descendant(path_segments) {
+            return;
+        }
+        match value {
+            Json::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    path_segments.push(index.to_string());
+                    self.count_selections_at_path(item, path_segments, counts);
+                    path_segments.pop();
+                }
+            }
+            Json::Object(map) => {
+                for (key, item) in map {
+                    path_segments.push(key.clone());
+                    self.count_selections_at_path(item, path_segments, counts);
+                    path_segments.pop();
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Sanitize optional metric text without modifying required export fields.
@@ -436,8 +580,12 @@ impl CompiledBuiltinBackend {
         path_segments: &[String],
     ) -> Option<String> {
         let mut path_segments = path_segments.to_vec();
-        self.sanitize_json_preorder_dfs_at_path(Json::String(value), &mut path_segments)
-            .and_then(|value| value.as_str().map(str::to_string))
+        self.sanitize_json_preorder_dfs_at_path(
+            Json::String(value),
+            &mut path_segments,
+            &mut MatchCounts::default(),
+        )
+        .and_then(|value| value.as_str().map(str::to_string))
     }
 
     /// Sanitize string-valued attributes while retaining analytical values.
@@ -519,18 +667,35 @@ impl CompiledBuiltinBackend {
         &self,
         value: Json,
         path_segments: &mut Vec<String>,
+        counts: &mut MatchCounts,
     ) -> Option<Json> {
+        let matched = self.matches_current_preorder_path(path_segments);
+        if matched {
+            counts.matched_paths = counts.matched_paths.saturating_add(1);
+        }
         if !self.target_path_matcher.is_empty()
-            && self.matches_current_preorder_path(path_segments)
+            && matched
             && matches!(self.action, BuiltinAction::Remove)
         {
+            if matches!(&value, Json::String(_)) {
+                counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+            }
+            counts.affected_values = counts.affected_values.saturating_add(1);
             return None;
         }
 
         match value {
             Json::String(text) => {
-                if self.matches_current_preorder_path(path_segments) {
-                    self.sanitize_string_value(text)
+                if matched {
+                    counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+                    let original = self.match_diagnostics.as_ref().map(|_| text.clone());
+                    let sanitized = self.sanitize_string_value(text);
+                    if original
+                        .is_some_and(|original| sanitized.as_ref() != Some(&Json::String(original)))
+                    {
+                        counts.affected_values = counts.affected_values.saturating_add(1);
+                    }
+                    sanitized
                 } else {
                     Some(Json::String(text))
                 }
@@ -542,7 +707,7 @@ impl CompiledBuiltinBackend {
                     .map(|(index, item)| {
                         path_segments.push(index.to_string());
                         let sanitized = self
-                            .sanitize_json_preorder_dfs_at_path(item, path_segments)
+                            .sanitize_json_preorder_dfs_at_path(item, path_segments, counts)
                             .unwrap_or(Json::Null);
                         path_segments.pop();
                         sanitized
@@ -554,7 +719,7 @@ impl CompiledBuiltinBackend {
                     .filter_map(|(key, value)| {
                         path_segments.push(key.clone());
                         let sanitized =
-                            self.sanitize_json_preorder_dfs_at_path(value, path_segments);
+                            self.sanitize_json_preorder_dfs_at_path(value, path_segments, counts);
                         path_segments.pop();
                         sanitized.map(|sanitized| (key, sanitized))
                     })
