@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
+use nemo_relay::diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -1260,7 +1261,10 @@ fn register_builtin_backend(
     let builtin = config.builtin.clone().ok_or_else(|| {
         PluginError::InvalidConfig("built-in PII redaction config is missing".to_string())
     })?;
-    let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
+    let compiled = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(builtin, config.codec.clone())?,
+        ctx,
+    );
     log::info!(
         target: "nemo_relay.plugin",
         event = "plugin_resource_validation_completed",
@@ -1356,6 +1360,27 @@ fn register_builtin_backend(
     }
 
     Ok(())
+}
+
+fn with_selector_diagnostics(
+    mut compiled: CompiledBuiltinBackend,
+    ctx: &PluginRegistrationContext,
+) -> CompiledBuiltinBackend {
+    if !compiled.is_trajectory()
+        && let Ok(recorder) = ctx
+            .diagnostics()
+            .register_component(ComponentRegistration::new("pii_redaction.selector", &[]))
+        && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {
+            namespace: "pii_redaction",
+            name: "selector_evaluated",
+            description: "Counts of selected nodes, selected string leaves, and changed values",
+            allowed_classes: &[],
+            outcome: DiagnosticOutcome::Success,
+        })
+    {
+        compiled = compiled.with_match_diagnostics(recorder, code);
+    }
+    compiled
 }
 
 fn registration_name(profile_name: Option<&str>, callback_name: &str) -> String {

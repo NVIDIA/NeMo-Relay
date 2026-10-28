@@ -464,6 +464,11 @@ enum PluginRegistrationNamespace {
 }
 
 impl PluginRegistrationContext {
+    /// Return the diagnostics context selected for this plugin activation.
+    pub fn diagnostics(&self) -> &Diagnostics {
+        &self.diagnostics
+    }
+
     /// Creates an empty plugin registration context.
     pub fn new() -> Self {
         Self::default()

@@ -4,6 +4,100 @@
 use super::*;
 
 #[test]
+fn selector_diagnostics_report_effectiveness_without_values() {
+    use nemo_relay::diagnostics::{
+        ComponentRegistration, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+        ExtensionRegistration,
+    };
+    use serde_json::json;
+
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let recorder = diagnostics
+        .register_component(ComponentRegistration::new("pii_redaction.selector", &[]))
+        .unwrap();
+    let code = recorder
+        .register_extension(ExtensionRegistration {
+            namespace: "pii_redaction",
+            name: "selector_evaluated",
+            description: "Counts of selected nodes, selected string leaves, and changed values",
+            allowed_classes: &[],
+            outcome: DiagnosticOutcome::Success,
+        })
+        .unwrap()
+        .unwrap();
+    let payload = json!({"messages": [{"content": [{"text": "alice@example.com"}]}]});
+    for (paths, globs, expected, detail) in [
+        (
+            vec!["/messages/*/content/*/text"],
+            vec![],
+            "alice@example.com",
+            "matched_paths=0 eligible_string_leaves=0 affected_values=0",
+        ),
+        (
+            vec!["/messages/0/content"],
+            vec![],
+            "alice@example.com",
+            "matched_paths=1 eligible_string_leaves=0 affected_values=0",
+        ),
+        (
+            vec![],
+            vec!["/messages/*/content/*/text"],
+            "[REDACTED]",
+            "matched_paths=1 eligible_string_leaves=1 affected_values=1",
+        ),
+        (
+            vec![],
+            vec![],
+            "[REDACTED]",
+            "matched_paths=6 eligible_string_leaves=1 affected_values=1",
+        ),
+    ] {
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                target_paths: paths.into_iter().map(str::to_owned).collect(),
+                target_path_globs: globs.into_iter().map(str::to_owned).collect(),
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap()
+        .with_match_diagnostics(recorder.clone(), code);
+        let result = backend.sanitize_json_preorder_dfs(payload.clone());
+        assert_eq!(result["messages"][0]["content"][0]["text"], expected);
+        let snapshot = diagnostics
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .events
+                .last()
+                .unwrap()
+                .detail
+                .as_ref()
+                .unwrap()
+                .message,
+            detail
+        );
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("alice@example.com")
+        );
+    }
+}
+
+#[test]
 fn builtin_compilation_rejects_invalid_selectors_and_incompatible_preset_options() {
     use serde_json::json;
 

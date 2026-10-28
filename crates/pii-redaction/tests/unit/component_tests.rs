@@ -40,6 +40,7 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
+use nemo_relay::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
@@ -91,6 +92,50 @@ fn plugin_config(config: Json) -> PluginConfig {
         components: vec![component(config)],
         policy: Default::default(),
     }
+}
+
+#[tokio::test]
+async fn selector_diagnostics_use_plugin_registration_context() {
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                target_paths: vec!["/unused".into()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+    );
+    let sanitized = tool_sanitize_callback(backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized["text"], "alice@example.com");
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.detail.as_ref().is_some_and(|detail| {
+                detail.message == "matched_paths=0 eligible_string_leaves=0 affected_values=0"
+            })
+    }));
 }
 
 struct CapturedOtlpRequest {
