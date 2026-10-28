@@ -477,8 +477,10 @@ counts are informational because
 some traffic may not contain the configured paths or sensitive values. With no
 selectors, `matched_paths` counts all visited JSON nodes, while
 `eligible_string_leaves` counts the string nodes considered for redaction.
-The diagnostic component key includes the profile number when multiple profiles
-are configured; legacy configuration retains the `pii_redaction.selector` key.
+When profiles are configured, the diagnostic component key includes the profile
+number, even with a single profile (for example,
+`pii_redaction.selector.profile_0`). Legacy configuration uses the
+`pii_redaction.selector` key.
 
 The plugin uses different payload boundaries for tools and LLMs:
 
