@@ -40,7 +40,9 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
-use nemo_relay::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+use nemo_relay::diagnostics::{
+    DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+};
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
@@ -110,7 +112,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
             BuiltinBackendConfig {
                 action: "redact".into(),
                 detector: Some("email".into()),
-                target_paths: vec!["/unused".into()],
+                target_paths: vec!["/text".into()],
                 ..BuiltinBackendConfig::default()
             },
             None,
@@ -125,7 +127,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
     )
     .await
     .unwrap();
-    assert_eq!(sanitized["text"], "alice@example.com");
+    assert_eq!(sanitized["text"], "[REDACTED]");
     let snapshot = diagnostics
         .snapshot(&DiagnosticQuery::default())
         .unwrap()
@@ -135,7 +137,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         event.code() == "pii_redaction.selector_evaluated"
             && event.component.key == "pii_redaction.selector"
             && event.detail.as_ref().is_some_and(|detail| {
-                detail.message == "matched_paths=0 eligible_string_leaves=0 affected_values=0"
+                detail.message == "matched_paths=1 eligible_string_leaves=1 affected_values=1"
             })
     }));
 
@@ -152,12 +154,13 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         &ctx,
         Some("profile_1"),
     );
-    tool_sanitize_callback(profile_backend)(
+    let sanitized = tool_sanitize_callback(profile_backend)(
         "example.tool".into(),
         json!({"text": "alice@example.com"}),
     )
     .await
     .unwrap();
+    assert_eq!(sanitized["text"], "[REDACTED]");
     let snapshot = diagnostics
         .snapshot(&DiagnosticQuery::default())
         .unwrap()
@@ -167,6 +170,75 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         event.code() == "pii_redaction.selector_evaluated"
             && event.component.key == "pii_redaction.selector.profile_00000000000000000001"
     }));
+}
+
+#[tokio::test]
+async fn selector_diagnostic_admission_failures_do_not_disable_redaction() {
+    let source = Diagnostics::default().source().clone();
+    for (case, enabled, limits) in [
+        ("disabled", false, DiagnosticLimits::default()),
+        (
+            "component_rejected",
+            true,
+            DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        ),
+        (
+            "extension_rejected",
+            true,
+            DiagnosticLimits {
+                max_extensions: 0,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let diagnostics =
+            Diagnostics::from_settings(source.clone(), DiagnosticsSettings { enabled, limits })
+                .unwrap();
+        let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let backend = with_selector_diagnostics(
+            CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "redact".into(),
+                    detector: Some("email".into()),
+                    target_paths: vec!["/text".into()],
+                    ..BuiltinBackendConfig::default()
+                },
+                None,
+            )
+            .unwrap(),
+            &ctx,
+            None,
+        );
+        let sanitized = tool_sanitize_callback(backend)(
+            "example.tool".into(),
+            json!({"text": "alice@example.com"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sanitized["text"], "[REDACTED]", "{case}");
+
+        if enabled {
+            let snapshot = diagnostics
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            assert!(snapshot.events.is_empty(), "{case}");
+            assert_eq!(
+                snapshot
+                    .components
+                    .iter()
+                    .any(|component| component.identity.key == "pii_redaction.selector"),
+                case == "extension_rejected",
+                "{case}"
+            );
+        } else {
+            assert!(diagnostics.snapshot(&DiagnosticQuery::default()).is_err());
+        }
+    }
 }
 
 struct CapturedOtlpRequest {
