@@ -63,7 +63,7 @@ including runtime and opaque codecs. Normalized response projection requires a
 recognized built-in codec because response codec capabilities are decode-only.
 
 For a mixed-provider gateway, rely on the active codec of each call. The
-[LLM payloads example](#targeting-and-composition) shows the selector boundary
+[LLM request-only example](#targeting-and-composition) shows the selector boundary
 for an OpenAI Chat Completions request.
 
 </details>
@@ -649,6 +649,52 @@ detector = "email"
 No selectors are needed: the detector inspects every string leaf. Numeric values remain unchanged.
 
 </Tab>
+<Tab title="Redact API keys">
+
+Replace a synthetic API key that matches the built-in `api_key` detector.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "api_key": "sk-example12345678",
+  "contact": "alice@example.com",
+  "operation": "lookup"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "api_key": "[REDACTED]",
+  "contact": "alice@example.com",
+  "operation": "lookup"
+}
+```
+
+No selectors are needed. This detector matches supported API-key patterns;
+the email remains unchanged because this profile uses only `api_key`. Use
+separate profiles to apply both email and API-key redaction.
+
+</Tab>
 <Tab title="Remove a field">
 
 Remove an entire credentials object from the event payload.
@@ -949,9 +995,9 @@ target_paths = ["/credentials"]
 Priority `80` runs before `90`. Each profile receives the payload produced by the preceding profile; array order breaks priority ties.
 
 </Tab>
-<Tab title="LLM payloads">
+<Tab title="LLM request only">
 
-Redact message content using an active OpenAI Chat Completions codec.
+Redact request message content using an active OpenAI Chat Completions codec.
 
 **Configuration**
 
@@ -1005,6 +1051,105 @@ provider payload shapes; select the normalized string leaves appropriate to
 the active codec. Omit `codec` for a gateway that supplies it per call. For a
 manual call without an active codec, the fallback for this API format is
 `codec = "openai_chat"` under `[components.config]`.
+
+These selectors cover request messages. The **LLM request and response** tab
+adds a selector for assistant response text.
+
+</Tab>
+<Tab title="LLM request and response">
+
+Use one policy to redact email addresses in both directions of an OpenAI Chat
+Completions call. The managed call supplies its active request and response codecs.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_path_globs = ["/messages/*/content", "/message"]
+```
+
+**Request: input event payload**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email alice@example.com"
+    }
+  ]
+}
+```
+
+**Request: published payload**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email [REDACTED]"
+    }
+  ]
+}
+```
+
+**Response: input event payload**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "model": "example-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Contact bob@example.com"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+**Response: published payload**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "model": "example-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Contact [REDACTED]"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+The codec exposes request message text at `/messages/*/content` and assistant
+response text at `/message` in Relay's normalized representation. The response
+selector therefore uses `/message` even though the emitted provider-shaped
+response stores that text under `choices[0].message.content`. The selectors are
+evaluated independently for the request and response payloads.
 
 </Tab>
 <Tab title="Trajectory removal">
