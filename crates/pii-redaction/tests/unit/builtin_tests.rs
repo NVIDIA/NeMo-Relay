@@ -125,6 +125,27 @@ fn selector_diagnostics_report_effectiveness_without_values() {
         "matched_paths=1 eligible_string_leaves=1 affected_values=1"
     );
 
+    let result = backend.sanitize_json_preorder_dfs(
+        json!({"messages": [{"content": [{"text": {"nested": "alice@example.com"}}]}]}),
+    );
+    assert!(result["messages"][0]["content"][0].get("text").is_none());
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .events
+            .last()
+            .unwrap()
+            .detail
+            .as_ref()
+            .unwrap()
+            .message,
+        "matched_paths=1 eligible_string_leaves=0 affected_values=1"
+    );
+
     let backend = CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "remove".into(),
