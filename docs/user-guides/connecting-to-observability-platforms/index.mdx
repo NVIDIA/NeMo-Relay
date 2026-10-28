@@ -8,13 +8,16 @@ hide-nav-links: true
 SPDX-License-Identifier: Apache-2.0 */}
 
 Enterprise teams need to investigate agent activity in the observability platform
-they already operate. This guide connects a Relay capture path to that platform
+they already operate. This guide connects a
+[NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay) capture path to that platform
 and verifies that agent or turn activity, model calls, and tools arrive together.
 It applies to managed coding agents, framework integrations, and instrumented applications.
 
-The optional Brev example uses a small Python application and Phoenix.
+The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses a small Python
+application and [Arize Phoenix](https://arize.com/phoenix/).
 It reads synthetic incident requests, asks a model to prioritize them, and writes
-a handoff. Hermes is another example choice; neither harness is required for your deployment.
+a handoff. [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent)
+is another example choice; neither harness is required for your deployment.
 
 ## Before you start
 

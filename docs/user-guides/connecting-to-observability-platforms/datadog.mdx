@@ -8,17 +8,21 @@ position: 6
 SPDX-License-Identifier: Apache-2.0 */}
 
 Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
-to make Relay-observed runs available to a team investigating traces in
-Datadog. The example routes Relay OTLP traces to an organization-operated
-OpenTelemetry Collector; that Collector forwards them to your Datadog site.
+to make runs captured by [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay)
+available to a team investigating traces in [Datadog](https://www.datadoghq.com/).
+The example routes Relay OTLP traces to an organization-operated
+[OpenTelemetry Collector](https://opentelemetry.io/); that Collector forwards
+them to your Datadog site.
 
 <Tip title="Use the same companion workload">
 Select `--destination datadog` in the parent guide's example. Supply your running Collector's trace URL. Its Datadog exporter and credentials stay in that collector or tracing backend.
 Find service `relay-support-triage` and apply this page's destination checks.
 </Tip>
 
-The example uses OpenInference to keep the same agent/model/tool roles as the
-Phoenix and LangSmith recipes. Datadog accepts both OpenInference and OpenTelemetry GenAI
+The example uses [OpenInference](https://github.com/Arize-ai/openinference) to keep
+the same agent/model/tool roles as the [Arize Phoenix](https://arize.com/phoenix/)
+and [LangSmith](https://www.langchain.com/langsmith/observability) recipes.
+Datadog accepts both OpenInference and OpenTelemetry GenAI
 conventions; use `gen_ai` when your pipeline standardizes on those attributes.
 This recipe verifies **APM trace arrival**. Enabling Datadog's Agent/LLM
 Observability product requires its additional
