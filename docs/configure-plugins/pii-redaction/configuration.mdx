@@ -25,38 +25,9 @@ field names stay `snake_case` in every binding and in `plugins.toml`.
 
 </Note>
 
-## Relation to Raw Middleware
-
-This plugin uses the same sanitize-guardrail middleware family documented in
-[Middleware](/about-nemo-relay/concepts/middleware).
-
-The difference between raw middleware and `pii_redaction` is the layer of
-abstraction:
-
-- Raw middleware asks you to register sanitize callbacks directly in code.
-- `pii_redaction` gives you a first-party, config-driven privacy contract on
-  top of those same runtime hooks.
-
-Choose `pii_redaction` when you want a reusable built-in policy surface.
-Choose raw middleware when you need bespoke callback logic that does not fit
-the plugin contract.
-
-## Plugin Versus Middleware
-
-Use this matrix when deciding whether to use the built-in `pii_redaction`
-plugin or raw sanitize-guardrail middleware directly.
-
-| Area | `pii_redaction` Plugin | Raw Middleware |
-| --- | --- | --- |
-| Primary UX | Declarative config through `plugins.toml`, bindings helpers, and the CLI editor | Callback registration in application code |
-| Best fit | Reusable privacy policy shared across apps or teams | App-specific logic tied to runtime state or custom heuristics |
-| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | You implement the behavior yourself |
-| Built-in detectors | Supported | You implement the matcher yourself |
-| Codec-aware LLM handling | Supported for the documented codecs | You handle normalization and provider shapes yourself |
-| Validation and editor support | Supported | Not provided |
-| Cross-runtime consistency | First-party contract across Relay surfaces | Depends on each app's callback code |
-| Flexibility | Limited to the plugin contract | Full control over sanitize behavior |
-| When to choose it | You want the fastest path to a supported privacy surface | You need behavior the plugin contract does not express |
+For an overview of where the plugin runs and when to use custom middleware,
+refer to
+[Where Redaction Runs](/configure-plugins/pii-redaction/about#where-redaction-runs).
 
 ## Component Shape
 
@@ -463,9 +434,9 @@ start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
 pointers prevent activation instead of silently leaving the intended values
 unsanitized.
 
-When runtime diagnostics are enabled and the selector diagnostic is admitted,
-the built-in JSON sanitizer records a `pii_redaction.selector_evaluated`
-observation for each document it processes.
+When [runtime diagnostics](/reference/diagnostics) are enabled and the selector
+diagnostic is admitted, the built-in JSON sanitizer records a
+`pii_redaction.selector_evaluated` observation for each document it processes.
 Its bounded detail reports `matched_paths` and `eligible_string_leaves` selected
 in the original document, plus `affected_values` actually changed or removed.
 It never includes matched content. With `action = "remove"`, a selector may match
@@ -510,13 +481,6 @@ event payload and its annotation are omitted rather than emitting unsanitized
 content. In particular, a manual LLM call with normalized target selectors, no
 active codec, and no configured `codec` fallback omits both the payload and its
 annotation.
-
-## Decision Rule
-
-Use `pii_redaction` for reusable, config-driven privacy behavior. Use raw
-middleware when the policy depends on application-specific runtime state or
-custom callback logic. Refer to [Plugin Versus Middleware](#plugin-versus-middleware)
-for the full comparison.
 
 ## Detector Presets
 

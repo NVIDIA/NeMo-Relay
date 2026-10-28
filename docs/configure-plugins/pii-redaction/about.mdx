@@ -1,144 +1,117 @@
 ---
 title: "PII Redaction Plugin"
 sidebar-title: "About"
-description: "Configure built-in PII redaction for emitted NeMo Relay observability payloads."
+description: "Understand where PII redaction runs and choose a policy for Relay observability data."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the PII redaction plugin when you want first-party privacy controls for
-managed NeMo Relay LLM, tool, mark, and generic scope observability surfaces
-through the shared plugin system.
+The PII redaction plugin removes or transforms sensitive values in NeMo Relay
+observability data before subscribers and exporters receive it. Use it to redact
+email addresses, remove private fields, mask or hash selected text, or remove
+conversational content from exported trajectories.
 
-The built-in plugin component uses `kind = "pii_redaction"` and is available as
-a first-party NeMo Relay plugin.
+Configure the first-party `pii_redaction` component in `plugins.toml` or through
+`nemo-relay plugins edit` to share a privacy policy across applications.
 
-The CLI and primary language bindings register this component. Direct Rust
-applications must call
-`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
-before they validate or initialize a `pii_redaction` component.
+## Where Redaction Runs
 
-The plugin supports these backend modes:
+Relay records observability data alongside managed LLM and tool calls. The plugin
+applies your policy to that event data. The provider or tool receives the real
+request, and the application receives the real result.
 
-- `builtin`
-  - Uses a native Rust backend for deterministic payload sanitization.
-- `local_model`
-  - Reserves a future local-model backend lane for more stochastic detection behavior.
+<MermaidStyles />
 
-## Use This Plugin When
+```mermaid
+flowchart TD
+    accTitle: PII redaction on the Relay observability path
+    accDescr: A managed call sends execution values to the provider or tool and application. Event data passes through PII redaction before reaching subscribers and exporters.
+    managed["Managed LLM<br/>or tool call"] --> execution["Provider or tool<br/>and application"]
+    managed -. "Event data" .-> redaction["PII redaction"]
+    redaction --> consumers["Subscribers<br/>and exporters"]
+```
 
-Start here when you need to:
+The same privacy policy can also sanitize marks and scope events. This diagram
+shows the data boundary; request and response events are sanitized separately.
+Other Relay middleware can change execution independently of this plugin.
 
-- Remove sensitive fields from emitted tool, LLM, mark, or generic scope
-  payloads.
-- Replace sensitive text with a deterministic marker such as `[REDACTED]`.
-- Hash matching values before observability exporters or subscribers receive
-  them.
-- Keep privacy behavior inside the same plugin config surface used by other
-  first-party NeMo Relay components.
-- Use built-in detector presets for common values such as emails, phone
-  numbers, URLs, API keys, and IP addresses without writing custom regexes.
+The plugin installs
+[sanitize guardrails](/about-nemo-relay/concepts/middleware#guardrails).
+These are Relay's existing hooks for transforming observability data. Use the
+plugin for declarative policies with built-in detectors and actions. Register
+custom sanitize middleware when your policy needs application code, runtime
+state, or external lookups.
 
-## Plugin Versus Middleware
+## What Data the Plugin Covers
 
-`pii_redaction` is built on top of NeMo Relay's existing sanitize-guardrail
-middleware.
+| Surface | Data Covered |
+| --- | --- |
+| Managed LLM calls | Request and response observability payloads, plus scope metadata. LLM selectors use the active codec's representation. |
+| Managed tool calls | Request arguments, result values, result annotations, and scope metadata. Tool results and annotations are sanitized as separate JSON documents. |
+| Marks | `data`, `category_profile`, and `metadata`, each sanitized independently. |
+| Other scopes | `data`, `category_profile`, and `metadata` on scope-start and scope-end events. |
 
-That means this plugin does **not** introduce a separate runtime mechanism.
-Instead, it packages a common privacy policy behind a first-party config
-surface.
+Every enabled profile covers these surfaces. Legacy single-policy configuration
+can toggle them with `input`, `output`, `mark`, `tool_input`, and `tool_output`.
+All five default to `true`.
 
-Use the plugin when you want:
+LLM selectors use codec-specific payload boundaries. Request and response codec
+capabilities differ, and codec conversion can canonicalize the emitted request.
+Refer to
+[Path Semantics](/configure-plugins/pii-redaction/configuration#path-semantics)
+for payload boundaries and normalized selector examples.
 
-- A reusable privacy policy that many applications or teams can share
-- Declarative config through `plugins.toml` or `nemo-relay plugins edit`
-- Built-in actions, detector presets, and codec-aware LLM handling
-- A supported, documented NeMo Relay surface instead of hand-registered callbacks
+## Example: Redact Email Addresses
 
-Use raw sanitize-guardrail middleware when you want:
+This `plugins.toml` profile replaces detected email addresses in observability
+text with `[REDACTED]`. Omitting path selectors lets the detector inspect every
+string leaf in each supported payload.
 
-- Custom redaction logic authored directly in application code
-- Dynamic behavior based on runtime state, external lookups, or one-off heuristics
-- Experiments that are too app-specific to become a first-party plugin contract
+```toml
+version = 1
 
-The difference between middleware and `pii_redaction` is that middleware is the
-**mechanism** and `pii_redaction` is the **packaged policy**.
+[[components]]
+kind = "pii_redaction"
+enabled = true
 
-## Current Scope
+[[components.config.profiles]]
+mode = "builtin"
 
-The built-in plugin exposes five managed sanitize surfaces:
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+```
 
-- `input`
-- `output`
-- `mark`
-- `tool_input`
-- `tool_output`
+For a tool call with `{"contact":"alice@example.com"}` as its arguments:
 
-Legacy single-policy configuration can toggle these surfaces independently.
-When `profiles` is used, every enabled profile covers all five surfaces and
-the associated LLM/tool scope metadata automatically.
+| Recipient | Arguments |
+| --- | --- |
+| Tool implementation | `{"contact":"alice@example.com"}` |
+| Subscribers and exporters | `{"contact":"[REDACTED]"}` |
 
-The current built-in backend supports five actions:
+Built-in detectors use deterministic patterns. They identify configured formats
+such as email addresses or API keys; they do not identify every kind of private
+information. Refer to
+[Detector Presets](/configure-plugins/pii-redaction/configuration#detector-presets)
+for the supported formats.
 
-- `remove`
-- `redact`
-- `regex_replace`
-- `hash`
-- `mask`
+## Choose a Policy
 
-The current backend boundary is intentional:
+| Goal | Policy |
+| --- | --- |
+| Replace detected sensitive text | Use `redact` with a built-in detector or custom pattern. |
+| Remove a known field or container | Use `remove` with an exact path or glob selector. |
+| Keep a transformed value | Use `hash`, `mask`, or `regex_replace`, according to what the consumer needs. |
+| Remove conversational content while keeping trajectory analytics | Use the existing `trajectory_context` preset. |
 
-- Managed tool surfaces are sanitized as JSON payloads with exact JSON-pointer
-  targeting or restricted single-segment glob selectors.
-- Managed LLM requests use the active resolved codec for each call, including
-  built-in, runtime, and opaque codecs. Normalized response projection requires
-  a recognized built-in codec because response codec capabilities are
-  decode-only. This lets redaction target normalized Relay shapes such as
-  `/messages/0/content` and `/message`.
-- `mark` sanitizes `data`, `category_profile`, and `metadata` independently on
-  every mark event. It defaults to `true`; set `mark = false` to opt out.
-- `input`, `output`, `tool_input`, and `tool_output` sanitize scope metadata on
-  their corresponding lifecycle events. Tool and LLM primary data and typed
-  profiles remain on their specialized sanitizer paths to avoid applying the
-  same mask or hash twice.
-- For built-in action policies, including detector-backed policies,
-  `tool_output` sanitizes the emitted `ToolExecutionResult.result` and
-  `ToolExecutionResult.annotation` as independent JSON documents. The
-  annotation is sanitized at scope end without changing the other typed tool
-  profile fields.
+Exact paths select a specific JSON node. Globs can select multiple nodes, with
+each `*` matching one object key or array index. String actions operate on
+selected string values; selecting a container does not select its descendants.
+Recursive `**` selectors and JSONPath expressions are not supported.
 
-## Observability Boundary
-
-This plugin installs sanitize guardrails, not execution intercepts.
-
-That means:
-
-- The plugin changes emitted observability payloads.
-- The real provider request and response values remain unchanged.
-- Subscribers and exporters receive sanitized payloads after the plugin runs.
-
-For managed LLM requests, codec decode and re-encode can canonicalize the
-emitted provider-shaped start event. For example, Relay can record an OpenAI
-Responses request in the codec's canonical `input` array form rather than the
-original shorthand form.
-
-## Current Boundaries
-
-This plugin is intentionally scoped to a deterministic built-in backend plus a
-future local-model extension point.
-
-In particular:
-
-- `local_model` is an extension point, not a complete backend implementation
-  today.
-- The plugin does not mutate the real callback arguments or return values.
-- The plugin supports exact JSON Pointer targeting plus a restricted,
-  single-segment JSON Pointer glob selector. It does not support recursive
-  selectors, predicates, or arbitrary JSONPath expressions.
-
-## Pages
-
-- [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
-  documents the built-in component shape, action semantics, supported codecs,
-  and example configs.
+Continue with
+[PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+for action semantics, selectors, profiles, and the trajectory preset. The
+shipped `builtin` backend implements these policies; `local_model` is an
+extension point that requires a runtime-provided backend.
