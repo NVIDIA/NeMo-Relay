@@ -49,6 +49,7 @@ dev = [
     # Transitive dependency of optional integrations; keep it at a patched release.
     "certifi>=2026.10.19",
     "ipython~=8.20",
+    "jsonschema>=4.26,<5",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
     "maturin>=1.0,<2.0; sys_platform != 'linux'",
     "pip-licenses>=5,<6",
@@ -175,7 +176,7 @@ omit = [
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
 # LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
 # dependencies which aren't installed by default.
-allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "httpx", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "openai.**", "pytest"]
+allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "httpx", "langchain.**", "langchain_*.**", "langgraph.**", "litellm.**", "nemo_relay._native", "openai.**", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]

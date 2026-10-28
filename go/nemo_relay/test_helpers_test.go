@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"os"
+	"runtime"
 	"testing"
 )
 
@@ -45,4 +46,13 @@ func runWithTestScopeStack(t *testing.T, fn func()) {
 func runTestWithScopeStack(t *testing.T, fn func(*testing.T)) {
 	t.Helper()
 	runWithTestScopeStack(t, func() { fn(t) })
+}
+
+func crossSchedulerBoundary(rounds int) {
+	handoff := make(chan struct{})
+	for range rounds {
+		go func() { handoff <- struct{}{} }()
+		<-handoff
+		runtime.Gosched()
+	}
 }

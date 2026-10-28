@@ -1202,7 +1202,7 @@ metadata promotion cannot be used to add an unsupported GenAI attribute.
 |---|---|---|
 | `gen_ai.agent.description` | Supported | Application-provided free-form agent description. Relay emits it on Agent scopes and marked CLI turns when canonical or recognized alias metadata supplies it. |
 | `gen_ai.agent.id` | Not supported | Stable identifier of a hosted GenAI agent resource. Relay does not yet distinguish hosted-agent create or client operations, and it does not substitute transient scope, session, subagent, or harness identifiers. |
-| `gen_ai.agent.name` | Supported | Application-provided human-readable agent name. Relay uses Agent scope identity and explicit applicable turn or tool metadata; marked turns omit it when no authoritative name exists. |
+| `gen_ai.agent.name` | Supported | Human-readable agent name from Agent scope identity or applicable turn or tool metadata. CLI turns inherit a canonical name from their owning Agent scope when available, then use explicit turn or session identity. Gateway-only turns omit it unless an explicit name is supplied. |
 | `gen_ai.agent.version` | Not supported | Version of a hosted GenAI agent. Relay does not yet classify hosted-agent operations. The generic `agent_version` captured by wrapped CLI launches identifies the harness executable and is intentionally not projected as this attribute. |
 | `gen_ai.conversation.compacted` | Not supported | Indicates that the effective context is a compacted view of an earlier conversation. Relay does not yet propagate positive compaction state into the later LLM operation; false must not be emitted. |
 | `gen_ai.conversation.id` | Supported | Stable conversation, session, or thread identifier. Relay projects the canonical key or recognized conversation, session, and thread aliases on applicable Agent, turn, LLM, and tool spans. |
@@ -1325,6 +1325,20 @@ type as identity; recognized Gemini native tool groups emit an identity for each
 tool in the group. Explicit native names are preserved. Unknown unnamed native
 definitions are omitted rather than assigned invented identities.
 
+### Turn Identity
+
+CLI turns inherit a canonical `gen_ai.agent.name` from their owning Agent scope.
+If that scope has no authoritative name, an explicit turn name takes precedence
+over the session or harness fallback. Claude Code main turns have no exported
+session Agent scope, so they use an explicit name, the session's nonblank
+`agent_type`, or `claude-code`. Unnamed Codex and Pi turns use `codex` and `pi`.
+The GenAI span name includes the resolved identity, for example
+`invoke_agent claude-code`. A child hook cannot supply the main turn's identity.
+
+A generic gateway turn does not infer an agent name. Subagent scopes retain their
+own identity and parentage. Session and subagent instance identifiers are not
+exported as `gen_ai.agent.id`, which identifies a hosted agent resource.
+
 ### Tool Identity
 
 Tool identity comes from instrumentation metadata and the typed tool-call ID,
@@ -1336,11 +1350,12 @@ The typed call ID takes precedence. Absent tool names use the scope name;
 unknown descriptions, types, and agent names are omitted.
 
 Claude Code, Codex, and Pi tool hooks default `gen_ai.tool.type` to `function`
-because these harnesses execute tools locally. They default `gen_ai.agent.name`
-to `claude-code`, `codex`, or `pi`, or `subagent:<id>` when ownership is known.
-These defaults apply to paired hooks and post-only hooks that synthesize a
-start, without replacing explicitly supplied nonblank string metadata, including
-the `tool_type` and `agent_name` aliases. Generic gateway sessions
+because these harnesses execute tools locally. Paired tool hooks inherit the
+resolved agent name from their parent turn or Agent scope. When the parent has
+no name, the default is `claude-code`, `codex`, or `pi`, or `subagent:<id>` when
+ownership is known. Post-only hooks retain those harness defaults. Neither
+path replaces explicitly supplied nonblank string metadata, including the
+`tool_type` and `agent_name` aliases. Generic gateway sessions
 do not infer a tool type or root executing-agent name. Invocation arguments
 are never used to infer tool descriptions.
 
