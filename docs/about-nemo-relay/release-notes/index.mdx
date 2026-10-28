@@ -46,9 +46,9 @@ This release expands plugin control, deployment options, and setup guidance:
 - The Python Google Agent Development Kit (ADK) integration records agent runs,
   model calls, and tool calls. Relay guardrails and intercepts apply to supported
   model and tool calls. Setup guides include ADK CLI and workflow examples.
-  ADK `LiteLlm` models are supported with `litellm` 1.106.2 or later. Relay
-  records the selected provider and rejects settings that can switch providers
-  during a call.
+  The integration supports ADK `LiteLlm` models with `litellm` 1.106.2 or later.
+  Relay records the selected provider. It rejects settings that can switch
+  providers during a call.
   Refer to [Google ADK](/supported-integrations/google-adk).
 - Daemon workers support the full middleware pipeline for large language model
   (LLM) calls.
@@ -113,7 +113,8 @@ The main compatibility changes affect these areas:
 
 - Node.js applications and package workflows require Node.js 24.13.1 or later.
 - LangChain and LangGraph tool results now record each value in `result` with
-  its type. Review tool-call shapes in custom middleware and subscribers.
+  its type. Review how custom middleware and subscribers read tool calls
+  and results.
   Refer to [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
 - Worker messages now have size limits for sending and receiving data.
   The default is 4 MiB per message. You can set limits by callback name.
@@ -159,7 +160,8 @@ The main fixes improve request handling, telemetry, and process cleanup:
 - Framework tool results retain content and handled error status. Manual LLM
   completion preserves an explicit error status. Cache replay keeps framework
   tool result objects and content intact.
-  LangChain and LangGraph results now expose the JSON data in custom objects.
+  LangChain and LangGraph results now include data from custom objects that
+  have a JSON form.
   Objects that cannot be replayed stay with the call that returned them.
 - Tool classification now recognizes `load_skill` as a skill tool.
 - OpenAI Responses streams retain usage and report missing terminal events.
@@ -180,8 +182,9 @@ The main fixes improve request handling, telemetry, and process cleanup:
 - Diagnostic HTTP errors now use consistent status codes and reason fields.
   Worker inspection reports whether a worker is missing or its diagnostics
   endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
-- CLI turn spans and paired tool hooks now inherit their owning Agent scope's
-  name. OpenTelemetry agent names and span names can change as a result.
+- CLI turn spans now inherit the name of their owning Agent scope.
+  Paired tool hooks use that name unless they supply an explicit name.
+  OpenTelemetry agent names and span names can change as a result.
   Refer to [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
 - Daemon, worker, and hook paths use less memory or avoid repeated work. Worker
   cancellation and session-lock cleanup release resources when calls end.
