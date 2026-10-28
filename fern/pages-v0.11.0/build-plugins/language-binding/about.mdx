@@ -25,9 +25,9 @@ These complete programs contain the same boundary in each binding: the plugin va
 component-local JSON, installs component-owned middleware, the host activates a
 `PluginConfig`, and cleanup tears the behavior down.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 import asyncio
 from typing import Any
 import nemo_relay
@@ -78,9 +78,8 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
+
+```js title="Node.js"
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -129,9 +128,8 @@ try {
   plugin.deregister('example.add-tag');
 }
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -221,8 +219,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 The host passes only `{"tag": "documentation"}` to both hooks. `register` does not
 receive the surrounding document, `enabled`, or another component's settings. Relay

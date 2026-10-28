@@ -59,9 +59,9 @@ stop.
 
 Choose a worker language to register a callback that proposes metadata additions:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import Event, EventMetadata, EventSanitizeFields, Json, LlmRequest, LlmSanitizeRequestContext
 
 async def add_plugin_context(event: Event) -> EventMetadata:
@@ -74,9 +74,8 @@ ctx.register_event_metadata_injector(
     priority=0,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use std::collections::BTreeMap;
 
 use nemo_relay_worker::Json;
@@ -92,8 +91,8 @@ context.register_event_metadata_injector(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Relay sends the immutable Event snapshot through the existing unary `Invoke` RPC. It
 validates and merges accepted additions before Event sanitizers run. A callback error
@@ -189,9 +188,9 @@ referenced it.
 Request intercepts affect real execution. The LLM form returns more than a provider
 request because Relay must carry its normalized annotation and accounting separately.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import AnnotatedLlmRequest, Json, LlmOptimizationContribution, LlmRequest, LlmRequestInterceptOutcome, PendingMarkSpec
 
 priority = requests["priority"]
@@ -235,9 +234,8 @@ ctx.register_llm_request_intercept(
     break_chain=break_chain,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 context.register_llm_request_intercept(
     "documentation_llm_request",
     config.requests.priority,
@@ -277,8 +275,8 @@ context.register_llm_request_intercept(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Returning only `rewritten` would be the wrong callback result for this surface. The tool
 request intercept does return JSON directly because it has no annotated request or LLM
@@ -324,9 +322,9 @@ stream, the Python task receives `asyncio.CancelledError` and the Rust callback 
 aborted. Cleanup belongs in `finally` or a drop-safe guard. Acknowledged cancellation
 does not prove that external blocking work has stopped.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 priority = execution["priority"]
 emit_pending_marks = execution["emit_pending_marks"]
 tag = settings["tag"]
@@ -413,9 +411,8 @@ ctx.register_llm_stream_execution_intercept(
     priority=priority,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 context.register_tool_execution_intercept(
     "documentation_tool_execution",
     config.execution.priority,
@@ -476,8 +473,8 @@ context.register_llm_stream_execution_intercept(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 `LlmExecutionContext` describes the codecs selected by the host for this
 managed invocation. `request_codec` is always present as an identity-bearing

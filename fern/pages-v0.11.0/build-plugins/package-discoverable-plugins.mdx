@@ -9,8 +9,13 @@ SPDX-License-Identifier: Apache-2.0 */}
 A discoverable plugin is a package containing one `relay-plugin.toml` manifest, its
 native library or worker entrypoint, and an optional component JSON Schema. The manifest
 lets Relay validate compatibility and integrity before code is loaded or a process is
-started. Runtime activation still comes from a component in `plugins.toml` or an
-equivalent binding configuration.
+started. Declare the package with `[[plugins.dynamic]]` in `plugins.toml` and
+put its runtime settings under `[plugins.dynamic.config]`. The CLI gateway and
+SDK initialization read these records and use lifecycle state to select plugins.
+A manual record can activate at startup when no lifecycle state file exists.
+Refer to
+[Dynamic Plugin Configuration](/configure-plugins/plugin-configuration-files#gateway-discoverable-plugin-records)
+for the configuration shape.
 
 ## Manifest Responsibilities
 
@@ -18,11 +23,11 @@ equivalent binding configuration.
 |---|---|
 | `[plugin]` | Stable package identity and plugin kind. |
 | `[compat]` | Supported Relay range plus the native manifest API or worker protocol contract. A typed native plugin built with the current SDK must declare a Relay range beginning at 0.10.0. |
-| `[defaults]` and `[capabilities]` | Initial enabled state and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
+| `[defaults]` and `[capabilities]` | The required `enabled = false` declaration and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
 | `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
 | `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
 | `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
-| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. |
+| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `callback_timeouts` and `max_message_bytes` here. |
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
 not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
@@ -47,105 +52,15 @@ location. The CLI retains its activation snapshot, which includes adjacent nativ
 dependencies. Native library digest checks use bounded regular-file reads and reject
 symbolic links and special files.
 
-<Tabs>
-<Tab title="Python Worker" language="toml">
-```toml
-manifest_version = 1
+<CodeBlocks>
 
-[plugin]
-id = "examples.python_grpc_worker"
-kind = "worker"
+<Code src="_code/python_grpc_worker/relay-plugin.toml" language="toml" title="Python Worker: relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
-[compat]
-relay = ">=0.10.0,<1.0"
-worker_protocol = "grpc-v1"
+<Code src="_code/rust_native_policy/relay-plugin.toml" language="toml" title="Native Rust: relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-[defaults]
-enabled = false
+<Code src="_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="Rust Worker: relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-[capabilities]
-items = ["plugin_worker", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-manifest_root = "."
-artifact = "nemo_relay_python_grpc_worker_example/worker.py"
-
-[integrity]
-sha256 = "sha256:<worker-source-sha256>"
-
-[load]
-runtime = "python"
-entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
-```
-</Tab>
-<Tab title="Native Rust" language="toml">
-```toml
-manifest_version = 1
-
-[plugin]
-id = "examples.rust_native_policy"
-kind = "rust_dynamic"
-
-[compat]
-relay = ">=0.10.0,<1.0"
-native_api = "1"
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_native", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-artifact = "target/debug/<platform-library-file>"
-
-[integrity]
-sha256 = "sha256:<artifact-sha256>"
-
-[load]
-library = "target/debug/<platform-library-file>"
-symbol = "nemo_relay_register_plugin"
-```
-</Tab>
-<Tab title="Rust Worker" language="toml">
-```toml
-manifest_version = 1
-
-[plugin]
-id = "examples.rust_grpc_worker"
-kind = "worker"
-
-[compat]
-relay = ">=0.10.0,<1.0"
-worker_protocol = "grpc-v1"
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_worker", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-artifact = "target/debug/<platform-worker-file>"
-
-[integrity]
-sha256 = "sha256:<artifact-sha256>"
-
-[load]
-runtime = "rust"
-entrypoint = "target/debug/<platform-worker-file>"
-```
-</Tab>
-</Tabs>
+</CodeBlocks>
 
 The Python package has one extra responsibility: `source.manifest_root` identifies the
 directory Relay installs into its managed environment. The digest still covers only the
@@ -203,12 +118,24 @@ trust policy and file layout are documented in [Manage](/configure-plugins/disco
 
 ## Worker Message Limits
 
-Set `[load.max_message_bytes]` with an optional `default_bytes` and `by_name`
-overrides for exact callback registration names.
+Set `[load.max_message_bytes]` in `relay-plugin.toml` with an optional
+`default_bytes` and `by_name` overrides for exact callback registration names.
+Keep these worker settings separate from `plugins.dynamic.config`. The following
+example sets a default limit and a larger limit for one callback:
+
+<Code src="_code/workers/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-8" showLineNumbers={false} />
+
+Limits must be whole numbers from 1 through 2,147,483,647 bytes. If you omit
+`default_bytes`, Relay uses 4 MiB. Each limit applies to each sent or received
+message, including stream chunks and calls to continuations. It does not limit
+the total stream size. Control RPCs use the default limit. Zero is invalid and
+does not disable the limit.
+
+Reactivate the plugin after changing its manifest or host environment.
 
 For example, `by_name.input_guardrail = 16777216` raises the registered
 `input_guardrail` callback and its continuations to 16 MiB. Host environment
-settings override plugin settings. See the
+settings override plugin settings. Refer to the
 [execution message-size contract](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size)
 for validation, compatibility, and memory considerations.
 
@@ -220,13 +147,7 @@ Python, Rust, and workers that you start with a custom command.
 
 The following example sets a default deadline and an override for one callback:
 
-```toml
-[load.callback_timeouts]
-default_ms = 60000
-
-[load.callback_timeouts.by_name]
-check_request = 90000
-```
+<Code src="_code/worker-timeouts/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-8" showLineNumbers={false} />
 
 Use positive whole numbers in milliseconds. In this example, most short callbacks
 have a limit of 60,000 milliseconds. The `check_request` callback has a limit of

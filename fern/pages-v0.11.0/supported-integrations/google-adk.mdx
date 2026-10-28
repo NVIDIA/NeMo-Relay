@@ -67,12 +67,38 @@ in the last column are in addition to `nemo-relay[google-adk]`.
 | Azure OpenAI | `OpenAILlm`, `OpenAIResponsesLlm`, or `AzureOpenAIResponsesLlm` | `google-adk[openai]` |
 | Amazon Bedrock through the OpenAI SDK | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` and `openai[bedrock]` |
 | OpenAI-compatible endpoints | `OpenAILlm` or `OpenAIResponsesLlm` | `google-adk[openai]` |
+| Providers available through LiteLLM | `LiteLlm` | `litellm` 1.106.2 or later |
 | Apigee | `ApigeeLlm` in GenAI or Chat Completions mode | None |
 
 For Vertex AI, Microsoft Foundry, Azure OpenAI, and Amazon Bedrock, configure
 ADK with the client for that service. For an OpenAI-compatible endpoint, set
 the client's `base_url`. The endpoint must support the API used by your ADK
 model class.
+
+For `LiteLlm`, Relay records the provider LiteLLM picks, such as `anthropic`
+or `ollama`. If LiteLLM finds no provider, Relay records the model class name.
+If a request intercept changes the model to one LiteLLM routes to another
+provider, the call fails.
+
+Some LiteLLM settings can move a call to another provider while it runs. Relay
+fails calls that use them, set directly or through a LiteLLM credential:
+
+- `fallbacks`, including LiteLLM's global `model_fallbacks`
+- `model_list`
+- A `context_window_fallback_dict` entry for the call's model
+- Model names that start with `litellm_agent/`
+- LiteLLM callbacks with a deployment hook or an agentic loop gate
+- A `prompt_id` when the model prefix names a LiteLLM prompt integration,
+  such as `langfuse/`, or when a registered LiteLLM prompt manager accepts it
+- A dynamic prompt management argument, such as the
+  `cache_control_injection_points` that ADK context caching sets, when a
+  registered LiteLLM prompt manager accepts the call
+
+To fall back across providers, use ADK `FallbackModel`.
+
+For Gemini models, Relay prices the token counts LiteLLM reports. LiteLLM adds
+tool-use prompt tokens to the prompt count unless the response used Google
+Search or Google Maps grounding.
 
 Other built-in ADK model classes are not supported and fail when called.
 

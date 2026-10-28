@@ -475,26 +475,27 @@ workers:
 
 ### Configure Execution Message Size
 
-Use exact callback registration names, as with `callback_timeouts`:
+Configure these tables in `relay-plugin.toml`, separate from the component
+configuration in `plugins.toml`. For timeout settings and a combined example,
+refer to [Worker Timeouts and Payload Limits](/configure-plugins/plugin-configuration-files#worker-timeouts-and-payload-limits).
 
-```toml
-[load.max_message_bytes]
-default_bytes = 4194304
-[load.max_message_bytes.by_name]
-input_guardrail = 16777216
-output_guardrail = 8388608
-```
+Use exact callback registration names, as shown in the following example:
 
-Precedence, highest first:
+<Code src="../_code/worker-message-limits/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-8" showLineNumbers={false} />
+
+Relay uses the following settings in order, from highest to lowest priority:
 
 - Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON callback-to-bytes map, such as `{"input_guardrail":16777216}`.
 - Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
 - Plugin `load.max_message_bytes.by_name`: exact callback registration name.
 - Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
 
-Limits are positive 32-bit integers which cover all data belonging to that
-callback, such as data, streams, and continuations. These limits do not
-change model context limits or provide automatic compaction.
+Limits must be whole numbers from 1 through 2,147,483,647 bytes. They apply to
+each sent or received message for that callback, including stream chunks and
+calls to continuations. They do not limit the total stream size. Control RPCs
+use the default limit. Zero is invalid. These limits do not change model
+context limits or provide automatic compaction. Reactivate the plugin after changing the manifest or host
+environment.
 
 ## JSON Envelopes and Errors
 

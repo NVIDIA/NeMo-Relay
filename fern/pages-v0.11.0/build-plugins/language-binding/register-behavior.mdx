@@ -24,9 +24,9 @@ before selecting and storing the target name.
 The following examples register the same constant-result gate after configuration has
 supplied a discovered effective target name:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 control = settings["registration_control"]
@@ -38,10 +38,8 @@ if control["enabled"]:
         lambda _kinds, _name: control["reason"],
     )
 ```
-</Tab>
 
-<Tab title="Node.js" language="node">
-```js
+```js title="Node.js"
 const control = settings.registration_control;
 if (control.enabled) {
   context.registerConditionalMiddlewareGuardrail(
@@ -52,10 +50,8 @@ if (control.enabled) {
   );
 }
 ```
-</Tab>
 
-<Tab title="Rust" language="rust">
-```rust
+```rust title="Rust"
 if config.registration_control.enabled {
     let reason = config.registration_control.reason.clone();
     ctx.register_conditional_middleware_guardrail(
@@ -66,8 +62,8 @@ if config.registration_control.enabled {
     )?;
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 The component-local gate name does not need a plugin prefix. Relay qualifies the name
 and records its rollback operation. The target name is different: it must already be the
@@ -148,9 +144,9 @@ The following excerpts show the same model-header rewrite. The full checked exam
 event observation, tool policy, execution wrappers, and streaming verification around
 this common center.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from nemo_relay import (
@@ -218,9 +214,8 @@ context.register_llm_stream_execution_intercept(
     "documentation-stream", execution["priority"], stream_request
 )
 ```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
+
+```js title="Node.js"
 const settings = normalizedConfig(config);
 const { observe, requests, execution } = settings;
 
@@ -269,9 +264,8 @@ context.registerLlmStreamExecutionIntercept(
   },
 );
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 let tag = config.tag.clone();
 let mode = config.requests.mode.clone();
 let blocked_tools = config.requests.blocked_tools.clone();
@@ -346,8 +340,8 @@ ctx.register_llm_stream_execution_intercept(
     }),
 )?;
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Execution codec objects are scoped to the callback that received them. Non-streaming
 capabilities expire when that callback finishes. A streaming request capability remains
