@@ -105,8 +105,8 @@ fn selector_diagnostics_report_effectiveness_without_values() {
         None,
     )
     .unwrap()
-    .with_match_diagnostics(recorder, code);
-    let result = backend.sanitize_json_preorder_dfs(payload);
+    .with_match_diagnostics(recorder.clone(), code);
+    let result = backend.sanitize_json_preorder_dfs(payload.clone());
     assert!(result["messages"][0]["content"][0].get("text").is_none());
     let snapshot = diagnostics
         .snapshot(&DiagnosticQuery::default())
@@ -123,6 +123,38 @@ fn selector_diagnostics_report_effectiveness_without_values() {
             .unwrap()
             .message,
         "matched_paths=1 eligible_string_leaves=1 affected_values=1"
+    );
+
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec![
+                "/messages/0/content".into(),
+                "/messages/0/content/0/text".into(),
+            ],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap()
+    .with_match_diagnostics(recorder, code);
+    let result = backend.sanitize_json_preorder_dfs(payload);
+    assert!(result["messages"][0].get("content").is_none());
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .events
+            .last()
+            .unwrap()
+            .detail
+            .as_ref()
+            .unwrap()
+            .message,
+        "matched_paths=2 eligible_string_leaves=1 affected_values=1"
     );
 }
 
@@ -206,12 +238,30 @@ fn target_path_matcher_deduplicates_equivalent_selectors() {
     .unwrap();
 
     assert_eq!(matcher.selectors.len(), 2);
+    assert!(!matcher.may_hide_descendant);
     assert!(matcher.matches(&["prompt".to_string()]));
     assert!(matcher.matches(&[
         "messages".to_string(),
         "0".to_string(),
         "content".to_string(),
     ]));
+}
+
+#[test]
+fn overlapping_selectors_require_full_document_counts() {
+    let overlapping = TargetPathMatcher::new(
+        &["/messages/0/content".into()],
+        &["/messages/*/content/*/text".into()],
+    )
+    .unwrap();
+    assert!(overlapping.may_hide_descendant);
+
+    let unrelated = TargetPathMatcher::new(
+        &["/metadata/owner".into()],
+        &["/messages/*/content/*/text".into()],
+    )
+    .unwrap();
+    assert!(!unrelated.may_hide_descendant);
 }
 
 #[test]

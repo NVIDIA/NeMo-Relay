@@ -66,6 +66,7 @@ impl std::fmt::Display for MatchCounts {
 #[derive(Clone)]
 struct TargetPathMatcher {
     selectors: Vec<TargetPathSelector>,
+    may_hide_descendant: bool,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -78,6 +79,35 @@ enum TargetPathSelector {
 enum TargetPathSegment {
     Exact(String),
     Any,
+}
+
+impl TargetPathSelector {
+    fn len(&self) -> usize {
+        match self {
+            Self::Exact(segments) => segments.len(),
+            Self::Glob(segments) => segments.len(),
+        }
+    }
+
+    fn segment_at(&self, index: usize) -> Option<&str> {
+        match self {
+            Self::Exact(segments) => Some(&segments[index]),
+            Self::Glob(segments) => match &segments[index] {
+                TargetPathSegment::Exact(value) => Some(value),
+                TargetPathSegment::Any => None,
+            },
+        }
+    }
+
+    fn may_hide(&self, other: &Self) -> bool {
+        self.len() < other.len()
+            && (0..self.len()).all(|index| {
+                match (self.segment_at(index), other.segment_at(index)) {
+                    (Some(left), Some(right)) => left == right,
+                    _ => true,
+                }
+            })
+    }
 }
 
 impl TargetPathMatcher {
@@ -110,12 +140,17 @@ impl TargetPathMatcher {
             })
             .collect::<Option<Vec<_>>>()?;
         let mut seen = BTreeSet::new();
+        let selectors: Vec<_> = exact
+            .into_iter()
+            .chain(globs)
+            .filter(|selector| seen.insert(selector.clone()))
+            .collect();
+        let may_hide_descendant = selectors
+            .iter()
+            .any(|shorter| selectors.iter().any(|longer| shorter.may_hide(longer)));
         Some(Self {
-            selectors: exact
-                .into_iter()
-                .chain(globs)
-                .filter(|selector| seen.insert(selector.clone()))
-                .collect(),
+            selectors,
+            may_hide_descendant,
         })
     }
 
@@ -128,6 +163,21 @@ impl TargetPathMatcher {
             TargetPathSelector::Exact(segments) => segments == path_segments,
             TargetPathSelector::Glob(segments) => {
                 segments.len() == path_segments.len()
+                    && segments.iter().zip(path_segments).all(|(selector, segment)| {
+                        matches!(selector, TargetPathSegment::Any)
+                            || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
+                    })
+            }
+        })
+    }
+
+    fn may_match_descendant(&self, path_segments: &[String]) -> bool {
+        self.selectors.iter().any(|selector| match selector {
+            TargetPathSelector::Exact(segments) => {
+                segments.len() > path_segments.len() && segments.starts_with(path_segments)
+            }
+            TargetPathSelector::Glob(segments) => {
+                segments.len() > path_segments.len()
                     && segments.iter().zip(path_segments).all(|(selector, segment)| {
                         matches!(selector, TargetPathSegment::Any)
                             || matches!(selector, TargetPathSegment::Exact(value) if value == segment)
@@ -417,10 +467,24 @@ impl CompiledBuiltinBackend {
     }
 
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
+        let selected = if self.match_diagnostics.is_some()
+            && matches!(self.action, BuiltinAction::Remove)
+            && self.target_path_matcher.may_hide_descendant
+        {
+            let mut selected = MatchCounts::default();
+            self.count_selections_at_path(&value, &mut Vec::new(), &mut selected);
+            Some(selected)
+        } else {
+            None
+        };
         let mut counts = MatchCounts::default();
         let result = self
             .sanitize_json_preorder_dfs_at_path(value, &mut Vec::new(), &mut counts)
             .unwrap_or(Json::Null);
+        if let Some(selected) = selected {
+            counts.matched_paths = selected.matched_paths;
+            counts.eligible_string_leaves = selected.eligible_string_leaves;
+        }
         if let Some((recorder, code)) = &self.match_diagnostics {
             let _ = recorder.record_lazy(|| {
                 Observation::extension(
@@ -433,6 +497,40 @@ impl CompiledBuiltinBackend {
             });
         }
         result
+    }
+
+    fn count_selections_at_path(
+        &self,
+        value: &Json,
+        path_segments: &mut Vec<String>,
+        counts: &mut MatchCounts,
+    ) {
+        if self.target_path_matcher.matches(path_segments) {
+            counts.matched_paths = counts.matched_paths.saturating_add(1);
+            if value.is_string() {
+                counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+            }
+        }
+        if !self.target_path_matcher.may_match_descendant(path_segments) {
+            return;
+        }
+        match value {
+            Json::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    path_segments.push(index.to_string());
+                    self.count_selections_at_path(item, path_segments, counts);
+                    path_segments.pop();
+                }
+            }
+            Json::Object(map) => {
+                for (key, item) in map {
+                    path_segments.push(key.clone());
+                    self.count_selections_at_path(item, path_segments, counts);
+                    path_segments.pop();
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Sanitize optional metric text without modifying required export fields.
