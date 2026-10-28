@@ -7,7 +7,7 @@ position: 32
 SPDX-License-Identifier: Apache-2.0 */}
 
 The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
-[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 0.11.0,
+[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 1.0.0,
 implements `WorkerPlugin`, registers all
 16 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
 create the authenticated `grpc-v1` server from the
@@ -104,7 +104,7 @@ name and digest placeholders:
 
 <Code src="../_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
+The manifest targets Relay 1.0.0 and uses the context-aware tool execution
 contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext::call` returns
 `ToolExecutionResult`, preserving an application payload and optional opaque annotation
 separately from Relay-owned pending marks. Rebuild the worker when adopting this SDK

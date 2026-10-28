@@ -6,7 +6,7 @@ position: 31
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/python-grpc-worker-plugin` package uses the 0.11.0
+The `examples/python-grpc-worker-plugin` package uses the 1.0.0
 `nemo-relay-plugin` SDK and the shared documentation configuration. Its worker registers
 all 16 [surfaces](/build-plugins/workers/middleware-and-continuations), accepts
 synchronous and asynchronous callback forms where the
@@ -76,7 +76,7 @@ Run the package's atomic tests before creating a managed environment:
 Relay creates the managed environment from the package root named by the
 [manifest](/build-plugins/package-discoverable-plugins). A
 minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
-0.11 worker SDK dependency:
+1.0.0 worker SDK dependency:
 
 <Code src="../_code/python-worker/pyproject.toml" language="toml" title="pyproject.toml" lines="4-19" showLineNumbers={false} />
 
@@ -147,7 +147,7 @@ the installed module. Calculate the `<worker-source-sha256>` placeholder from th
 
 <Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
-The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
+The manifest targets Relay 1.0.0 and uses the context-aware tool execution
 contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
 `ToolExecutionResult`, whose `result` contains the application payload and whose optional
 `annotation` remains adjacent opaque metadata. See the

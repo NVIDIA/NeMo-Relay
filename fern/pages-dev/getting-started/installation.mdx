@@ -139,7 +139,7 @@ refer to the [Support Matrix](/reference/support-matrix).
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=1.0.0 sh
 ```
 
 Install into another directory:
@@ -163,7 +163,7 @@ Set the same environment variable before invoking the installer to install a
 specific version:
 
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.11.0'
+$env:NEMO_RELAY_VERSION = '1.0.0'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 
@@ -280,7 +280,7 @@ Install the Python package when your application uses NeMo Relay through the
 Python wrapper and owns the tool or LLM call boundary.
 
 ```bash
-uv add nemo-relay==0.11.0
+uv add nemo-relay==1.0.0
 ```
 
 Use `uv add` from an application project that has a `pyproject.toml`; it records
@@ -303,7 +303,7 @@ Install the Node.js package when your application uses NeMo Relay through the
 JavaScript API and owns the tool or LLM call boundary.
 
 ```bash
-npm install nemo-relay-node@0.11.0
+npm install nemo-relay-node@1.0.0
 ```
 
 Use Node.js 24.13.1 or newer. On supported x64 and ARM64 Linux systems, npm
@@ -315,8 +315,8 @@ the musl package on Alpine Linux.
 Add the Rust crates when your application uses NeMo Relay directly from Rust.
 
 ```bash
-cargo add nemo-relay@0.11.0
-cargo add nemo-relay-adaptive@0.11.0
+cargo add nemo-relay@1.0.0
+cargo add nemo-relay-adaptive@1.0.0
 ```
 
 The crates provide these capabilities:
@@ -335,7 +335,7 @@ Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
 the package:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.11.0
+openclaw plugins install npm:nemo-relay-openclaw@1.0.0
 openclaw gateway restart
 ```
 
@@ -360,7 +360,7 @@ Install the Python package with the supported framework extras when your
 application uses LangChain, LangGraph, or Deep Agents.
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]==0.11.0"
+uv add "nemo-relay[langchain,langgraph,deepagents]==1.0.0"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by

@@ -27,7 +27,7 @@ Before you start, make sure you have:
 - Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own endpoint
 
 <Warning>
-This guide pins Switchyard plugin `0.3.2` and NeMo Relay `0.11.0` separately.
+This guide pins Switchyard plugin `0.3.2` and NeMo Relay `1.0.0` separately.
 Relay selects the bundle for your operating system, CPU, and CLI libc target.
 The plugin is a native library loaded into the Relay process; install it only
 from a source you trust.
@@ -55,13 +55,13 @@ script comes from `main`; `NEMO_RELAY_VERSION` selects the CLI release.
 <Tabs>
 <Tab title="Unix shell">
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=1.0.0 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
 <Tab title="Windows PowerShell">
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.11.0'
+$env:NEMO_RELAY_VERSION = '1.0.0'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 </Tab>

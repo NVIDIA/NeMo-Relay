@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "nemo-relay-python-grpc-worker-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["nemo-relay-plugin>=0.11.0"]
+dependencies = ["nemo-relay-plugin>=1.0.0"]
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-asyncio>=0.26"]
