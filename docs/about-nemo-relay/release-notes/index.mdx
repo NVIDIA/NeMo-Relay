@@ -30,72 +30,9 @@ For the full release history, including individual pull requests, refer to
 
 ## Release 0.11.0
 
-NeMo Relay 0.11.0 is in development. The following sections summarize changes
-since 0.10.0, including fixes from the 0.10 patch releases. For the full history
-of a published version, refer to GitHub Releases.
-
-### Highlights
-
-This release expands plugin control, deployment options, and setup guidance:
-
-- Runtime diagnostics keeps counts and recent events in memory, with storage
-  limits set at startup. Readers can inspect gateways, daemons, and embedded
-  applications. Native and worker plugins can record their own internal work.
-  Memory views show diagnostic storage use and optional resource samples.
-  Collection is disabled by default. Refer to [Diagnostics](/reference/diagnostics).
-- The Python Google Agent Development Kit (ADK) integration records agent runs,
-  model calls, and tool calls. Relay guardrails and intercepts apply to supported
-  model and tool calls. Setup guides include ADK CLI and workflow examples.
-  For the full support list, refer to
-  [Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
-- Daemon workers support the full middleware pipeline for large language model
-  (LLM) calls.
-  This covers OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
-  Refer to
-  [LLM Middleware](/daemon/reference#llm-middleware).
-- Scope snapshots expose the visible scope IDs and types across bindings and
-  plugin SDKs. Refer to
-  [Inspect the Visible Stack](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
-- OpenTelemetry Protocol (OTLP) endpoints support custom certificate authorities
-  and mutual Transport Layer Security (TLS). Refer to
-  [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls).
-- Python applications can configure local OTLP trace files with
-  `OpenTelemetryFileSinkConfig`. Refer to
-  [Trace File Sinks](/configure-plugins/observability/opentelemetry#trace-file-sinks).
-- Operational file log sinks now support `failure_policy = "optional"`.
-  This lets Relay start even if it cannot open that log file. Refer to
-  [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
-- Agent Trajectory Interchange Format (ATIF) exports can omit raw events and
-  full provider requests to reduce file size. Both remain included by default.
-  Remote uploads use compact JSON, with fewer spaces and line breaks.
-  Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
-- Deep Agents supports `position="outer"` to record tool results after your
-  middleware changes them. The default remains `"inner"`. Refer to
-  [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
-- Doctor checks OTLP file sinks, disabled components and destinations,
-  references to credentials, and personally identifiable information (PII)
-  settings. A passing HTTP check only means the collector answered.
-  It does not prove that the collector accepts your credentials or trace data.
-  Doctor does not test whether redaction removed sensitive data. Refer to
-  [Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
-- Provider API key helpers can supply a fresh credential for each request
-  attempt. Refer to
-  [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
-- OpenAI- and Anthropic-compatible model upstreams can use remote HTTP when
-  their hosts are explicitly trusted. These requests send no credential headers.
-  Prefer HTTPS. Refer to
-  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
-- Codex and Claude Code hook sessions can continue the launcher's trace through
-  `TRACEPARENT` and `TRACESTATE`. Refer to
-  [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
-- New quick starts cover application bindings and supported frameworks and
-  coding agents. Plugin setup guidance includes Switchyard. Refer to
-  [Quick Starts](/getting-started/quick-start) and
-  [Switchyard](/configure-plugins/switchyard).
-- The configuration editor exposes more gateway, provider, logging, and plugin
-  settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
-  [Interactive Setup](/nemo-relay-cli/basic-usage#interactive-setup) and
-  [Kubernetes Deployment Guidance](/daemon/kubernetes).
+NeMo Relay 0.11.0 includes the changes below. They cover updates since 0.10.0,
+including fixes from the 0.10 patch releases. For the full release history, refer to
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
 ### Compatibility and Migration
 
@@ -119,9 +56,10 @@ The main compatibility changes affect these areas:
   The default is 4 MiB per message. You can set limits by callback name.
   Upgrade the host and worker SDKs together before using these settings. Refer to
   [Configure Execution Message Size](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
-- Automatic OTLP logs and metrics now require HTTPS for remote destinations,
-  just like traces. This rule applies even without credentials. TLS files must
-  be available when Relay checks plugins. A fatal TLS error stops an HTTP trace
+- Automatic OpenTelemetry Protocol (OTLP) logs and metrics now require HTTPS
+  for remote destinations, just like traces. This rule applies even without
+  credentials. Transport Layer Security (TLS) files must be available when
+  Relay checks plugins. A fatal TLS error stops an HTTP trace
   exporter. Fix the TLS problem, then recreate the exporter to send traces again.
 - If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
   field or use `..Default::default()` to fill in missing fields.
@@ -147,46 +85,121 @@ The main compatibility changes affect these areas:
   Restart the process to change them. Diagnostic read access can expose private
   data and needs separate authorization.
 
-### Fixes and Other Changes
+### Integrations and Coding Agents
 
-The main fixes improve request handling, telemetry, and process cleanup:
+These changes improve framework support and coding-agent traces:
 
-- Provider routing checks access before using Relay-held credentials. Plugin
-  integrity and signature failures always prevent activation.
-- Request codecs preserve provider fields across multiple edits. LangChain
-  tool schema edits now reach the model call. Gemini request edits preserve
-  text placement, and streamed function-call arguments are merged correctly.
+- The Python Google Agent Development Kit (ADK) integration records agent runs,
+  large language model (LLM) calls, and tool calls. Relay guardrails and
+  intercepts apply to supported model and tool calls. Setup guides include
+  ADK CLI and workflow examples.
+  For the full support list, refer to
+  [Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
+- Deep Agents supports `position="outer"` to record tool results after your
+  middleware changes them. The default remains `"inner"`. Refer to
+  [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
+- Codex and Claude Code hook sessions can continue the launcher's trace through
+  `TRACEPARENT` and `TRACESTATE`. Refer to
+  [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+- LangChain tool schema edits now reach the model call.
 - Framework tool results retain content and handled error status. Manual LLM
   completion preserves an explicit error status. Cache replay keeps framework
   tool result objects and content intact.
 - Tool classification now recognizes `load_skill` as a skill tool.
-- OpenAI Responses streams retain usage and report missing terminal events.
-  Gemini cost estimates account for thinking and supported tool-use tokens.
+- CLI turn spans now inherit the name of their owning Agent scope.
+  Paired tool hooks use that name unless they supply an explicit name.
+  OpenTelemetry agent names and span names can change as a result.
+  Refer to [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
+
+### Diagnostics and Observability
+
+These changes help you inspect runtime behavior and manage telemetry:
+
+- Runtime diagnostics keeps counts and recent events in memory, with storage
+  limits set at startup. Readers can inspect gateways, daemons, and embedded
+  applications. Native and worker plugins can record their own internal work.
+  Memory views show diagnostic storage use and optional resource samples.
+  Collection is disabled by default. Refer to [Diagnostics](/reference/diagnostics).
+- Doctor checks OTLP file sinks, disabled components and destinations,
+  references to credentials, and personally identifiable information (PII)
+  settings. A passing HTTP check only means the collector answered.
+  It does not prove that the collector accepts your credentials or trace data.
+  Doctor does not test whether redaction removed sensitive data. Refer to
+  [Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
+- OTLP endpoints support custom certificate authorities and mutual TLS. Refer to
+  [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls).
+- Python applications can configure local OTLP trace files with
+  `OpenTelemetryFileSinkConfig`. Refer to
+  [Trace File Sinks](/configure-plugins/observability/opentelemetry#trace-file-sinks).
+- Agent Trajectory Interchange Format (ATIF) exports can omit raw events and
+  full provider requests to reduce file size. Both remain included by default.
+  Remote uploads use compact JSON, with fewer spaces and line breaks.
+  Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
+- ATIF output uses valid content parts. Text-only step messages use strings.
+  Delivery-failure warnings identify the affected trajectory.
+- Diagnostic HTTP errors now use consistent status codes and reason fields.
+  Worker inspection reports whether a worker is missing or its diagnostics
+  endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
+- Gemini cost estimates account for thinking and supported tool-use tokens.
   Pricing now counts each group of input tokens once, including cached tokens.
   It uses all input tokens to choose a pricing tier. If token counts conflict,
   Relay does not estimate a cost. Refer to
   [Model Pricing](/configure-plugins/model-pricing).
+
+### Providers and Request Handling
+
+These changes improve provider access and request handling:
+
+- Daemon workers support the full middleware pipeline for LLM calls.
+  This covers OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+  Refer to
+  [LLM Middleware](/daemon/reference#llm-middleware).
+- Provider API key helpers can supply a fresh credential for each request
+  attempt. Refer to
+  [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
+- OpenAI- and Anthropic-compatible model upstreams can use remote HTTP when
+  their hosts are explicitly trusted. These requests send no credential headers.
+  Prefer HTTPS. Refer to
+  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
+- Provider routing checks access before using Relay-held credentials.
+- Request codecs preserve provider fields across multiple edits. Gemini request
+  edits preserve text placement, and streamed function-call arguments are
+  merged correctly.
+- OpenAI Responses streams retain usage and report missing terminal events.
+
+### Configuration and Deployment
+
+These changes improve setup, logging, and deployment guidance:
+
+- Operational file log sinks now support `failure_policy = "optional"`.
+  This lets Relay start even if it cannot open that log file. Refer to
+  [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
+- Logging overrides preserve configured file sinks.
+- The configuration editor exposes more gateway, provider, logging, and plugin
+  settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
+  [Interactive Setup](/nemo-relay-cli/basic-usage#interactive-setup) and
+  [Kubernetes Deployment Guidance](/daemon/kubernetes).
+- New quick starts cover application bindings and supported frameworks and
+  coding agents. Plugin setup guidance includes Switchyard. Refer to
+  [Quick Starts](/getting-started/quick-start) and
+  [Switchyard](/configure-plugins/switchyard).
+
+### Runtime and Plugin Reliability
+
+These changes improve scope inspection, streaming, and resource cleanup:
+
+- Scope snapshots expose the visible scope IDs and types across bindings and
+  plugin SDKs. Refer to
+  [Inspect the Visible Stack](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
+- Plugin integrity and signature failures always prevent activation.
 - Streaming preserves Unicode characters split across transport chunks.
   Python streams retain pending exceptions through native wakeups. Node.js
   streams retain errors when closing overlaps a read.
   Node.js also catches errors thrown by codec callbacks. Worker streams keep
   middleware errors. Errors before the first chunk keep their HTTP status.
   Failed streams no longer send a marker that reports successful completion.
-- ATIF output uses valid content parts. Text-only step messages use strings.
-  Delivery-failure warnings identify the affected trajectory.
-- Logging overrides preserve configured file sinks.
-- Diagnostic HTTP errors now use consistent status codes and reason fields.
-  Worker inspection reports whether a worker is missing or its diagnostics
-  endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
-- CLI turn spans now inherit the name of their owning Agent scope.
-  Paired tool hooks use that name unless they supply an explicit name.
-  OpenTelemetry agent names and span names can change as a result.
-  Refer to [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
 - Daemon, worker, and hook paths use less memory or avoid repeated work. Worker
   cancellation and session-lock cleanup release resources when calls end.
-
-For upgrade actions and links to each affected workflow, refer to the
-[Migration Guides](/reference/migration-guides).
 
 ## Known Issues in 0.11.0
 

@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Use this page to upgrade from NeMo Relay 0.10.0 to 0.11.0.
 
-This guide covers the upcoming 0.11.0 release. It includes fixes from the 0.10
+This guide covers the 0.11.0 release. It includes fixes from the 0.10
 patch releases. Configuration changes from earlier patch upgrades still apply.
 
 ## Upgrade to NeMo Relay 0.11.0
@@ -28,7 +28,229 @@ For package names and installation commands, refer to
 follow [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
 Keep the daemon's identity state and existing managed bundle during the upgrade.
 
-### Configuration Changes
+### Integrations and Coding Agents
+
+#### Review LangChain Tool-Call Shapes in Middleware
+
+In 0.11.0, managed LangChain and LangGraph tool results use the
+`nemo.relay.tool_result@1` JSON wrapper. It holds display content, failure status,
+and the result values with their types.
+
+Review custom Relay middleware that reads or changes LangChain and LangGraph
+tool calls. Check both the arguments it receives and the results it returns:
+
+- Tool arguments remain JSON. Check that middleware edits match the tool's
+  input schema.
+- Tool results use a wrapper with `schema`, `content`, `is_error`, and `result`
+  fields. Set `schema` to `nemo.relay.tool_result@1`. Edit `content` to change the
+  displayed result. Set `is_error` to `true` for failure or `false` for success.
+- Each value in `result` includes its type. Update middleware and subscribers
+  that read or edit this field. Keep parts with no JSON form unchanged.
+- If an execution intercept returns a result without running the tool, return
+  the full wrapper. The framework's codec must be able to decode its `result`.
+
+Later calls can restore built-in values and supported framework types.
+Custom Python objects stay with the call that returned them. Their data is
+visible in the wrapper when it has a JSON form.
+The response cache runs those tools again instead of replaying the objects.
+For the value format and replay rules, refer to
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+and [LangChain](/supported-integrations/langchain).
+
+#### Check ADK LiteLLM Settings
+
+The Google ADK integration now supports `LiteLlm` with `litellm` 1.106.2 or later.
+Relay records the provider LiteLLM selects. If an intercept selects a model
+from another provider, Relay fails the call.
+
+Relay rejects LiteLLM settings that can switch providers during a call.
+This includes provider fallbacks and `model_list`. Use ADK `FallbackModel`
+to try another provider if a call fails. Also review your prompt management
+and callback settings. The full list of rejected settings is in
+[Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
+
+#### Review Deep Agents Middleware Order
+
+For Deep Agents, set `position="outer"` in `add_nemo_relay_integration` to
+record tool results after your middleware changes them. The default remains
+`"inner"`. It records results before your middleware changes them.
+Refer to [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
+
+#### Review CLI Turn Identity
+
+CLI turn spans now inherit the agent name from their owning Agent scope.
+Paired tool hooks use that name unless they supply an explicit name.
+Review dashboards that group spans by
+`gen_ai.agent.name` or span name. These values can now show an agent name
+instead of the coding-agent name, such as `codex`. Generic gateway turns omit
+the agent name unless you supply one. Refer to
+[Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
+
+#### Refresh Hooks and Restore Credentials
+
+Restart Relay gateways and daemons after upgrading. Local hook delivery now
+uses TLS and verifies the server's identity before sending credentials or
+payloads.
+
+If a loopback daemon runs under another account, publish its hook certificate
+for local users. This applies to daemon addresses that use `http://`. Refer to
+[Publish the Hook Certificate](/daemon/reference#publish-the-hook-certificate).
+
+Refresh personal Relay-managed Codex and Claude Code integrations before
+starting new sessions. Run the following command:
+
+```bash
+nemo-relay integrations refresh
+```
+
+To refresh one Codex or Claude Code integration, use
+`nemo-relay install <agent> --force`. For a personal Relay-managed Pi extension,
+run `nemo-relay install pi --force`. Replace manually installed Pi extensions
+with the updated source. For managed daemon bundles, follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back) instead. Do not
+regenerate those bundles with personal install commands.
+
+Generated tool checks use `PreToolUse`. Relay no longer generates a separate
+`PermissionRequest` hook. Without an explicit policy flag, tool checks and
+unreadable or invalid hook payloads fail closed. Other named events fail open.
+A fail-closed hook blocks the operation if Relay cannot check it. Review custom
+wrappers that omit a policy flag.
+
+Fail-closed delivery failures now return exit code `2`. This includes missing
+credentials, connection errors, timeouts, and HTTP errors. Fail-open delivery
+failures return `0`. Guardrail rejections return `2` under either policy.
+Hook requests now have a 30-second timeout. Leave room for delivery when setting
+guardrail evaluation timeouts. Refer to
+[Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+
+Hook sessions now use a valid `TRACEPARENT` from the launching process as their
+OpenTelemetry parent. `TRACESTATE` travels with it. The first hook that creates
+a session sets its parent; later hooks do not change it. Review launch scripts
+that already set these variables. Unset them if each session should start a new
+trace. Refer to
+[Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+
+Make sure hooks can read `NEMO_RELAY_CLIENT_TOKEN` or the per-user token file.
+If the file is missing, run the following command as the user who runs the
+harness:
+
+```bash
+nemo-relay daemon token ensure
+```
+
+Then start a new harness session so the Model Context Protocol (MCP) server
+registers the credential. Model requests need the route credential in the
+harness's provider headers. Creating the token file alone does not add that
+header. Managed Pi also requires `NEMO_RELAY_CLIENT_TOKEN` in its environment.
+Refer to
+[Credential Resolution](/daemon/configuration#credential-resolution).
+
+#### Review Recovered Tool Completions
+
+Relay can now close a Codex MCP tool span when a later model request contains
+the matching result. Model traffic must pass through Relay for this recovery.
+The outcome is `unknown`, and the duration can exceed the actual run time.
+This recovery does not apply to shell tools.
+
+Review dashboards that treat all closed tool spans as successful. To export
+the recovery fields as OpenTelemetry span attributes, add `"tool_completion_"`
+to the trace endpoint's `promote_metadata_prefixes`. Refer to
+[Codex Captured Events](/nemo-relay-cli/codex#captured-events).
+
+### Diagnostics and Observability
+
+#### Enable and Protect Diagnostics
+
+Runtime diagnostics is optional and disabled by default. Existing logging and
+exporters do not enable it. For gateways and daemons, configure `[diagnostics]`
+in `config.toml`. Embedded applications use `plugins.toml` or the diagnostics
+profile passed to `plugin.initialize`.
+
+The first embedded initialization selects the process settings, even when
+collection is disabled. Later initialization with different settings returns
+`diagnostics: configuration_conflict`. Restart the process to change them.
+For an existing gateway, update its owner's configuration and restart it.
+Capture any needed evidence first because shutdown discards the stored history.
+Refer to [Embedded Diagnostics](/reference/diagnostics/bindings) and
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli).
+
+Grant diagnostic read access only to callers allowed to inspect the whole
+context. Detail can contain private data that has not been sanitized. Query
+filters do not restrict a reader's access. Native plugin reads need an explicit
+`native_diagnostics_read_context` policy grant. Worker plugin recording does
+not grant access to host snapshots. Refer to
+[Plugin Diagnostics](/build-plugins/diagnostics).
+
+Diagnostic memory limits cover diagnostic storage, not total process memory.
+Daemon worker caches can contain only part of a snapshot or a stale page.
+Check the returned coverage and freshness fields. Refer to
+[Diagnostic Memory Inspection](/reference/diagnostics/memory) and
+[Diagnostics API](/reference/diagnostics/api).
+
+#### Review Exported Telemetry
+
+Review stored events, dashboards, and custom exporters for the changes below.
+These include Agent Trajectory Interchange Format (ATIF) output and personally
+identifiable information (PII) filtering.
+
+| Area | Upgrade Action |
+| --- | --- |
+| OpenAI Responses streams | Handle an error if a stream ends without `response.completed`, `response.failed`, or `response.incomplete`. Missing usage alone does not mean the stream ended early. Relay keeps received output and leaves missing usage unset. |
+| ATIF messages | Accept a string for text-only step messages. Review content-part readers against the corrected ATIF output. Refer to [ATIF](/configure-plugins/observability/atif). |
+| Tool failures | LangChain and LangGraph tools that return a handled error now have an `ERROR` span status. The framework still receives the tool result. Refer to [LangChain](/supported-integrations/langchain#observability). |
+| Manual LLM failures | Set `otel.status_code` to `"ERROR"` in end-call metadata to report a failed call. Relay now preserves that status. Refer to [Reporting a Manual Call Failure](/integrate-into-frameworks/wrap-llm-calls#reporting-a-manual-call-failure). |
+| PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration). |
+| Gemini usage and cost | Estimates now include thinking tokens and supported tool-use prompt tokens. Unknown or mixed tool evidence can leave cost unset. Do not treat missing cost as zero. Refer to [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics). |
+
+Review cost estimates that include cached input. Relay now bills uncached input,
+cache reads, and cache writes separately. It counts all input tokens when choosing
+a pricing tier. If token counts conflict, Relay does not estimate a cost.
+Refer to [Model Pricing](/configure-plugins/model-pricing).
+
+Remote ATIF uploads and local recovery files now use compact JSON, with fewer
+spaces and line breaks. Use a JSON parser to read these files.
+The new `include_observed_events` and `include_llm_requests` options both default
+to `true`. Set both to `false` to remove both copies of full requests.
+Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
+
+Daemon workers now pass request codecs to telemetry sanitizers. For manual Rust
+calls, supply a codec with `LlmCallParams::builder().codec(...)`. PII rules that
+target normalized fields omit the telemetry payload if no suitable codec is
+available. The provider request stays unchanged. Refer to
+[Provider Codecs](/integrate-into-frameworks/provider-codecs).
+
+For private collectors, you can now set Transport Layer Security (TLS)
+certificate and client key paths on each OpenTelemetry Protocol (OTLP) endpoint.
+Prefer HTTPS. Use `insecure_http_hosts` only when a destination needs an explicit
+exception to the plaintext transport checks.
+Refer to [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls)
+and [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
+
+Automatic OTLP trace, log, and metric exporters now require HTTPS for remote
+destinations, even without headers. Check your `OTEL_*` endpoint variables.
+To allow HTTP for a trusted host, list it in
+`NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`. This setting applies only to automatic
+exporters. Prefer HTTPS because HTTP sends data without encryption. Refer to
+[Automatic OpenTelemetry Configuration](/configure-plugins/observability/opentelemetry#automatic-opentelemetry-configuration).
+
+Make TLS files available when Relay checks plugins and when exporters start.
+Relay checks that it can read the PEM files and that client certificates match
+their keys. A fatal TLS error stops an HTTP trace exporter. Fix the TLS problem,
+then recreate the exporter. Traces created while it is stopped are lost.
+Calls to `force_flush()` and plugin cleanup can now report this delivery error.
+Refer to
+[Trace Batch Processor Configuration](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
+
+Run `nemo-relay doctor` after checking exporter settings. It now checks file-sink
+paths, disabled components and destinations, references to credentials, and
+PII settings. Checks for files and credential references also run with `--offline`.
+A passing HTTP check only means the collector answered. It does not prove that
+the collector accepts your credentials or trace data. Doctor does not test
+whether redaction removed sensitive data. It also does not read `header_file`
+values. Refer to
+[Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
+
+### Providers and Request Handling
 
 #### Check Provider URLs
 
@@ -50,6 +272,106 @@ without encryption. Refer to
 Relay no longer follows upstream redirects. It also removes the `Location`
 header from redirect responses. Set the final provider URL directly. Refer to
 [Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+
+#### Review Managed Provider Credentials
+
+Direct gateway clients must authenticate to Relay before using credentials
+from Relay's configuration or environment. Use `nemo-relay run` to set up
+client access, or send provider credentials from the client.
+
+Anonymous daemon requests can use daemon-held credentials only in explicit
+`--pass-through` mode on a loopback listener. A daemon bound to `0.0.0.0`
+requires a bound route for this access. This also applies to requests sent to
+`127.0.0.1`. Refer to
+[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
+
+Managed provider requests and model discovery now use the same credential
+rules. A configured API key helper replaces the caller's provider credential.
+Without a helper, Relay keeps caller-provided API keys. It can replace native
+ChatGPT credentials with an administrator's OpenAI credential on managed
+routes. If Relay has no replacement, OpenAI requests keep the caller's ChatGPT
+credential. Review deployments that use a helper or an administrator credential
+to choose the provider account. For the credential selection order, refer to
+[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+
+`GET /models` and `GET /v1/models` use Anthropic when the request includes
+`anthropic-version` or `anthropic-beta`. Otherwise, they use OpenAI. The API
+key's format does not select a provider. Model lists do not create LLM events.
+
+Compaction, voice, and other unmanaged routes do not receive Relay-held
+provider credentials. Supply any required credentials from the client. With a
+custom `openai_base_url`, Relay removes recognized ChatGPT credentials from
+these requests. ChatGPT voice call creation at
+`POST /backend-api/codex/realtime/calls` keeps the caller's ChatGPT credential.
+
+For Codex, a custom `openai_base_url` now also applies to model requests that
+keep ChatGPT credentials. Without a custom base or replacement credential,
+Relay uses the native ChatGPT Codex backend. To change that backend, set
+`[upstream] chatgpt_codex_base_url` to an endpoint trusted with the caller's
+ChatGPT credentials. Refer to
+[Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
+
+Managed Claude model routing requires an Anthropic API key or an
+administrator's Anthropic-compatible gateway credential. Claude.ai OAuth is
+not supported with `ANTHROPIC_BASE_URL`. If your deployment uses only OAuth,
+keep native routing instead of setting the managed base URL. Refer to
+[Daemon Configuration](/daemon/configuration#claude-code).
+
+#### Review Pi Provider Endpoints
+
+Named upstreams for Pi now require public or loopback addresses. Private,
+link-local, and other special-use addresses are refused. This check also
+applies to addresses found through DNS. Remote endpoints require HTTPS.
+
+For a private provider endpoint, configure the gateway's OpenAI or Anthropic
+base URL instead of using a named upstream. Managed deployments set these
+URLs in system configuration. Refer to
+[Model Redirection](/nemo-relay-cli/pi#model-redirection).
+
+#### Review Request Intercepts
+
+Relay now preserves provider fields across multiple request edits. It keeps
+fields on unchanged entries and on tool calls or results with a clear call-ID
+match. New entries do not inherit fields from old entries. Check intercepts
+that edit several messages or array entries. Refer to
+[Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings).
+
+LangChain model intercepts can now change tool descriptions, input schemas,
+and provider-specific tool definitions. Keep tool count, order, and names
+unchanged. Check that the model adapter accepts the edited definitions.
+
+#### Verify Worker Middleware
+
+Daemon workers now run all six LLM middleware types for OpenAI Chat
+Completions, OpenAI Responses, and Anthropic Messages. This includes streaming
+calls. Review plugins that can now change or block requests and responses.
+
+When request intercepts, execution intercepts, or conditional execution
+guardrails are active, successful calls return HTTP `200`. They do not keep
+the provider's original success headers or trailers. Stream formatting can
+also change. Sanitizers alone leave the provider response unchanged. Refer to
+[LLM Middleware](/daemon/reference#llm-middleware).
+
+After the upgrade, verify worker status and an observable plugin result.
+`/healthz` and MCP readiness alone do not prove that plugins are active. Use
+`--require-worker` when requests must wait for worker processing. Refer to
+[Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation).
+
+#### Review HTTP Error Handling
+
+Remote NeMo Guardrails failures now preserve the received HTTP status through
+`FlowError::Upstream`. Update Rust error matches that expected
+`FlowError::Internal`.
+
+Plugin error messages with the exact form `HTTP <status>: <message>` now carry
+an HTTP status. The status must be from `400` through `599`. Review existing
+callback errors that use this form. Use the SDK's `http_error_message` helper
+to create one. After streaming headers are sent, an error cannot change the
+HTTP response status. Refer to
+[Build Native Plugins](/build-plugins/native/about) and
+[Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
+
+### Configuration and Deployment
 
 #### Review Configuration Loaded by Workers
 
@@ -87,6 +409,14 @@ Records for that sink are lost.
 Fix the file access problem, then restart Relay to try again. Refer to
 [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
 
+#### Update Rust Logging Configuration
+
+If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
+field. Set it to `FileLogSinkFailurePolicy::Required` to keep the default
+behavior. You can also use `..Default::default()` to fill in missing fields.
+Existing TOML files need no changes to keep sinks required. Refer to
+[Rust Library API](/reference/operational-logging#rust-library-api).
+
 #### Review Adaptive Hint Injection
 
 Adaptive hints now use the settings in `inject_header` and `inject_body_path`.
@@ -102,15 +432,7 @@ object, Relay leaves the body unchanged. If the path points to metadata,
 Relay keeps the caller's other metadata fields. Refer to
 [Adaptive Hints](/configure-plugins/adaptive/adaptive-hints#fields).
 
-### API and Plugin Compatibility
-
-#### Update Rust Logging Configuration
-
-If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
-field. Set it to `FileLogSinkFailurePolicy::Required` to keep the default
-behavior. You can also use `..Default::default()` to fill in missing fields.
-Existing TOML files need no changes to keep sinks required. Refer to
-[Rust Library API](/reference/operational-logging#rust-library-api).
+### Runtime and Plugin Reliability
 
 #### Configure Python Object Decoding
 
@@ -153,57 +475,6 @@ callback fields. The builder accepts existing synchronous closures. For direct
 struct construction, convert synchronous callbacks with `.into()`. Set
 `borrowed_collector` to `None` unless you use the new borrowing callback.
 Refer to [Borrowing Stream Chunks in Rust](/integrate-into-frameworks/provider-response-codecs#borrowing-stream-chunks-in-rust).
-
-#### Review Request Intercepts
-
-Relay now preserves provider fields across multiple request edits. It keeps
-fields on unchanged entries and on tool calls or results with a clear call-ID
-match. New entries do not inherit fields from old entries. Check intercepts
-that edit several messages or array entries. Refer to
-[Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings).
-
-LangChain model intercepts can now change tool descriptions, input schemas,
-and provider-specific tool definitions. Keep tool count, order, and names
-unchanged. Check that the model adapter accepts the edited definitions.
-
-#### Review LangChain Tool-Call Shapes in Middleware
-
-In 0.11.0, managed LangChain and LangGraph tool results use the
-`nemo.relay.tool_result@1` JSON wrapper. It holds display content, failure status,
-and the result values with their types.
-
-Review custom Relay middleware that reads or changes LangChain and LangGraph
-tool calls. Check both the arguments it receives and the results it returns:
-
-- Tool arguments remain JSON. Check that middleware edits match the tool's
-  input schema.
-- Tool results use a wrapper with `schema`, `content`, `is_error`, and `result`
-  fields. Set `schema` to `nemo.relay.tool_result@1`. Edit `content` to change the
-  displayed result. Set `is_error` to `true` for failure or `false` for success.
-- Each value in `result` includes its type. Update middleware and subscribers
-  that read or edit this field. Keep parts with no JSON form unchanged.
-- If an execution intercept returns a result without running the tool, return
-  the full wrapper. The framework's codec must be able to decode its `result`.
-
-Later calls can restore built-in values and supported framework types.
-Custom Python objects stay with the call that returned them. Their data is
-visible in the wrapper when it has a JSON form.
-The response cache runs those tools again instead of replaying the objects.
-For the value format and replay rules, refer to
-[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
-and [LangChain](/supported-integrations/langchain).
-
-#### Check ADK LiteLLM Settings
-
-The Google ADK integration now supports `LiteLlm` with `litellm` 1.106.2 or later.
-Relay records the provider LiteLLM selects. If an intercept selects a model
-from another provider, Relay fails the call.
-
-Relay rejects LiteLLM settings that can switch providers during a call.
-This includes provider fallbacks and `model_list`. Use ADK `FallbackModel`
-to try another provider if a call fails. Also review your prompt management
-and callback settings. The full list of rejected settings is in
-[Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
 
 #### Check Dynamic Plugin Compatibility and Trust
 
@@ -270,269 +541,6 @@ Preserving the original error keeps downstream failures from being counted as
 separate plugin callback failures. Refer to
 [Rust Worker SDK](/build-plugins/workers/rust) and
 [Python Worker SDK](/build-plugins/workers/python).
-
-#### Review HTTP Error Handling
-
-Remote NeMo Guardrails failures now preserve the received HTTP status through
-`FlowError::Upstream`. Update Rust error matches that expected
-`FlowError::Internal`.
-
-Plugin error messages with the exact form `HTTP <status>: <message>` now carry
-an HTTP status. The status must be from `400` through `599`. Review existing
-callback errors that use this form. Use the SDK's `http_error_message` helper
-to create one. After streaming headers are sent, an error cannot change the
-HTTP response status. Refer to
-[Build Native Plugins](/build-plugins/native/about) and
-[Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
-
-### Observability and Telemetry Changes
-
-Review stored events, dashboards, and custom exporters for the changes below.
-These include Agent Trajectory Interchange Format (ATIF) output and personally
-identifiable information (PII) filtering.
-
-| Area | Upgrade Action |
-| --- | --- |
-| OpenAI Responses streams | Handle an error if a stream ends without `response.completed`, `response.failed`, or `response.incomplete`. Missing usage alone does not mean the stream ended early. Relay keeps received output and leaves missing usage unset. |
-| ATIF messages | Accept a string for text-only step messages. Review content-part readers against the corrected ATIF output. Refer to [ATIF](/configure-plugins/observability/atif). |
-| Tool failures | LangChain and LangGraph tools that return a handled error now have an `ERROR` span status. The framework still receives the tool result. Refer to [LangChain](/supported-integrations/langchain#observability). |
-| Manual LLM failures | Set `otel.status_code` to `"ERROR"` in end-call metadata to report a failed call. Relay now preserves that status. Refer to [Reporting a Manual Call Failure](/integrate-into-frameworks/wrap-llm-calls#reporting-a-manual-call-failure). |
-| PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration). |
-| Gemini usage and cost | Estimates now include thinking tokens and supported tool-use prompt tokens. Unknown or mixed tool evidence can leave cost unset. Do not treat missing cost as zero. Refer to [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics). |
-
-Review cost estimates that include cached input. Relay now bills uncached input,
-cache reads, and cache writes separately. It counts all input tokens when choosing
-a pricing tier. If token counts conflict, Relay does not estimate a cost.
-Refer to [Model Pricing](/configure-plugins/model-pricing).
-
-Remote ATIF uploads and local recovery files now use compact JSON, with fewer
-spaces and line breaks. Use a JSON parser to read these files.
-The new `include_observed_events` and `include_llm_requests` options both default
-to `true`. Set both to `false` to remove both copies of full requests.
-Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
-
-For Deep Agents, set `position="outer"` in `add_nemo_relay_integration` to
-record tool results after your middleware changes them. The default remains
-`"inner"`. It records results before your middleware changes them.
-Refer to [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
-
-CLI turn spans now inherit the agent name from their owning Agent scope.
-Paired tool hooks use that name unless they supply an explicit name.
-Review dashboards that group spans by
-`gen_ai.agent.name` or span name. These values can now show an agent name
-instead of the coding-agent name, such as `codex`. Generic gateway turns omit
-the agent name unless you supply one. Refer to
-[Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
-
-Daemon workers now pass request codecs to telemetry sanitizers. For manual Rust
-calls, supply a codec with `LlmCallParams::builder().codec(...)`. PII rules that
-target normalized fields omit the telemetry payload if no suitable codec is
-available. The provider request stays unchanged. Refer to
-[Provider Codecs](/integrate-into-frameworks/provider-codecs).
-
-For private collectors, you can now set Transport Layer Security (TLS)
-certificate and client key paths on each OpenTelemetry Protocol (OTLP) endpoint.
-Prefer HTTPS. Use `insecure_http_hosts` only when a destination needs an explicit
-exception to the plaintext transport checks.
-Refer to [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls)
-and [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
-
-Automatic OTLP trace, log, and metric exporters now require HTTPS for remote
-destinations, even without headers. Check your `OTEL_*` endpoint variables.
-To allow HTTP for a trusted host, list it in
-`NEMO_RELAY_OTEL_INSECURE_HTTP_HOSTS`. This setting applies only to automatic
-exporters. Prefer HTTPS because HTTP sends data without encryption. Refer to
-[Automatic OpenTelemetry Configuration](/configure-plugins/observability/opentelemetry#automatic-opentelemetry-configuration).
-
-Make TLS files available when Relay checks plugins and when exporters start.
-Relay checks that it can read the PEM files and that client certificates match
-their keys. A fatal TLS error stops an HTTP trace exporter. Fix the TLS problem,
-then recreate the exporter. Traces created while it is stopped are lost.
-Calls to `force_flush()` and plugin cleanup can now report this delivery error.
-Refer to
-[Trace Batch Processor Configuration](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
-
-Run `nemo-relay doctor` after checking exporter settings. It now checks file-sink
-paths, disabled components and destinations, references to credentials, and
-PII settings. Checks for files and credential references also run with `--offline`.
-A passing HTTP check only means the collector answered. It does not prove that
-the collector accepts your credentials or trace data. Doctor does not test
-whether redaction removed sensitive data. It also does not read `header_file`
-values. Refer to
-[Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
-
-### Enable and Protect Diagnostics
-
-Runtime diagnostics is optional and disabled by default. Existing logging and
-exporters do not enable it. For gateways and daemons, configure `[diagnostics]`
-in `config.toml`. Embedded applications use `plugins.toml` or the diagnostics
-profile passed to `plugin.initialize`.
-
-The first embedded initialization selects the process settings, even when
-collection is disabled. Later initialization with different settings returns
-`diagnostics: configuration_conflict`. Restart the process to change them.
-For an existing gateway, update its owner's configuration and restart it.
-Capture any needed evidence first because shutdown discards the stored history.
-Refer to [Embedded Diagnostics](/reference/diagnostics/bindings) and
-[CLI and Daemon Diagnostics](/reference/diagnostics/cli).
-
-Grant diagnostic read access only to callers allowed to inspect the whole
-context. Detail can contain private data that has not been sanitized. Query
-filters do not restrict a reader's access. Native plugin reads need an explicit
-`native_diagnostics_read_context` policy grant. Worker plugin recording does
-not grant access to host snapshots. Refer to
-[Plugin Diagnostics](/build-plugins/diagnostics).
-
-Diagnostic memory limits cover diagnostic storage, not total process memory.
-Daemon worker caches can contain only part of a snapshot or a stale page.
-Check the returned coverage and freshness fields. Refer to
-[Diagnostic Memory Inspection](/reference/diagnostics/memory) and
-[Diagnostics API](/reference/diagnostics/api).
-
-### Coding-Agent Integration Changes
-
-#### Refresh Hooks and Restore Credentials
-
-Restart Relay gateways and daemons after upgrading. Local hook delivery now
-uses TLS and verifies the server's identity before sending credentials or
-payloads.
-
-If a loopback daemon runs under another account, publish its hook certificate
-for local users. This applies to daemon addresses that use `http://`. Refer to
-[Publish the Hook Certificate](/daemon/reference#publish-the-hook-certificate).
-
-Refresh personal Relay-managed Codex and Claude Code integrations before
-starting new sessions. Run the following command:
-
-```bash
-nemo-relay integrations refresh
-```
-
-To refresh one Codex or Claude Code integration, use
-`nemo-relay install <agent> --force`. For a personal Relay-managed Pi extension,
-run `nemo-relay install pi --force`. Replace manually installed Pi extensions
-with the updated source. For managed daemon bundles, follow
-[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back) instead. Do not
-regenerate those bundles with personal install commands.
-
-Generated tool checks use `PreToolUse`. Relay no longer generates a separate
-`PermissionRequest` hook. Without an explicit policy flag, tool checks and
-unreadable or invalid hook payloads fail closed. Other named events fail open.
-A fail-closed hook blocks the operation if Relay cannot check it. Review custom
-wrappers that omit a policy flag.
-
-Fail-closed delivery failures now return exit code `2`. This includes missing
-credentials, connection errors, timeouts, and HTTP errors. Fail-open delivery
-failures return `0`. Guardrail rejections return `2` under either policy.
-Hook requests now have a 30-second timeout. Leave room for delivery when setting
-guardrail evaluation timeouts. Refer to
-[Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
-
-Hook sessions now use a valid `TRACEPARENT` from the launching process as their
-OpenTelemetry parent. `TRACESTATE` travels with it. The first hook that creates
-a session sets its parent; later hooks do not change it. Review launch scripts
-that already set these variables. Unset them if each session should start a new
-trace. Refer to
-[Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
-
-Make sure hooks can read `NEMO_RELAY_CLIENT_TOKEN` or the per-user token file.
-If the file is missing, run the following command as the user who runs the
-harness:
-
-```bash
-nemo-relay daemon token ensure
-```
-
-Then start a new harness session so the Model Context Protocol (MCP) server
-registers the credential. Model requests need the route credential in the
-harness's provider headers. Creating the token file alone does not add that
-header. Managed Pi also requires `NEMO_RELAY_CLIENT_TOKEN` in its environment.
-Refer to
-[Credential Resolution](/daemon/configuration#credential-resolution).
-
-#### Review Managed Provider Credentials
-
-Direct gateway clients must authenticate to Relay before using credentials
-from Relay's configuration or environment. Use `nemo-relay run` to set up
-client access, or send provider credentials from the client.
-
-Anonymous daemon requests can use daemon-held credentials only in explicit
-`--pass-through` mode on a loopback listener. A daemon bound to `0.0.0.0`
-requires a bound route for this access. This also applies to requests sent to
-`127.0.0.1`. Refer to
-[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
-
-Managed provider requests and model discovery now use the same credential
-rules. A configured API key helper replaces the caller's provider credential.
-Without a helper, Relay keeps caller-provided API keys. It can replace native
-ChatGPT credentials with an administrator's OpenAI credential on managed
-routes. If Relay has no replacement, OpenAI requests keep the caller's ChatGPT
-credential. Review deployments that use a helper or an administrator credential
-to choose the provider account. For the credential selection order, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
-
-`GET /models` and `GET /v1/models` use Anthropic when the request includes
-`anthropic-version` or `anthropic-beta`. Otherwise, they use OpenAI. The API
-key's format does not select a provider. Model lists do not create LLM events.
-
-Compaction, voice, and other unmanaged routes do not receive Relay-held
-provider credentials. Supply any required credentials from the client. With a
-custom `openai_base_url`, Relay removes recognized ChatGPT credentials from
-these requests. ChatGPT voice call creation at
-`POST /backend-api/codex/realtime/calls` keeps the caller's ChatGPT credential.
-
-For Codex, a custom `openai_base_url` now also applies to model requests that
-keep ChatGPT credentials. Without a custom base or replacement credential,
-Relay uses the native ChatGPT Codex backend. To change that backend, set
-`[upstream] chatgpt_codex_base_url` to an endpoint trusted with the caller's
-ChatGPT credentials. Refer to
-[Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
-
-Managed Claude model routing requires an Anthropic API key or an
-administrator's Anthropic-compatible gateway credential. Claude.ai OAuth is
-not supported with `ANTHROPIC_BASE_URL`. If your deployment uses only OAuth,
-keep native routing instead of setting the managed base URL. Refer to
-[Daemon Configuration](/daemon/configuration#claude-code).
-
-#### Verify Worker Middleware
-
-Daemon workers now run all six LLM middleware types for OpenAI Chat
-Completions, OpenAI Responses, and Anthropic Messages. This includes streaming
-calls. Review plugins that can now change or block requests and responses.
-
-When request intercepts, execution intercepts, or conditional execution
-guardrails are active, successful calls return HTTP `200`. They do not keep
-the provider's original success headers or trailers. Stream formatting can
-also change. Sanitizers alone leave the provider response unchanged. Refer to
-[LLM Middleware](/daemon/reference#llm-middleware).
-
-After the upgrade, verify worker status and an observable plugin result.
-`/healthz` and MCP readiness alone do not prove that plugins are active. Use
-`--require-worker` when requests must wait for worker processing. Refer to
-[Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation).
-
-#### Review Pi Provider Endpoints
-
-Named upstreams for Pi now require public or loopback addresses. Private,
-link-local, and other special-use addresses are refused. This check also
-applies to addresses found through DNS. Remote endpoints require HTTPS.
-
-For a private provider endpoint, configure the gateway's OpenAI or Anthropic
-base URL instead of using a named upstream. Managed deployments set these
-URLs in system configuration. Refer to
-[Model Redirection](/nemo-relay-cli/pi#model-redirection).
-
-#### Review Recovered Tool Completions
-
-Relay can now close a Codex MCP tool span when a later model request contains
-the matching result. Model traffic must pass through Relay for this recovery.
-The outcome is `unknown`, and the duration can exceed the actual run time.
-This recovery does not apply to shell tools.
-
-Review dashboards that treat all closed tool spans as successful. To export
-the recovery fields as OpenTelemetry span attributes, add `"tool_completion_"`
-to the trace endpoint's `promote_metadata_prefixes`. Refer to
-[Codex Captured Events](/nemo-relay-cli/codex#captured-events).
 
 ## Related Release Information
 
