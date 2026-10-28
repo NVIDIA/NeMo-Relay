@@ -9,12 +9,17 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Enterprise platform teams need a consistent way to route supported coding-agent
 activity, apply telemetry policy, and audit what happened while developers keep
-their usual tools. A Relay daemon brokers those connections and coordinates
+their usual tools. The [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay)
+daemon brokers those connections and coordinates
 workers running under each user's operating-system identity.
 
 This guide covers managed routing, supported model/tool capture, and telemetry
 redaction. Identity-provider enrollment, offboarding, and preventing alternate
 network routes require your organization's additional controls.
+
+The optional [NVIDIA Brev](https://brev.nvidia.com/) example runs either
+[Anthropic Claude Code](https://claude.com/product/claude-code) or
+[OpenAI Codex](https://github.com/openai/codex) under two Linux users.
 
 ## Before you start
 
