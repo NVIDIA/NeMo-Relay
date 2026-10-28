@@ -6,6 +6,7 @@
 use super::*;
 use crate::api::event::{BaseEvent, MarkEvent, ScopeEvent};
 use crate::api::scope::ScopeType;
+use crate::observability::runtime_diagnostics::MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS;
 
 #[test]
 fn signal_headers_reject_invalid_http_names_values_and_case_collisions() {

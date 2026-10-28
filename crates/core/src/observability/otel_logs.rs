@@ -53,7 +53,7 @@ use super::otel_signal::{
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
     telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
 };
-use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
+use super::{ExporterRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
@@ -509,7 +509,7 @@ impl OpenTelemetryLogSubscriber {
     }
 
     /// Return a bounded snapshot of runtime diagnostics for this subscriber.
-    pub fn runtime_diagnostics(&self) -> OpenTelemetryRuntimeDiagnostics {
+    pub fn runtime_diagnostics(&self) -> ExporterRuntimeDiagnostics {
         self.inner.runtime_diagnostics.snapshot()
     }
 

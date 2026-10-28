@@ -267,15 +267,16 @@ marks reach no OTLP signal and produce an operational diagnostic. Scope events
 maintain log lineage but do not become logs or metrics. Operational stderr and
 file records are not input to either telemetry subscriber.
 
-Each direct trace, log, and metric subscriber also exposes a bounded runtime
-diagnostics snapshot. Rust and Python use `runtime_diagnostics()`, Node.js uses
-`runtimeDiagnostics()`. The C FFI exposes the corresponding
-`*_runtime_diagnostics_json` APIs, which return a caller-owned JSON array
-released with `nemo_relay_string_free`. These snapshots report stable codes,
-occurrence counts, and the most recent message for delivery and
-event-processing failures. See
+Direct trace, log, and metric subscribers and ATOF exporters also expose a
+bounded runtime diagnostics snapshot: `runtime_diagnostics()` in Rust and
+Python, `runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go.
+The C FFI `*_runtime_diagnostics_json` functions return a caller-owned JSON
+array released with `nemo_relay_string_free`. Snapshots report stable codes,
+counts, and recorded messages for delivery and event-processing failures.
+Refer to
 [OpenTelemetry](/configure-plugins/observability/opentelemetry#direct-subscribers)
-for the complete API and lifecycle contract.
+and [ATOF Runtime Diagnostics](/configure-plugins/observability/atof#runtime-diagnostics)
+for the API and lifecycle contract.
 
 Detailed setup, configuration, and API behavior for these subscribers belongs in
 [Observability](/configure-plugins/observability/about).

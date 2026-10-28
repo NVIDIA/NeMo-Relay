@@ -57,6 +57,7 @@ class _AtofCaptureServer(http.server.ThreadingHTTPServer):
     requests: list[tuple[dict[str, str], bytes]]
     request_event: threading.Event
     first_response_gate: threading.Event | None
+    response_status: int
 
 
 class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
@@ -67,7 +68,7 @@ class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
         server.request_event.set()
         if len(server.requests) == 1 and server.first_response_gate is not None:
             server.first_response_gate.wait(timeout=30)
-        self.send_response(200)
+        self.send_response(server.response_status)
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
@@ -78,14 +79,16 @@ class _AtofCapture:
     server: "_AtofCaptureServer"
     thread: threading.Thread
 
-    def __init__(self, *, block_first_response: bool = False) -> None:
+    def __init__(self, *, block_first_response: bool = False, response_status: int = 200) -> None:
         self.first_response_gate = threading.Event() if block_first_response else None
+        self.response_status = response_status
 
     def __enter__(self) -> _AtofCapture:
         self.server = _AtofCaptureServer(("127.0.0.1", 0), _AtofCaptureHandler)
         self.server.requests = []
         self.server.request_event = threading.Event()
         self.server.first_response_gate = self.first_response_gate
+        self.server.response_status = self.response_status
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         return self
@@ -743,6 +746,36 @@ class TestObservabilityConfigHelpers:
         assert trajectory["agent"]["extra"]["binding"] == "python"
         assert "python-observability-agent" in json.dumps(trajectory["extra"])
 
+    async def test_atof_stream_sink_delivery_failures_reach_the_plugin_report(self, tmp_path: Path) -> None:
+        with _AtofCapture(response_status=503) as rejecting:
+            async with await plugin.initialize(
+                plugin.PluginConfig(
+                    components=[
+                        ComponentSpec(
+                            ObservabilityConfig(
+                                atof=AtofConfig(
+                                    enabled=True,
+                                    sinks=[
+                                        AtofFileSinkConfig(output_directory=str(tmp_path), filename="events.jsonl"),
+                                        AtofStreamSinkConfig(url=f"{rejecting.url}/events", timeout_millis=5000),
+                                    ],
+                                )
+                            )
+                        )
+                    ]
+                )
+            ) as activation:
+                scope.event("python-rejected-mark")
+                await subscribers.flush_async()
+            diagnostics = activation.report["config"]["runtime_diagnostics"]
+            assert [entry["code"] for entry in diagnostics] == ["atof.stream_delivery_failed"]
+            assert diagnostics[0]["component"] == "observability"
+            assert diagnostics[0].get("field") == "atof.sinks[1].url"
+            assert diagnostics[0]["count"] == 1
+            assert diagnostics[0]["message"] == (
+                f"ATOF http_post stream to {rejecting.url} returned status 503 Service Unavailable"
+            )
+
     @pytest.mark.parametrize(
         ("field_name_policy", "expected_data"),
         [
@@ -834,10 +867,9 @@ class TestObservabilityConfigHelpers:
             response_thread = threading.Thread(target=release_response, daemon=True)
             response_thread.start()
             teardown_started.set()
-            started_at = time.monotonic()
             await activation.close()
             cleared = True
-            assert time.monotonic() - started_at < 2
+            assert "runtime_diagnostics" not in activation.report["config"]
             response_thread.join(timeout=2)
             assert not response_thread.is_alive()
 

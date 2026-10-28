@@ -64,6 +64,12 @@ from nemo_relay._native import (
     AtofStreamSinkConfig as AtofStreamSinkConfig,
 )
 from nemo_relay._native import (
+    ExporterRuntimeDiagnostic as ExporterRuntimeDiagnostic,
+)
+from nemo_relay._native import (
+    ExporterRuntimeDiagnostics as ExporterRuntimeDiagnostics,
+)
+from nemo_relay._native import (
     LLMAttributes as LLMAttributes,
 )
 from nemo_relay._native import (
@@ -134,12 +140,6 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     OpenTelemetryMetricSubscriber as OpenTelemetryMetricSubscriber,
-)
-from nemo_relay._native import (
-    OpenTelemetryRuntimeDiagnostic as OpenTelemetryRuntimeDiagnostic,
-)
-from nemo_relay._native import (
-    OpenTelemetryRuntimeDiagnostics as OpenTelemetryRuntimeDiagnostics,
 )
 from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
@@ -509,6 +509,9 @@ def _native_scope_stack_active() -> bool: ...
 def _sync_thread_scope_stack(stack: ScopeStack) -> None: ...
 
 __all__: list[str]
+
+OpenTelemetryRuntimeDiagnostic = ExporterRuntimeDiagnostic
+OpenTelemetryRuntimeDiagnostics = ExporterRuntimeDiagnostics
 
 class ScopeStackEntry:
     """Immutable UUID and canonical type of one visible scope."""
