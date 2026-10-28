@@ -37433,7 +37433,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## pulldown-cmark - 0.13.4
+## pulldown-cmark - 0.13.5
 
 **Repository URL**: https://github.com/raphlinus/pulldown-cmark
 **License Type(s)**: MIT

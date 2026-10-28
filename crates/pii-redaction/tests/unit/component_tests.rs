@@ -40,6 +40,9 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
+use nemo_relay::diagnostics::{
+    DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+};
 use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
@@ -90,6 +93,151 @@ fn plugin_config(config: Json) -> PluginConfig {
         version: 1,
         components: vec![component(config)],
         policy: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn selector_diagnostics_use_plugin_registration_context() {
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                target_paths: vec!["/text".into()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+        None,
+    );
+    let sanitized = tool_sanitize_callback(backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized["text"], "[REDACTED]");
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector"
+            && event.detail.as_ref().is_some_and(|detail| {
+                detail.message == "matched_paths=1 eligible_string_leaves=1 affected_values=1"
+            })
+    }));
+
+    let profile_backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+        Some("profile_1"),
+    );
+    let sanitized = tool_sanitize_callback(profile_backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized["text"], "[REDACTED]");
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector.profile_1"
+    }));
+}
+
+#[tokio::test]
+async fn selector_diagnostic_admission_failures_do_not_disable_redaction() {
+    let source = Diagnostics::default().source().clone();
+    for (case, enabled, limits) in [
+        ("disabled", false, DiagnosticLimits::default()),
+        (
+            "component_rejected",
+            true,
+            DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        ),
+        (
+            "extension_rejected",
+            true,
+            DiagnosticLimits {
+                max_extensions: 0,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let diagnostics =
+            Diagnostics::from_settings(source.clone(), DiagnosticsSettings { enabled, limits })
+                .unwrap();
+        let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let backend = with_selector_diagnostics(
+            CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "redact".into(),
+                    detector: Some("email".into()),
+                    target_paths: vec!["/text".into()],
+                    ..BuiltinBackendConfig::default()
+                },
+                None,
+            )
+            .unwrap(),
+            &ctx,
+            None,
+        );
+        let sanitized = tool_sanitize_callback(backend)(
+            "example.tool".into(),
+            json!({"text": "alice@example.com"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sanitized["text"], "[REDACTED]", "{case}");
+
+        if enabled {
+            let snapshot = diagnostics
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            assert!(snapshot.events.is_empty(), "{case}");
+            assert_eq!(
+                snapshot
+                    .components
+                    .iter()
+                    .any(|component| component.identity.key == "pii_redaction.selector"),
+                case == "extension_rejected",
+                "{case}"
+            );
+        } else {
+            assert!(diagnostics.snapshot(&DiagnosticQuery::default()).is_err());
+        }
     }
 }
 
@@ -2908,10 +3056,14 @@ fn pii_redaction_defaults_enable_mark_sanitization() {
 
 #[test]
 fn generated_registration_names_sort_in_profile_array_order() {
-    assert!(
-        registration_name(Some("profile_2"), "mark")
-            < registration_name(Some("profile_10"), "mark")
-    );
+    assert_eq!(profile_registration_prefix("profile_0"), "profile_a_0");
+    assert_eq!(profile_registration_prefix("profile_10"), "profile_b_10");
+    for (earlier, later) in [(2, 3), (9, 10), (99, 100), (999, 1000)] {
+        assert!(
+            registration_name(Some(&format!("profile_{earlier}")), "mark")
+                < registration_name(Some(&format!("profile_{later}")), "mark")
+        );
+    }
 }
 
 #[test]
@@ -3142,8 +3294,8 @@ fn local_profile_registrations_receive_generated_namespaces() {
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_0/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_1/shared"));
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
