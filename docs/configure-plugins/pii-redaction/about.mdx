@@ -17,48 +17,64 @@ Configure the first-party `pii_redaction` component in `plugins.toml` or through
 
 ## Where Redaction Runs
 
-Relay records observability data alongside managed LLM and tool calls. The plugin
-applies your policy to that event data. The provider or tool receives the real
-request, and the application receives the real result.
+Relay records a unit of work as a [scope](/about-nemo-relay/concepts/scopes).
+Opening and closing a scope produces start and end events. Managed LLM and tool
+calls have their own scopes, with request data on the start event and result
+data on the end event. A mark records an observation within the active scope
+without opening another scope.
+
+The plugin sanitizes the observable fields of these events before subscribers
+and exporters receive them. The provider or tool receives the real request,
+and the application receives the real result.
 
 <MermaidStyles />
 
 ```mermaid
 flowchart TD
-    accTitle: PII redaction on the Relay observability path
-    accDescr: A managed call sends execution values to the provider or tool and application. Event data passes through PII redaction before reaching subscribers and exporters.
-    managed["Managed LLM<br/>or tool call"] --> execution["Provider or tool<br/>and application"]
-    managed -. "Event data" .-> redaction["PII redaction"]
+    accTitle: Scope and mark events pass through PII redaction
+    accDescr: Application activity includes managed LLM and tool execution, scope starts and ends, and marks. Snapshots of scope and mark event data pass through PII sanitizers before subscribers and exporters receive them.
+    activity["Application or integration"] -->|"Managed call"| execution["Provider or tool<br/>and application"]
+    activity -. "Scope start / end<br/>and mark events" .-> snapshot["Event snapshot"]
+    snapshot --> redaction["PII sanitizers"]
     redaction --> consumers["Subscribers<br/>and exporters"]
 ```
 
-The same privacy policy can also sanitize marks and scope events. This diagram
-shows the data boundary; request and response events are sanitized separately.
-Other Relay middleware can change execution independently of this plugin.
+Each event is sanitized during queued publication, before delivery. The diagram
+shows the data boundary rather than execution timing.
 
-The plugin installs
-[sanitize guardrails](/about-nemo-relay/concepts/middleware#guardrails).
-These are Relay's existing hooks for transforming observability data. Use the
-plugin for declarative policies with built-in detectors and actions. Register
-custom sanitize middleware when your policy needs application code, runtime
-state, or external lookups.
+### How the Plugin Uses Sanitize Guardrails
+
+The plugin installs [sanitize guardrails](/about-nemo-relay/concepts/middleware#guardrails).
+These are Relay middleware callbacks, registered when the plugin is activated
+and invoked during event publication.
+
+On LLM and tool events, request or response sanitizers handle the primary
+payload first. Scope-event sanitizers then handle the remaining supported
+fields, such as metadata and tool result annotations. Mark events have their
+own sanitizer callbacks.
+
+The separate [NeMo Guardrails plugin](/configure-plugins/nemo-guardrails/about)
+applies NeMo Guardrails policies to managed execution. The built-in PII backend
+runs inside Relay without that plugin or service. Use custom sanitize middleware
+for transformations that the built-in actions cannot express.
 
 ## What Data the Plugin Covers
 
 | Surface | Data Covered |
 | --- | --- |
-| Managed LLM calls | Request and response observability payloads, plus scope metadata. LLM selectors use the active codec's representation. |
-| Managed tool calls | Request arguments, result values, result annotations, and scope metadata. Tool results and annotations are sanitized as separate JSON documents. |
-| Marks | `data`, `category_profile`, and `metadata`, each sanitized independently. |
-| Other scopes | `data`, `category_profile`, and `metadata` on scope-start and scope-end events. |
+| LLM scope start and end | Request data at start, response data at end, and scope metadata. |
+| Tool scope start and end | Arguments at start; result values and result annotations at end; scope metadata on both. Results and annotations are sanitized as separate JSON documents. |
+| Marks within the active scope | `data`, `category_profile`, and `metadata`, each sanitized independently when the mark is published. |
+| Other scope starts and ends | `data`, `category_profile`, and `metadata` on each start or end event. |
 
-Every enabled profile covers these surfaces. Legacy single-policy configuration
-can toggle them with `input`, `output`, `mark`, `tool_input`, and `tool_output`.
-All five default to `true`.
+Every enabled profile covers all supported surfaces. Profiles have no
+per-surface switches; `enabled = false` disables a whole profile. For individual
+surface controls, use the supported single-policy form described in
+[Choose Sanitization Surfaces](/configure-plugins/pii-redaction/configuration#choose-sanitization-surfaces)
+with a configuration example.
 
-LLM selectors use codec-specific payload boundaries. Request and response codec
-capabilities differ, and codec conversion can canonicalize the emitted request.
-Refer to
+LLM selectors use codec-specific payload boundaries, and codec conversion can
+canonicalize the emitted request. Refer to
 [Path Semantics](/configure-plugins/pii-redaction/configuration#path-semantics)
 for payload boundaries and normalized selector examples.
 
@@ -90,9 +106,7 @@ For a tool call with `{"contact":"alice@example.com"}` as its arguments:
 | Tool implementation | `{"contact":"alice@example.com"}` |
 | Subscribers and exporters | `{"contact":"[REDACTED]"}` |
 
-Built-in detectors use deterministic patterns. They identify configured formats
-such as email addresses or API keys; they do not identify every kind of private
-information. Refer to
+Built-in detectors use deterministic patterns. Refer to
 [Detector Presets](/configure-plugins/pii-redaction/configuration#detector-presets)
 for the supported formats.
 

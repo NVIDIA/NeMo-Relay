@@ -37,11 +37,11 @@ The top-level PII redaction object contains:
 | --- | --- |
 | `version` | PII redaction config schema version. Defaults to `1`. |
 | `mode` | Backend mode. Current values are `builtin` and `local_model`. Defaults to `builtin`. |
-| `input` | Enables managed LLM request sanitization and non-tool, non-LLM scope-start field sanitization. Defaults to `true`. |
-| `output` | Enables managed LLM response sanitization and non-tool, non-LLM scope-end field sanitization. Defaults to `true`. |
+| `input` | Enables managed LLM request sanitization and shared scope-start processing. Defaults to `true`. |
+| `output` | Enables managed LLM response sanitization and shared scope-end processing. Defaults to `true`. |
 | `mark` | Enables mark `data`, `category_profile`, and `metadata` sanitization. Defaults to `true`. |
-| `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
-| `tool_output` | Enables sanitization of emitted `ToolExecutionResult.result` and `ToolExecutionResult.annotation` observability values. Defaults to `true`. |
+| `tool_input` | Enables sanitization of emitted tool-request observability payloads and shared scope-start processing. Defaults to `true`. |
+| `tool_output` | Enables sanitization of emitted `ToolExecutionResult.result` and `ToolExecutionResult.annotation` observability values and shared scope-end processing. Defaults to `true`. |
 | `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
 | `codec` | Optional compatibility fallback for legacy/manual managed LLM calls that do not expose an active codec. |
 | `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
@@ -51,7 +51,7 @@ The top-level PII redaction object contains:
 
 At least one managed redaction surface must be enabled.
 
-Use either the legacy single-policy fields (`mode`, surface flags, `priority`,
+Use either the supported single-policy fields (`mode`, surface flags, `priority`,
 `builtin`, and `local`) or `profiles`, but not both. The component-wide
 `codec`, `version`, and `policy` fields remain valid with `profiles`.
 
@@ -60,6 +60,51 @@ order to break ties. Relay assigns internal names such as `profile_0`, so
 profiles do not require IDs. Disabled profiles are validated but do not
 register callbacks. Profile lists concatenate during config layering, with
 higher-precedence profiles placed before lower-precedence profiles.
+
+### Choose Sanitization Surfaces
+
+The component supports two configuration forms:
+
+| Form | Surface Controls |
+| --- | --- |
+| Profiles | Every enabled profile applies to all supported surfaces. Set a profile's `enabled = false` to disable that entire policy. |
+| Single policy | Set `input`, `output`, `mark`, `tool_input`, and `tool_output` to enable or disable their sanitizer hooks. All five default to `true`. |
+
+Use surface flags under `[components.config]` in the single-policy form. They
+cannot be combined with `profiles` or placed inside a profile. At least one
+profile must remain enabled in profile mode, or one surface in single-policy
+mode. Both forms are supported.
+
+Scope-event processing shares the request and response hooks: Relay registers
+the scope-start sanitizer when either `input` or `tool_input` is enabled, and
+the scope-end sanitizer when either `output` or `tool_output` is enabled.
+For other scope categories, these shared sanitizers process `data`,
+`category_profile`, and `metadata`. LLM and tool scope metadata follows the
+corresponding LLM or tool flag. Refer to [Observability Semantics](#observability-semantics)
+for the division between payload and scope-field sanitizers.
+
+For example, this single-policy configuration redacts email addresses on LLM,
+tool, and scope events while leaving mark events unchanged:
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+mode = "builtin"
+mark = false
+
+[components.config.builtin]
+action = "redact"
+detector = "email"
+```
+
+Here `input`, `output`, `tool_input`, and `tool_output` retain their default
+value of `true`. Setting `enabled = false` on the component disables the whole
+PII redaction component.
 
 ### Mixed-Provider Gateway Example
 
