@@ -2392,7 +2392,7 @@ fn worker_llm_execution_context_requires_zero_ten_compatibility() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) =
-        write_manifest_with_relay(fixture.binary_path(), ">=0.9,<1.0");
+        write_manifest_with_relay(fixture.binary_path(), ">=0.9,<2.0");
 
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),

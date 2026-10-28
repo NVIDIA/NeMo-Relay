@@ -347,7 +347,8 @@ unchanged, so the `grpc-v1` identifier and `nemo.relay.worker.v1` protobuf
 package do not change. Beginning with Relay 0.9, worker SDKs surface it through
 the existing `register_tool_execution_intercept` callback. A worker plugin that
 registers this surface must declare a `compat.relay` range that excludes Relay
-0.8, such as `>=0.9,<1.0`.
+0.8. For workers rebuilt with the 1.0.0 SDK, use
+`compat.relay = ">=1.0.0,<2.0"`.
 
 ```proto
 message JsonValue {

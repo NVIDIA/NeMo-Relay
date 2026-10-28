@@ -85,8 +85,8 @@ Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. Refer to the
 complete example for platform-specific artifact and manifest setup.
 
-Native plugins built with the 0.10 SDK require
-`compat.relay = ">=0.10.0,<1.0"`. Relay creates one
+The checked native plugin example targets the 1.0.0 SDK and declares
+`compat.relay = ">=1.0.0,<2.0"`. Relay creates one
 SDK-owned Tokio executor for each configured plugin component. It defaults to
 two workers: enough for modest concurrent async I/O without broadly
 oversubscribing the host. Increase the count only when measured I/O concurrency

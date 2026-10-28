@@ -86,7 +86,7 @@ google-adk-test = [
 
 [project.optional-dependencies]
 cli = [
-    "nemo-relay-cli-bin==0.11.0",
+    "nemo-relay-cli-bin==1.0.0",
 ]
 
 langchain = [

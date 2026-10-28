@@ -215,7 +215,7 @@ id = "{PLUGIN_ID}"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.10.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]

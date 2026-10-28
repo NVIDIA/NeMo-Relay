@@ -13,7 +13,7 @@ let diagnostics = Diagnostics::from_settings(
         instance_id: uuid::Uuid::now_v7(),
         process_id: Some(std::process::id()),
         process_role: "embedded".into(),
-        relay_version: "0.11.0".into(),
+        relay_version: "1.0.0".into(),
     },
     DiagnosticsSettings {
         enabled: true,

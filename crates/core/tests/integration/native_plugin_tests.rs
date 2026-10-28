@@ -1410,7 +1410,7 @@ async fn native_abi_v7_rejects_manifest_that_admits_relay_zero_nine() {
     let manifest_ref = write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: ">=0.9,<1.0",
+        relay: ">=0.9,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -1571,7 +1571,7 @@ fn native_loader_rejects_unsupported_relay_requirement_before_loading() {
     let manifest_ref = write_manifest_text(ManifestOptions {
         manifest_dir: manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: ">=1.0,<2.0",
+        relay: ">=2.0,<3.0",
         library: "libdoes-not-need-to-exist.so",
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
