@@ -3056,10 +3056,14 @@ fn pii_redaction_defaults_enable_mark_sanitization() {
 
 #[test]
 fn generated_registration_names_sort_in_profile_array_order() {
-    assert!(
-        registration_name(Some("profile_2"), "mark")
-            < registration_name(Some("profile_10"), "mark")
-    );
+    assert_eq!(profile_registration_prefix("profile_0"), "profile_a_0");
+    assert_eq!(profile_registration_prefix("profile_10"), "profile_b_10");
+    for (earlier, later) in [(2, 3), (9, 10), (99, 100), (999, 1000)] {
+        assert!(
+            registration_name(Some(&format!("profile_{earlier}")), "mark")
+                < registration_name(Some(&format!("profile_{later}")), "mark")
+        );
+    }
 }
 
 #[test]
@@ -3290,8 +3294,8 @@ fn local_profile_registrations_receive_generated_namespaces() {
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_0/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_1/shared"));
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }

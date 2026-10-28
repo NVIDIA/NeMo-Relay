@@ -1407,7 +1407,12 @@ pub(super) fn profile_registration_prefix(profile_name: &str) -> String {
         .and_then(|index| index.parse::<usize>().ok())
         .map_or_else(
             || profile_name.to_string(),
-            |index| format!("profile_{index:020}"),
+            |index| {
+                let digits = index.to_string();
+                // Sort by decimal digit count, then by digits, without a fixed-width suffix.
+                let length_code = char::from(b'a' + (digits.len() - 1) as u8);
+                format!("profile_{length_code}_{digits}")
+            },
         )
 }
 
