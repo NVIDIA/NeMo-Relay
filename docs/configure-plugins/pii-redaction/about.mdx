@@ -57,9 +57,11 @@ state, or external lookups.
 | Marks within the active scope | `data`, `category_profile`, and `metadata`, each sanitized independently when the mark is published. |
 | Other scope starts and ends | `data`, `category_profile`, and `metadata` on each start or end event. |
 
-Every enabled profile covers all supported surfaces; profiles have no per-surface
-switches. The supported single-policy configuration provides `input`, `output`,
-`mark`, `tool_input`, and `tool_output` flags, which all default to `true`.
+With `profiles`, each enabled profile applies to all supported surfaces. To
+control which surfaces are sanitized, configure a single policy directly under
+`[components.config]`, without `profiles`. In that form, `input`, `output`,
+`mark`, `tool_input`, and `tool_output` control the sanitizer surfaces and default
+to `true`.
 
 LLM selectors use codec-specific payload boundaries. Request and response codec
 capabilities differ, and codec conversion can canonicalize the emitted request.
