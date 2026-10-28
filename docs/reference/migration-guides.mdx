@@ -11,6 +11,8 @@ Use this page to upgrade from NeMo Relay 0.10.0 to 0.11.0.
 This guide covers the 0.11.0 release. It includes fixes from the 0.10
 patch releases. Configuration changes from earlier patch upgrades still apply.
 
+Start with the package updates. Then review the sections for the features you use.
+
 ## Upgrade to NeMo Relay 0.11.0
 
 ### Update Packages and Plugin SDKs
@@ -59,7 +61,8 @@ and [LangChain](/supported-integrations/langchain).
 
 #### Check ADK LiteLLM Settings
 
-The Google ADK integration now supports `LiteLlm` with `litellm` 1.106.2 or later.
+The Google Agent Development Kit (ADK) integration supports `LiteLlm` with
+`litellm` 1.106.2 or later.
 Relay records the provider LiteLLM selects. If an intercept selects a model
 from another provider, Relay fails the call.
 
@@ -80,17 +83,16 @@ Refer to [Middleware Ordering](/supported-integrations/deepagents#middleware-ord
 
 CLI turn spans now inherit the agent name from their owning Agent scope.
 Paired tool hooks use that name unless they supply an explicit name.
-Review dashboards that group spans by
-`gen_ai.agent.name` or span name. These values can now show an agent name
-instead of the coding-agent name, such as `codex`. Generic gateway turns omit
-the agent name unless you supply one. Refer to
+Review dashboards that group spans by `gen_ai.agent.name` or span name.
+These values can now use a configured agent name instead of a default such as
+`codex`. Generic gateway turns omit the agent name unless you supply one. Refer to
 [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
 
 #### Refresh Hooks and Restore Credentials
 
 Restart Relay gateways and daemons after upgrading. Local hook delivery now
-uses TLS and verifies the server's identity before sending credentials or
-payloads.
+uses Transport Layer Security (TLS). Relay checks the server's identity before
+sending credentials or payloads.
 
 If a loopback daemon runs under another account, publish its hook certificate
 for local users. This applies to daemon addresses that use `http://`. Refer to
@@ -198,7 +200,7 @@ identifiable information (PII) filtering.
 | OpenAI Responses streams | Handle an error if a stream ends without `response.completed`, `response.failed`, or `response.incomplete`. Missing usage alone does not mean the stream ended early. Relay keeps received output and leaves missing usage unset. |
 | ATIF messages | Accept a string for text-only step messages. Review content-part readers against the corrected ATIF output. Refer to [ATIF](/configure-plugins/observability/atif). |
 | Tool failures | LangChain and LangGraph tools that return a handled error now have an `ERROR` span status. The framework still receives the tool result. Refer to [LangChain](/supported-integrations/langchain#observability). |
-| Manual LLM failures | Set `otel.status_code` to `"ERROR"` in end-call metadata to report a failed call. Relay now preserves that status. Refer to [Reporting a Manual Call Failure](/integrate-into-frameworks/wrap-llm-calls#reporting-a-manual-call-failure). |
+| Manual model failures | Set `otel.status_code` to `"ERROR"` in end-call metadata to report a failed call. Relay now preserves that status. Refer to [Reporting a Manual Call Failure](/integrate-into-frameworks/wrap-llm-calls#reporting-a-manual-call-failure). |
 | PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration). |
 | Gemini usage and cost | Estimates now include thinking tokens and supported tool-use prompt tokens. Unknown or mixed tool evidence can leave cost unset. Do not treat missing cost as zero. Refer to [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics). |
 
@@ -296,7 +298,7 @@ to choose the provider account. For the credential selection order, refer to
 
 `GET /models` and `GET /v1/models` use Anthropic when the request includes
 `anthropic-version` or `anthropic-beta`. Otherwise, they use OpenAI. The API
-key's format does not select a provider. Model lists do not create LLM events.
+key's format does not select a provider. Model lists do not create model events.
 
 Compaction, voice, and other unmanaged routes do not receive Relay-held
 provider credentials. Supply any required credentials from the client. With a
@@ -342,9 +344,10 @@ unchanged. Check that the model adapter accepts the edited definitions.
 
 #### Verify Worker Middleware
 
-Daemon workers now run all six LLM middleware types for OpenAI Chat
-Completions, OpenAI Responses, and Anthropic Messages. This includes streaming
-calls. Review plugins that can now change or block requests and responses.
+Daemon workers now run all six large language model (LLM) middleware types.
+This applies to OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages,
+including streaming calls. Review plugins that can now change or block requests
+and responses.
 
 When request intercepts, execution intercepts, or conditional execution
 guardrails are active, successful calls return HTTP `200`. They do not keep
