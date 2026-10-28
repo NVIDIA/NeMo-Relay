@@ -130,7 +130,8 @@ Use `JsonPassthrough` for tool arguments from a model. Use `DataclassCodec` or
 `PydanticCodec` for one known schema.
 
 The LangChain and LangGraph integrations still pass tool arguments as JSON.
-Their result codecs allow only known framework types. For LangChain structured
+Their result codecs keep custom Python objects within the call that returned
+them. Later calls can restore only supported types. For LangChain structured
 responses, declare the expected classes in the request's `response_format`.
 
 For a complete example, refer to
@@ -166,11 +167,39 @@ that edit several messages or array entries. Refer to
 LangChain model intercepts can now change tool descriptions, input schemas,
 and provider-specific tool definitions. Keep tool count, order, and names
 unchanged. Check that the model adapter accepts the edited definitions.
-Managed LangChain and LangGraph tool results now use a versioned JSON format
-with `content`, `is_error`, and `result` fields. Update custom intercepts that
-read or replace the old result shape. Refer to
+
+#### Review LangChain Tool-Call Shapes in Middleware
+
+Review custom Relay middleware that reads or changes LangChain and LangGraph
+tool calls. Check both the arguments it receives and the results it returns:
+
+- Tool arguments remain JSON. Check that middleware edits match the tool's
+  input schema.
+- Tool results use a wrapper with `schema`, `content`, `is_error`, and `result`
+  fields. The schema is `nemo.relay.tool_result@1`. Edit `content` to change the
+  displayed result and `is_error` to change its failure status.
+- Each value in `result` now includes its type. Update middleware and subscribers
+  that read or edit this field. Keep parts with no JSON form unchanged.
+- If an execution intercept returns a result without running the tool, return
+  the full wrapper. Its `result` must be valid for the framework's codec.
+
+Custom Python objects stay with their original call.
+The response cache runs those tools again instead of replaying the objects.
+For the value format and replay rules, refer to
 [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
 and [LangChain](/supported-integrations/langchain).
+
+#### Check ADK LiteLLM Settings
+
+The Google ADK integration now supports `LiteLlm` with `litellm` 1.106.2 or later.
+Relay records the provider LiteLLM selects. A request intercept cannot change
+the model to one that uses another provider.
+
+Relay rejects LiteLLM settings that can switch providers during a call.
+This includes provider fallbacks and `model_list`. To fall back across
+providers, use ADK `FallbackModel` instead. Check prompt management and callback
+settings against the full list in
+[Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
 
 #### Check Dynamic Plugin Compatibility and Trust
 
@@ -283,6 +312,13 @@ record tool results after your middleware changes them. The default remains
 `"inner"`. It records results before your middleware changes them.
 Refer to [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
 
+CLI turn spans now inherit the agent name from their owning Agent scope.
+Paired tool hooks use that name too. Review dashboards that group spans by
+`gen_ai.agent.name` or span name. These values can now show an agent name
+instead of a harness name such as `codex`. Generic gateway turns still omit
+the agent name unless one is supplied. Refer to
+[Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
+
 Daemon workers now pass request codecs to telemetry sanitizers. For manual Rust
 calls, supply a codec with `LlmCallParams::builder().codec(...)`. PII rules that
 target normalized fields omit the telemetry payload if no suitable codec is
@@ -318,7 +354,7 @@ A passing HTTP check only means the collector answered. It does not prove that
 the collector accepts your credentials or trace data. Doctor does not test
 whether redaction removed sensitive data. It also does not read `header_file`
 values. Refer to
-[CLI Configuration and Exporter Checks](/nemo-relay-cli/basic-usage).
+[Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
 
 ### Enable and Protect Diagnostics
 

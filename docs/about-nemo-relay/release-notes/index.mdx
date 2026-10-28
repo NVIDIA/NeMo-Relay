@@ -46,6 +46,9 @@ This release expands plugin control, deployment options, and setup guidance:
 - The Python Google Agent Development Kit (ADK) integration records agent runs,
   model calls, and tool calls. Relay guardrails and intercepts apply to supported
   model and tool calls. Setup guides include ADK CLI and workflow examples.
+  ADK `LiteLlm` models are supported with `litellm` 1.106.2 or later. Relay
+  records the selected provider and rejects settings that can switch providers
+  during a call.
   Refer to [Google ADK](/supported-integrations/google-adk).
 - Daemon workers support the full middleware pipeline for large language model
   (LLM) calls.
@@ -76,7 +79,7 @@ This release expands plugin control, deployment options, and setup guidance:
   settings. A passing HTTP check only means the collector answered.
   It does not prove that the collector accepts your credentials or trace data.
   Doctor does not test whether redaction removed sensitive data. Refer to
-  [CLI Configuration and Exporter Checks](/nemo-relay-cli/basic-usage).
+  [Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
 - Provider API key helpers can supply a fresh credential for each request
   attempt. Refer to
   [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
@@ -109,6 +112,9 @@ configuration, and stream error handling. Review the
 The main compatibility changes affect these areas:
 
 - Node.js applications and package workflows require Node.js 24.13.1 or later.
+- LangChain and LangGraph tool results now record each value in `result` with
+  its type. Review tool-call shapes in custom middleware and subscribers.
+  Refer to [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
 - Worker messages now have size limits for sending and receiving data.
   The default is 4 MiB per message. You can set limits by callback name.
   Upgrade the host and worker SDKs together before using these settings. Refer to
@@ -153,6 +159,8 @@ The main fixes improve request handling, telemetry, and process cleanup:
 - Framework tool results retain content and handled error status. Manual LLM
   completion preserves an explicit error status. Cache replay keeps framework
   tool result objects and content intact.
+  LangChain and LangGraph results now expose the JSON data in custom objects.
+  Objects that cannot be replayed stay with the call that returned them.
 - Tool classification now recognizes `load_skill` as a skill tool.
 - OpenAI Responses streams retain usage and report missing terminal events.
   Gemini cost estimates account for thinking and supported tool-use tokens.
@@ -168,12 +176,13 @@ The main fixes improve request handling, telemetry, and process cleanup:
   Failed streams no longer send a marker that reports successful completion.
 - ATIF output uses valid content parts. Text-only step messages use strings.
   Delivery-failure warnings identify the affected trajectory.
-- Logging overrides preserve configured file sinks. Go bindings retain native
-  handles for the duration of foreign function interface (FFI) calls.
-  Go callbacks recover from panics and keep stream finalizer output.
+- Logging overrides preserve configured file sinks.
 - Diagnostic HTTP errors now use consistent status codes and reason fields.
   Worker inspection reports whether a worker is missing or its diagnostics
   endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
+- CLI turn spans and paired tool hooks now inherit their owning Agent scope's
+  name. OpenTelemetry agent names and span names can change as a result.
+  Refer to [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
 - Daemon, worker, and hook paths use less memory or avoid repeated work. Worker
   cancellation and session-lock cleanup release resources when calls end.
 
