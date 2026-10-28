@@ -8,9 +8,11 @@ hide-nav-links: true
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use these guides to connect Relay capabilities to an enterprise deployment goal.
+Use these guides to connect [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay)
+capabilities to an enterprise deployment goal.
 Each guide explains the decisions, configuration, and evidence you need.
-An optional Brev example demonstrates the same process with specific products.
+An optional [NVIDIA Brev](https://brev.nvidia.com/) example demonstrates the same
+process with specific products.
 
 <CardGroup cols={3}>
 <Card title="Connecting to Observability Platforms" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms">
@@ -26,9 +28,9 @@ Compare fixed-model and routed tasks before changing a model policy.
 
 | Goal | What you need | Brev example |
 | --- | --- | --- |
-| Connect observability | A Relay capture path and a tracing destination | Instrumented Python application and Phoenix; no separate agent harness |
-| Govern coding agents | Administrator access and a managed deployment | Two Linux users running either Claude Code or Codex |
-| Evaluate routing | Supported model traffic and two accessible model targets | pi and NVIDIA inference, with fixed and routed policies |
+| Connect observability | A Relay capture path and a tracing destination | Instrumented Python application and [Arize Phoenix](https://arize.com/phoenix/); no separate agent harness |
+| Govern coding agents | Administrator access and a managed deployment | Two Linux users running either [Anthropic Claude Code](https://claude.com/product/claude-code) or [OpenAI Codex](https://github.com/openai/codex) |
+| Evaluate routing | Supported model traffic and two accessible model targets | The [pi coding agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) and NVIDIA inference, with fixed and routed policies |
 
 Start with **Connecting to Observability Platforms** if you want the smallest
 deployment to inspect. The other guides introduce managed operating-system
