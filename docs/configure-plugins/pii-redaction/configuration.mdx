@@ -45,7 +45,7 @@ The top-level PII redaction object contains:
 | `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
 | `tool_output` | Enables sanitization of emitted `ToolExecutionResult.result` and `ToolExecutionResult.annotation` observability values. Defaults to `true`. |
 | `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
-| `codec` | Optional compatibility fallback for legacy/manual managed LLM calls that do not expose an active codec. |
+| `codec` | Optional fallback API format for LLM calls that do not supply an active codec. For example, use `codec = "anthropic_messages"` for Anthropic Messages payloads. Omit this field when your integration supplies a codec; the call's active codec takes precedence. |
 | `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
 | `builtin` | Built-in backend settings used when `mode = "builtin"`. |
 | `local` | Local-backend settings used when `mode = "local_model"`. |
