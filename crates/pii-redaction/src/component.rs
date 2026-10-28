@@ -1370,12 +1370,7 @@ fn with_selector_diagnostics(
 ) -> CompiledBuiltinBackend {
     let component_key = profile_name.map_or_else(
         || "pii_redaction.selector".to_string(),
-        |name| {
-            format!(
-                "pii_redaction.selector.{}",
-                profile_registration_prefix(name)
-            )
-        },
+        |name| format!("pii_redaction.selector.{name}"),
     );
     if !compiled.is_trajectory()
         && let Ok(recorder) = ctx

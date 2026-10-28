@@ -168,7 +168,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         .unwrap();
     assert!(snapshot.events.iter().any(|event| {
         event.code() == "pii_redaction.selector_evaluated"
-            && event.component.key == "pii_redaction.selector.profile_00000000000000000001"
+            && event.component.key == "pii_redaction.selector.profile_1"
     }));
 }
 
