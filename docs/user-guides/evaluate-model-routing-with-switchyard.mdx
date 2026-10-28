@@ -9,11 +9,15 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Enterprise teams need evidence before moving agent work to a different model mix.
 A cheaper model may fail important tasks; a routing judge adds overhead and can
-make mistakes. This guide uses Relay and Switchyard to compare a routing policy
-against fixed-model baselines using the same tasks and acceptance checks.
+make mistakes. This guide uses [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay)
+with [NeMo Switchyard](https://nvidia-nemo.github.io/Switchyard/) running as a first
+party native plugin to compare a routing policy against fixed-model baselines
+using the same tasks and acceptance checks.
 
-The optional Brev example uses pi, two NVIDIA model targets, and a judge.
-Switchyard runs as a native plugin inside the Relay process handling model calls.
+The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses the
+[pi coding agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent),
+two NVIDIA model targets, and a judge. Switchyard runs inside the Relay process
+handling model calls.
 The outcome is a scorecard for your policy decision; monetary savings require
 validated prices as well as measured usage.
 
