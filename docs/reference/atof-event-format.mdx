@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 ## 1. Overview
 
-ATOF (Agentic Trajectory Observability Format) is the wire format for agent runtime subscriber callbacks. Events represent the lifecycle of scopes — composable units of agent work — within the runtime. Subscribers receive events in real time as the runtime executes agent workflows.
+ATOF (Agent Trajectory Observability Format) is the wire format for agent runtime subscriber callbacks. Events represent the lifecycle of scopes — composable units of agent work — within the runtime. Subscribers receive events in real time as the runtime executes agent workflows.
 
 **Primary purpose:** lossless replay for inspection and evaluation. An ATOF event stream MUST carry enough information to reconstruct what happened in an agent run — identity, call graph, LLM messages in/out, tool calls and results — so that humans and tools can debug, audit, and evaluate the run post-hoc.
 

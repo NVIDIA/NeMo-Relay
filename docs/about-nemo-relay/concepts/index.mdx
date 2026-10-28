@@ -17,8 +17,9 @@ NeMo Relay's shared runtime model has five parts:
 - **Middleware** decides what can block, rewrite, sanitize, or wrap managed
   execution.
 - **Plugins** install reusable runtime behavior from configuration.
-- **Subscribers and exporters** consume that stream in process, write raw ATOF
-  events, or project events into downstream formats.
+- **Subscribers and exporters** consume that stream in process, write raw Agent
+  Trajectory Observability Format (ATOF) events, or project events into
+  downstream formats.
 
 Managed tool and LLM helpers are the application-owned API path through scopes,
 middleware, events, and subscribers. Codecs are boundary translators that
