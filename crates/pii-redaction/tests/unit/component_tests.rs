@@ -117,6 +117,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         )
         .unwrap(),
         &ctx,
+        None,
     );
     let sanitized = tool_sanitize_callback(backend)(
         "example.tool".into(),
@@ -132,9 +133,39 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         .unwrap();
     assert!(snapshot.events.iter().any(|event| {
         event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector"
             && event.detail.as_ref().is_some_and(|detail| {
                 detail.message == "matched_paths=0 eligible_string_leaves=0 affected_values=0"
             })
+    }));
+
+    let profile_backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+        Some("profile_1"),
+    );
+    tool_sanitize_callback(profile_backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector.profile_00000000000000000001"
     }));
 }
 

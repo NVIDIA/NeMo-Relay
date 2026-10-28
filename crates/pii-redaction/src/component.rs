@@ -1264,6 +1264,7 @@ fn register_builtin_backend(
     let compiled = with_selector_diagnostics(
         CompiledBuiltinBackend::new(builtin, config.codec.clone())?,
         ctx,
+        profile_name,
     );
     log::info!(
         target: "nemo_relay.plugin",
@@ -1365,11 +1366,21 @@ fn register_builtin_backend(
 fn with_selector_diagnostics(
     mut compiled: CompiledBuiltinBackend,
     ctx: &PluginRegistrationContext,
+    profile_name: Option<&str>,
 ) -> CompiledBuiltinBackend {
+    let component_key = profile_name.map_or_else(
+        || "pii_redaction.selector".to_string(),
+        |name| {
+            format!(
+                "pii_redaction.selector.{}",
+                profile_registration_prefix(name)
+            )
+        },
+    );
     if !compiled.is_trajectory()
         && let Ok(recorder) = ctx
             .diagnostics()
-            .register_component(ComponentRegistration::new("pii_redaction.selector", &[]))
+            .register_component(ComponentRegistration::new(&component_key, &[]))
         && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {
             namespace: "pii_redaction",
             name: "selector_evaluated",
