@@ -42,39 +42,28 @@ flowchart TD
 Each event is sanitized during queued publication, before delivery. The diagram
 shows the data boundary rather than execution timing.
 
-### How the Plugin Uses Sanitize Guardrails
-
 The plugin installs [sanitize guardrails](/about-nemo-relay/concepts/middleware#guardrails).
-These are Relay middleware callbacks, registered when the plugin is activated
-and invoked during event publication.
-
-On LLM and tool events, request or response sanitizers handle the primary
-payload first. Scope-event sanitizers then handle the remaining supported
-fields, such as metadata and tool result annotations. Mark events have their
-own sanitizer callbacks.
-
-The separate [NeMo Guardrails plugin](/configure-plugins/nemo-guardrails/about)
-applies NeMo Guardrails policies to managed execution. The built-in PII backend
-runs inside Relay without that plugin or service. Use custom sanitize middleware
-for transformations that the built-in actions cannot express.
+These are Relay's existing hooks for transforming observability data. Use the
+plugin for declarative policies with built-in detectors and actions. Register
+custom sanitize middleware when your policy needs application code, runtime
+state, or external lookups.
 
 ## What Data the Plugin Covers
 
 | Surface | Data Covered |
 | --- | --- |
-| LLM scope start and end | Request data at start, response data at end, and scope metadata. |
+| LLM scope start and end | Request data at start, response data at end, and scope metadata. LLM selectors use the active codec's representation. |
 | Tool scope start and end | Arguments at start; result values and result annotations at end; scope metadata on both. Results and annotations are sanitized as separate JSON documents. |
 | Marks within the active scope | `data`, `category_profile`, and `metadata`, each sanitized independently when the mark is published. |
 | Other scope starts and ends | `data`, `category_profile`, and `metadata` on each start or end event. |
 
-Every enabled profile covers all supported surfaces. Profiles have no
-per-surface switches; `enabled = false` disables a whole profile. For individual
-surface controls, use the supported single-policy form described in
-[Choose Sanitization Surfaces](/configure-plugins/pii-redaction/configuration#choose-sanitization-surfaces)
-with a configuration example.
+Every enabled profile covers all supported surfaces; profiles have no per-surface
+switches. The supported single-policy configuration provides `input`, `output`,
+`mark`, `tool_input`, and `tool_output` flags, which all default to `true`.
 
-LLM selectors use codec-specific payload boundaries, and codec conversion can
-canonicalize the emitted request. Refer to
+LLM selectors use codec-specific payload boundaries. Request and response codec
+capabilities differ, and codec conversion can canonicalize the emitted request.
+Refer to
 [Path Semantics](/configure-plugins/pii-redaction/configuration#path-semantics)
 for payload boundaries and normalized selector examples.
 
@@ -106,7 +95,9 @@ For a tool call with `{"contact":"alice@example.com"}` as its arguments:
 | Tool implementation | `{"contact":"alice@example.com"}` |
 | Subscribers and exporters | `{"contact":"[REDACTED]"}` |
 
-Built-in detectors use deterministic patterns. Refer to
+Built-in detectors use deterministic patterns. They identify configured formats
+such as email addresses or API keys; they do not identify every kind of private
+information. Refer to
 [Detector Presets](/configure-plugins/pii-redaction/configuration#detector-presets)
 for the supported formats.
 
