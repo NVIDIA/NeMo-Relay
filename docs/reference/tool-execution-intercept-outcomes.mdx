@@ -285,9 +285,9 @@ across bindings.
 
 Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
 baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
-excludes Relay versions before 0.8. The recommended range is
-`>=0.8.0,<1.0`; open-ended ranges such as `>=0.8.0` are valid. The native ABI
-for that result-shape change is v4. Workers retain the `grpc-v1` identifier and
+excludes Relay versions before 0.8. For plugins rebuilt with the 1.0.0 SDK,
+use `compat.relay = ">=1.0.0,<2.0"`. The native ABI for that result-shape
+change is v4. Workers retain the `grpc-v1` identifier and
 `nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
 type and tool-execution outcome field type. Regenerate worker protobuf bindings
 as part of the required rebuild. Future incompatible contract changes must
@@ -295,9 +295,10 @@ increment the corresponding native API or worker protocol version.
 
 Relay 0.9 replaces the tool execution callback shape without changing the
 `grpc-v1` package or result messages. Worker plugins that register this surface
-must declare `compat.relay = ">=0.9,<1.0"` or another range that excludes Relay
-0.8. Native plugins use ABI v5 for the context-carrying callback slot; Relay
-rejects the registration when the plugin admits an incompatible Relay version.
+must declare a compatibility range that excludes Relay 0.8. For plugins
+rebuilt with the 1.0.0 SDK, use `compat.relay = ">=1.0.0,<2.0"`. Native plugins
+use ABI v5 for the context-carrying callback slot; Relay rejects the registration
+when the plugin admits an incompatible Relay version.
 
 ## Migration
 

@@ -63,7 +63,7 @@ The Node.js package provides the following capabilities:
 Install the npm package in a Node.js 24.13.1 or newer project:
 
 ```bash
-npm install nemo-relay-node@0.11.0
+npm install nemo-relay-node@1.0.0
 ```
 
 On Windows, the native runtime remains loaded until process exit, including

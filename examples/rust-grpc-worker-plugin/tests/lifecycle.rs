@@ -248,7 +248,7 @@ id = "{PLUGIN_ID}"
 kind = "worker"
 
 [compat]
-relay = ">=0.10.0,<1.0"
+relay = ">=1.0.0,<2.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

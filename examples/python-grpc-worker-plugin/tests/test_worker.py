@@ -114,7 +114,7 @@ def test_manifest_digest_matches_worker_source() -> None:
 def test_manifest_declares_current_worker_protocol() -> None:
     manifest = read_manifest()
 
-    assert manifest["compat"] == {"relay": ">=0.10.0,<1.0", "worker_protocol": "grpc-v1"}
+    assert manifest["compat"] == {"relay": ">=1.0.0,<2.0", "worker_protocol": "grpc-v1"}
 
 
 def test_schema_declares_only_supported_groups() -> None:

@@ -123,7 +123,7 @@ pub(super) fn validate_annotated_request_consumer_compatibility(
     let requirement = parse_relay_requirement(relay)?;
     if requirement.matches(&Version::new(0, 5, u64::MAX)) {
         return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{plugin_kind}' registers an LLM request intercept and must declare compat.relay = \">=0.6,<1.0\" or another range that excludes Relay 0.5"
+            "dynamic plugin '{plugin_kind}' registers an LLM request intercept and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.5"
         )));
     }
     Ok(())
@@ -136,7 +136,7 @@ pub(super) fn validate_tool_execution_context_compatibility(
     let requirement = parse_relay_requirement(relay)?;
     if version_requirement_matches_minor(&requirement, 0, 8) {
         return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{plugin_kind}' registers a context-aware tool execution intercept and must declare compat.relay = \">=0.9,<1.0\" or another range that excludes Relay 0.8"
+            "dynamic plugin '{plugin_kind}' registers a context-aware tool execution intercept and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.8"
         )));
     }
     Ok(())
@@ -150,7 +150,7 @@ pub(super) fn validate_llm_execution_context_compatibility(
     let requirement = parse_relay_requirement(relay)?;
     if version_requirement_matches_minor(&requirement, 0, 9) {
         return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{plugin_kind}' registers an LLM execution intercept and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
+            "dynamic plugin '{plugin_kind}' registers an LLM execution intercept and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.9"
         )));
     }
     Ok(())
@@ -163,7 +163,7 @@ pub(super) fn validate_native_abi_compatibility(
     let requirement = parse_relay_requirement(relay)?;
     if version_requirement_matches_minor(&requirement, 0, 9) {
         return Err(PluginError::InvalidConfig(format!(
-            "dynamic native plugin '{plugin_kind}' uses native ABI v7 and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
+            "dynamic native plugin '{plugin_kind}' uses native ABI v7 and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.9"
         )));
     }
     Ok(())
