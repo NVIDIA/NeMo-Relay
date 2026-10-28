@@ -59,6 +59,8 @@ The example uses OpenAI Chat Completions. pi's Relay integration is a proof of
 concept with version-sensitive hooks; it is one harness choice. Confirm the
 [Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
 before substituting another harness or API.
+Use Switchyard's [model selection guide](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/model_selection/)
+to check candidate models against your tools, context, and output requirements.
 
 ## 2. Install and configure the route
 
@@ -144,6 +146,8 @@ The caller selects the virtual route `switchyard/routed`, rather than a real
 target model. The plugin reads the provider key from Relay's environment.
 Holding the selection for a session avoids changing targets at every tool
 continuation. Each independent task must have a distinct session identity.
+See [classifier routing](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/llm_classifier_routing/)
+for judge requirements, thresholds, and session-affinity options.
 
 <Accordion title="Brev example: prepare pi and the native plugin">
 Use a disposable CPU VM and the persistent pi extension from the
@@ -206,49 +210,37 @@ The API base URL is `https://integrate.api.nvidia.com/v1`; requests use
 
 ## 4. Interpret task quality and routing together
 
-A three-task Brev run with one attempt per policy produced this scorecard:
+Compare the routed policy with both fixed-model baselines on your workload.
+Read resource changes alongside task acceptance, including failed attempts.
 
-| Policy | Accepted | Seconds | Answer tokens | Judge tokens |
-| --- | --- | --- | --- | --- |
-| Fixed capable | 2/3 | 540.6 | Unknown | No judge |
-| Fixed efficient | 2/3 | 260.6 | 158,206 | No judge |
-| Routed | 2/3 | 202.0 | 159,091 | 9,993 |
+| Signal | How to interpret it |
+| --- | --- |
+| Task acceptance | Similar totals can hide failures on different tasks. Inspect which requirements each policy missed. |
+| Elapsed time | Compare repeated task durations and slow cases. Include judge calls, retries, and timeouts. |
+| Answer usage | Compare input and output tokens by served model. Lower token totals alone do not establish lower cost. |
+| Judge overhead | Include classification usage and latency when evaluating the whole workflow. |
+| Routing mix | Check whether selections match task needs. If a policy always chooses the same target, compare it with that fixed-model baseline. |
+| Recoveries and truncation | Inspect invalid verdicts, fallback reasons, and incomplete calls before attributing results to the routing policy. |
 
-<Note title="The harder task exposed a quality gap">
-All three policies failed the dependency-planning attempt. The capable model's
-code passed the external checks, but its session hit the 420-second timeout.
-The efficient and routed attempts left the function unimplemented. Each policy
-had a truncated model call. All three judge verdicts selected the efficient
-model, with no classifier recoveries or answer fallbacks. This does not establish
-valid selection of the capable target; inspect the forecasts and retest the judge
-before promoting this policy.
+<Note title="A selected model is not a completed task">
+Confirm the served model and acceptance result. A capable selection caused by
+an invalid judge verdict does not demonstrate successful classification.
+Keep missing usage or pricing marked unknown.
 </Note>
 
-The two simpler tasks passed under every policy. Keep the failed harder task in
-the result rather than accepting the policy from those successes alone. Missing
-capable-model usage remains unknown. Results depend on endpoint, models, and
-budgets; repeat with your selected catalog models and representative tasks.
-
-<Accordion title="Why repeat the comparison">
-An earlier two-task comparison repeated three times accepted 6/6 capable tasks,
-3/6 efficient tasks, and 6/6 routed tasks. Two judge verdicts were unusable and
-recovered to the capable model; every capable selection came from recovery.
-Those results did not demonstrate valid forecasts choosing both targets.
-The broader task set above exposed another acceptance boundary. Retain failed
-attempts, judge recoveries, and truncated calls when comparing policies.
-</Accordion>
+<Accordion title="Brev example: locate the evidence">
 
 | Evidence | Inspect |
 | --- | --- |
 | Task acceptance | `results.json`, generated files, and `acceptance.log` |
 | Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
-| Judge recovery | `evidence.source` (`fail_open` or `fall_open` in 0.3.2) and `reason_code` |
+| Judge recovery | Decision `evidence.source` and `reason_code` |
 | Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
 | Usage and truncation | `summary.json`, answer/routing metrics, and incomplete model calls |
 
 Judge HTTP success does not establish a valid verdict. Review final JSON and
-recovery reasons before changing the judge model, its budget, or the threshold.
-Keep failed trials in the scorecard and repeat with representative work.
+recovery reasons alongside the task's acceptance log.
+</Accordion>
 
 ### Add cost when prices are known
 
@@ -262,14 +254,36 @@ Cost per accepted task = workload cost / accepted tasks
 ```
 
 Compare the result with the fixed-capable baseline using your validated
-[pricing catalog](/configure-plugins/model-pricing). Retain the quality gate:
-a low cost per failed task is not a successful deployment result.
+[pricing catalog](/configure-plugins/model-pricing). Apply your task-quality
+requirement before accepting a cost improvement.
+
+## 5. Refine and validate the policy
+
+If routing misses required tasks, inspect the chosen target, judge verdict, and
+failure evidence. If acceptance holds but resource use grows, check judge
+frequency, retries, and model usage. When the efficient baseline already meets
+your requirements, consider whether routing adds useful value.
+
+Change one setting at a time and repeat the comparison. Promote a policy when
+task acceptance and the resource improvement hold across representative work
+and repeated trials. Re-evaluate after changes to models, providers, or the harness.
+
+<CardGroup cols={2}>
+<Card title="Compare and tune" href="https://nvidia-nemo.github.io/Switchyard/tuning/" icon="fa-solid fa-sliders">
+Follow Switchyard's evaluation loop to diagnose the decision mix and adjust a policy.
+</Card>
+<Card title="Benchmarks and runnable profiles" href="https://nvidia-nemo.github.io/Switchyard/benchmarks/" icon="fa-solid fa-chart-column">
+Explore published comparisons, routing configurations, and reproduction instructions.
+</Card>
+</CardGroup>
+
+For other usage examples, see the
+[Relay integration](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
+and [standalone pi recipe](https://nvidia-nemo.github.io/Switchyard/integrations/pi/).
+The pi recipe uses Switchyard's local reference server; this guide uses the Relay plugin.
 
 ## Cleanup and next steps
 
 The runner stops each task gateway. Retain the scorecard and logs, then remove
 only your chosen output and plugin-bundle directories. Leave other users' pi
 settings and plugin installations in place.
-
-Promote a policy only after task acceptance, judge validity, routing stability,
-and the relevant resource improvement hold on your workload.
