@@ -442,6 +442,14 @@ target_path_globs = [
 ]
 ```
 
+For example, `/messages/*/content` matches both
+`/messages/A/content` and `/messages/B/content`. If either `content` value is
+an array or object, `redact` does not redact its descendant strings: it acts
+only on selected string values. For content parts such as
+`{"messages":[{"content":[{"text":"alice@example.com"}]}]}`, use
+`/messages/*/content/*/text` to select the `text` string. The same glob also
+matches a `text` key in an object one level below `content`.
+
 Globs are not recursive: `/output/*` selects only a direct child of `output`.
 It does not select `/output/0/content/0/text`; use
 `/output/*/content/*/text` for that shape. Relay does not support `**`,
@@ -454,6 +462,25 @@ component. The empty string selects the document root. Every other pointer must
 start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
 pointers prevent activation instead of silently leaving the intended values
 unsanitized.
+
+When runtime diagnostics are enabled and the selector diagnostic is admitted,
+the built-in JSON sanitizer records a `pii_redaction.selector_evaluated`
+observation for each document it processes.
+Its bounded detail reports `matched_paths` and `eligible_string_leaves` selected
+in the original document, plus `affected_values` actually changed or removed.
+It never includes matched content. With `action = "remove"`, a selector may match
+a child string inside a container that is removed before the sanitizer visits
+that string; the child counts as selected, while only the container counts as
+affected. A selector can match a container while matching no string leaves, and
+a selected string can remain unchanged when the detector finds nothing. Zero
+counts are informational because
+some traffic may not contain the configured paths or sensitive values. With no
+selectors, `matched_paths` counts all visited JSON nodes, while
+`eligible_string_leaves` counts the string nodes considered for redaction.
+When profiles are configured, the diagnostic component key includes the profile
+number, even with a single profile (for example,
+`pii_redaction.selector.profile_0`). Legacy configuration uses the
+`pii_redaction.selector` key.
 
 The plugin uses different payload boundaries for tools and LLMs:
 

@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
+use nemo_relay::diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -1260,7 +1261,11 @@ fn register_builtin_backend(
     let builtin = config.builtin.clone().ok_or_else(|| {
         PluginError::InvalidConfig("built-in PII redaction config is missing".to_string())
     })?;
-    let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
+    let compiled = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(builtin, config.codec.clone())?,
+        ctx,
+        profile_name,
+    );
     log::info!(
         target: "nemo_relay.plugin",
         event = "plugin_resource_validation_completed",
@@ -1358,6 +1363,32 @@ fn register_builtin_backend(
     Ok(())
 }
 
+fn with_selector_diagnostics(
+    mut compiled: CompiledBuiltinBackend,
+    ctx: &PluginRegistrationContext,
+    profile_name: Option<&str>,
+) -> CompiledBuiltinBackend {
+    let component_key = profile_name.map_or_else(
+        || "pii_redaction.selector".to_string(),
+        |name| format!("pii_redaction.selector.{name}"),
+    );
+    if !compiled.is_trajectory()
+        && let Ok(recorder) = ctx
+            .diagnostics()
+            .register_component(ComponentRegistration::new(&component_key, &[]))
+        && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {
+            namespace: "pii_redaction",
+            name: "selector_evaluated",
+            description: "Counts of selected nodes, selected string leaves, and changed values",
+            allowed_classes: &[],
+            outcome: DiagnosticOutcome::Success,
+        })
+    {
+        compiled = compiled.with_match_diagnostics(recorder, code);
+    }
+    compiled
+}
+
 fn registration_name(profile_name: Option<&str>, callback_name: &str) -> String {
     profile_name.map_or_else(
         || callback_name.to_string(),
@@ -1376,7 +1407,12 @@ pub(super) fn profile_registration_prefix(profile_name: &str) -> String {
         .and_then(|index| index.parse::<usize>().ok())
         .map_or_else(
             || profile_name.to_string(),
-            |index| format!("profile_{index:020}"),
+            |index| {
+                let digits = index.to_string();
+                // Sort by decimal digit count, then by digits, without a fixed-width suffix.
+                let length_code = char::from(b'a' + (digits.len() - 1) as u8);
+                format!("profile_{length_code}_{digits}")
+            },
         )
 }
 
