@@ -198,14 +198,24 @@ unsanitized.
 `trajectory_context` is a fail-closed policy for metrics-oriented trajectory
 export. It discards original LLM request and response payloads and generates
 minimal provider-shaped projections from sanitized normalized annotations.
-Only recognized built-in codec identities, or a configured legacy codec when
-no active codec is present, are eligible for projection. Runtime and opaque
-codec identities emit `{}` even when their payload resembles a built-in shape.
-Unknown provider fields, extensions, additional choices or candidates, headers,
-provider-native values, generic event data and metadata, category-profile extras,
-and unknown custom-mark payloads cannot pass through those projections. Present
-opaque typed JSON values become `{}`. A valid `nemo_relay.log.severity` value is
-restored for marks.
+For supported built-in codecs, the published LLM request or response retains
+supported structure and analytics, including message roles, tool names, and
+tool-call correlation IDs. Conversational text is replaced with `[REDACTED]` by
+default. Tool arguments and parameter schemas are emptied. Refer to the
+[Trajectory removal worked example](/configure-plugins/pii-redaction/configuration#targeting-and-composition)
+for the request, response, and separate tool events before and after sanitization.
+
+A configured legacy codec can also provide this projection when no active codec
+is present. Custom runtime and opaque codec identities publish `{}` instead,
+even when their payload resembles a supported provider's JSON shape.
+
+Unknown fields and unstructured payloads are discarded or emptied. This includes
+provider extensions, additional choices or candidates, headers, provider-native
+values, generic event data, and category-profile extras. Present opaque typed
+JSON values become `{}`. Metadata retains only explicitly supported fields,
+including recognized scope status values and valid `nemo_relay.log.severity`
+values for marks. Unknown custom-mark payloads are emptied by default;
+`custom_mark_payload_policy = "preserve"` explicitly retains them.
 
 Scope metadata retains only recognized `otel.status_code` values (`OK`, `ERROR`,
 `UNSET`) and, for `ERROR`, Relay's fixed `error.type` classifications or `_OTHER`.
