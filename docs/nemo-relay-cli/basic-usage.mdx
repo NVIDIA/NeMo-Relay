@@ -510,8 +510,10 @@ follows:
 The client must have Relay access to use Relay's credentials. For managed
 provider requests and model lists, Relay resolves credentials in this order:
 
-1. If a helper is configured, Relay runs it for each outbound request attempt.
-   The helper's token replaces any provider credential from the client.
+1. If a helper is configured, its token replaces any provider credential
+   from the client. Relay runs the helper for each outbound request attempt
+   when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
+   the cached token until the cache interval ends.
 2. Without a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
    `api-key`, or `anthropic-api-key` header.
 3. If the client sends no credential, Relay uses the configured API key or
