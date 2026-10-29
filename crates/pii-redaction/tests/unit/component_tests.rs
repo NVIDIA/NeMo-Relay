@@ -68,6 +68,9 @@ static TEST_LOGGING: Once = Once::new();
 #[path = "trajectory_status_tests.rs"]
 mod trajectory_status_tests;
 
+#[path = "trajectory_tool_correlation_tests.rs"]
+mod trajectory_tool_correlation_tests;
+
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
@@ -695,19 +698,19 @@ fn trajectory_typed_request_matrix_preserves_only_approved_structure() {
                 {"type": "audio", "audio": {"data": "SECRET"}},
                 {"type": "file", "file": {"data": "SECRET"}},
                 {"type": "refusal", "refusal": "SECRET"},
-                {"type": "tool_use", "id": "SECRET", "name": "search", "input": {"q": "SECRET"}},
-                {"type": "tool_result", "tool_use_id": "SECRET", "content": {"text": "SECRET"}, "is_error": true},
+                {"type": "tool_use", "id": "call-parts", "name": "search", "input": {"q": "SECRET"}},
+                {"type": "tool_result", "tool_use_id": "call-parts", "content": {"text": "SECRET"}, "is_error": true},
                 {"type": "provider_native", "provider": "openai", "kind": "output_text", "value": {"text": "SECRET"}}
             ]},
             {"role": "developer", "content": "SECRET"},
             {"role": "assistant", "content": "SECRET", "tool_calls": [{
-                "id": "SECRET", "type": "function",
+                "id": "call-chat", "type": "function",
                 "function": {"name": "terminal", "arguments": "SECRET"}
             }]},
-            {"role": "tool", "tool_call_id": "SECRET", "content": "SECRET"},
+            {"role": "tool", "tool_call_id": "call-chat", "content": "SECRET"},
             {"role": "function", "name": "legacy_tool", "content": "SECRET"},
-            {"role": "tool_call", "id": "SECRET", "call_id": "SECRET", "name": "browser", "arguments": {"q": "SECRET"}, "future": "SECRET"},
-            {"role": "tool_result", "id": "SECRET", "call_id": "SECRET", "output": {"text": "SECRET"}, "future": "SECRET"},
+            {"role": "tool_call", "id": "SECRET", "call_id": "call-responses", "name": "browser", "arguments": {"q": "SECRET"}, "future": "SECRET"},
+            {"role": "tool_result", "id": "SECRET", "call_id": "call-responses", "output": {"text": "SECRET"}, "future": "SECRET"},
             {"role": "provider_native", "provider": "anthropic", "kind": "tool_result", "value": {"text": "SECRET"}}
         ],
         "instructions": "SECRET",
@@ -767,7 +770,23 @@ fn trajectory_typed_request_matrix_preserves_only_approved_structure() {
     );
     assert_eq!(value["messages"][1]["content"][6]["name"], "search");
     assert_eq!(value["messages"][1]["content"][6]["input"], json!({}));
-    assert_eq!(value["messages"][4]["tool_call_id"], "[REDACTED]");
+    assert_eq!(value["messages"][1]["content"][6]["id"], "call-parts");
+    assert_eq!(
+        value["messages"][1]["content"][7]["tool_use_id"],
+        "call-parts"
+    );
+    assert_eq!(value["messages"][3]["tool_calls"][0]["id"], "call-chat");
+    assert_eq!(value["messages"][4]["tool_call_id"], "call-chat");
+    assert_eq!(value["messages"][6]["call_id"], "call-responses");
+    assert_eq!(value["messages"][7]["call_id"], "call-responses");
+    assert_eq!(value["messages"][6]["id"], "[REDACTED]");
+    assert_eq!(value["messages"][7]["id"], "[REDACTED]");
+    assert_eq!(
+        trajectory_sanitizer()
+            .sanitize_annotated_request(sanitized)
+            .unwrap(),
+        serde_json::from_value(value.clone()).unwrap()
+    );
     assert_eq!(value["messages"][6]["name"], "browser");
     assert_eq!(value["messages"][6]["arguments"], json!({}));
     assert_eq!(value["messages"][8]["value"], json!({}));
@@ -888,7 +907,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
         Some(
             CategoryProfile::builder()
                 .model_name("gpt-5.6-sol")
-                .tool_call_id("SECRET")
+                .tool_call_id("call-profile")
                 .subtype("SECRET")
                 .tool_result_annotation(json!({"secret": "SECRET"}))
                 .extra(BTreeMap::from([
@@ -915,7 +934,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
     assert_eq!(sanitized.metadata, Some(json!({})));
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.model_name.as_deref(), Some("gpt-5.6-sol"));
-    assert_eq!(profile.tool_call_id.as_deref(), Some("[REDACTED]"));
+    assert_eq!(profile.tool_call_id.as_deref(), Some("call-profile"));
     assert_eq!(profile.subtype.as_deref(), Some("[REDACTED]"));
     assert_eq!(profile.tool_result_annotation, Some(json!({})));
     assert_eq!(

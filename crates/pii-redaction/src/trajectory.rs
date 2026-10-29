@@ -161,12 +161,8 @@ impl TrajectorySanitizer {
             id: marked_option(id, &self.replacement),
             model,
             message: message.map(|content| sanitize_message_content(content, &self.replacement)),
-            tool_calls: tool_calls.map(|calls| {
-                calls
-                    .into_iter()
-                    .map(|call| sanitize_response_tool_call(call, &self.replacement))
-                    .collect()
-            }),
+            tool_calls: tool_calls
+                .map(|calls| calls.into_iter().map(sanitize_response_tool_call).collect()),
             finish_reason: match finish_reason {
                 Some(FinishReason::Unknown(_)) => None,
                 known => known,
@@ -355,12 +351,6 @@ fn replace_optional_json(value: &mut Option<Json>) {
     }
 }
 
-fn replace_optional_string(value: &mut Option<String>, replacement: &str) {
-    if value.is_some() {
-        *value = Some(replacement.to_string());
-    }
-}
-
 fn sanitize_generation_params(params: GenerationParams, replacement: &str) -> GenerationParams {
     let GenerationParams {
         temperature,
@@ -411,10 +401,10 @@ fn sanitize_message(message: Message, replacement: &str) -> Message {
         },
         Message::Tool {
             content,
-            tool_call_id: _,
+            tool_call_id,
         } => Message::Tool {
             content: sanitize_message_content(content, replacement),
-            tool_call_id: replacement.to_string(),
+            tool_call_id,
         },
         Message::Function { content, name } => Message::Function {
             content: content.map(|_| replacement.to_string()),
@@ -422,25 +412,25 @@ fn sanitize_message(message: Message, replacement: &str) -> Message {
         },
         Message::ToolCallItem {
             id,
-            call_id: _,
+            call_id,
             name,
             arguments: _,
             extra: _,
         } => Message::ToolCallItem {
             id: id.map(|_| replacement.to_string()),
-            call_id: replacement.to_string(),
+            call_id,
             name,
             arguments: empty_object(),
             extra: Map::new(),
         },
         Message::ToolResultItem {
             id,
-            call_id: _,
+            call_id,
             output: _,
             extra: _,
         } => Message::ToolResultItem {
             id: id.map(|_| replacement.to_string()),
-            call_id: replacement.to_string(),
+            call_id,
             output: empty_object(),
             extra: Map::new(),
         },
@@ -501,23 +491,23 @@ fn sanitize_content_part(part: ContentPart, replacement: &str) -> ContentPart {
             extra: Map::new(),
         },
         ContentPart::ToolUse {
-            id: _,
+            id,
             name,
             input: _,
             extra: _,
         } => ContentPart::ToolUse {
-            id: replacement.to_string(),
+            id,
             name,
             input: empty_object(),
             extra: Map::new(),
         },
         ContentPart::ToolResult {
-            tool_use_id: _,
+            tool_use_id,
             content: _,
             is_error,
             extra: _,
         } => ContentPart::ToolResult {
-            tool_use_id: replacement.to_string(),
+            tool_use_id,
             content: empty_object(),
             is_error: is_error.map(|_| false),
             extra: Map::new(),
@@ -545,7 +535,7 @@ fn sanitize_image_url(image_url: OpenAiImageUrl, replacement: &str) -> OpenAiIma
 
 fn sanitize_tool_call(call: ToolCall, replacement: &str) -> ToolCall {
     ToolCall {
-        id: replacement.to_string(),
+        id: call.id,
         call_type: preserve_known_string(call.call_type, &["function"], replacement),
         function: sanitize_function_call(call.function, replacement),
     }
@@ -730,9 +720,9 @@ fn sanitize_api_specific_request(
     }
 }
 
-fn sanitize_response_tool_call(call: ResponseToolCall, replacement: &str) -> ResponseToolCall {
+fn sanitize_response_tool_call(call: ResponseToolCall) -> ResponseToolCall {
     ResponseToolCall {
-        id: replacement.to_string(),
+        id: call.id,
         name: call.name,
         arguments: empty_object(),
     }
@@ -1148,7 +1138,7 @@ fn sanitize_category_profile_base(
     mut profile: CategoryProfile,
     sanitizer: &TrajectorySanitizer,
 ) -> CategoryProfile {
-    replace_optional_string(&mut profile.tool_call_id, &sanitizer.replacement);
+    // Keep correlation identifiers aligned with tool calls in LLM annotations.
     profile.subtype = profile.subtype.map(|subtype| {
         if is_known_mark_subtype(&subtype) {
             subtype
