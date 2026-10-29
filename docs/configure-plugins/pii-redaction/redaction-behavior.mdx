@@ -36,38 +36,21 @@ The plugin uses different payload boundaries for tools and LLMs:
   inside each value; it does not start with `/data`, `/category_profile`, or
   `/metadata`.
 
-The current implementation also preserves provider-shaped response-path
-compatibility for the supported built-in codecs, but normalized LLM paths are
-the recommended contract for new configuration. If normalized paths are
-configured and Relay cannot resolve a request codec or cannot project a
-response through a recognized built-in or compatible fallback codec, the LLM
-event payload and its annotation are omitted rather than emitting unsanitized
-content. In particular, a manual LLM call with normalized target selectors, no
-active codec, and no configured `codec` fallback omits both the payload and its
-annotation.
+When using LLM selectors, supply the matching codec on the call, or configure a
+[`codec` fallback](/configure-plugins/pii-redaction/configuration#how-to-choose-a-codec)
+for calls without an active codec. If a required codec is unavailable or Relay
+cannot safely sanitize and convert the payload, it omits the LLM payload and
+its annotation from the recorded event.
 
-The built-in plugin uses sanitize guardrails and event sanitizers.
+The PII policy changes observability data only. It leaves inputs sent to
+providers and tools, and results returned to your application, unchanged.
+Subscribers and exporters receive sanitized events; values removed by the
+policy are unavailable to them.
 
-That means:
-
-- The real provider request and response values are unchanged.
-- The emitted NeMo Relay start, end, or mark event observability fields are
-  sanitized.
-- `annotated_response` is regenerated from the sanitized end-event payload when
-  the active response codec can decode that payload.
-- Subscribers and exporters consume only the sanitized canonical event stream.
-  Each exporter can omit or transform fields as part of its normal projection,
-  but raw values removed by the plugin do not bypass the sanitizer.
-
-For built-in action policies, including detector-backed policies, the PII
-redaction scope sanitizer leaves `data` and typed `category_profile` fields
-unchanged on tool and LLM scope events because the specialized sanitizer already
-owns that lifecycle boundary. It sanitizes `metadata` independently. When
-`tool_output` is enabled, the tool scope-end sanitizer also sanitizes only
-`category_profile.tool_result_annotation`; the other typed tool profile
-fields remain unchanged. This prevents repeated hashing or masking. Other scope
-categories use the shared scope-start and scope-end hooks described under
-[Single-Policy Settings](/configure-plugins/pii-redaction/configuration#single-policy-settings).
+Metadata is sanitized separately from request and result payloads. In the
+single-policy configuration, use the
+[surface flags](/configure-plugins/pii-redaction/configuration#single-policy-settings)
+to choose which event surfaces are sanitized.
 
 ## Action Semantics
 
