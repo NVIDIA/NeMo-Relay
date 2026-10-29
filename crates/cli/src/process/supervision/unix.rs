@@ -19,6 +19,7 @@ pub(super) struct ProcessTree {
 pub(super) async fn spawn(
     command: &mut tokio::process::Command,
 ) -> std::io::Result<(tokio::process::Child, ProcessTree)> {
+    check_process_group_signaling()?;
     // Register before spawning so a signal cannot terminate Relay in the interval between child
     // creation and supervision. Tokio retains the OS handlers process-wide, which is appropriate:
     // a transparent run exits immediately after this child finishes.
@@ -53,6 +54,26 @@ pub(super) async fn spawn(
             signals,
         },
     ))
+}
+
+fn check_process_group_signaling() -> std::io::Result<()> {
+    // Probe the live supervisor group without sending a signal or starting the agent. Sandboxes
+    // such as OpenShell reject negative-PID kill calls before checking group existence, so even
+    // cleanup after a successful child with no remaining descendants would otherwise fail.
+    // SAFETY: getpgrp has no preconditions; signal zero only checks signaling permission.
+    let result = unsafe { libc::kill(-libc::getpgrp(), 0) };
+    if result == -1 {
+        let error = std::io::Error::last_os_error();
+        return Err(std::io::Error::new(
+            error.kind(),
+            format!(
+                "cannot launch coding agent: Unix process-group signaling is unavailable: {error}; \
+                 Relay requires it for signal forwarding and descendant cleanup; \
+                 run a standalone Relay gateway and start the agent separately with its Relay integration"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn wait(
