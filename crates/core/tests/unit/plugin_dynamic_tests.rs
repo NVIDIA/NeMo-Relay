@@ -47,6 +47,7 @@ fn sample_record() -> DynamicPluginRecord {
             worker_protocol: "grpc-v1".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            forward_env: vec![],
             max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
@@ -184,6 +185,7 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        forward_env: vec![],
         max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
@@ -208,6 +210,7 @@ fn registry_replacement_rejects_invalid_record_shapes() {
     registry.add(sample_record()).expect("register plugin");
     let mut replacement = sample_record();
     replacement.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        forward_env: vec![],
         max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
@@ -320,6 +323,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
         worker_protocol: " grpc-v1 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        forward_env: vec![],
         max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Python,
@@ -338,6 +342,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     assert_eq!(
         stored.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            forward_env: vec![],
             max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
@@ -599,6 +604,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         manifest.load,
         DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+            forward_env: vec![],
             max_message_bytes: None,
             callback_timeouts: None,
             runtime: Some(WorkerRuntime::Python),
@@ -615,6 +621,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            forward_env: vec![],
             max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
@@ -980,6 +987,7 @@ entrypoint = " acme_guardrails.plugin:register "
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            forward_env: vec![],
             max_message_bytes: None,
             callback_timeouts: None,
             runtime: WorkerRuntime::Python,
@@ -1026,6 +1034,7 @@ entrypoint = "acme_guardrails.plugin:register"
         assert_eq!(
             record.load,
             DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                forward_env: vec![],
                 max_message_bytes: None,
                 callback_timeouts: None,
                 runtime: expected,
@@ -1772,6 +1781,7 @@ fn manifest_validation_covers_forbidden_cross_lane_fields() {
 
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
     native.load = DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+        forward_env: vec![],
         max_message_bytes: None,
         callback_timeouts: None,
         runtime: Some(WorkerRuntime::Rust),
@@ -1902,6 +1912,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
             native_api: "1".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        forward_env: vec![],
         max_message_bytes: None,
         callback_timeouts: None,
         runtime: WorkerRuntime::Rust,
@@ -2171,5 +2182,52 @@ fn worker_callback_deadlines_validate_and_round_trip() {
             DynamicPluginManifest::parse_toml(&invalid).is_err(),
             "accepted {invalid}"
         );
+    }
+}
+
+#[test]
+fn worker_forward_env_round_trips_and_is_preserved_in_records() {
+    for patterns in [
+        vec![],
+        vec!["EXAMPLE_CONTEXT_ID", "EXAMPLE_*", "_CUSTOM", "a1"],
+    ] {
+        let authored = valid_worker_manifest_toml()
+            .replace("[load]", &format!("[load]\nforward_env = {patterns:?}"));
+        let manifest = DynamicPluginManifest::parse_toml(&authored).unwrap();
+        let serialized = toml::to_string(&manifest).unwrap();
+        assert_eq!(
+            DynamicPluginManifest::parse_toml(&serialized).unwrap(),
+            manifest
+        );
+        let record = manifest.into_record(None).unwrap();
+        let DynamicPluginLoadContract::Worker(load) = record.load else {
+            panic!("expected worker load");
+        };
+        assert_eq!(load.forward_env, patterns);
+    }
+}
+
+#[test]
+fn worker_forward_env_rejects_invalid_patterns_and_native_manifests() {
+    for pattern in [
+        "",
+        "*",
+        "EX*AMPLE",
+        "EXAMPLE_**",
+        "1NAME",
+        " HAS_SPACE",
+        "A=B",
+        "A?",
+        "A-B",
+    ] {
+        let authored = valid_worker_manifest_toml()
+            .replace("[load]", &format!("[load]\nforward_env = [{pattern:?}]"));
+        let err = DynamicPluginManifest::parse_toml(&authored).unwrap_err();
+        assert!(err.to_string().contains("load.forward_env"), "{err}");
+    }
+    for patterns in ["[]", "[\"EXAMPLE_*\"]"] {
+        let authored = valid_rust_manifest_toml()
+            .replace("[load]", &format!("[load]\nforward_env = {patterns}"));
+        assert!(DynamicPluginManifest::parse_toml(&authored).is_err());
     }
 }

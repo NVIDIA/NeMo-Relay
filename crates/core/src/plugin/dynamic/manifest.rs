@@ -129,6 +129,9 @@ pub struct DynamicPluginManifestWorkerLoad {
     /// Worker entrypoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// Host environment names or trailing-wildcard prefixes to forward at launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forward_env: Vec<String>,
     /// Per-RPC byte limits for this plugin; host environment settings override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_message_bytes: Option<WorkerMessageLimits>,
@@ -191,6 +194,8 @@ enum DynamicPluginManifestLoadSchema {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct RawDynamicPluginManifestLoad {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    forward_env: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime: Option<WorkerRuntime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entrypoint: Option<String>,
@@ -211,7 +216,8 @@ impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
         D: Deserializer<'de>,
     {
         let raw = RawDynamicPluginManifestLoad::deserialize(deserializer)?;
-        let has_worker_fields = raw.runtime.is_some()
+        let has_worker_fields = raw.forward_env.is_some()
+            || raw.runtime.is_some()
             || raw.entrypoint.is_some()
             || raw.max_message_bytes.is_some()
             || raw.callback_timeouts.is_some();
@@ -219,6 +225,7 @@ impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
 
         match (has_worker_fields, has_native_fields) {
             (true, false) => Ok(Self::Worker(DynamicPluginManifestWorkerLoad {
+                forward_env: raw.forward_env.unwrap_or_default(),
                 runtime: raw.runtime,
                 entrypoint: raw.entrypoint,
                 max_message_bytes: raw.max_message_bytes,
@@ -246,6 +253,7 @@ impl Serialize for DynamicPluginManifestLoad {
     {
         let raw = match self {
             Self::Worker(load) => RawDynamicPluginManifestLoad {
+                forward_env: (!load.forward_env.is_empty()).then(|| load.forward_env.clone()),
                 runtime: load.runtime,
                 entrypoint: load.entrypoint.clone(),
                 max_message_bytes: load.max_message_bytes.clone(),
@@ -254,6 +262,7 @@ impl Serialize for DynamicPluginManifestLoad {
                 symbol: None,
             },
             Self::RustDynamic(load) => RawDynamicPluginManifestLoad {
+                forward_env: None,
                 runtime: None,
                 entrypoint: None,
                 max_message_bytes: None,
@@ -681,6 +690,19 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
+            for pattern in &load.forward_env {
+                let name = pattern.strip_suffix('*').unwrap_or(pattern);
+                let mut bytes = name.bytes();
+                if !bytes
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                    || !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "load.forward_env entries must be environment variable names with an optional trailing '*'".into(),
+                    ));
+                }
+            }
             if let Some(limits) = &load.max_message_bytes {
                 if limits
                     .default_bytes
@@ -716,6 +738,7 @@ impl DynamicPluginManifestLoad {
         match self {
             Self::Worker(load) => {
                 DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                    forward_env: load.forward_env,
                     max_message_bytes: load.max_message_bytes,
                     callback_timeouts: load.callback_timeouts,
                     runtime: load

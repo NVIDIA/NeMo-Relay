@@ -27,7 +27,7 @@ for the configuration shape.
 | `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
 | `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
 | `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
-| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `callback_timeouts` and `max_message_bytes` here. |
+| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `forward_env`, `callback_timeouts`, and `max_message_bytes` here. |
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
 not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
@@ -115,6 +115,45 @@ Success means package validation passes before activation, tampering causes inte
 validation to fail, the runtime report identifies the dynamic component, and teardown
 removes its registrations before the library unloads or worker exits. The operator-side
 trust policy and file layout are documented in [Manage](/configure-plugins/discoverable-plugins).
+
+## Forward Host Environment Variables
+
+Add `load.forward_env` to `relay-plugin.toml` to pass selected host environment
+variables to a managed worker. This setting supports Python, Rust, and workers
+that Relay starts with a custom command. The following example selects one
+variable and all variables that start with `EXAMPLE_CONFIG_`:
+
+```toml
+[load]
+runtime = "python"
+entrypoint = "example_plugin"
+forward_env = ["EXAMPLE_CONTEXT_ID", "EXAMPLE_CONFIG_*"]
+```
+
+This option requires Relay 0.11 or later. Set `compat.relay` to a range such as
+`>=0.11.0,<1.0` if your plugin needs forwarded variables.
+
+Names must start with an ASCII letter or underscore. The rest of the name can
+contain ASCII letters, digits, and underscores. An optional `*` at the end matches
+any suffix, including an empty suffix. You can't use `*` alone or leave an entry
+empty. Names are case-sensitive on Unix. Windows ignores letter case.
+
+Relay reads the selected variables when it starts the worker. It skips missing
+variables. Relay also keeps these host variables when they exist: `PATH`,
+`SYSTEMROOT`, `WINDIR`, `TMPDIR`, `TEMP`, `TMP`, `SSL_CERT_FILE`, and `SSL_CERT_DIR`.
+If you omit `forward_env` or set it to `[]`, Relay forwards no other host variables.
+Reactivate the plugin to apply changes.
+
+The plugin author sets this option in the manifest. Component settings stay in
+`plugins.toml`. Relay stores only the names and patterns in the plugin record.
+It does not show forwarded values in plugin inspection output. Relay supplies its
+own token, endpoints, and message limits. Forwarded values cannot replace these
+settings.
+
+Worker plugins are trusted code. Running them in a separate process does not
+make them a security sandbox. Relay does not block any selected variable by name.
+Choose specific names or narrow prefixes. The plugin can read any credentials
+you forward. Settings such as `PYTHONPATH` can change how the worker starts.
 
 ## Worker Message Limits
 

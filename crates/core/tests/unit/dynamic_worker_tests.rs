@@ -591,6 +591,20 @@ fn python_worker_launch_clears_host_python_environment() {
 #[test]
 /// Preserves interpreter selection and forwards endpoint and transport settings.
 fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
+    const CHILD: &str = "RELAY_FORWARD_LAUNCH_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "plugin::dynamic::worker::tests::python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file", "--nocapture"])
+            .env(CHILD, "1")
+            .env("NEMO_RELAY_WORKER_TOKEN", "stale token")
+            .env("NEMO_RELAY_WORKER_ENDPOINT_FILE", "stale path")
+            .env("RELAY_FORWARD_LAUNCH", "forwarded value")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+
     let plugin_id = "acme.python.launch";
     let digest = Sha256::digest(plugin_id.as_bytes())
         .iter()
@@ -604,7 +618,7 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     std::fs::write(
         &interpreter,
         format!(
-            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" \"$NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES\" > '{}'\nexit 0\n",
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" \"$NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES\" \"$NEMO_RELAY_WORKER_TOKEN\" \"$RELAY_FORWARD_LAUNCH\" > '{}'\nexit 0\n",
             probe.display()
         ),
     )
@@ -614,30 +628,38 @@ fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file()
     std::fs::set_permissions(&interpreter, permissions).unwrap();
 
     let endpoint_file = temp.path().join("worker-endpoint");
-    let mut child = spawn_worker_process(WorkerProcessLaunch {
-        runtime: WorkerRuntime::Python,
-        manifest_path: &temp.path().join("plugin.toml"),
-        environment_ref: managed.to_str(),
-        plugin_id,
-        entrypoint: "acme_worker:create_plugin",
-        activation_id: "activation",
-        auth_token: "token",
-        host_endpoint: "http://127.0.0.1:1",
-        worker_endpoint: "http://127.0.0.1:2",
-        worker_endpoint_file: Some(&endpoint_file),
-        max_message_bytes: &WorkerCallbackMessageLimits {
-            default_bytes: 16 * 1024 * 1024,
-            ..Default::default()
-        },
-    })
-    .unwrap();
-    assert!(child.wait().unwrap().success());
-    let recorded = std::fs::read_to_string(&probe).unwrap();
-    let mut lines = recorded.lines();
-    assert_eq!(lines.next(), interpreter.to_str());
-    assert_eq!(lines.next(), endpoint_file.to_str());
-    assert_eq!(lines.next(), Some("16777216"));
-    assert_eq!(lines.next(), None);
+    for endpoint in [Some(endpoint_file.as_path()), None] {
+        let mut child = spawn_worker_process(WorkerProcessLaunch {
+            forward_env: &["NEMO_RELAY_*".into(), "RELAY_FORWARD_LAUNCH".into()],
+            runtime: WorkerRuntime::Python,
+            manifest_path: &temp.path().join("plugin.toml"),
+            environment_ref: managed.to_str(),
+            plugin_id,
+            entrypoint: "acme_worker:create_plugin",
+            activation_id: "activation",
+            auth_token: "token",
+            host_endpoint: "http://127.0.0.1:1",
+            worker_endpoint: "http://127.0.0.1:2",
+            worker_endpoint_file: endpoint,
+            max_message_bytes: &WorkerCallbackMessageLimits {
+                default_bytes: 16 * 1024 * 1024,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        assert!(child.wait().unwrap().success());
+        let recorded = std::fs::read_to_string(&probe).unwrap();
+        let mut lines = recorded.lines();
+        assert_eq!(lines.next(), interpreter.to_str());
+        assert_eq!(
+            lines.next(),
+            Some(endpoint.and_then(Path::to_str).unwrap_or(""))
+        );
+        assert_eq!(lines.next(), Some("16777216"));
+        assert_eq!(lines.next(), Some("token"));
+        assert_eq!(lines.next(), Some("forwarded value"));
+        assert_eq!(lines.next(), None);
+    }
 }
 
 #[cfg(not(unix))]
@@ -6109,4 +6131,92 @@ async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors
         assert!(tx.is_closed());
         assert!(stream.next().await.is_none());
     }
+}
+
+#[test]
+fn worker_environment_forwarding_is_opt_in() {
+    const CHILD: &str = "RELAY_FORWARD_ENV_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "plugin::dynamic::worker::tests::worker_environment_forwarding_is_opt_in",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("RELAY_FORWARD_EXACT", "exact value")
+            .env("RELAY_FORWARD_PREFIX_ONE", "prefix value")
+            .env("RELAY_FORWARD_PREFIX_", "")
+            .env("PYTHONPATH", "/explicit/plugin/path")
+            .env("RELAY_FORWARD_PREFIX", "not a prefix match")
+            .env("RELAY_FORWARD_UNSELECTED", "not selected")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let mut command = Command::new("unused");
+    minimize_worker_environment(&mut command, &[]);
+    assert!(
+        !command
+            .get_envs()
+            .any(|(key, _)| key == "RELAY_FORWARD_EXACT")
+    );
+    for name in ["PATH", "TMPDIR", "TEMP", "SSL_CERT_FILE"] {
+        if let Some(value) = std::env::var_os(name) {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, v)| key == name && v == Some(value.as_os_str()))
+            );
+        }
+    }
+    let patterns = [
+        "RELAY_FORWARD_EXACT",
+        "RELAY_FORWARD_PREFIX_*",
+        "RELAY_FORWARD_MISSING",
+        "PYTHONPATH",
+    ]
+    .map(String::from);
+    minimize_worker_environment(&mut command, &patterns);
+    let selected = command
+        .get_envs()
+        .filter_map(|(key, value)| value.map(|v| (key.to_owned(), v.to_owned())))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_EXACT"))
+            .unwrap(),
+        "exact value"
+    );
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_PREFIX_ONE"))
+            .unwrap(),
+        "prefix value"
+    );
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_PREFIX_"))
+            .unwrap(),
+        ""
+    );
+    assert_eq!(
+        selected.get(std::ffi::OsStr::new("PYTHONPATH")).unwrap(),
+        "/explicit/plugin/path"
+    );
+    for name in [
+        "RELAY_FORWARD_UNSELECTED",
+        "RELAY_FORWARD_PREFIX",
+        "RELAY_FORWARD_MISSING",
+    ] {
+        assert!(!selected.contains_key(std::ffi::OsStr::new(name)));
+    }
+    minimize_worker_environment(&mut command, &["relay_forward_exact".into()]);
+    assert_eq!(
+        command
+            .get_envs()
+            .any(|(key, value)| key == "RELAY_FORWARD_EXACT" && value.is_some()),
+        cfg!(windows)
+    );
 }
