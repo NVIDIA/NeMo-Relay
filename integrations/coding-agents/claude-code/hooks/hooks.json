@@ -145,6 +145,17 @@
           }
         ]
       }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only --fail-open",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
     ]
   }
 }

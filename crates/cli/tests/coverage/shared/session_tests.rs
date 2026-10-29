@@ -11773,3 +11773,104 @@ async fn invalid_or_provider_trace_context_leaves_the_session_in_a_new_trace() {
     drop(sessions);
     manager.close_all("test_shutdown").await.unwrap();
 }
+
+#[tokio::test]
+async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
+    let subscriber_name = "cli-claude-stop-failure-test";
+    let captured = Arc::new(StdMutex::new(Vec::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "claude-code-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("claude-stop-failure")
+            {
+                events.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    let session_id = "claude-stop-failure";
+    for hook in ["SessionStart", "UserPromptSubmit"] {
+        let outcome = crate::agents::shared::adapters::claude_code::adapt(
+            json!({"session_id": session_id, "hook_event_name": hook, "prompt": "hello"}),
+            &headers,
+        );
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+    let first_turn = manager
+        .inner
+        .lock()
+        .await
+        .get(session_id)
+        .unwrap()
+        .turn_scope
+        .clone()
+        .unwrap();
+    // A previous successful model response must not mask the terminal failure.
+    manager
+        .inner
+        .lock()
+        .await
+        .get_mut(session_id)
+        .unwrap()
+        .last_turn_llm_output = Some(json!({"message": "earlier response"}));
+    let outcome = crate::agents::shared::adapters::claude_code::adapt(
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "StopFailure",
+            "error": "model_not_found",
+            "error_details": "model unavailable"
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, outcome.events)
+        .await
+        .unwrap();
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get(session_id).unwrap();
+        assert!(session.turn_scope.is_none());
+        assert!(session.session_started);
+    }
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        let end = events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::End))
+            .unwrap();
+        assert_eq!(end.uuid(), first_turn.uuid);
+        assert_eq!(end.output().unwrap()["status"], "error");
+        assert_eq!(end.output().unwrap()["error"], "model_not_found");
+        assert_eq!(end.output().unwrap()["error_details"], "model unavailable");
+        assert_eq!(end.metadata().unwrap()["otel.status_code"], "ERROR");
+        assert_eq!(end.metadata().unwrap()["error.type"], "model_not_found");
+    }
+    let outcome = crate::agents::shared::adapters::claude_code::adapt(
+        json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit", "prompt": "retry"}),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, outcome.events)
+        .await
+        .unwrap();
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get(session_id).unwrap();
+        assert_ne!(session.turn_scope.as_ref().unwrap().uuid, first_turn.uuid);
+    }
+    manager.close_all("test_done").await.unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber(subscriber_name).unwrap();
+}
