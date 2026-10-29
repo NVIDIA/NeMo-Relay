@@ -792,6 +792,8 @@ export declare class AtofExporter {
    * timeout is logged and does not by itself return an error.
    */
   shutdown(): void
+  /** Return delivery diagnostics recorded by this exporter's stream sink. */
+  runtimeDiagnostics(): Array<{ code: string; message: string; count: number }>
 }
 ```
 
