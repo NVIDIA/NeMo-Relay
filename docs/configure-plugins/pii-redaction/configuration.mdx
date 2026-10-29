@@ -43,8 +43,7 @@ The following shared fields belong under `[components.config]` in either form:
 | `profiles` | Array of objects | Unset | Ordered policies. Omit to use the single-policy form. |
 | `policy` | Object | See details | Handling of unknown components, unknown fields, and unsupported values. |
 
-<details>
-<summary>How to choose a codec</summary>
+#### How to choose a codec
 
 Choose the value by the API payload format:
 
@@ -66,12 +65,9 @@ For a mixed-provider gateway, rely on the active codec of each call. The
 [LLM request-only example](#targeting-and-composition) shows the selector boundary
 for an OpenAI Chat Completions request.
 
-</details>
-
 <a id="configuration-policy" />
 
-<details>
-<summary>Configuration validation policy</summary>
+#### Configuration validation policy
 
 Set these fields under `[components.config.policy]` to control configuration
 diagnostics. Each accepts `ignore`, `warn`, or `error`.
@@ -84,8 +80,6 @@ diagnostics. Each accepts `ignore`, `warn`, or `error`.
 
 The global plugin policy can also affect the resolved policy. Refer to
 [Configure](/configure-plugins/plugin-configuration-files) for precedence.
-
-</details>
 
 ### Profile Settings
 
@@ -102,8 +96,7 @@ These fields belong under each `[[components.config.profiles]]` entry:
 At least one profile must be enabled. Use either profiles or the
 [single-policy settings](#single-policy-settings); do not combine the two forms.
 
-<details>
-<summary>How profiles compose and execute</summary>
+#### How profiles compose and execute
 
 Profiles execute by ascending `priority`, with array order breaking ties.
 Relay assigns internal positional names such as `profile_0`; no user-supplied
@@ -118,8 +111,6 @@ Profile lists concatenate during configuration layering, with higher-precedence
 profiles placed before lower-precedence profiles. Refer to
 [Configure](/configure-plugins/plugin-configuration-files) for file discovery
 and merge rules.
-
-</details>
 
 <a id="built-in-mode" />
 
@@ -177,20 +168,18 @@ When `profiles` is omitted, set these fields directly under `[components.config]
 At least one surface flag must be enabled. These fields cannot be combined
 with `profiles`; profile entries do not accept surface flags.
 
-<details>
-<summary>How surface flags apply to scope events</summary>
+**[Jump to Worked Examples](#worked-examples)**
+
+#### How surface flags apply to scope events
 
 Scope-start processing is enabled when either `input` or `tool_input` is `true`;
 scope-end processing is enabled when either `output` or `tool_output` is `true`.
 On LLM and tool events, metadata follows the corresponding LLM or tool flag.
 Other scope categories use the enabled shared scope-start or scope-end hook.
 
-</details>
-
 <a id="backend-support" />
 
-<details>
-<summary>Backend support and local-model settings</summary>
+#### Backend support and local-model settings
 
 The following table compares the available PII redaction backends:
 
@@ -206,7 +195,7 @@ The following table compares the available PII redaction backends:
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, `gemini_generate_content` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
 
-#### Local Backend Fields
+##### Local Backend Fields
 
 Use `[components.config.profiles.local]` or `[components.config.local]`:
 
@@ -218,11 +207,11 @@ Use `[components.config.profiles.local]` or `[components.config.local]`:
 | `allow_network` | Boolean | Unset | Network access setting for a runtime-provided backend. |
 | `max_latency_ms` | Nonnegative integer | Unset | Target latency budget in milliseconds. |
 
-#### Local Model Mode
+##### Local Model Mode
 
 `local_model` is reserved for a future in-process local-model backend.
 
-#### Current Status
+##### Current Status
 
 The current local-model status is:
 
@@ -238,16 +227,13 @@ The current local-model status is:
 Without a provider, runtimes report the local backend as unavailable during
 plugin initialization.
 
-</details>
-
 ## Detailed Behavior
 
 ### Action Semantics
 
-<details>
-<summary>How each action changes a selected value</summary>
+#### How each action changes a selected value
 
-#### `remove`
+##### `remove`
 
 `remove` is structural.
 
@@ -263,7 +249,7 @@ When a target matches:
   its annotation instead.
 - Targeted scalar or root values become `null`.
 
-#### `regex_replace`
+##### `regex_replace`
 
 `regex_replace` applies the configured regex to matching string leaves and
 replaces matches with the configured `replacement`.
@@ -271,7 +257,7 @@ replaces matches with the configured `replacement`.
 If you set `detector` instead of `pattern`, the built-in backend uses the
 detector's stock matcher regex.
 
-#### `redact`
+##### `redact`
 
 `redact` is the deterministic whole-match replacement lane.
 
@@ -285,14 +271,14 @@ Use `redact` when you want:
 - a consistent redaction token across detectors
 - clearer policy intent than a custom `regex_replace`
 
-#### `hash`
+##### `hash`
 
 `hash` replaces matching string leaves with their SHA-256 hex digest.
 
 When `pattern` or `detector` is set, `hash` only replaces the matching
 substring instead of hashing the entire string leaf.
 
-#### `mask`
+##### `mask`
 
 `mask` replaces the middle portion of each matching string leaf with the
 configured `mask_char`.
@@ -322,12 +308,9 @@ When `detector` is set and you do not specify `unmasked_prefix` or
 - `gcp_api_key`: Preserves the `AIza`-style prefix and the last four characters
 - `azure_storage_account_key`: Preserves the last four characters
 
-</details>
-
 ### Detector Presets
 
-<details>
-<summary>Supported detectors and matching rules</summary>
+#### Supported detectors and matching rules
 
 The built-in detector presets are grouped into three deterministic families:
 
@@ -364,12 +347,9 @@ For actions other than `remove`, if both target-selector lists are empty, the
 built-in backend sanitizes every matching string leaf in the selected payload
 boundary. The `remove` action requires at least one selector.
 
-</details>
-
 ### Observability Semantics
 
-<details>
-<summary>Payload boundaries and event publication</summary>
+#### Payload boundaries and event publication
 
 The plugin uses different payload boundaries for tools and LLMs:
 
@@ -423,12 +403,9 @@ fields remain unchanged. This prevents repeated hashing or masking. Other scope
 categories use the shared scope-start and scope-end hooks described under
 [Single-Policy Settings](#single-policy-settings).
 
-</details>
-
 ### Path Semantics
 
-<details>
-<summary>Exact pointers, globs, and container selection</summary>
+#### Exact pointers, globs, and container selection
 
 `target_paths` are exact RFC 6901 JSON-pointer matches. `target_path_globs`
 adds a restricted, opt-in selector language: a whole `*` segment matches one
@@ -468,12 +445,9 @@ start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
 pointers prevent activation instead of silently leaving the intended values
 unsanitized.
 
-</details>
-
 ### Trajectory Context Preset
 
-<details>
-<summary>What the trajectory preset removes and preserves</summary>
+#### What the trajectory preset removes and preserves
 
 `trajectory_context` is a fail-closed policy for metrics-oriented trajectory
 export. It discards original LLM request and response payloads and generates
@@ -515,12 +489,9 @@ suitable correlation keys. To retain an unknown custom mark unchanged, set
 `custom_mark_payload_policy = "preserve"` explicitly and only for a trusted
 producer.
 
-</details>
-
 ### Typed Metric Marks
 
-<details>
-<summary>Typed metric sanitization and allowed dimensions</summary>
+#### Typed metric sanitization and allowed dimensions
 
 Relay recognizes marks that use its `nemo.relay.metric_measurements` schema as
 typed metric envelopes. PII sanitization preserves the measurement name, kind,
@@ -563,12 +534,9 @@ all other opaque fields are discarded.
 
 Refer to the **Metric dimensions** example in [Targeting and Composition](#targeting-and-composition) for a complete configuration and payload comparison.
 
-</details>
-
 ### CLI Editor Support
 
-<details>
-<summary>Setup and interactive editing</summary>
+#### Setup and interactive editing
 
 The CLI and primary language bindings register the component. Direct Rust
 applications must call
@@ -598,8 +566,6 @@ discarded by the interactive edit flow.
 
 If your policy needs callback code instead of editor or configuration fields,
 use raw middleware.
-
-</details>
 
 ## Worked Examples
 
@@ -1347,8 +1313,7 @@ The final model response is sanitized independently:
 Response text and the response ID use the replacement marker. Token counts,
 model, finish reason, and the assistant role remain available.
 
-<details>
-<summary>Initial tool-call response and standalone tool events</summary>
+#### Initial tool-call response and standalone tool events
 
 The first model response proposes the same tool call. Its correlation ID
 survives even though its arguments are removed:
@@ -1431,8 +1396,6 @@ published argument and result payloads are empty objects:
 Both events retain `tool_call_id = "call_lookup_1"`, so exporters can link the
 execution and result to the model's request. The application receives the
 original tool result and LLM responses; sanitization affects observability data.
-
-</details>
 
 Refer to [Trajectory Context Preset](#trajectory-context-preset) for the full
 preservation contract, codec requirements, and custom-mark behavior.
@@ -1541,8 +1504,7 @@ Zero counts are informational: some traffic legitimately lacks the configured
 path or a matching sensitive value. Diagnostic detail includes only bounded
 counts, never the original matched content.
 
-<details>
-<summary>Selection accounting and component keys</summary>
+### Selection accounting and component keys
 
 With `action = "remove"`, a child string inside a selected container can count
 as selected even though removing the container prevents the sanitizer from
@@ -1557,5 +1519,3 @@ with a single profile. Single-policy observations use `pii_redaction.selector`.
 The `trajectory_context` preset uses its semantic sanitization path rather than
 this selector diagnostic. Use the preset when the goal is broad payload removal;
 refer to [Trajectory Context Preset](#trajectory-context-preset).
-
-</details>
