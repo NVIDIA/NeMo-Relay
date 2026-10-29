@@ -14,30 +14,35 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+# First-party crates.
 nemo-relay.workspace = true
-log = { version = "0.4", features = ["kv"] }
-uuid = { workspace = true, features = ["v4", "v7", "serde"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2"
-tdigest = { version = "0.2", features = ["use_serde"] }
-tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "time"] }
-tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
-regex = "1"
-serde_json_canonicalizer = "0.3"
-sha2 = "0.11"
-strum = { version = "0.27", features = ["derive"] }
 
-redis = { version = "1.1", features = ["tokio-comp", "connection-manager"], optional = true }
+# Third-party dependencies.
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+log = { workspace = true, features = ["kv"] }
+redis = { workspace = true, features = ["tokio-comp", "connection-manager"], optional = true }
+regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_json_canonicalizer.workspace = true
+sha2.workspace = true
+strum = { workspace = true, features = ["derive"] }
+tdigest = { workspace = true, features = ["use_serde"] }
+thiserror.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [features]
 redis-backend = ["redis"]
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dev-dependencies]
+# First-party crates.
 nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
-tokio = { workspace = true, default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
+
+# Third-party dependencies.
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
 
 [[test]]
 name = "redis_integration"
