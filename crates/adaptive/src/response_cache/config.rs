@@ -232,8 +232,8 @@ pub struct ToolCacheConfig {
     /// Master switch; off by default.
     pub enabled: bool,
     /// Tool execution-intercept priority. Defaults to `150`.
-    /// Lower values run first. The default places NeMo Guardrails (`100`)
-    /// before the cache, so guardrails runs on cache hits.
+    /// Lower values run first. Give guardrails a lower priority than the
+    /// cache so guardrails run on cache hits.
     pub priority: i32,
     /// Whether conventional in-band tool error results may be stored.
     pub cache_errors: bool,

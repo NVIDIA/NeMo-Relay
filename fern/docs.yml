@@ -100,18 +100,20 @@ redirects:
   destination: /nemo/relay/configure-plugins/adaptive/acg
 - source: /nemo/relay/adaptive-plugin/adaptive-hints
   destination: /nemo/relay/configure-plugins/adaptive/adaptive-hints
-- source: /nemo/relay/nemo-guardrails-plugin/about
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
-- source: /nemo/relay/nemo-guardrails-plugin/configuration
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/configuration
+- source: /nemo/relay/dev/nemo-guardrails-plugin/about
+  destination: /nemo/relay/dev/reference/migration-guides
+- source: /nemo/relay/dev/nemo-guardrails-plugin/configuration
+  destination: /nemo/relay/dev/reference/migration-guides
 - source: /nemo/relay/pii-redaction-plugin/about
   destination: /nemo/relay/configure-plugins/pii-redaction/about
 - source: /nemo/relay/pii-redaction-plugin/configuration
   destination: /nemo/relay/configure-plugins/pii-redaction/configuration
 
-# Legacy release documentation
-- source: /nemo/relay/v0.3.0/build-plugins/nemoguardrails
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
+# Removed built-in plugin documentation
+- source: /nemo/relay/dev/configure-plugins/nemo-guardrails/about
+  destination: /nemo/relay/dev/reference/migration-guides
+- source: /nemo/relay/dev/configure-plugins/nemo-guardrails/configuration
+  destination: /nemo/relay/dev/reference/migration-guides
 
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide

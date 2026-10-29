@@ -362,10 +362,6 @@ After the upgrade, verify worker status and an observable plugin result.
 
 #### Review HTTP Error Handling
 
-Remote NeMo Guardrails failures now preserve the received HTTP status through
-`FlowError::Upstream`. Update Rust error matches that expected
-`FlowError::Internal`.
-
 Plugin error messages with the exact form `HTTP <status>: <message>` now carry
 an HTTP status. The status must be from `400` through `599`. Review existing
 callback errors that use this form. Use the SDK's `http_error_message` helper
@@ -375,6 +371,16 @@ HTTP response status. Refer to
 [Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
 
 ### Configuration and Deployment
+
+#### Remove Built-In NeMo Guardrails Configuration
+
+The built-in `nemo_guardrails` plugin has been removed, including its local
+Python worker, remote backend, CLI editor, and Rust `guardrails-remote`
+feature. Remove existing `nemo_guardrails` entries from `plugins.toml` and
+application plugin configuration, and remove the Cargo feature from Rust
+dependencies. Validation reports the removed kind as an unknown component,
+and enabled entries prevent plugin activation. No replacement plugin is
+included in this release.
 
 #### Review Configuration Loaded by Workers
 
@@ -392,9 +398,8 @@ authentication variables. Refer to
 #### Keep Policy Checks Before Caches
 
 Large language model (LLM) and tool response caches now use priority `150` by
-default. NeMo Guardrails uses `100`. Lower values run first. Review explicit
-priorities so policy checks run before cache lookups, including on cache hits.
-The LLM cache does not run when remote NeMo Guardrails handles a call. Refer to
+default. Lower values run first. Review explicit priorities so policy checks
+run before cache lookups, including on cache hits. Refer to
 [Response Cache](/configure-plugins/adaptive/response-cache).
 
 #### Review Operational Logging

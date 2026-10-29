@@ -46,6 +46,10 @@ configuration, and stream error handling. Review the
 
 The main compatibility changes affect these areas:
 
+- The built-in `nemo_guardrails` plugin and `guardrails-remote` Cargo feature
+  have been removed. Remove existing component entries and Rust feature
+  references before upgrading. No replacement plugin is included. Refer to
+  [Remove Built-In NeMo Guardrails Configuration](/reference/migration-guides#remove-built-in-nemo-guardrails-configuration).
 - Node.js applications and package workflows require Node.js 24.13.1 or later.
 - LangChain and LangGraph tool results use the `nemo.relay.tool_result@1`
   JSON wrapper. It holds display content, failure status, and result values
@@ -287,11 +291,6 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
   times out.
 - OpenClaw provides telemetry through public hooks. Its security and
   optimization coverage is partial because Relay does not manage its execution.
-- The built-in `nemo_guardrails` plugin remains deprecated but is still
-  available in 0.11.0. No replacement is included. The remote backend
-  depends on its configured service's availability, latency, and policy behavior.
-  The local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`.
-  Refer to [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
 - The personally identifiable information (PII) redaction plugin supports its
   local backend based on fixed rules. Local-model backend configuration is
   reserved for future work.

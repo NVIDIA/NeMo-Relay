@@ -490,10 +490,9 @@ payloads only; they do not change the real arguments, result, or cache key.
 outermost. A hit returns before later execution interceptors and the managed
 callback.
 
-LLM and tool caches use priority `150` by default. NeMo Guardrails uses `100`.
-Lower values run first, so guardrails runs before the cache. This keeps
-guardrails active on cache hits. The LLM cache does not run when remote NeMo
-Guardrails handles a call.
+LLM and tool caches use priority `150` by default. Lower values run first.
+Give guardrails a lower priority than the cache so guardrails run on cache
+hits.
 
 For custom priorities, give each cache a higher value than any policy check
 that must run on hits. Review custom values when you upgrade.
