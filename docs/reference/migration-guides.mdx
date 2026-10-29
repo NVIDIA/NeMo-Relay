@@ -216,7 +216,7 @@ identifiable information (PII) filtering.
 | ATIF messages | Accept a string for text-only step messages. Review content-part readers against the corrected ATIF output. Refer to [ATIF](/configure-plugins/observability/atif). |
 | Tool failures | LangChain and LangGraph tools that return a handled error now have an `ERROR` span status. The framework still receives the tool result. Refer to [LangChain](/supported-integrations/langchain#observability). |
 | Manual model failures | Set `otel.status_code` to `"ERROR"` in end-call metadata to report a failed call. Relay now preserves that status. Refer to [Reporting a Manual Call Failure](/integrate-into-frameworks/wrap-llm-calls#reporting-a-manual-call-failure). |
-| PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration). |
+| PII status metadata | The `trajectory_context` preset keeps recognized status codes and error classifications. It still removes free-form descriptions and exception names. Refer to [PII Redaction Behavior](/configure-plugins/pii-redaction/redaction-behavior#trajectory-context-preset). |
 | Gemini usage and cost | Estimates now include thinking tokens and supported tool-use prompt tokens. Unknown or mixed tool evidence can leave cost unset. Do not treat missing cost as zero. Refer to [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics). |
 
 Review cost estimates that include cached input. Relay now bills uncached input,
