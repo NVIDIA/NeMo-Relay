@@ -55,7 +55,7 @@ state, or external lookups.
 | LLM scope start and end | Request data at start, response data at end, and scope metadata. LLM selectors use the active codec's representation. |
 | Tool scope start and end | Arguments at start; result values and result annotations at end; scope metadata on both. Results and annotations are sanitized as separate JSON documents. |
 | Marks within the active scope | `data`, `category_profile`, and `metadata`, each sanitized independently when the mark is published. |
-| Other scope starts and ends | `data`, `category_profile`, and `metadata` on each start or end event. |
+| Other scope starts and ends | `data`, `category_profile`, and `metadata`. With a single policy, starts require `input` or `tool_input`; ends require `output` or `tool_output`. |
 
 With `profiles`, each enabled profile applies to all supported surfaces. To
 control which surfaces are sanitized, configure a single policy directly under
@@ -73,7 +73,10 @@ for payload boundaries and normalized selector examples.
 
 This `plugins.toml` profile replaces detected email addresses in observability
 text with `[REDACTED]`. Omitting path selectors lets the detector inspect every
-string leaf in each supported payload.
+string leaf in ordinary payloads. For typed metric marks, it sanitizes descriptions
+and string attributes while preserving measurement names. Refer to
+[Typed Metric Marks](/configure-plugins/pii-redaction/configuration#typed-metric-marks)
+for the metric-specific rules.
 
 ```toml
 version = 1
