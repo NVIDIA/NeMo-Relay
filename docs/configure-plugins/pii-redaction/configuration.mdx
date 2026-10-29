@@ -125,7 +125,7 @@ implements deterministic actions and detector presets.
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
 | `preset` | String | Unset | Set to `trajectory_context` for broad conversational-content removal while retaining supported analytics. |
-| `action` | String | `remove` | `remove`, `redact`, `regex_replace`, `hash`, or `mask`. Choose an action explicitly, or use `preset`. |
+| `action` | String | `remove` | `remove`, `redact`, `regex_replace`, `hash` (SHA-256), or `mask`. Choose an action explicitly, or use `preset`. |
 | `target_paths` | Array of strings | `[]` | Exact RFC 6901 pointers. Combined with `target_path_globs`. |
 | `target_path_globs` | Array of strings | `[]` | Pointer globs; each whole `*` segment matches one key or index. Recursive `**` is unsupported. |
 | `pattern` | String | Unset | Regex matcher. Use either `pattern` or `detector`, never both. |
@@ -481,9 +481,10 @@ unmasked_suffix = 4
 Without a detector, the explicit suffix setting applies to the whole selected string.
 
 </Tab>
-<Tab title="Hash text">
+<Tab title="Hash text (SHA-256)">
 
-Replace a customer identifier with its SHA-256 hexadecimal digest.
+Use `action = "hash"` to replace a customer identifier with its SHA-256
+hexadecimal digest.
 
 **Configuration**
 
@@ -518,7 +519,9 @@ target_paths = ["/customer_id"]
 }
 ```
 
-Without a matcher, the entire selected string is hashed. A configured pattern or detector limits hashing to matched substrings.
+Without a matcher, `hash` computes SHA-256 for the entire selected string.
+With a pattern or detector, it computes a separate digest for each matching
+substring, leaving the surrounding text unchanged.
 
 </Tab>
 <Tab title="Regex replacement">

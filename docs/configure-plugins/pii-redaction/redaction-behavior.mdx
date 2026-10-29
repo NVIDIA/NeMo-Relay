@@ -94,12 +94,16 @@ Use `redact` when you want:
 - a consistent redaction token across detectors
 - clearer policy intent than a custom `regex_replace`
 
-#### `hash`
+<a id="hash" />
 
-`hash` replaces matching string leaves with their SHA-256 hex digest.
+#### `hash` (SHA-256)
 
-When `pattern` or `detector` is set, `hash` only replaces the matching
-substring instead of hashing the entire string leaf.
+`hash` uses SHA-256 on the UTF-8 bytes of the selected text, without a salt.
+It returns the digest as 64 lowercase hexadecimal characters.
+
+Without `pattern` or `detector`, the entire selected string is hashed.
+With either matcher, each matching substring gets its own SHA-256 digest;
+unmatched text is preserved.
 
 #### `mask`
 

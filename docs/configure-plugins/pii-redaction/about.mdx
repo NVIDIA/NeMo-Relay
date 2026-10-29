@@ -11,8 +11,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 The PII redaction plugin removes or transforms sensitive values in NeMo Relay
 observability data before subscribers and exporters receive it. Use it to redact
-email addresses, remove private fields, mask or hash selected text, or remove
-conversational content from exported trajectories.
+email addresses, remove private fields, mask selected text, replace text with
+SHA-256 hashes, or remove conversational content from exported trajectories.
 
 Configure the first-party `pii_redaction` component in `plugins.toml` or through
 `nemo-relay plugins edit` to share a privacy policy across applications.
@@ -128,7 +128,7 @@ for the supported formats.
 | --- | --- |
 | Replace detected sensitive text | Use `redact` with a built-in detector or custom pattern. |
 | Remove a known field or container | Use `remove` with an exact path or glob selector. |
-| Keep a transformed value | Use `hash`, `mask`, or `regex_replace`, according to what the consumer needs. |
+| Keep a transformed value | Use `hash` (SHA-256), `mask`, or `regex_replace`, according to what the consumer needs. |
 | Remove conversational content while keeping trajectory analytics | Use the existing `trajectory_context` preset. |
 
 Exact paths select a specific JSON node. Globs can select multiple nodes, with
@@ -161,7 +161,7 @@ plugin or raw sanitize-guardrail middleware directly.
 | --- | --- | --- |
 | Configuration interface | Declarative config through `plugins.toml`, bindings helpers, and the CLI editor | Callback registration in application code |
 | Best fit | Reusable privacy policy shared across apps or teams | App-specific logic tied to runtime state or custom heuristics |
-| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | You implement the behavior yourself |
+| Built-in actions | `remove`, `redact`, `regex_replace`, `hash` (SHA-256), `mask` | You implement the behavior yourself |
 | Built-in detectors | Supported | You implement the matcher yourself |
 | Codec-aware LLM handling | Supported for the documented codecs | You handle normalization and provider shapes yourself |
 | Validation and editor support | Supported | Not provided |
