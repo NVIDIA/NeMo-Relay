@@ -1901,6 +1901,8 @@ fn doctor_reports_helpers_and_ignored_environment_without_exposing_secrets() {
         command: "secret-missing-helper-command".into(),
         args: vec!["secret-helper-argument".into()],
         timeout_ms: 2500,
+        cache_ttl_ms: 0,
+        cache: Default::default(),
         auth_scheme: None,
     };
     let mut report = empty_report();
@@ -1970,6 +1972,8 @@ fn doctor_reports_static_keys_custom_headers_and_helper_without_environment_warn
         command: "helper-that-is-not-executed".into(),
         args: vec![],
         timeout_ms: 10000,
+        cache_ttl_ms: 0,
+        cache: Default::default(),
         auth_scheme: Some(crate::upstream_auth::AuthScheme::Bearer),
     });
     let info = UpstreamAuthInfo::from_effective_gateway_auth(&config);

@@ -203,10 +203,19 @@ Configure `[upstream.openai_api_key_helper]` or
 to run your helper. Use `timeout_ms` to set its timeout in milliseconds.
 The default timeout is 10 seconds.
 
-Relay runs the helper for each outbound request attempt. It reads the token from
-stdout and does not cache it. OpenAI uses bearer authentication. Anthropic uses
-`x-api-key` by default. Set `auth_scheme = "bearer"` for an Anthropic endpoint
-that requires bearer authentication.
+By default, Relay runs the helper for each outbound request attempt. It reads
+the token from stdout.
+
+To reuse tokens, set `cache_ttl_ms` to a value greater than `0`. The value is in
+milliseconds. Omit it or set it to `0` to disable caching. After the cache
+interval ends, the next request refreshes the token. Requests that arrive during
+a refresh wait for the same result. If the refresh fails, Relay stops those
+requests. It does not use the old token or another credential. Relay keeps
+cached tokens in memory, with a separate cache for each provider and upstream.
+
+OpenAI uses bearer authentication. Anthropic uses `x-api-key` by default. Set
+`auth_scheme = "bearer"` for an Anthropic endpoint that requires bearer
+authentication.
 
 Choose one credential source for each provider. You can use a helper, a static
 API key, or a custom authorization header. If the helper fails, Relay stops the
