@@ -235,7 +235,7 @@ func TestOpenTelemetrySubscribersExposeRuntimeDiagnostics(t *testing.T) {
 		name               string
 		register           func(string) error
 		deregister         func(string) error
-		runtimeDiagnostics func() ([]OpenTelemetryRuntimeDiagnostic, error)
+		runtimeDiagnostics func() ([]ExporterRuntimeDiagnostic, error)
 	}{
 		{"trace", traceSubscriber.Register, traceSubscriber.Deregister, traceSubscriber.RuntimeDiagnostics},
 		{"log", logSubscriber.Register, logSubscriber.Deregister, logSubscriber.RuntimeDiagnostics},
@@ -261,7 +261,7 @@ func TestOpenTelemetrySubscribersExposeRuntimeDiagnostics(t *testing.T) {
 	for _, subscriber := range subscribers {
 		diagnostics, err := subscriber.runtimeDiagnostics()
 		requireNoError(t, err, "RuntimeDiagnostics failed")
-		var invalidMetric *OpenTelemetryRuntimeDiagnostic
+		var invalidMetric *ExporterRuntimeDiagnostic
 		for index := range diagnostics {
 			if diagnostics[index].Code == "otel.metric_mark_invalid" {
 				invalidMetric = &diagnostics[index]
@@ -460,7 +460,7 @@ func TestClosedOpenTelemetrySubscribersRejectRuntimeDiagnostics(t *testing.T) {
 	metrics.Close()
 	for _, test := range []struct {
 		name        string
-		diagnostics func() ([]OpenTelemetryRuntimeDiagnostic, error)
+		diagnostics func() ([]ExporterRuntimeDiagnostic, error)
 	}{
 		{"trace", trace.RuntimeDiagnostics},
 		{"logs", logs.RuntimeDiagnostics},

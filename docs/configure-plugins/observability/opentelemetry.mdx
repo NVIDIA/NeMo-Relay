@@ -98,7 +98,7 @@ behavior; it does not inherit the setting.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Automatic | Nonblank generic endpoint activates traces, logs, and metrics. The exporter derives paths and honors signal-specific endpoint precedence. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Automatic | Generic protocol: `grpc`, `http/protobuf`, or `http/json`; all three transports are compiled in. Without this and a signal-specific protocol, Relay defaults to `http/protobuf`. |
 | `OTEL_EXPORTER_OTLP_TIMEOUT` | Automatic | Generic OTLP request timeout. |
-| `OTEL_EXPORTER_OTLP_COMPRESSION` | Automatic | Generic OTLP compression: `gzip` or `zstd`. |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | Automatic | Generic OTLP compression: `none` (disabled), `gzip`, or `zstd`. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Automatic | Generic OTLP request headers, parsed by the upstream exporter. See the header safety warning below. |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Automatic | Nonblank trace endpoint activates only traces; overrides `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Automatic | Trace protocol; overrides `OTEL_EXPORTER_OTLP_PROTOCOL`. |
@@ -216,7 +216,7 @@ Development attributes. Refer to
 [GenAI Projection Attribute Support](#genai-projection-attribute-support) for
 the exact current inventory and its newer registry baseline.
 
-NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.32`). It
+NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.33`). It
 deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage. Different
@@ -1065,7 +1065,7 @@ category and category profile, schema, sanitized metadata, and ATOF version
 under `nemo_relay.*` keys. A mark in a resolvable active or completed scope
 receives trace and span context. An orphan mark receives no invented trace
 context. Relay leaves OTLP `event_name` unset with the currently vendored
-OpenTelemetry SDK (`0.32`) and retains the dynamic name in
+OpenTelemetry SDK (`0.33`) and retains the dynamic name in
 `nemo_relay.mark.name`.
 
 <Warning>
@@ -1145,7 +1145,7 @@ The `metrics` section applies these settings to every metric endpoint:
 | `cardinality_limit` | `2000` | SDK series limit per instrument. |
 
 Metric points use SDK collection timestamps. The currently vendored
-OpenTelemetry SDK (`0.32`) cannot preserve the source mark timestamp or attach
+OpenTelemetry SDK (`0.33`) cannot preserve the source mark timestamp or attach
 a trace-linked exemplar through this path. Relay does not emulate correlation
 with high-cardinality attributes.
 
@@ -1500,8 +1500,8 @@ The log and metric equivalents are `OpenTelemetryLogConfig` with
 `OpenTelemetryLogSubscriber`, and `OpenTelemetryMetricConfig` with
 `OpenTelemetryMetricSubscriber`. Each config takes one required endpoint and
 exposes the signal settings documented above. Bare OTLP/HTTP authorities gain
-the corresponding standard signal path. Rust, Python, and Node.js expose the
-same three independently managed subscriber kinds. The C FFI remains
+the corresponding standard signal path. Rust, Python, Node.js, and Go expose
+the same three independently managed subscriber kinds. Go and the C FFI remain
 experimental and source-first.
 
 Direct construction creates one independently managed exporter. Register the
@@ -1611,11 +1611,11 @@ metrics.shutdown()?;
 </Tab>
 </Tabs>
 
-Every direct trace, log, and metric subscriber exposes a bounded runtime
+Direct trace, log, and metric subscribers expose a bounded runtime
 diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
-`runtimeDiagnostics()` in Node.js. It reports each runtime condition's stable
-code, occurrence count, and most recent message. C FFI callers use
-`nemo_relay_otel_subscriber_runtime_diagnostics_json`,
+`runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go. It reports
+a stable code, count, and recorded messages per runtime condition. C FFI
+callers use `nemo_relay_otel_subscriber_runtime_diagnostics_json`,
 `nemo_relay_otel_log_subscriber_runtime_diagnostics_json`, or
 `nemo_relay_otel_metric_subscriber_runtime_diagnostics_json`. Each writes a
 caller-owned bounded JSON array of diagnostic entries that the caller must

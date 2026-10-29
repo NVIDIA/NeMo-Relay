@@ -4,9 +4,9 @@
 //! Shared infrastructure for independently owned OTLP signal providers.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,16 +19,15 @@ use opentelemetry_sdk::{
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use uuid::Uuid;
 
+use super::otel::{
+    ExporterInitializationError, ExporterInitializationResult, OpenTelemetryError, Result,
+};
+use super::runtime_diagnostics::{ExporterRuntimeDiagnostics, ExporterRuntimeDiagnosticsRecorder};
+use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 use crate::api::event::{
     Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, ScopeCategory,
     ValidatedMetricMeasurement,
 };
-use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
-
-use super::otel::{
-    ExporterInitializationError, ExporterInitializationResult, OpenTelemetryError, Result,
-};
-use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
 
 // Each dynamic pipeline owns a runtime worker and a supervising thread. Keep the
 // per-endpoint log/metric budget conservative; the base provider is not counted.
@@ -37,8 +36,6 @@ pub(super) const MAX_DYNAMIC_SIGNAL_PIPELINES: usize = 16;
 // Bound active UUID retention without expiring legitimate long-running scopes.
 pub(super) const MAX_ACTIVE_RESOURCE_SCOPES: usize = 4_096;
 
-const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
-const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
 pub(super) const TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS: [&str; 3] = [
     "telemetry.sdk.name",
     "telemetry.sdk.language",
@@ -65,53 +62,10 @@ pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>)
     Resource::builder().with_attributes(attributes).build()
 }
 
-/// A bounded aggregate describing an OpenTelemetry runtime problem.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenTelemetryRuntimeDiagnostic {
-    /// Stable identifier for the diagnostic condition.
-    pub code: String,
-    /// Distinct messages recorded for this condition, retained within a bounded budget.
-    pub message: String,
-    /// Total number of occurrences recorded for this condition.
-    pub count: u64,
-}
-
-/// Snapshot of bounded runtime diagnostics recorded by an OpenTelemetry subscriber.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OpenTelemetryRuntimeDiagnostics {
-    diagnostics: Vec<OpenTelemetryRuntimeDiagnostic>,
-}
-
-impl OpenTelemetryRuntimeDiagnostics {
-    /// Return diagnostics in stable code order.
-    pub fn entries(&self) -> &[OpenTelemetryRuntimeDiagnostic] {
-        &self.diagnostics
-    }
-
-    /// Return a diagnostic by its stable code.
-    pub fn get(&self, code: &str) -> Option<&OpenTelemetryRuntimeDiagnostic> {
-        self.diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == code)
-    }
-}
-
-#[derive(Debug, Default)]
-struct RuntimeDiagnosticState {
-    diagnostics: BTreeMap<String, RuntimeDiagnosticEntry>,
-}
-
-#[derive(Debug)]
-struct RuntimeDiagnosticEntry {
-    diagnostic: OpenTelemetryRuntimeDiagnostic,
-    messages: BTreeSet<String>,
-}
-
 /// Shared runtime-diagnostic recorder for one independently owned OTLP subscriber.
 #[derive(Debug, Clone)]
 pub(super) struct SignalRuntimeDiagnostics {
-    state: Arc<Mutex<RuntimeDiagnosticState>>,
-    plugin_field: Option<String>,
+    recorder: ExporterRuntimeDiagnosticsRecorder,
     // Shared by every resource pipeline for this trace endpoint. Once set,
     // recreating the subscriber is the only way to resume sending.
     terminal_trace_tls_failure: Arc<OnceLock<&'static str>>,
@@ -120,8 +74,7 @@ pub(super) struct SignalRuntimeDiagnostics {
 impl SignalRuntimeDiagnostics {
     pub(super) fn new(plugin_field: Option<String>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
-            plugin_field,
+            recorder: ExporterRuntimeDiagnosticsRecorder::new(plugin_field),
             terminal_trace_tls_failure: Arc::new(OnceLock::new()),
         }
     }
@@ -136,64 +89,15 @@ impl SignalRuntimeDiagnostics {
     }
 
     pub(super) fn record(&self, code: impl Into<String>, message: String, count: u64) -> u64 {
-        let code = code.into();
-        let count = count.max(1);
-        let message = truncate_runtime_diagnostic_message(message);
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let total = if let Some(diagnostic) = state.diagnostics.get_mut(&code) {
-            diagnostic.diagnostic.count = diagnostic.diagnostic.count.saturating_add(count);
-            if diagnostic.messages.insert(message.clone()) {
-                let combined = combine_runtime_diagnostic_messages(&diagnostic.messages);
-                if combined.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
-                    diagnostic.diagnostic.message = combined;
-                } else {
-                    diagnostic.messages.remove(&message);
-                }
-            }
-            diagnostic.diagnostic.count
-        } else if state.diagnostics.len() < MAX_RUNTIME_DIAGNOSTICS {
-            let mut messages = BTreeSet::new();
-            messages.insert(message.clone());
-            state.diagnostics.insert(
-                code.clone(),
-                RuntimeDiagnosticEntry {
-                    diagnostic: OpenTelemetryRuntimeDiagnostic {
-                        code: code.clone(),
-                        message: message.clone(),
-                        count,
-                    },
-                    messages,
-                },
-            );
-            count
-        } else {
-            return 0;
-        };
-        drop(state);
-
-        record_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
-        total
+        self.recorder.record(code, message, count)
     }
 
-    pub(super) fn snapshot(&self) -> OpenTelemetryRuntimeDiagnostics {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        OpenTelemetryRuntimeDiagnostics {
-            diagnostics: state
-                .diagnostics
-                .values()
-                .map(|entry| entry.diagnostic.clone())
-                .collect(),
-        }
+    pub(super) fn snapshot(&self) -> ExporterRuntimeDiagnostics {
+        self.recorder.snapshot()
     }
 
     pub(super) fn has_plugin_mirror(&self) -> bool {
-        self.plugin_field.is_some()
+        self.recorder.has_plugin_mirror()
     }
 }
 
@@ -253,30 +157,6 @@ pub(super) fn drain_startup_queue(force_flush: impl FnOnce() -> OTelSdkResult) -
             "OpenTelemetry batch processor did not drain its startup message: {error}"
         ))
     })
-}
-
-fn truncate_runtime_diagnostic_message(message: String) -> String {
-    if message.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
-        return message;
-    }
-    let mut truncated = message
-        .chars()
-        .take(MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS - 1)
-        .collect::<String>();
-    truncated.push('…');
-    truncated
-}
-
-fn combine_runtime_diagnostic_messages(messages: &BTreeSet<String>) -> String {
-    messages
-        .iter()
-        .fold(String::new(), |mut combined, message| {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(message);
-            combined
-        })
 }
 
 pub(super) enum MetricMarkClassification {
@@ -655,22 +535,6 @@ pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<M
         metadata.insert(key, value);
     }
     Ok(metadata)
-}
-
-pub(super) fn record_signal_runtime_diagnostic(
-    code: &str,
-    field: Option<String>,
-    message: String,
-    count: u64,
-) {
-    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
-        code: code.to_string(),
-        component: "observability".to_string(),
-        field,
-        message,
-        session_id: None,
-        count,
-    });
 }
 
 pub(super) fn signal_resource(

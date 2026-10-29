@@ -39,7 +39,7 @@ use super::otel_signal::{
     validate_telemetry_sdk_resource_attributes,
 };
 use super::{
-    MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
+    ExporterRuntimeDiagnostics, MarkProjection, OpenTelemetryType, OtlpAttributeMapping,
     apply_attribute_mappings, attribute_mapping_aliases, attribute_mapping_inputs,
     default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
@@ -1251,7 +1251,7 @@ impl OpenTelemetrySubscriber {
     }
 
     /// Return a bounded snapshot of runtime diagnostics for this subscriber.
-    pub fn runtime_diagnostics(&self) -> OpenTelemetryRuntimeDiagnostics {
+    pub fn runtime_diagnostics(&self) -> ExporterRuntimeDiagnostics {
         self.inner.runtime_diagnostics.snapshot()
     }
 

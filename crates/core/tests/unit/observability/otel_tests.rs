@@ -5667,7 +5667,7 @@ fn assert_telemetry_sdk_resource(attributes: &[OtlpKeyValue]) {
     );
     assert_eq!(
         otlp_string_attribute(attributes, "telemetry.sdk.version"),
-        Some("0.32.1")
+        Some("0.33.1")
     );
 }
 

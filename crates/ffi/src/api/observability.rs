@@ -37,7 +37,7 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
 /// # Safety
 /// `out_json` must point to writable storage for one C-string pointer.
 unsafe fn write_runtime_diagnostics(
-    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+    diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
     out_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     let entries = serde_json::Value::Array(
@@ -503,6 +503,30 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_shutdown(
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_atof_error(&error),
     }
+}
+
+/// Returns delivery diagnostics recorded by this exporter's stream sink as JSON.
+///
+/// The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+/// entries sorted by code. The caller owns `out_json` and must free it with
+/// `nemo_relay_string_free`.
+///
+/// # Safety
+/// `exporter` and `out_json` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_atof_exporter_runtime_diagnostics_json(
+    exporter: *const FfiAtofExporter,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if exporter.is_null() {
+        set_last_error("exporter pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if let Err(status) = required_out_ptr(out_json) {
+        return status;
+    }
+    unsafe { write_runtime_diagnostics((&*exporter).0.runtime_diagnostics(), out_json) }
 }
 
 /// Returns the ATOF exporter output path as a string when its sink is a file.
