@@ -98,7 +98,7 @@ behavior; it does not inherit the setting.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Automatic | Nonblank generic endpoint activates traces, logs, and metrics. The exporter derives paths and honors signal-specific endpoint precedence. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Automatic | Generic protocol: `grpc`, `http/protobuf`, or `http/json`; all three transports are compiled in. Without this and a signal-specific protocol, Relay defaults to `http/protobuf`. |
 | `OTEL_EXPORTER_OTLP_TIMEOUT` | Automatic | Generic OTLP request timeout. |
-| `OTEL_EXPORTER_OTLP_COMPRESSION` | Automatic | Generic OTLP compression: `gzip` or `zstd`. |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | Automatic | Generic OTLP compression: `none` (disabled), `gzip`, or `zstd`. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Automatic | Generic OTLP request headers, parsed by the upstream exporter. See the header safety warning below. |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Automatic | Nonblank trace endpoint activates only traces; overrides `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Automatic | Trace protocol; overrides `OTEL_EXPORTER_OTLP_PROTOCOL`. |
@@ -216,7 +216,7 @@ Development attributes. Refer to
 [GenAI Projection Attribute Support](#genai-projection-attribute-support) for
 the exact current inventory and its newer registry baseline.
 
-NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.32`). It
+NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.33`). It
 deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage. Different
@@ -1065,7 +1065,7 @@ category and category profile, schema, sanitized metadata, and ATOF version
 under `nemo_relay.*` keys. A mark in a resolvable active or completed scope
 receives trace and span context. An orphan mark receives no invented trace
 context. Relay leaves OTLP `event_name` unset with the currently vendored
-OpenTelemetry SDK (`0.32`) and retains the dynamic name in
+OpenTelemetry SDK (`0.33`) and retains the dynamic name in
 `nemo_relay.mark.name`.
 
 <Warning>
@@ -1145,7 +1145,7 @@ The `metrics` section applies these settings to every metric endpoint:
 | `cardinality_limit` | `2000` | SDK series limit per instrument. |
 
 Metric points use SDK collection timestamps. The currently vendored
-OpenTelemetry SDK (`0.32`) cannot preserve the source mark timestamp or attach
+OpenTelemetry SDK (`0.33`) cannot preserve the source mark timestamp or attach
 a trace-linked exemplar through this path. Relay does not emulate correlation
 with high-cardinality attributes.
 
