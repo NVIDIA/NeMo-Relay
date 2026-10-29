@@ -29,7 +29,7 @@ Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with [`Self::targe
 
 ### `target_path_globs: Vec<String>`
 
-JSON-pointer glob paths to sanitize. A whole `*` segment matches one object key or array index; matching is not recursive.
+JSON-pointer glob paths to sanitize. A whole `*` segment matches one object key or array index; a whole `**` segment matches zero or more segments.
 
 ### `pattern: Option<String>`
 
