@@ -21,22 +21,25 @@ test = false
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+# First-party crates.
 nemo-relay = { workspace = true, features = ["atof-streaming", "object-store", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
-chrono = "0.4"
-log = "0.4"
-napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
-napi-derive = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-stacker = "0.1"
+
+# Third-party dependencies.
+chrono = { workspace = true, default-features = true }
+log.workspace = true
+napi = { workspace = true, features = ["napi6", "async", "serde-json", "tokio_rt"] }
+napi-derive.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+stacker.workspace = true
 tokio = { workspace = true, default-features = true, features = ["rt-multi-thread", "sync"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { workspace = true, default-features = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v7"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [build-dependencies]
-napi-build = "2"
+napi-build.workspace = true

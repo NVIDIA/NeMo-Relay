@@ -51,74 +51,77 @@ worker-grpc = [
 ]
 
 [dependencies]
-enumset = { version = "1", default-features = false }
-arrayvec = { version = "0.7", default-features = false }
-nemo-relay-types.workspace = true
+# First-party crates.
 nemo-relay-plugin.workspace = true
+nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }
-uuid = { workspace = true, features = ["v7", "serde"] }
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
-toml = { version = "0.9" }
-schemars = { version = "0.8", optional = true }
-chrono = { version = "0.4", features = ["serde"] }
-bitflags = { version = "2", features = ["serde"] }
-thiserror = "2"
-strum = { version = "0.27", features = ["derive"] }
-tokio = { workspace = true, default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
-tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
-typed-builder = "0.23.2"
-futures-util = "0.3"
+
+# Third-party dependencies.
+arrayvec.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bitflags = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+circular-buffer.workspace = true
+enumset.workspace = true
+futures-util.workspace = true
+http.workspace = true
+http-body.workspace = true
+hyper-util = { workspace = true, features = ["tokio"], optional = true }
+jsonschema.workspace = true
+libloading.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+object_store = { workspace = true, features = ["aws"], optional = true }
 opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
-opentelemetry-semantic-conventions.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
+opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
-tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
-libloading = "0.8"
-tempfile = "3"
-semver = "1"
-sha2 = "0.11"
-base64 = "0.22"
-ring = ">=0.17.13, <0.18"
-jsonschema = { version = "0.46.6", default-features = false }
-percent-encoding = "2"
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
-prost = "0.14"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
-opentelemetry-http = "0.32"
-http = "1"
-http-body = "1"
-async-trait = "0.1"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "rustls", "stream"] }
-sysinfo = { version = "0.39.6", default-features = false, features = ["system", "network"] }
-tonic = { version = "0.14.1", default-features = false }
-object_store = { version = "0.14.1", default-features = false, features = ["aws"], optional = true }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
-tower = { version = "0.5", features = ["util"], optional = true }
-hyper-util = { version = "0.1", features = ["tokio"], optional = true }
-shell-words = "1"
-log = { version = "0.4", features = ["kv", "kv_serde"] }
-spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
-unicode-general-category = "1.1"
-circular-buffer = "2.0.1"
+percent-encoding.workspace = true
+prost.workspace = true
+reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
+ring.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+schemars = { workspace = true, optional = true }
+semver.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+sha2.workspace = true
+shell-words.workspace = true
+spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
+strum = { workspace = true, features = ["derive"] }
+sysinfo = { workspace = true, features = ["system", "network"] }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"], optional = true }
+toml.workspace = true
+tonic.workspace = true
+tower = { workspace = true, features = ["util"], optional = true }
+tracing = { workspace = true, features = ["std", "log"] }
+typed-builder.workspace = true
+unicode-general-category.workspace = true
+uuid = { workspace = true, features = ["v7", "serde"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs", "param"] }
+rustix = { workspace = true, features = ["fs", "param"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
-rcgen = "0.13"
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
-futures = "0.3"
+futures.workspace = true
+object_store = { workspace = true, features = ["aws"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "logs", "metrics"] }
-tonic = { version = "0.14.1", features = ["transport"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-serde_json = "1"
-object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
+rcgen.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
+tokio-stream = { workspace = true, default-features = true, features = ["net"] }
+tonic = { workspace = true, default-features = true, features = ["transport"] }
 
 [[test]]
 name = "codec_integration"

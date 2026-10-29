@@ -21,22 +21,28 @@ crate-type = ["cdylib", "rlib"]
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+# First-party crates.
 nemo-relay = { workspace = true, features = ["atof-streaming", "object-store", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
-pyo3 = { version = "0.29.0", features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
-pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
-pythonize = "0.29.0"
-serde_json = "1"
-serde = "1"
-uuid = { workspace = true, features = ["v7"] }
+
+# Third-party dependencies.
+chrono = { workspace = true, default-features = true }
+pyo3 = { workspace = true, features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
+pyo3-async-runtimes = { workspace = true, features = ["tokio-runtime"] }
+pythonize.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, default-features = true, features = ["full"] }
-tokio-stream = "0.1"
-chrono = "0.4"
+tokio-stream = { workspace = true, default-features = true }
+uuid = { workspace = true, features = ["v7"] }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [dev-dependencies]
+# First-party crates.
 nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
-tempfile = "3"
+
+# Third-party dependencies.
+tempfile.workspace = true
