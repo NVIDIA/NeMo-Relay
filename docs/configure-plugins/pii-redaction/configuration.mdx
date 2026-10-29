@@ -498,11 +498,15 @@ exception names.
 Typed LLM annotations retain message roles and content-part kinds; provider,
 model, and tool names; request tuning settings; finish reasons; token and cache
 usage; and normalized cost amounts, currency, and source classification.
-Conversational content and application identifiers use the configured
+Conversational content and other application identifiers use the configured
 replacement, which defaults to `[REDACTED]`. Opaque typed fields become `{}`;
 approved typed numeric and boolean analytics remain available. Routing metadata,
 pricing provenance, optimization contribution evidence, and unknown fields are
 discarded. Relay lifecycle identifiers remain unchanged.
+
+Tool-call correlation IDs remain unchanged across LLM messages and tool
+lifecycle events so exporters can associate results with the correct calls.
+Response IDs and other application identifiers still use the replacement marker.
 
 Provider, model, tool, and metric names are intentional free-form exceptions.
 Do not place user content, secrets, or personal identifiers in these fields.
@@ -1154,7 +1158,12 @@ evaluated independently for the request and response payloads.
 </Tab>
 <Tab title="Trajectory removal">
 
-Remove a tool payload as part of broad trajectory-content removal.
+Remove conversational content while preserving the structure of an OpenAI Chat
+exchange that uses native function calling. This example uses synthetic customer
+data captured before and after sanitization through managed LLM and tool calls.
+The managed LLM calls supply `OpenAIChatCodec` as their request and response codec.
+The payloads below show provider-shaped message bodies; LLM request headers are
+omitted from the display.
 
 **Configuration**
 
@@ -1172,28 +1181,261 @@ mode = "builtin"
 preset = "trajectory_context"
 ```
 
-**Input event payload: tool arguments**
+The model first requests `lookup_customer` with
+`{"email":"alice@example.com"}` as its arguments. The tool returns
+`{"email":"alice@example.com","plan":"Enterprise"}`. The application then
+sends the tool result back to the model in the following request.
+
+**LLM request before sanitization**
 
 ```json
 {
-  "prompt": "Summarize alice@example.com's notes",
-  "document": {
-    "text": "Private document text"
+  "messages": [
+    {
+      "content": "Which plan does alice@example.com have?",
+      "role": "user"
+    },
+    {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"email\":\"alice@example.com\"}",
+            "name": "lookup_customer"
+          },
+          "id": "call_lookup_1",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "{\"email\":\"alice@example.com\",\"plan\":\"Enterprise\"}",
+      "role": "tool",
+      "tool_call_id": "call_lookup_1"
+    }
+  ],
+  "model": "test-model",
+  "temperature": 0,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Find a customer account by email address.",
+        "name": "lookup_customer",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email"
+          ],
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "function"
+    }
+  ]
+}
+```
+
+**Published LLM request after sanitization**
+
+```json
+{
+  "messages": [
+    {
+      "content": "[REDACTED]",
+      "role": "user"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{}",
+            "name": "lookup_customer"
+          },
+          "id": "call_lookup_1",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "[REDACTED]",
+      "role": "tool",
+      "tool_call_id": "call_lookup_1"
+    }
+  ],
+  "model": "test-model",
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "[REDACTED]",
+        "name": "lookup_customer",
+        "parameters": {},
+        "strict": false
+      },
+      "type": "function"
+    }
+  ]
+}
+```
+
+The assistant's `tool_calls[0].id` and the tool message's `tool_call_id` both
+remain `call_lookup_1`. The tool name, message roles, model, and temperature
+remain available. The preset replaces user and tool-result text, empties tool
+arguments and the parameter schema, and replaces the function description.
+The minimal projection sets `strict` to `false` after discarding the schema.
+
+The final model response is sanitized independently:
+
+**LLM response before sanitization**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "alice@example.com has the Enterprise plan.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "id": "chatcmpl-private-2",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 10,
+    "prompt_tokens": 76,
+    "total_tokens": 86
   }
 }
 ```
 
-**Published payload**
+**Published LLM response after sanitization**
 
 ```json
-{}
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "[REDACTED]",
+        "role": "assistant"
+      }
+    }
+  ],
+  "id": "[REDACTED]",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 10,
+    "prompt_tokens": 76,
+    "total_tokens": 86
+  }
+}
 ```
 
-The preset empties tool payloads. On supported LLM events it replaces
-conversational content while retaining approved normalized analytics. Event
-identity and parentage remain available. Refer to
-[Trajectory Context Preset](#trajectory-context-preset) for the full preservation
-contract, codec requirements, and custom-mark behavior.
+Response text and the response ID use the replacement marker. Token counts,
+model, finish reason, and the assistant role remain available.
+
+<details>
+<summary>Initial tool-call response and standalone tool events</summary>
+
+The first model response proposes the same tool call. Its correlation ID
+survives even though its arguments are removed:
+
+**Initial tool-call response before sanitization**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"email\":\"alice@example.com\"}",
+              "name": "lookup_customer"
+            },
+            "id": "call_lookup_1",
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "id": "chatcmpl-private-1",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 42,
+    "total_tokens": 54
+  }
+}
+```
+
+**Published initial tool-call response**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{}",
+              "name": "lookup_customer"
+            },
+            "id": "call_lookup_1",
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "id": "[REDACTED]",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 42,
+    "total_tokens": 54
+  }
+}
+```
+
+The standalone tool execution is a separate pair of lifecycle events. Its
+published argument and result payloads are empty objects:
+
+| Tool Event | Original Payload | Published Payload |
+| --- | --- | --- |
+| Start arguments | `{"email":"alice@example.com"}` | `{}` |
+| End result | `{"email":"alice@example.com","plan":"Enterprise"}` | `{}` |
+
+Both events retain `tool_call_id = "call_lookup_1"`, so exporters can link the
+execution and result to the model's request. The application receives the
+original tool result and LLM responses; sanitization affects observability data.
+
+</details>
+
+Refer to [Trajectory Context Preset](#trajectory-context-preset) for the full
+preservation contract, codec requirements, and custom-mark behavior.
 
 </Tab>
 <Tab title="Metric dimensions">
