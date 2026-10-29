@@ -5,8 +5,9 @@
 //!
 //! Personal `nemo-relay install` deliberately remains separate. A managed bundle is rendered
 //! once for one deployment and then distributed by the administrator. Refresh and doctor only
-//! validate it: changing a deployed v1 artifact in place is an error, and an incompatible contract
-//! after v1 publication needs a separately named v2 bundle.
+//! validate it: changing a deployed artifact in place is an error. The 0.11 StopFailure addition
+//! intentionally revises the v1 Claude plugin bytes; earlier Claude bundles must be regenerated
+//! into a new deployment directory and provisioned with their new trusted digest.
 
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
@@ -52,8 +53,8 @@ const PI_ARTIFACT_PATHS: &[&str] = &[
     "pi/extension-v1/tsconfig.json",
 ];
 
-// Part of the v1 artifact family. Once v1 is published, new host events belong in a v2 family:
-// silently changing these lists would make an upgrade rewrite enterprise-managed plugin bytes.
+// Part of the v1 artifact family. The 0.11 Claude StopFailure addition intentionally changes
+// its canonical bytes. Validation rejects older Claude bundles; refresh never rewrites them.
 const CODEX_HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
