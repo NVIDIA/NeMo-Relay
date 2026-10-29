@@ -21,6 +21,21 @@ binding-specific setup command. For source builds, use
 
 If a command worked previously and now fails, check whether a toolchain update changed the active Rust, Python, Node.js, or Go version. Recreate generated artifacts after switching versions, especially Python virtual environments, Node.js `node_modules`, and Go build caches.
 
+## Coding Agent Cannot Launch In A Sandbox
+
+On Unix, the shared launcher for Pi, Codex, and Claude Code requires process-group
+signaling to forward signals and terminate descendants left by agent wrappers.
+Relay checks this capability before launching the agent. If the check fails, it
+reports `cannot launch coding agent: Unix process-group signaling is unavailable`.
+
+OpenShell sandboxes can block negative-PID `kill()` calls, including the
+signal-zero permission check. In these environments, run a standalone Relay
+gateway and start the agent separately with its Relay integration. See
+[Pi Integration](/nemo-relay-cli/pi),
+[Codex Integration](/nemo-relay-cli/codex), or
+[Claude Code Integration](/nemo-relay-cli/claude-code) for integration setup.
+The separate agent process needs lifecycle management from its caller or sandbox.
+
 ## Rust Workspace Fails To Build
 
 Run the narrowest failing build first:
