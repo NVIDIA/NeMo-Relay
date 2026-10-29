@@ -63,6 +63,12 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+#[path = "recursive_export_tests.rs"]
+mod recursive_export_tests;
+
+#[path = "recursive_glob_tests.rs"]
+mod recursive_glob_tests;
+
 static TEST_LOGGING: Once = Once::new();
 
 #[path = "trajectory_status_tests.rs"]
@@ -3796,7 +3802,9 @@ fn validate_builtin_target_path_globs_as_json_pointers() {
             "target_path_globs": [
                 "/messages/*/content",
                 "/output/*/content/*/text",
-                "/metadata/a~1b"
+                "/metadata/a~1b",
+                "/messages/**/text",
+                "/**"
             ]
         }
     })));

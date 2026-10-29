@@ -131,10 +131,13 @@ for the supported formats.
 | Keep a transformed value | Use `hash` (SHA-256), `mask`, or `regex_replace`, according to what the consumer needs. |
 | Remove conversational content while keeping trajectory analytics | Use the existing `trajectory_context` preset. |
 
-Exact paths select a specific JSON node. Globs can select multiple nodes, with
-each `*` matching one object key or array index. String actions operate on
-selected string values; selecting a container does not select its descendants.
-Recursive `**` selectors and JSONPath expressions are not supported.
+Exact paths select a specific JSON node. In glob selectors, `*` matches one
+object key or array index, while `**` matches zero or more path segments. Use
+`/messages/**/text`, for example, to select `text` fields at any depth under
+`messages`. String actions operate on selected string values; an exact pointer
+to a container does not select its descendants. Refer to
+[Path Semantics](/configure-plugins/pii-redaction/redaction-behavior#path-semantics)
+for examples, container removal, and literal wildcard keys.
 
 ## Relation to Raw Middleware
 

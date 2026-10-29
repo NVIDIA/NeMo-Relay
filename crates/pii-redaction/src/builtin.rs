@@ -62,7 +62,7 @@ impl std::fmt::Display for MatchCounts {
     }
 }
 
-/// Compiled exact-pointer and single-segment glob selectors.
+/// Compiled exact-pointer, single-segment, and recursive glob selectors.
 #[derive(Clone)]
 struct TargetPathMatcher {
     selectors: Vec<TargetPathSelector>,
@@ -73,33 +73,40 @@ struct TargetPathMatcher {
 enum TargetPathSelector {
     Exact(Vec<String>),
     Glob(Vec<TargetPathSegment>),
+    RecursiveGlob(Vec<TargetPathSegment>),
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum TargetPathSegment {
     Exact(String),
     Any,
+    AnyDepth,
 }
 
 impl TargetPathSelector {
     fn len(&self) -> usize {
         match self {
             Self::Exact(segments) => segments.len(),
-            Self::Glob(segments) => segments.len(),
+            Self::Glob(segments) | Self::RecursiveGlob(segments) => segments.len(),
         }
     }
 
     fn segment_at(&self, index: usize) -> Option<&str> {
         match self {
             Self::Exact(segments) => Some(&segments[index]),
-            Self::Glob(segments) => match &segments[index] {
+            Self::Glob(segments) | Self::RecursiveGlob(segments) => match &segments[index] {
                 TargetPathSegment::Exact(value) => Some(value),
-                TargetPathSegment::Any => None,
+                TargetPathSegment::Any | TargetPathSegment::AnyDepth => None,
             },
         }
     }
 
     fn may_hide(&self, other: &Self) -> bool {
+        // A recursive selector can match an ancestor and its descendants, even
+        // when it is the only selector. Conservatively count before removal.
+        if matches!(self, Self::RecursiveGlob(_)) || matches!(other, Self::RecursiveGlob(_)) {
+            return true;
+        }
         self.len() < other.len()
             && (0..self.len()).all(|index| {
                 match (self.segment_at(index), other.segment_at(index)) {
@@ -120,21 +127,26 @@ impl TargetPathMatcher {
             .iter()
             .map(|path| {
                 json_pointer_segments(path).map(|segments| {
-                    if segments.iter().all(|segment| segment != "*") {
+                    if segments
+                        .iter()
+                        .all(|segment| segment != "*" && segment != "**")
+                    {
                         TargetPathSelector::Exact(segments)
                     } else {
-                        TargetPathSelector::Glob(
-                            segments
-                                .into_iter()
-                                .map(|segment| {
-                                    if segment == "*" {
-                                        TargetPathSegment::Any
-                                    } else {
-                                        TargetPathSegment::Exact(segment)
-                                    }
-                                })
-                                .collect(),
-                        )
+                        let recursive = segments.iter().any(|segment| segment == "**");
+                        let segments = segments
+                            .into_iter()
+                            .map(|segment| match segment.as_str() {
+                                "*" => TargetPathSegment::Any,
+                                "**" => TargetPathSegment::AnyDepth,
+                                _ => TargetPathSegment::Exact(segment),
+                            })
+                            .collect();
+                        if recursive {
+                            TargetPathSelector::RecursiveGlob(segments)
+                        } else {
+                            TargetPathSelector::Glob(segments)
+                        }
                     }
                 })
             })
@@ -161,6 +173,9 @@ impl TargetPathMatcher {
     fn matches(&self, path_segments: &[String]) -> bool {
         self.selectors.iter().any(|selector| match selector {
             TargetPathSelector::Exact(segments) => segments == path_segments,
+            TargetPathSelector::RecursiveGlob(segments) => {
+                recursive_glob_matches(segments, path_segments, false)
+            }
             TargetPathSelector::Glob(segments) => {
                 segments.len() == path_segments.len()
                     && segments.iter().zip(path_segments).all(|(selector, segment)| {
@@ -173,6 +188,9 @@ impl TargetPathMatcher {
 
     fn may_match_descendant(&self, path_segments: &[String]) -> bool {
         self.selectors.iter().any(|selector| match selector {
+            TargetPathSelector::RecursiveGlob(segments) => {
+                recursive_glob_matches(segments, path_segments, true)
+            }
             TargetPathSelector::Exact(segments) => {
                 segments.len() > path_segments.len() && segments.starts_with(path_segments)
             }
@@ -226,10 +244,11 @@ impl TargetPathMatcher {
                 TargetPathSelector::Exact(segments) => segments
                     .first()
                     .map(|segment| TargetPathSegment::Exact(segment.clone())),
-                TargetPathSelector::Glob(segments) => segments.first().cloned(),
+                TargetPathSelector::Glob(segments)
+                | TargetPathSelector::RecursiveGlob(segments) => segments.first().cloned(),
             };
             match first {
-                Some(TargetPathSegment::Any) => true,
+                Some(TargetPathSegment::Any | TargetPathSegment::AnyDepth) => true,
                 Some(TargetPathSegment::Exact(segment)) => matches!(
                     segment.as_str(),
                     "message" | "tool_calls" | "finish_reason" | "api_specific"
@@ -238,6 +257,53 @@ impl TargetPathMatcher {
             }
         })
     }
+}
+
+/// Match whole path segments, retrying only the most recent `**`. This uses
+/// constant scratch space and at most O(pattern segments * path segments)
+/// segment comparisons; literal comparisons also depend on key byte length.
+/// There is no recursive or exponential backtracking. Prefix mode asks whether
+/// some strict descendant can match, for diagnostic traversal pruning.
+fn recursive_glob_matches(
+    pattern: &[TargetPathSegment],
+    path: &[String],
+    descendant: bool,
+) -> bool {
+    let (mut pattern_index, mut path_index) = (0, 0);
+    let mut recursive = None;
+    while path_index < path.len() {
+        match pattern.get(pattern_index) {
+            Some(TargetPathSegment::AnyDepth) => {
+                recursive = Some((pattern_index, path_index));
+                pattern_index += 1;
+            }
+            Some(TargetPathSegment::Any) => {
+                pattern_index += 1;
+                path_index += 1;
+            }
+            Some(TargetPathSegment::Exact(value)) if value == &path[path_index] => {
+                pattern_index += 1;
+                path_index += 1;
+            }
+            _ => {
+                let Some((recursive_index, consumed)) = recursive else {
+                    return false;
+                };
+                let consumed = consumed + 1;
+                recursive = Some((recursive_index, consumed));
+                pattern_index = recursive_index + 1;
+                path_index = consumed;
+            }
+        }
+    }
+    if descendant {
+        // An unconsumed suffix can be supplied by a descendant. A consumed
+        // `**` can also absorb more segments before matching the suffix again.
+        return pattern_index < pattern.len() || recursive.is_some();
+    }
+    pattern[pattern_index..]
+        .iter()
+        .all(|segment| matches!(segment, TargetPathSegment::AnyDepth))
 }
 
 #[derive(Clone)]

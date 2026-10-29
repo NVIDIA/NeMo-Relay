@@ -127,7 +127,7 @@ implements deterministic actions and detector presets.
 | `preset` | String | Unset | Set to `trajectory_context` for broad conversational-content removal while retaining supported analytics. |
 | `action` | String | `remove` | `remove`, `redact`, `regex_replace`, `hash` (SHA-256), or `mask`. Choose an action explicitly, or use `preset`. |
 | `target_paths` | Array of strings | `[]` | Exact RFC 6901 pointers. Combined with `target_path_globs`. |
-| `target_path_globs` | Array of strings | `[]` | Pointer globs; each whole `*` segment matches one key or index. Recursive `**` is unsupported. |
+| `target_path_globs` | Array of strings | `[]` | Pointer globs: a whole `*` segment matches one key or index; a whole `**` segment matches zero or more segments. See [Path Semantics](/configure-plugins/pii-redaction/redaction-behavior#path-semantics). |
 | `pattern` | String | Unset | Regex matcher. Use either `pattern` or `detector`, never both. |
 | `detector` | String | Unset | Built-in matcher such as `email` or `api_key`. See [Detector Presets](#detector-presets). |
 | `replacement` | String | `[REDACTED]` | Replacement for `redact`, `regex_replace`, and `trajectory_context`. |
@@ -643,6 +643,97 @@ and `content`. Each `*` matches one array index. Selecting only
 `/messages/0/content` would select an array and leave the email unchanged.
 Putting `*` in `target_paths` would match literal keys instead of array indices.
 Refer to [Path Semantics](/configure-plugins/pii-redaction/redaction-behavior#path-semantics) for the matching contract.
+
+</Tab>
+<Tab title="Recursive content">
+
+Select `text` fields at varying depths under `messages`, including a direct
+child. This is a JSON-native tool payload; its nesting is application-defined.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_path_globs = ["/messages/**/text"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "messages": {
+    "text": "alice@example.com",
+    "batch": [
+      {
+        "content": [
+          {
+            "text": "bob@example.com"
+          },
+          {
+            "nested": {
+              "text": "carol@example.com"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "outside": {
+    "text": "dave@example.com"
+  }
+}
+```
+
+**Published payload**
+
+```json
+{
+  "messages": {
+    "text": "[REDACTED]",
+    "batch": [
+      {
+        "content": [
+          {
+            "text": "[REDACTED]"
+          },
+          {
+            "nested": {
+              "text": "[REDACTED]"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "outside": {
+    "text": "dave@example.com"
+  }
+}
+```
+
+`**` matches zero segments for `/messages/text` and multiple segments for the
+nested `text` fields. All three selected email values are redacted. The
+`outside.text` value is unchanged because it lies outside the `messages`
+subtree. A single `*` would match only one level.
+
+For LLM calls, recursive selectors use the active codec's representation.
+A plain-string `content` field needs a selector such as
+`/messages/**/content`; `/messages/**/text` selects fields named `text`.
+Refer to [Recursive Globs](/configure-plugins/pii-redaction/redaction-behavior#recursive-globs)
+for container removal and root selection, and
+[Literal Wildcard Keys and Migration](/configure-plugins/pii-redaction/redaction-behavior#literal-wildcard-keys-and-migration)
+when upgrading a policy that used a literal `**` key.
 
 </Tab>
 <Tab title="Multiple profiles">
@@ -1233,6 +1324,7 @@ For the **Nested content** example:
 | `target_paths = ["/messages/*/content/*/text"]` | No matching array indices: `*` is literal in exact paths. |
 | `target_paths = ["/messages/0/content"]` | A container matches, but no string is selected for `redact`. |
 | `target_path_globs = ["/messages/*/content/*/text"]` | Two text leaves are selected; the email leaf changes. |
+| `target_path_globs = ["/messages/**/text"]` | The same two leaves are selected; `text` fields at other depths under `messages` would also be selected. |
 | Neither selector list configured | All string leaves are eligible; the email leaf changes. |
 
 Zero counts are informational: some traffic legitimately lacks the configured
