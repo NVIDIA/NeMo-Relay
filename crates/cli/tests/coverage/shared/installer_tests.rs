@@ -1138,3 +1138,13 @@ fn hook_http_failures_keep_plugin_reporting_context_from_relay_responses() {
     .unwrap_err();
     assert!(!error.to_string().contains("do not expose"));
 }
+
+#[test]
+fn claude_generated_hooks_include_stop_failure() {
+    let commands = GeneratedHookCommands::new("cmd --fail-open", "cmd --fail-closed");
+    let generated = generated_policy_hooks(CodingAgent::ClaudeCode, &commands);
+    assert_eq!(
+        generated["hooks"]["StopFailure"][0]["hooks"][0]["command"],
+        "cmd --fail-open"
+    );
+}
