@@ -18,20 +18,26 @@ default = []
 schema = ["dep:schemars", "nemo-relay/schema"]
 
 [dependencies]
+# First-party crates.
 nemo-relay.workspace = true
-log = { version = "0.4", features = ["kv"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-regex = "1"
-sha2 = "0.11"
-schemars = { version = "0.8", optional = true }
+
+# Third-party dependencies.
+log = { workspace = true, features = ["kv"] }
+regex.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
+# First-party crates.
 nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
-futures = "0.3"
+
+# Third-party dependencies.
+futures.workspace = true
 opentelemetry = { workspace = true, features = ["trace"] }
-tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "metrics"] }
-prost = "0.14"
-tempfile = "3"
+prost.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
