@@ -5562,7 +5562,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph (1.2.11)
+## langgraph (1.2.14)
 
 ### Licenses
 License: `MIT`
@@ -5652,7 +5652,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph-sdk (0.4.5)
+## langgraph-sdk (0.4.6)
 
 ### Licenses
 License: `MIT`
