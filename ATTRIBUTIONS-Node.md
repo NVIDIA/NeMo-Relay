@@ -1793,7 +1793,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## @hono/node-server - 2.1.1
+## @hono/node-server - 2.1.5
 **Repository URL**: https://github.com/honojs/node-server
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
