@@ -127,11 +127,16 @@ fn supervision_rejects_blocked_group_signaling_before_launch() {
         .env("NEMO_RELAY_TEST_BLOCK_GROUP_SIGNALING", "1")
         .output()
         .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "seccomp regression fixture failed: {}\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        stdout,
         String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "seccomp regression fixture did not run exactly once: {stdout}"
     );
 }
 
