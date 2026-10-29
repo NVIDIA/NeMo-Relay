@@ -17,6 +17,16 @@ pub use super::model_pricing::{
     set_active_pricing_resolver,
 };
 
+/// Provider-reported cost accepted by OpenAI-compatible and Anthropic codecs.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawProviderUsageCost {
+    Scalar(f64),
+    Detailed(RawUsageCost),
+    // An unknown cost shape must not discard the rest of the response annotation.
+    Unknown(serde::de::IgnoredAny),
+}
+
 /// Provider/framework cost object accepted by built-in response codecs.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RawUsageCost {
@@ -44,9 +54,15 @@ pub(crate) struct RawUsageCost {
 
 pub(crate) fn provider_reported_cost(
     provider_total_cost: Option<f64>,
-    cost: Option<RawUsageCost>,
+    cost: Option<RawProviderUsageCost>,
 ) -> Option<CostEstimate> {
-    let cost = cost.unwrap_or_default();
+    let (scalar_cost, detailed_cost) = match cost {
+        Some(RawProviderUsageCost::Scalar(cost)) => (Some(cost), None),
+        Some(RawProviderUsageCost::Detailed(cost)) => (None, Some(cost)),
+        Some(RawProviderUsageCost::Unknown(_)) | None => (None, None),
+    };
+    let provider_total_cost = provider_total_cost.or(scalar_cost);
+    let cost = detailed_cost.unwrap_or_default();
     let provider_total_uses_default_currency = provider_total_cost.is_some();
     let nested_currency_is_default = cost
         .currency

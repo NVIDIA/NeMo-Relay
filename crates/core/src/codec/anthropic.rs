@@ -30,8 +30,9 @@ use super::request::{
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
-    estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
+    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawProviderUsageCost,
+    ResponseToolCall, Usage, estimate_cost_for_provider, infer_model_provider,
+    provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -96,7 +97,7 @@ struct RawAnthropicUsage {
     iterations: Option<Vec<RawAnthropicIterationUsage>>,
     #[serde(rename = "cost_usd")]
     provider_cost: Option<f64>,
-    cost: Option<RawUsageCost>,
+    cost: Option<RawProviderUsageCost>,
 }
 
 #[derive(Deserialize)]
