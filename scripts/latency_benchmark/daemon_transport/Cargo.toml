@@ -9,27 +9,27 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1"
-async-stream = "0.3"
-base64 = "0.22"
-bytes = "1"
-clap = { version = "4", features = ["derive"] }
-const-hex = "1"
-hdrhistogram = "7"
-http = "1"
-http-body-util = "0.1"
-hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "ring", "tls12"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "server-auto", "tokio"] }
-ring = "0.17"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.11"
-tempfile = "3"
+anyhow.workspace = true
+async-stream.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap = { workspace = true, features = ["derive"] }
+const-hex.workspace = true
+hdrhistogram.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http1", "http2"] }
+hyper-rustls = { workspace = true, features = ["http1", "http2", "native-tokio", "ring", "tls12"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "server-auto", "tokio"] }
+ring.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, default-features = true, features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
-toml = "0.9"
-tower-service = "0.3"
+toml.workspace = true
+tower-service.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
