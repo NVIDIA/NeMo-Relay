@@ -902,10 +902,18 @@ clients that support the fallback to use HTTP streaming. An ordinary GET remains
 
 The daemon uses the same `[upstream.openai_api_key_helper]` and
 `[upstream.anthropic_api_key_helper]` configuration as the personal gateway.
-Relay runs the helper for each provider request attempt. This includes middleware
-retries, streaming requests, and WebSocket handshakes. Choose one credential
-source for each provider. You cannot combine a helper with a static API key or
-a custom authorization header. Refer to
+By default, Relay runs the helper for each provider request attempt. This
+includes middleware retries, streaming requests, and WebSocket handshakes.
+
+To reuse tokens, set `cache_ttl_ms` to a value greater than `0` in the provider's
+helper table. The value is in milliseconds. Omit it or set it to `0` to disable
+caching. After the cache interval ends, the next request refreshes the token.
+Requests that arrive during a refresh wait for the same result. If the refresh
+fails, Relay stops those requests. It does not use the old token or another
+credential. Each daemon or worker process keeps its own cache.
+
+Choose one credential source for each provider. You cannot combine a helper
+with a static API key or a custom authorization header. Refer to
 [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
 for examples, supported authentication methods, limits, and error handling.
 
