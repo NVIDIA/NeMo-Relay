@@ -147,6 +147,21 @@ header. Managed Pi also requires `NEMO_RELAY_CLIENT_TOKEN` in its environment.
 Refer to
 [Credential Resolution](/daemon/configuration#credential-resolution).
 
+#### Replace Managed Claude Hook Bundles
+
+NeMo Relay 0.11 adds `StopFailure` to the existing managed v1 Claude bundle.
+This is a breaking change for previously generated managed bundles containing
+Claude Code: doctor, managed refresh, and output reuse reject their old
+canonical bytes. Bundles containing only Codex or Pi are unaffected.
+
+Before upgrading a managed Claude deployment, generate a replacement bundle
+with the same daemon address, dispatcher, platform, and agents, using a new
+output directory. Deploy it, provision the new SHA-256 separately, and update
+the Claude plugin and settings paths to the replacement directory. Refresh
+remains validation-only and does not rewrite the old bundle. Refer to
+[managed bundle configuration](/daemon/configuration) for the generation and
+validation commands.
+
 #### Review Recovered Tool Completions
 
 Relay can now close a Codex MCP tool span when a later model request contains

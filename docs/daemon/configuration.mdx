@@ -545,6 +545,16 @@ injection. Relay validates the resolved route credential from
 `nemo-relay daemon token ensure` creates that file, but Relay does not install
 an operating-system-specific login agent.
 
+<Warning>
+NeMo Relay 0.11 intentionally changes the managed v1 Claude hook bundle to
+capture `StopFailure`. Older bundles containing Claude Code no longer match
+the canonical bytes expected by doctor, managed refresh, or output reuse.
+Generate a replacement in a new directory using the same deployment values,
+deploy it, provision its newly printed digest separately, and update the
+Claude launch paths. Refresh does not migrate or overwrite the old bundle.
+Bundles containing only Codex or Pi are unaffected by this change.
+</Warning>
+
 Create a bundle once from fixed deployment values. Repeat `--agent` to select
 the artifacts that the administrator distributes:
 

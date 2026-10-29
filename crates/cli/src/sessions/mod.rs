@@ -2668,6 +2668,10 @@ impl Session {
             };
             return Ok(task_delivery.or(turn_delivery));
         }
+        // A failed boundary is authoritative even if an earlier model call succeeded.
+        if event.metadata["otel.status_code"] == "ERROR" {
+            self.last_turn_llm_output = None;
+        }
         let (_, subscriber_delivery) = self
             .close_turn(event.payload, Some(event.metadata), "closed_by_turn_end")
             .await?;
