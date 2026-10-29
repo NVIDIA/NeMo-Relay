@@ -3612,7 +3612,7 @@ async fn default_cache_keeps_policy_execution_outside_hits() {
     let policy_runs = Arc::new(AtomicUsize::new(0));
     nemo_relay::api::registry::register_llm_execution_intercept(
         "cache_policy_test",
-        100, // NeMo Guardrails default
+        100, // Policy check priority
         Arc::new({
             let policy_runs = Arc::clone(&policy_runs);
             move |_name, request, _context, next| {

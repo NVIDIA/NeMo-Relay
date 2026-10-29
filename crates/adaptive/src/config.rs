@@ -205,8 +205,8 @@ pub struct ResponseCacheConfig {
     /// when the response-cache section is enabled.
     pub namespace: String,
     /// Execution-intercept priority. Defaults to `150`.
-    /// Lower values run first. The default places NeMo Guardrails (`100`)
-    /// before the cache, so guardrails runs on cache hits.
+    /// Lower values run first. Give guardrails a lower priority than the
+    /// cache so guardrails run on cache hits.
     pub priority: i32,
     /// Probability in `[0.0, 1.0]` of skipping the cache and running live.
     pub bypass_rate: f64,

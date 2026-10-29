@@ -2180,6 +2180,32 @@ fn test_singleton_plugin_registration_discovers_ordinal() {
 }
 
 #[test]
+fn test_removed_nemo_guardrails_is_not_a_builtin() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("nemo_guardrails")],
+        ..PluginConfig::default()
+    };
+    let report = test_validate_static_plugin_config(&config);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "plugin.unknown_component"
+            && diagnostic.component.as_deref() == Some("nemo_guardrails")
+    }));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(test_initialize_plugin_host_exact(config))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::NotFound(message) if message.contains("nemo_guardrails")));
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
 fn test_initialize_plugins_reports_missing_component_during_activation() {
     let _guard = lock_runtime_owner();
     reset_global();
