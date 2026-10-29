@@ -3130,7 +3130,7 @@ async def test_a_cost_a_finished_responses_stream_reports_reaches_the_annotation
     assert_balanced(subscribed_events)
 
 
-async def test_a_usage_the_native_codec_cannot_read_leaves_the_call_unannotated(
+async def test_an_unrecognized_cost_preserves_the_response_annotation(
     subscribed_events: list[nemo_relay.Event],
 ) -> None:
     from google.adk.agents import LlmAgent
@@ -3142,6 +3142,37 @@ async def test_a_usage_the_native_codec_cannot_read_leaves_the_call_unannotated(
         "model": _GPT,
         "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}],
         "usage": {**_OPENAI_USAGE, "cost": "0.0042"},
+    }
+    model = _openai_chat_model(_Canned([httpx.Response(200, json=completion)]))
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert final_text(adk_events) == "Sunny."
+    (end,) = ends(subscribed_events, "llm")
+    assert status_of(end) == "OK"
+    response = response_of(end)
+    assert response.id == "chatcmpl-1"
+    assert response.finish_reason == "complete"
+    usage = present(response.usage)
+    assert usage["prompt_tokens"] == 100
+    assert usage["completion_tokens"] == 20
+    assert usage["total_tokens"] == 120
+    assert "cost" not in usage
+    assert_balanced(subscribed_events)
+
+
+async def test_a_usage_the_native_codec_cannot_read_leaves_the_call_unannotated(
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+
+    completion: nemo_relay.JsonObject = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": _GPT,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}],
+        "usage": {**_OPENAI_USAGE, "cost_usd": "0.0042"},
     }
     model = _openai_chat_model(_Canned([httpx.Response(200, json=completion)]))
 

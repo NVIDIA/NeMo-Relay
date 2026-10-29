@@ -386,7 +386,7 @@ Built-in codecs normalize provider field names as follows:
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
 | `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
 | `uncached_input_tokens` | `prompt_tokens - prompt_tokens_details.cached_tokens`, when both are reported | `input_tokens - input_tokens_details.cached_tokens`, when both are reported | `input_tokens` | `promptTokens - promptTokensDetails.cachedTokens`, when both are reported | `promptTokenCount - cachedContentTokenCount`, when both are reported |
-| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — |
+| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | — | — |
 
 Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
 
@@ -411,6 +411,11 @@ but OpenAI Chat `completion_tokens_details` is not.
 | `input` / `output` / `cache_read` / `cache_write` | Per-category amounts in `currency`. |
 | `source` | `provider_reported` (authoritative) or `model_pricing` (estimated). |
 | `pricing_provider` / `pricing_model` / `pricing_as_of` / `pricing_source` | Estimate provenance, for auditing stale pricing. |
+
+For Chat Completions, Responses, and Messages, `cost_usd` takes precedence over
+`usage.cost`. Unrecognized `usage.cost` values are ignored without discarding
+token usage or other response annotations; configured pricing can still supply
+an estimate.
 
 Missing is not zero: an absent `cost` or token field means unknown, while an
 explicit `0` is a reported value and is preserved. Relay does not convert
