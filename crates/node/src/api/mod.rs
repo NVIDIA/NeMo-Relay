@@ -981,8 +981,8 @@ fn build_otel_metric_config(
     Ok(config)
 }
 
-fn otel_runtime_diagnostics_json(
-    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+fn exporter_runtime_diagnostics_json(
+    diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
 ) -> Json {
     Json::Array(
         diagnostics
@@ -5640,6 +5640,12 @@ impl AtofExporter {
             .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
+
+    /// Return delivery diagnostics recorded by this exporter's stream sink.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+    }
 }
 
 /// Mutable configuration object for `OpenTelemetrySubscriber`.
@@ -5870,7 +5876,7 @@ impl OpenTelemetrySubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying tracer provider.
@@ -5973,7 +5979,7 @@ impl OpenTelemetryLogSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying logger provider.
@@ -6072,7 +6078,7 @@ impl OpenTelemetryMetricSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying meter provider.

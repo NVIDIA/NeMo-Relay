@@ -6,16 +6,20 @@
 import http.server
 import json
 import threading
+from pathlib import Path
 from typing import TypedDict, cast
 from uuid import uuid4
 
 import pytest
 
+import nemo_relay
 from nemo_relay import (
     AtifExporter,
     AtofExporter,
     AtofExporterConfig,
     AtofExporterMode,
+    ExporterRuntimeDiagnostic,
+    ExporterRuntimeDiagnostics,
     JsonObject,
     LLMAttributes,
     LLMRequest,
@@ -31,7 +35,6 @@ from nemo_relay import (
     OpenTelemetryLogSubscriber,
     OpenTelemetryMetricConfig,
     OpenTelemetryMetricSubscriber,
-    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     ScopeAttributes,
     ScopeEvent,
@@ -486,6 +489,78 @@ class TestAtifExporterType:
             assert exporter.deregister("py_atif_exporter") is False
 
 
+class TestAtofExporterRuntimeDiagnostics:
+    def test_file_sink_records_nothing(self, tmp_path: Path) -> None:
+        config = AtofExporterConfig()
+        config.output_directory = str(tmp_path)
+        config.filename = "events.jsonl"
+        exporter = AtofExporter(config)
+        exporter.register("py_atof_file_diagnostics")
+        try:
+            scope.event("py_atof_file_mark")
+            subscribers.flush()
+            exporter.force_flush()
+        finally:
+            exporter.deregister("py_atof_file_diagnostics")
+            exporter.shutdown()
+        diagnostics = exporter.runtime_diagnostics()
+        assert isinstance(diagnostics, ExporterRuntimeDiagnostics)
+        assert diagnostics.entries == []
+        assert diagnostics.get("atof.stream_delivery_failed") is None
+
+    def test_rejected_stream_deliveries_are_recorded(self) -> None:
+        with _OtelCollector(response_status=503) as collector:
+            config = AtofExporterConfig()
+            config.sink_type = "stream"
+            config.url = collector.endpoint
+            config.transport = "http_post"
+            exporter = AtofExporter(config)
+            assert exporter.runtime_diagnostics().entries == []
+            exporter.register("py_atof_rejected_diagnostics")
+            try:
+                scope.event("py_atof_rejected_mark")
+                subscribers.flush()
+                exporter.force_flush()
+            finally:
+                exporter.deregister("py_atof_rejected_diagnostics")
+                exporter.shutdown()
+            origin = f"http://127.0.0.1:{collector.server.server_port}"
+
+        failed = exporter.runtime_diagnostics().get("atof.stream_delivery_failed")
+        assert isinstance(failed, ExporterRuntimeDiagnostic)
+        assert failed.count == 1
+        assert failed.message == f"ATOF http_post stream to {origin} returned status 503 Service Unavailable"
+        assert collector.endpoint not in failed.message
+        assert [entry.code for entry in exporter.runtime_diagnostics().entries] == ["atof.stream_delivery_failed"]
+
+    @pytest.mark.parametrize(
+        ("former_name", "replacement"),
+        [
+            ("OpenTelemetryRuntimeDiagnostic", ExporterRuntimeDiagnostic),
+            ("OpenTelemetryRuntimeDiagnostics", ExporterRuntimeDiagnostics),
+        ],
+    )
+    def test_former_opentelemetry_names_warn_and_resolve_to_the_exporter_types(
+        self,
+        former_name: str,
+        replacement: type[ExporterRuntimeDiagnostic] | type[ExporterRuntimeDiagnostics],
+    ) -> None:
+        with pytest.warns(DeprecationWarning, match=f"use nemo_relay.{replacement.__name__}$"):
+            assert getattr(nemo_relay, former_name) is replacement
+
+    def test_star_import_keeps_the_former_names(self) -> None:
+        namespace: dict[str, object] = {}
+        with pytest.warns(DeprecationWarning, match="OpenTelemetryRuntimeDiagnostic"):
+            exec("from nemo_relay import *", namespace)
+        assert namespace["OpenTelemetryRuntimeDiagnostic"] is ExporterRuntimeDiagnostic
+        assert namespace["OpenTelemetryRuntimeDiagnostics"] is ExporterRuntimeDiagnostics
+
+    def test_unknown_module_attribute_raises_attribute_error(self) -> None:
+        missing = "does_not_exist"
+        with pytest.raises(AttributeError, match=missing):
+            getattr(nemo_relay, missing)
+
+
 class TestAtofExporterType:
     def test_config_defaults_mutation_and_repr(self, tmp_path) -> None:
         config = AtofExporterConfig()
@@ -621,7 +696,7 @@ class TestOpenTelemetryTypes:
             subscribers.flush()
 
             diagnostics = subscriber.runtime_diagnostics()
-            assert isinstance(diagnostics, OpenTelemetryRuntimeDiagnostics)
+            assert isinstance(diagnostics, ExporterRuntimeDiagnostics)
             diagnostic = diagnostics.get("otel.metric_mark_invalid")
             assert diagnostic is not None
             assert diagnostic.count == 3

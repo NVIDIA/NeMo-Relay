@@ -1891,6 +1891,19 @@ NemoRelayStatus nemo_relay_atof_exporter_force_flush(const struct FfiAtofExporte
 NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *exporter);
 
 /**
+ * Returns delivery diagnostics recorded by this exporter's stream sink as JSON.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries sorted by code. The caller owns `out_json` and must free it with
+ * `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `exporter` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_atof_exporter_runtime_diagnostics_json(const struct FfiAtofExporter *exporter,
+                                                                  char **out_json);
+
+/**
  * Returns the ATOF exporter output path as a string when its sink is a file.
  *
  * # Safety

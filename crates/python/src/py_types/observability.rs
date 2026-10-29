@@ -57,15 +57,15 @@ impl PyOpenTelemetryTlsConfig {
     }
 }
 
-/// One bounded runtime diagnostic from an OpenTelemetry subscriber.
-#[pyclass(name = "OpenTelemetryRuntimeDiagnostic", frozen, skip_from_py_object)]
+/// One runtime diagnostic recorded by an exporter or subscriber.
+#[pyclass(name = "ExporterRuntimeDiagnostic", frozen, skip_from_py_object)]
 #[derive(Clone)]
-pub struct PyOpenTelemetryRuntimeDiagnostic {
-    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostic,
+pub struct PyExporterRuntimeDiagnostic {
+    inner: nemo_relay::observability::ExporterRuntimeDiagnostic,
 }
 
 #[pymethods]
-impl PyOpenTelemetryRuntimeDiagnostic {
+impl PyExporterRuntimeDiagnostic {
     #[getter]
     fn code(&self) -> &str {
         &self.inner.code
@@ -82,32 +82,32 @@ impl PyOpenTelemetryRuntimeDiagnostic {
     }
 }
 
-/// Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber.
-#[pyclass(name = "OpenTelemetryRuntimeDiagnostics", frozen, skip_from_py_object)]
+/// Snapshot of runtime diagnostics from an exporter or subscriber.
+#[pyclass(name = "ExporterRuntimeDiagnostics", frozen, skip_from_py_object)]
 #[derive(Clone)]
-pub struct PyOpenTelemetryRuntimeDiagnostics {
-    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+pub struct PyExporterRuntimeDiagnostics {
+    inner: nemo_relay::observability::ExporterRuntimeDiagnostics,
 }
 
 #[pymethods]
-impl PyOpenTelemetryRuntimeDiagnostics {
+impl PyExporterRuntimeDiagnostics {
     /// Return diagnostics in stable code order.
     #[getter]
-    fn entries(&self) -> Vec<PyOpenTelemetryRuntimeDiagnostic> {
+    fn entries(&self) -> Vec<PyExporterRuntimeDiagnostic> {
         self.inner
             .entries()
             .iter()
             .cloned()
-            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+            .map(|inner| PyExporterRuntimeDiagnostic { inner })
             .collect()
     }
 
     /// Return the diagnostic with ``code``, when present.
-    fn get(&self, code: &str) -> Option<PyOpenTelemetryRuntimeDiagnostic> {
+    fn get(&self, code: &str) -> Option<PyExporterRuntimeDiagnostic> {
         self.inner
             .get(code)
             .cloned()
-            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+            .map(|inner| PyExporterRuntimeDiagnostic { inner })
     }
 }
 
@@ -493,6 +493,13 @@ impl PyAtofExporter {
     pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.shutdown())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Return delivery diagnostics recorded by a stream sink.
+    pub(crate) fn runtime_diagnostics(&self) -> PyExporterRuntimeDiagnostics {
+        PyExporterRuntimeDiagnostics {
+            inner: self.inner.runtime_diagnostics(),
+        }
     }
 
     pub(crate) fn __repr__(&self) -> String {
@@ -1021,9 +1028,9 @@ impl PyOpenTelemetrySubscriber {
     }
 
     /// Return a bounded snapshot of exporter and event-processing diagnostics.
-    pub(crate) fn runtime_diagnostics(&self) -> PyResult<PyOpenTelemetryRuntimeDiagnostics> {
+    pub(crate) fn runtime_diagnostics(&self) -> PyResult<PyExporterRuntimeDiagnostics> {
         self.with_runtime_context(|| {
-            Ok(PyOpenTelemetryRuntimeDiagnostics {
+            Ok(PyExporterRuntimeDiagnostics {
                 inner: self.inner.runtime_diagnostics(),
             })
         })
@@ -1260,8 +1267,8 @@ impl PyOpenTelemetryLogSubscriber {
     }
 
     /// Return a bounded snapshot of exporter and event-processing diagnostics.
-    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
-        PyOpenTelemetryRuntimeDiagnostics {
+    fn runtime_diagnostics(&self) -> PyExporterRuntimeDiagnostics {
+        PyExporterRuntimeDiagnostics {
             inner: self.inner.runtime_diagnostics(),
         }
     }
@@ -1486,8 +1493,8 @@ impl PyOpenTelemetryMetricSubscriber {
     }
 
     /// Return a bounded snapshot of exporter and event-processing diagnostics.
-    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
-        PyOpenTelemetryRuntimeDiagnostics {
+    fn runtime_diagnostics(&self) -> PyExporterRuntimeDiagnostics {
+        PyExporterRuntimeDiagnostics {
             inner: self.inner.runtime_diagnostics(),
         }
     }
