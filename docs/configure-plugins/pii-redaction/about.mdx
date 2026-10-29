@@ -39,8 +39,10 @@ flowchart TD
     redaction --> consumers["Subscribers<br/>and exporters"]
 ```
 
-Each event is sanitized during queued publication, before delivery. The diagram
-shows the data boundary rather than execution timing.
+Each event is sanitized during queued publication, before delivery. Subscribers
+and exporters consume the sanitized canonical event stream; exporter projections
+do not recover values removed by the plugin. The diagram shows the data boundary
+rather than execution timing.
 
 The plugin installs [sanitize guardrails](/about-nemo-relay/concepts/middleware#guardrails).
 These are Relay's existing hooks for transforming observability data. Use the
@@ -66,8 +68,22 @@ to `true`.
 LLM selectors use codec-specific payload boundaries. Request and response codec
 capabilities differ, and codec conversion can canonicalize the emitted request.
 Refer to
-[Path Semantics](/configure-plugins/pii-redaction/configuration#path-semantics)
+[Payload Boundaries and Selection Rules](/configure-plugins/pii-redaction/redaction-behavior#observability-semantics)
 for payload boundaries and normalized selector examples.
+
+## Available Backends
+
+| Backend | Availability and Coverage |
+| --- | --- |
+| `builtin` | Shipped deterministic actions and detectors for managed LLM calls, tools, marks, and scope events. Available in runtimes that include the `nemo-relay-pii-redaction` crate. |
+| `local_model` | Configuration and validation extension point for runtimes that install a local backend provider. The shipped local backend does not implement LLM, tool, mark, or generic scope sanitization. |
+
+Without a local backend provider, runtimes report `local_model` as unavailable
+during plugin initialization. Refer to
+[Local Backend Fields](/configure-plugins/pii-redaction/configuration#local-backend-fields)
+for its reserved configuration fields and to
+[Codec Selection](/configure-plugins/pii-redaction/configuration#how-to-choose-a-codec)
+for supported builtin LLM formats.
 
 ## Example: Redact Email Addresses
 
@@ -75,7 +91,7 @@ This `plugins.toml` profile replaces detected email addresses in observability
 text with `[REDACTED]`. Omitting path selectors lets the detector inspect every
 string leaf in ordinary payloads. For typed metric marks, it sanitizes descriptions
 and string attributes while preserving measurement names. Refer to
-[Typed Metric Marks](/configure-plugins/pii-redaction/configuration#typed-metric-marks)
+[Typed Metric Marks](/configure-plugins/pii-redaction/redaction-behavior#typed-metric-marks)
 for the metric-specific rules.
 
 ```toml
@@ -153,8 +169,7 @@ plugin or raw sanitize-guardrail middleware directly.
 | Flexibility | Limited to the plugin contract | Full control over sanitize behavior |
 | When to choose it | You want the fastest path to a supported privacy surface | You need behavior the plugin contract does not express |
 
-Continue with
-[PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
-for action semantics, selectors, profiles, and the trajectory preset. The
-shipped `builtin` backend implements these policies; `local_model` is an
-extension point that requires a runtime-provided backend.
+Continue with [Configuration](/configure-plugins/pii-redaction/configuration)
+for settings, profiles, and worked examples, or
+[Redaction Behavior](/configure-plugins/pii-redaction/redaction-behavior) for actions,
+selectors, trajectory preservation, and diagnostic interpretation.
