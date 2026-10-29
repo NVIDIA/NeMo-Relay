@@ -120,9 +120,6 @@ navigation:
     - folder: ../pages-dev/configure-plugins/adaptive
       title: Adaptive Runtime
       title-source: frontmatter
-    - folder: ../pages-dev/configure-plugins/nemo-guardrails
-      title: NeMo Guardrails (Deprecated)
-      title-source: frontmatter
     - folder: ../pages-dev/configure-plugins/pii-redaction
       title: PII Redaction
       title-source: frontmatter
