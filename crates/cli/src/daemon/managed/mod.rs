@@ -76,6 +76,7 @@ const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "SubagentStop",
     "Notification",
     "Stop",
+    "StopFailure",
     "PreCompact",
     "PostCompact",
     "SessionEnd",
