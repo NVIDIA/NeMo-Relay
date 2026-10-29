@@ -315,6 +315,8 @@ fn credentials_switch_sources_and_round_trip_without_running_helpers() {
                     command: "never-execute-this-secret-command".into(),
                     args: vec!["argument with spaces".into(), "secret-argument\"\\".into()],
                     timeout_ms: 2345,
+                    cache_ttl_ms: 300000,
+                    cache: Default::default(),
                     auth_scheme: Some(AuthScheme::Bearer),
                 },
             )
@@ -336,6 +338,7 @@ fn credentials_switch_sources_and_round_trip_without_running_helpers() {
         assert_eq!(parsed.command, "never-execute-this-secret-command");
         assert_eq!(parsed.args, ["argument with spaces", "secret-argument\"\\"]);
         assert_eq!(parsed.timeout_ms, 2345);
+        assert_eq!(parsed.cache_ttl_ms, 300000);
         assert!(matches!(parsed.auth_scheme, Some(AuthScheme::Bearer)));
 
         document
@@ -373,6 +376,8 @@ fn helper_replacement_supports_nested_inline_and_dotted_tables_and_default_schem
                         command: "new-secret".into(),
                         args: Vec::new(),
                         timeout_ms: 10_000,
+                        cache_ttl_ms: 0,
+                        cache: Default::default(),
                         auth_scheme: None,
                     },
                 )
@@ -394,6 +399,8 @@ fn helper_replacement_supports_nested_inline_and_dotted_tables_and_default_schem
                 command: "helper".into(),
                 args: Vec::new(),
                 timeout_ms: 1,
+                cache_ttl_ms: 0,
+                cache: Default::default(),
                 auth_scheme: Some(AuthScheme::ApiKey),
             },
         )
@@ -432,6 +439,8 @@ fn invalid_credential_replacements_preserve_the_previous_source() {
                         command: command.into(),
                         args: Vec::new(),
                         timeout_ms,
+                        cache_ttl_ms: 0,
+                        cache: Default::default(),
                         auth_scheme,
                     }
                 )

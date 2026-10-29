@@ -5251,6 +5251,18 @@ fn api_key_helpers_validate_exclusive_sources_and_provider_schemes() {
         let file: FileConfig = toml::from_str(&helper).unwrap();
         let mut gateway = GatewayConfig::default();
         apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+        for ttl in [0, 300000] {
+            let file: FileConfig =
+                toml::from_str(&format!("{helper}cache_ttl_ms = {ttl}\n")).unwrap();
+            let mut gateway = GatewayConfig::default();
+            apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+            assert_eq!(
+                crate::upstream_auth::helper(&gateway, provider == "anthropic")
+                    .unwrap()
+                    .cache_ttl_ms,
+                ttl
+            );
+        }
         for static_name in ["api_key", "auth_header"] {
             let text = format!("[upstream]\n{provider}_{static_name} = 'static-key'\n{helper}");
             let file: FileConfig = toml::from_str(&text).unwrap();
@@ -5310,7 +5322,7 @@ fn replacing_upstream_helpers_does_not_inherit_old_command_arguments() {
             "https://original.example",
             "https://replacement.example",
         ] {
-            let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example'\n[upstream.{provider}_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\nauth_scheme = 'bearer'\n")).unwrap();
+            let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example'\n[upstream.{provider}_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\ncache_ttl_ms = 300000\nauth_scheme = 'bearer'\n")).unwrap();
             let url = if endpoint.is_empty() {
                 String::new()
             } else {
@@ -5328,6 +5340,7 @@ fn replacing_upstream_helpers_does_not_inherit_old_command_arguments() {
             assert_eq!(helper.command, "new-helper");
             assert!(helper.args.is_empty());
             assert_eq!(helper.timeout_ms, 10_000);
+            assert_eq!(helper.cache_ttl_ms, 0);
             assert!(helper.auth_scheme.is_none());
         }
     }
@@ -5396,6 +5409,8 @@ fn environment_headers_override_static_keys_but_not_helpers() {
             command: "not-executed".into(),
             args: vec![],
             timeout_ms: 10000,
+            cache_ttl_ms: 0,
+            cache: Default::default(),
             auth_scheme: None,
         };
         let mut gateway = GatewayConfig {

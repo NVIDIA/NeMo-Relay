@@ -2681,47 +2681,54 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
 
 #[cfg(unix)]
 #[tokio::test]
-async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
-    let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
-    let capture = seen.clone();
-    let app = Router::new().route(
-        "/v1/messages/count_tokens",
-        post(move |headers: HeaderMap| {
-            let capture = capture.clone();
-            async move {
-                capture.lock().unwrap().push(headers);
-                "{}"
-            }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let config = GatewayConfig {
-        anthropic_base_url: format!("http://{}", listener.local_addr().unwrap()),
-        anthropic_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
-        ..GatewayConfig::default()
-    };
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    for _ in 0..2 {
-        let request = Request::post("/v1/messages/count_tokens")
-            .header(AUTHORIZATION, "Bearer caller-token")
-            .body(Body::from("{}"))
+async fn unmanaged_daemon_dispatch_honors_helper_cache_ttl() {
+    for cache_ttl_ms in [0, 60_000] {
+        let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+        let capture = seen.clone();
+        let app = Router::new().route(
+            "/v1/messages/count_tokens",
+            post(move |headers: HeaderMap| {
+                let capture = capture.clone();
+                async move {
+                    capture.lock().unwrap().push(headers);
+                    "{}"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut generator = crate::upstream_auth::tests::helper("printf 'token-%s' $$");
+        generator.cache_ttl_ms = cache_ttl_ms;
+        let config = GatewayConfig {
+            anthropic_base_url: format!("http://{}", listener.local_addr().unwrap()),
+            anthropic_api_key_helper: Some(generator),
+            ..GatewayConfig::default()
+        };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for _ in 0..2 {
+            let request = Request::post("/v1/messages/count_tokens")
+                .header(AUTHORIZATION, "Bearer caller-token")
+                .body(Body::from("{}"))
+                .unwrap();
+            let response = dispatch_unmanaged(
+                pooled_client().unwrap(),
+                request,
+                ProviderRoute::Anthropic,
+                &config,
+            )
+            .await
             .unwrap();
-        let response = dispatch_unmanaged(
-            pooled_client().unwrap(),
-            request,
-            ProviderRoute::Anthropic,
-            &config,
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        response.into_body().collect().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.into_body().collect().await.unwrap();
+        }
+        let captured = seen.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(
+            captured[0]["x-api-key"] == captured[1]["x-api-key"],
+            cache_ttl_ms > 0
+        );
+        assert!(!captured[0].contains_key(AUTHORIZATION));
+        server.abort();
     }
-    let captured = seen.lock().unwrap();
-    assert_eq!(captured.len(), 2);
-    assert_ne!(captured[0]["x-api-key"], captured[1]["x-api-key"]);
-    assert!(!captured[0].contains_key(AUTHORIZATION));
-    server.abort();
 }
 
 #[cfg(unix)]
@@ -3394,4 +3401,72 @@ async fn managed_runtime_cancelled_first_read_preserves_another_active_call() {
     .await
     .unwrap();
     runtime.close().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_runtime_reuses_helper_credentials_for_streaming_requests() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let capture = seen.clone();
+    let app = Router::new().route(
+        "/v1/responses",
+        post(move |headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                capture.lock().unwrap().push(headers);
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from("data: [DONE]\n\n"))
+                    .unwrap()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut generator = crate::upstream_auth::tests::helper("printf 'token-%s' $$");
+    generator.cache_ttl_ms = 60_000;
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        openai_api_key_helper: Some(generator),
+        ..GatewayConfig::default()
+    };
+    let provider = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(config, Vec::new(), "owner".into())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let response = runtime
+            .proxy_provider(
+                pooled_client().unwrap(),
+                Request::post("/v1/responses")
+                    .header(ACCEPT, "text/event-stream")
+                    .header(AUTHORIZATION, "Bearer caller-secret")
+                    .body(Body::from(
+                        r#"{"model":"test","input":"hello","stream":true}"#,
+                    ))
+                    .unwrap(),
+                ProviderRoute::OpenAi,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "data: [DONE]\n\n"
+        );
+    }
+    {
+        let captured = seen.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(captured[0][AUTHORIZATION], captured[1][AUTHORIZATION]);
+        assert!(
+            captured[0][AUTHORIZATION]
+                .to_str()
+                .unwrap()
+                .starts_with("Bearer token-")
+        );
+    }
+    runtime.close().await.unwrap();
+    provider.abort();
 }
