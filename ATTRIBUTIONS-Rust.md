@@ -32997,7 +32997,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## opentelemetry - 0.32.0
+## opentelemetry - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry
 **License Type(s)**: Apache-2.0
@@ -33078,7 +33078,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## opentelemetry-http - 0.32.0
+## opentelemetry-http - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-http
 **License Type(s)**: Apache-2.0
@@ -33159,7 +33159,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## opentelemetry-otlp - 0.32.0
+## opentelemetry-otlp - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-otlp
 **License Type(s)**: Apache-2.0
@@ -33240,7 +33240,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## opentelemetry-proto - 0.32.0
+## opentelemetry-proto - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-proto
 **License Type(s)**: Apache-2.0
@@ -33449,7 +33449,7 @@ limitations under the License.
    limitations under the License.
 ```
 
-## opentelemetry-semantic-conventions - 0.32.1
+## opentelemetry-semantic-conventions - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-semantic-conventions
 **License Type(s)**: Apache-2.0
@@ -33530,7 +33530,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## opentelemetry_sdk - 0.32.1
+## opentelemetry_sdk - 0.33.1
 
 **Repository URL**: https://github.com/open-telemetry/opentelemetry-rust/tree/main/opentelemetry-sdk
 **License Type(s)**: Apache-2.0
