@@ -566,6 +566,12 @@ fn recursive_globs_agree_with_exhaustive_reference_matching() {
     let pointer = format!("/{}/missing", ["**/a"; 64].join("/"));
     let matcher = TargetPathMatcher::new(&[], &[pointer]).unwrap();
     assert!(!matcher.matches(&vec!["a".into(); 256]));
+
+    // A nearly matching literal suffix after `**` exercises repeated retries,
+    // rather than only the many-globstar case above.
+    let pointer = format!("/**/{}/missing", ["a"; 64].join("/"));
+    let matcher = TargetPathMatcher::new(&[], &[pointer]).unwrap();
+    assert!(!matcher.matches(&vec!["a".into(); 512]));
 }
 
 #[test]

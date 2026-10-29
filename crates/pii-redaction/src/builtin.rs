@@ -260,8 +260,9 @@ impl TargetPathMatcher {
 }
 
 /// Match whole path segments, retrying only the most recent `**`. This uses
-/// constant scratch space and at most O(pattern length * path length) work,
-/// without recursive or exponential backtracking. Prefix mode asks whether
+/// constant scratch space and at most O(pattern segments * path segments)
+/// segment comparisons; literal comparisons also depend on key byte length.
+/// There is no recursive or exponential backtracking. Prefix mode asks whether
 /// some strict descendant can match, for diagnostic traversal pruning.
 fn recursive_glob_matches(
     pattern: &[TargetPathSegment],

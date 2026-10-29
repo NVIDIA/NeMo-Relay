@@ -63,6 +63,9 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+#[path = "recursive_export_tests.rs"]
+mod recursive_export_tests;
+
 #[path = "recursive_glob_tests.rs"]
 mod recursive_glob_tests;
 
