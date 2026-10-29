@@ -54,11 +54,11 @@ symbolic links and special files.
 
 <CodeBlocks>
 
-<Code src="_code/python_grpc_worker/relay-plugin.toml" language="toml" title="Python Worker: relay-plugin.toml" lines="4-32" showLineNumbers={false} />
+<Code src="_code/python_grpc_worker/relay-plugin.toml" language="toml" title="Python Worker: relay-plugin.toml" lines="4-33" showLineNumbers={false} />
 
 <Code src="_code/rust_native_policy/relay-plugin.toml" language="toml" title="Native Rust: relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-<Code src="_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="Rust Worker: relay-plugin.toml" lines="4-31" showLineNumbers={false} />
+<Code src="_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="Rust Worker: relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
 </CodeBlocks>
 
@@ -138,8 +138,10 @@ contain ASCII letters, digits, and underscores. An optional `*` at the end match
 any suffix, including an empty suffix. You can't use `*` alone or leave an entry
 empty. Names are case-sensitive on Unix. Windows ignores letter case.
 
-Relay reads the selected variables when it starts the worker. It skips missing
-variables. Relay also keeps these host variables when they exist: `PATH`,
+Relay reads the selected variables from the host process environment when it
+starts the worker. It does not read Windows registry settings or shell profiles.
+It also does not read `launchd` or `systemd` configuration. Relay skips missing
+variables. It keeps these host variables when they exist: `PATH`,
 `SYSTEMROOT`, `WINDIR`, `TMPDIR`, `TEMP`, `TMP`, `SSL_CERT_FILE`, and `SSL_CERT_DIR`.
 If you omit `forward_env` or set it to `[]`, Relay forwards no other host variables.
 Reactivate the plugin to apply changes.

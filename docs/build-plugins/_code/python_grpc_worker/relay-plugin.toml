@@ -30,3 +30,4 @@ sha256 = "sha256:<worker-source-sha256>"
 [load]
 runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
+forward_env = []
