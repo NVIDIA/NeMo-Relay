@@ -4,6 +4,8 @@ sidebar-title: "About"
 description: "Understand where PII redaction runs and choose a policy for Relay observability data."
 position: 1
 ---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
@@ -31,8 +33,6 @@ and the application receives the real result.
 
 ```mermaid
 flowchart TD
-    accTitle: Scope and mark events pass through PII redaction
-    accDescr: Application activity includes managed LLM and tool execution, scope starts and ends, and marks. Snapshots of scope and mark event data pass through PII sanitizers before subscribers and exporters receive them.
     activity["Application or integration"] -->|"Managed call"| execution["Provider or tool<br/>and application"]
     activity -. "Scope start / end<br/>and mark events" .-> snapshot["Event snapshot"]
     snapshot --> redaction["PII sanitizers"]
