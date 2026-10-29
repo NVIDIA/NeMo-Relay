@@ -3649,77 +3649,93 @@ async fn voice_connections_preserve_configured_upstream_and_chatgpt_credentials(
 #[tokio::test]
 async fn helper_authentication_reaches_gateway_upstream_on_each_dispatch() {
     use axum::{Router, routing::post};
-    let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
-    let capture = seen.clone();
-    let app = Router::new().route(
-        "/",
-        post(move |headers: HeaderMap| {
-            let capture = capture.clone();
-            async move {
-                capture.lock().unwrap().push(headers);
-                "{}"
-            }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let config = GatewayConfig {
-        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
-        anthropic_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
-        ..GatewayConfig::default()
-    };
-    let http = test_http_client();
-    let inbound = HeaderMap::from_iter([(
-        header::AUTHORIZATION,
-        HeaderValue::from_static("Bearer inbound"),
-    )]);
-    for route in [
-        ProviderRoute::OpenAiResponses,
-        ProviderRoute::AnthropicMessages,
-        ProviderRoute::OpenAiModels,
-        ProviderRoute::AnthropicModels,
-    ] {
-        let forwarding = ProviderForwarding::new(
-            route,
-            crate::provider_auth::ProviderRequestAuthorization {
-                source_credential:
-                    crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
-                allow_environment_provider_auth: true,
-            },
-            &config,
+    for cache_ttl_ms in [0, 60_000] {
+        let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+        let capture = seen.clone();
+        let app = Router::new().route(
+            "/",
+            post(move |headers: HeaderMap| {
+                let capture = capture.clone();
+                async move {
+                    capture.lock().unwrap().push(headers);
+                    "{}"
+                }
+            }),
         );
-        for streaming in [false, true] {
-            let response = forward_upstream_request(
-                &http,
-                &http,
-                &http,
-                UpstreamForwardRequest {
-                    method: &Method::POST,
-                    url: &url,
-                    body_bytes: &Bytes::from_static(b"{}"),
-                    headers: &inbound,
-                    effective_request: None,
-                    source_body: None,
-                    forwarding: forwarding.clone(),
-                    operational: None,
-                    streaming,
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut generator = crate::upstream_auth::tests::helper("printf 'token-%s' $$");
+        generator.cache_ttl_ms = cache_ttl_ms;
+        let config = GatewayConfig {
+            openai_api_key_helper: Some(generator.clone()),
+            anthropic_api_key_helper: Some(generator.clone()),
+            ..GatewayConfig::default()
+        };
+        let http = test_http_client();
+        let inbound = HeaderMap::from_iter([(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer inbound"),
+        )]);
+        for route in [
+            ProviderRoute::OpenAiResponses,
+            ProviderRoute::AnthropicMessages,
+            ProviderRoute::OpenAiModels,
+            ProviderRoute::AnthropicModels,
+        ] {
+            let forwarding = ProviderForwarding::new(
+                route,
+                crate::provider_auth::ProviderRequestAuthorization {
+                    source_credential:
+                        crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
+                    allow_environment_provider_auth: true,
                 },
-            )
-            .await
-            .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
+                &config,
+            );
+            for streaming in [false, true] {
+                let response = forward_upstream_request(
+                    &http,
+                    &http,
+                    &http,
+                    UpstreamForwardRequest {
+                        method: &Method::POST,
+                        url: &url,
+                        body_bytes: &Bytes::from_static(b"{}"),
+                        headers: &inbound,
+                        effective_request: None,
+                        source_body: None,
+                        forwarding: forwarding.clone(),
+                        operational: None,
+                        streaming,
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+            }
         }
+        let captured = seen.lock().unwrap();
+        assert_eq!(captured.len(), 8);
+        assert_eq!(
+            captured[0]["authorization"] == captured[1]["authorization"],
+            cache_ttl_ms > 0
+        );
+        assert_eq!(
+            captured[2]["x-api-key"] == captured[3]["x-api-key"],
+            cache_ttl_ms > 0
+        );
+        assert!(!captured[2].contains_key("authorization"));
+        assert_eq!(
+            captured[4]["authorization"] == captured[5]["authorization"],
+            cache_ttl_ms > 0
+        );
+        assert_eq!(
+            captured[6]["x-api-key"] == captured[7]["x-api-key"],
+            cache_ttl_ms > 0
+        );
+        assert!(!captured[6].contains_key("authorization"));
+        server.abort();
     }
-    let captured = seen.lock().unwrap();
-    assert_eq!(captured.len(), 8);
-    assert_ne!(captured[0]["authorization"], captured[1]["authorization"]);
-    assert_ne!(captured[2]["x-api-key"], captured[3]["x-api-key"]);
-    assert!(!captured[2].contains_key("authorization"));
-    assert_ne!(captured[4]["authorization"], captured[5]["authorization"]);
-    assert_ne!(captured[6]["x-api-key"], captured[7]["x-api-key"]);
-    assert!(!captured[6].contains_key("authorization"));
-    server.abort();
 }
 
 #[tokio::test]
@@ -3924,6 +3940,8 @@ async fn unmanaged_routes_never_inject_configured_or_environment_credentials() {
                 command: "unmanaged-route-helper-must-not-run".into(),
                 args: Vec::new(),
                 timeout_ms: 1000,
+                cache_ttl_ms: 0,
+                cache: Default::default(),
                 auth_scheme: None,
             }),
             ..GatewayConfig::default()

@@ -358,6 +358,11 @@ impl ConfigDocument {
         let timeout = i64::try_from(helper.timeout_ms)
             .map_err(|_| CliError::Config("helper timeout_ms is too large".into()))?;
         table.insert("timeout_ms", Value::from(timeout));
+        if helper.cache_ttl_ms > 0 {
+            let ttl = i64::try_from(helper.cache_ttl_ms)
+                .map_err(|_| CliError::Config("helper cache_ttl_ms is too large".into()))?;
+            table.insert("cache_ttl_ms", Value::from(ttl));
+        }
         if let Some(scheme) = helper.auth_scheme {
             table.insert(
                 "auth_scheme",

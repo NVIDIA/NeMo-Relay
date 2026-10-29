@@ -510,8 +510,10 @@ follows:
 The client must have Relay access to use Relay's credentials. For managed
 provider requests and model lists, Relay resolves credentials in this order:
 
-1. If a helper is configured, Relay runs it for each outbound request attempt.
-   The helper's token replaces any provider credential from the client.
+1. If a helper is configured, its token replaces any provider credential
+   from the client. Relay runs the helper for each outbound request attempt
+   when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
+   the cached token until the cache interval ends.
 2. Without a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
    `api-key`, or `anthropic-api-key` header.
 3. If the client sends no credential, Relay uses the configured API key or
@@ -561,15 +563,47 @@ Set `timeout_ms` to a value greater than `0`. The value is in milliseconds.
 The default is `10000`, or 10 seconds. If the helper fails, Relay stops the
 request before sending it upstream. Relay does not use another credential.
 
-Relay does not cache tokens or refresh them on a timer. Each outbound request
-attempt runs its own helper. Requests sent at the same time use separate helper
-processes. A streaming request runs the helper when Relay sends the request.
-Response chunks do not run it again. WebSocket handshakes use the same policy.
+By default, Relay runs a separate helper process for each outbound request
+attempt. This also applies to requests sent at the same time. Omit
+`cache_ttl_ms` or set it to `0` to keep this behavior.
+
+To reuse tokens, set `cache_ttl_ms` to a value greater than `0`. The value is in
+milliseconds. The following example reuses tokens for up to five minutes:
+
+```toml
+[upstream.openai_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
+cache_ttl_ms = 300000
+```
+
+Relay starts this interval after it checks the helper's output. It reuses the
+token until the interval ends. Choose a value shorter than the token's remaining
+lifetime. Relay does not read an expiry time from the token or helper output.
+
+After the interval ends, the next request runs the helper again to refresh the
+token. Requests that arrive during a refresh wait for the same result. Relay
+does not refresh tokens on a timer. If a refresh fails, Relay stops the requests
+waiting for it. It does not use the old token or another credential. A later
+request can try the helper again.
+
+Relay keeps cached tokens in memory. Requests that use the same provider and
+loaded configuration share the cache. Separate processes do not share cached
+tokens. Relay does not reuse a token after the loaded helper settings or
+upstream base URL change. Configuration file edits do not change settings in a
+running Relay process. Restart that process to load the new settings and clear
+its cache. Relay does not save cached tokens to disk or include them in
+diagnostics.
+
+For a streaming request, Relay gets the token when it sends the request.
+Response chunks do not run the helper again. The stream can continue after the
+cache interval ends. WebSocket handshakes use the same rules.
 
 The HTTP client does not follow redirects or retry requests that use a helper.
-This prevents the client from reusing a helper token. A middleware retry runs
-the helper again before Relay sends another request. Requests without a helper
-keep their existing redirect and retry behavior.
+A middleware retry checks the cache before Relay sends the request again. It
+reuses the cached token if the cache interval has not ended. Otherwise, it runs
+the helper again. Requests without a helper keep their existing redirect and
+retry behavior.
 
 OpenAI helpers use `Authorization: Bearer <token>`. Anthropic helpers use
 `auth_scheme = "api_key"` by default. This sends `x-api-key: <token>`.
@@ -593,8 +627,8 @@ layer. Restating the same URL, including the default URL, keeps inherited
 credentials.
 
 A helper table in a higher-priority file replaces the entire inherited helper.
-Include `command` in the new table. Omitted arguments, timeout, and
-authentication settings use their defaults.
+Include `command` in the new table. Omitted settings use their defaults.
+For example, omitting `cache_ttl_ms` disables caching for the replacement helper.
 
 Relay uses helpers only for the configured upstream. It does not send helper
 tokens to endpoints named by a client or an interceptor. ChatGPT voice calls
