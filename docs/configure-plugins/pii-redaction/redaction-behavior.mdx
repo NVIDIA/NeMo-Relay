@@ -154,11 +154,14 @@ boundary. The `remove` action requires at least one selector.
 ### Exact pointers, globs, and container selection
 
 `target_paths` are exact RFC 6901 JSON-pointer matches. `target_path_globs`
-adds a restricted, opt-in selector language: a whole `*` segment matches one
-object key or array index. Exact paths and glob paths are combined.
-Within `target_path_globs`, `*` is a wildcard only when it is the complete
-pointer segment. Segments such as `content*` and `foo*bar` match those literal
-object keys.
+adds an opt-in selector language: a whole `*` segment matches exactly one
+object key or array index, and a whole `**` segment matches zero or more path
+segments. Exact paths and glob paths are combined; a node selected by multiple
+selectors is counted and sanitized once per document.
+
+Wildcards are special only when they occupy the complete pointer segment.
+Segments such as `content*`, `content**`, and `foo*bar` match those literal
+object keys. Predicates and arbitrary JSONPath expressions are not supported.
 
 For example, these selectors cover every message and provider-output text
 block without capping the number of array items:
@@ -178,18 +181,70 @@ only on selected string values. For content parts such as
 `/messages/*/content/*/text` to select the `text` string. The same glob also
 matches a `text` key in an object one level below `content`.
 
-Globs are not recursive: `/output/*` selects only a direct child of `output`.
-It does not select `/output/0/content/0/text`; use
-`/output/*/content/*/text` for that shape. Relay does not support `**`,
-predicates, or arbitrary JSONPath expressions. `target_paths = ["/*"]`
-continues to select a literal `*` object key; use `target_path_globs = ["/*"]`
-when `*` should be a wildcard.
+A single `*` does not cross path segments: `/output/*` selects only direct
+children of `output`, not `/output/0/content/0/text`. Use
+`/output/*/content/*/text` for that specific shape, or `/output/**/text` when
+the nesting depth can vary.
 
 Relay validates every configured path as RFC 6901 syntax before activating the
 component. The empty string selects the document root. Every other pointer must
 start with `/`, and `~` escapes must use `~0` for `~` or `~1` for `/`. Invalid
 pointers prevent activation instead of silently leaving the intended values
 unsanitized.
+
+### Recursive globs
+
+Use `**` when the same field can appear at different depths within a payload.
+It matches zero or more complete segments, including object keys and array
+indices. The entire path must still match the selector:
+
+| Selector | Example Matches |
+| --- | --- |
+| `/messages/*/text` | `/messages/0/text`. |
+| `/messages/**/text` | `/messages/text`, `/messages/0/content/0/text`. |
+| `/**/email` | `/email`, `/customer/contact/email`. |
+| `/messages/**` | `/messages` and every descendant. |
+| `/messages/*/**` | Every descendant of `/messages`; excludes `/messages` itself. |
+
+`/messages/**/text` does not select `/other/text` or
+`/messages/0/text/child`: the path must start with `messages` and end with `text`.
+
+Use the narrowest subtree and field name that meet your policy. For example,
+`/messages/**/text` selects `text` values at varying depths without selecting
+fields outside `messages`. It does not select a plain-string `content` field;
+use `/messages/**/content` for that field. LLM selectors still refer to the
+active codec's representation, as described in
+[Payload Boundaries](#payload-boundaries-and-event-publication).
+
+<Warning>
+`**` can match zero segments. With `action = "remove"`, `/messages/**`
+removes the `messages` field itself, including the container and all its
+contents. Use `/messages/*/**` to keep that container while removing its
+children. On ordinary JSON payloads, removed array elements become `null`.
+
+`/**` selects the document root and every descendant. With `remove`, an ordinary
+JSON payload becomes `null`; with a string action, every string leaf is selected.
+For broad trajectory removal that preserves supported analytics, use the
+[trajectory_context preset](#trajectory-context-preset).
+</Warning>
+
+Refer to the **Recursive content** example in
+[Targeting and Composition](/configure-plugins/pii-redaction/configuration#targeting-and-composition)
+for a complete configuration and before/after payloads.
+
+### Literal wildcard keys and migration
+
+`target_paths` always treats `*` and `**` as literal object keys. Use
+`target_paths = ["/metadata/**"]` to select the field named `**` under
+`metadata`; use `target_path_globs = ["/metadata/**"]` to select `metadata`
+and every descendant.
+
+Earlier versions treated a whole `**` segment in `target_path_globs` as a
+literal key. **This behavior has changed.** Before upgrading, move selectors
+intended to match literal `**` keys to `target_paths`. If a selector combines
+wildcard segments with a literal `**` key, enumerate the required concrete
+pointers in `target_paths`; glob selectors have no escape for a literal `**`
+segment. The RFC 6901 escapes `~0` and `~1` still represent `~` and `/`.
 
 ## Trajectory Context Preset
 
@@ -299,8 +354,15 @@ for the diagnostic fields and setup.
 
 With `action = "remove"`, a child string inside a selected container can count
 as selected even though removing the container prevents the sanitizer from
-visiting the child. Only the removed container counts as affected. A selected
-string can also remain unchanged when its detector finds nothing.
+visiting the child. Only the removed container counts as affected. This also
+applies when one recursive selector matches both nodes. For example,
+`/messages/**` applied to `{"messages":{"text":"alice@example.com"}}` with
+`remove` reports `matched_paths=2`, `eligible_string_leaves=1`, and
+`affected_values=1`.
+
+For recursive `remove` policies, enabling match diagnostics adds a
+selection-counting pass before removal. A selected string can also remain
+unchanged when its detector finds nothing.
 
 With neither selector list configured, `matched_paths` counts all visited JSON
 nodes and `eligible_string_leaves` counts the eligible string nodes.
