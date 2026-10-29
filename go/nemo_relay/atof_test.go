@@ -5,6 +5,8 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +126,70 @@ func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 	if records[2]["scope_category"] != "end" {
 		t.Fatalf("expected end scope record, got %#v", records[2])
 	}
+}
+
+func TestAtofExporterRuntimeDiagnosticsStayEmptyForAFileSink(t *testing.T) {
+	exporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofFileSinkConfig{
+		OutputDirectory: t.TempDir(),
+		Filename:        eventsJSONLFilename,
+	}})
+	requireNoError(t, err, "NewAtofExporter failed")
+	defer exporter.Close()
+
+	name := "go_atof_file_diag_" + time.Now().Format("150405.000000")
+	requireNoError(t, exporter.Register(name), "Register failed")
+	runWithTestScopeStack(t, func() {
+		requireNoError(t, EmitEvent("atof_file_mark"), "EmitEvent failed")
+	})
+	requireNoError(t, exporter.Deregister(name), "Deregister failed")
+	requireNoError(t, exporter.ForceFlush(), "ForceFlush failed")
+	requireNoError(t, exporter.Shutdown(), "Shutdown failed")
+
+	diagnostics, err := exporter.RuntimeDiagnostics()
+	requireNoError(t, err, "RuntimeDiagnostics failed")
+	if len(diagnostics) != 0 {
+		t.Fatalf("expected no diagnostics for a file sink, got %#v", diagnostics)
+	}
+}
+
+func TestAtofExporterRuntimeDiagnosticsRecordRejectedDeliveries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	exporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofStreamSinkConfig{
+		URL:           server.URL + "/events",
+		Transport:     AtofEndpointTransportHTTPPost,
+		TimeoutMillis: 5000,
+	}})
+	requireNoError(t, err, "NewAtofExporter failed")
+	defer exporter.Close()
+
+	name := "go_atof_rejected_diag_" + time.Now().Format("150405.000000")
+	requireNoError(t, exporter.Register(name), "Register failed")
+	runWithTestScopeStack(t, func() {
+		requireNoError(t, EmitEvent("atof_rejected_mark"), "EmitEvent failed")
+	})
+	requireNoError(t, exporter.Deregister(name), "Deregister failed")
+	requireNoError(t, exporter.ForceFlush(), "ForceFlush failed")
+	requireNoError(t, exporter.Shutdown(), "Shutdown failed")
+
+	diagnostics, err := exporter.RuntimeDiagnostics()
+	requireNoError(t, err, "RuntimeDiagnostics failed")
+	if len(diagnostics) != 1 {
+		t.Fatalf("expected one diagnostic, got %#v", diagnostics)
+	}
+	requireEqual(t, diagnostics[0].Code, "atof.stream_delivery_failed", "unexpected code")
+	if diagnostics[0].Count != 1 {
+		t.Fatalf("unexpected count: %d", diagnostics[0].Count)
+	}
+	requireEqual(
+		t,
+		diagnostics[0].Message,
+		"ATOF http_post stream to "+server.URL+" returned status 503 Service Unavailable",
+		"unexpected message",
+	)
 }
 
 func TestAtofExporterAppendAndOverwriteModes(t *testing.T) {

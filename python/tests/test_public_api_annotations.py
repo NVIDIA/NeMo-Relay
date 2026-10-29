@@ -36,7 +36,7 @@ def test_exported_functions_have_complete_type_annotations() -> None:
     missing = []
     for module in modules:
         for name in getattr(module, "__all__", ()):
-            function = getattr(module, name, None)
+            function = vars(module).get(name)
             if not inspect.isfunction(function):
                 continue
             signature = inspect.signature(function)
@@ -58,7 +58,7 @@ def test_exported_functions_have_comprehensive_docstrings() -> None:
     missing = []
     for module in modules:
         for name in getattr(module, "__all__", ()):
-            function = getattr(module, name, None)
+            function = vars(module).get(name)
             if not inspect.isfunction(function):
                 continue
             docstring = inspect.getdoc(function) or ""

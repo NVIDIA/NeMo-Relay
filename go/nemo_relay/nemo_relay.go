@@ -285,6 +285,7 @@ extern int32_t nemo_relay_atof_exporter_deregister(const char*);
 extern int32_t nemo_relay_atof_exporter_force_flush(const void*);
 extern int32_t nemo_relay_atof_exporter_shutdown(const void*);
 extern int32_t nemo_relay_atof_exporter_path(const void*, char**);
+extern int32_t nemo_relay_atof_exporter_runtime_diagnostics_json(const void*, char**);
 extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
@@ -2644,6 +2645,15 @@ func (e *AtofExporter) Shutdown() error {
 	return callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_shutdown(e.ptr) })
 }
 
+// RuntimeDiagnostics returns delivery diagnostics recorded by a stream sink.
+func (e *AtofExporter) RuntimeDiagnostics() ([]ExporterRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_runtime_diagnostics_json(e.ptr, &out) }); err != nil {
+		return nil, err
+	}
+	return decodeExporterRuntimeDiagnostics(out)
+}
+
 // Close frees the exporter handle.
 func (e *AtofExporter) Close() {
 	if e.ptr != nil {
@@ -2728,13 +2738,17 @@ type OpenTelemetrySubscriber struct {
 	ptr unsafe.Pointer
 }
 
-// OpenTelemetryRuntimeDiagnostic is one bounded aggregate of an OTLP exporter
-// or event-processing failure.
-type OpenTelemetryRuntimeDiagnostic struct {
+// ExporterRuntimeDiagnostic is one runtime diagnostic recorded by an exporter or subscriber.
+type ExporterRuntimeDiagnostic struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Count   uint64 `json:"count"`
 }
+
+// OpenTelemetryRuntimeDiagnostic is the former name of ExporterRuntimeDiagnostic.
+//
+// Deprecated: Use ExporterRuntimeDiagnostic.
+type OpenTelemetryRuntimeDiagnostic = ExporterRuntimeDiagnostic
 
 const (
 	openTelemetryEndpointRequiredMessage = "endpoint is required"
@@ -2742,9 +2756,9 @@ const (
 	completedSpanContextTTLField         = "completed span context TTL"
 )
 
-func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
+func decodeExporterRuntimeDiagnostics(out *C.char) ([]ExporterRuntimeDiagnostic, error) {
 	defer C.nemo_relay_string_free(out)
-	var diagnostics []OpenTelemetryRuntimeDiagnostic
+	var diagnostics []ExporterRuntimeDiagnostic
 	if err := jsonUnmarshal([]byte(C.GoString(out)), &diagnostics); err != nil {
 		return nil, err
 	}
@@ -3107,12 +3121,12 @@ func (s *OpenTelemetrySubscriber) ForceFlush() error {
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
-func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]ExporterRuntimeDiagnostic, error) {
 	var out *C.char
 	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
-	return decodeOpenTelemetryRuntimeDiagnostics(out)
+	return decodeExporterRuntimeDiagnostics(out)
 }
 
 // Shutdown shuts down the underlying tracer provider.
@@ -3421,12 +3435,12 @@ func (s *OpenTelemetryLogSubscriber) ForceFlush() error {
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
-func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]ExporterRuntimeDiagnostic, error) {
 	var out *C.char
 	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_log_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
-	return decodeOpenTelemetryRuntimeDiagnostics(out)
+	return decodeExporterRuntimeDiagnostics(out)
 }
 
 // Shutdown drains and shuts down the logger provider.
@@ -3559,12 +3573,12 @@ func (s *OpenTelemetryMetricSubscriber) ForceFlush() error {
 }
 
 // RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
-func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]ExporterRuntimeDiagnostic, error) {
 	var out *C.char
 	if err := callStatus(func() C.int32_t { return C.nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(s.ptr, &out) }); err != nil {
 		return nil, err
 	}
-	return decodeOpenTelemetryRuntimeDiagnostics(out)
+	return decodeExporterRuntimeDiagnostics(out)
 }
 
 // Shutdown performs final collection and shuts down the meter provider.

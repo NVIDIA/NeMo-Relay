@@ -54,8 +54,17 @@ mod otel_tls;
 pub use otel_tls::OpenTelemetryTlsConfig;
 pub mod plugin_component;
 mod private_file;
+pub(crate) mod runtime_diagnostics;
 
-pub use otel_signal::{OpenTelemetryRuntimeDiagnostic, OpenTelemetryRuntimeDiagnostics};
+pub use runtime_diagnostics::{ExporterRuntimeDiagnostic, ExporterRuntimeDiagnostics};
+
+/// Former name of `ExporterRuntimeDiagnostic`.
+#[deprecated(note = "use ExporterRuntimeDiagnostic")]
+pub type OpenTelemetryRuntimeDiagnostic = ExporterRuntimeDiagnostic;
+
+/// Former name of `ExporterRuntimeDiagnostics`.
+#[deprecated(note = "use ExporterRuntimeDiagnostics")]
+pub type OpenTelemetryRuntimeDiagnostics = ExporterRuntimeDiagnostics;
 
 /// Return the provider-independent input total used by semantic observability
 /// projections. Anthropic reports uncached, cache-read, and cache-creation

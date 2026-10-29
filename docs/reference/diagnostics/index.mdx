@@ -368,8 +368,9 @@ Diagnostic retention remains independent of these delivery policies. Refer to
 [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
-OpenTelemetry subscriber delivery diagnostics remain legacy-only. Skipped automatic
-exporters contribute initialization evidence to runtime diagnostics:
+OpenTelemetry subscriber and ATOF stream sink delivery diagnostics remain
+legacy-only. Skipped automatic exporters contribute initialization evidence to
+runtime diagnostics:
 
 - **Diagnostics enabled and recorder admitted:** Each skipped exporter records
   `plugin.exporter_initialization_failed` with activation phase, warning severity,

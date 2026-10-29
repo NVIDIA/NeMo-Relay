@@ -1545,7 +1545,9 @@ fn register_atof_exporter(
             let config = CoreAtofExporterConfig {
                 sink: build_atof_sink_config(index, sink)?,
             };
-            AtofExporter::new_with_plaintext_policy(config, plaintext)
+            let diagnostic_field = matches!(config.sink, CoreAtofSinkConfig::Stream(_))
+                .then(|| format!("atof.sinks[{index}].url"));
+            AtofExporter::new_with_plaintext_policy(config, plaintext, diagnostic_field)
                 .map(Arc::new)
                 .map_err(|error| {
                     PluginError::RegistrationFailed(format!("ATOF sinks[{index}]: {error}"))
@@ -2503,7 +2505,7 @@ fn reject_opentelemetry_metric_mark(
             "OpenTelemetry metric mark was dropped atomically: {error}"
         );
     }
-    crate::observability::otel_signal::record_signal_runtime_diagnostic(
+    crate::observability::runtime_diagnostics::record_plugin_runtime_diagnostic(
         "otel.metric_mark_invalid",
         metric_diagnostic_field.map(str::to_owned),
         format!(
