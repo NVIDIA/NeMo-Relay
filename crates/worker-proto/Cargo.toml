@@ -13,13 +13,13 @@ description = "gRPC protocol definitions for NeMo Relay out-of-process worker pl
 workspace = true
 
 [dependencies]
-prost = "0.14"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"] }
-tonic-prost = "0.14.2"
+prost.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tonic = { workspace = true, features = ["codegen", "transport"] }
+tonic-prost.workspace = true
 
 [build-dependencies]
-prost-build = "0.14"
-protoc-bin-vendored = "3.2.0"
-tonic-prost-build = "0.14.2"
+prost-build.workspace = true
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
