@@ -115,6 +115,123 @@ async fn supervised_wait_terminates_descendants_left_by_a_wrapper() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn supervision_rejects_blocked_group_signaling_before_launch() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "process::tests::blocked_group_signaling_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_BLOCK_GROUP_SIGNALING", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "seccomp regression fixture failed: {}\n{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "seccomp regression fixture did not run exactly once: {stdout}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn blocked_group_signaling_fixture() {
+    if std::env::var_os("NEMO_RELAY_TEST_BLOCK_GROUP_SIGNALING").is_none() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let marker = temp.path().join("agent-started");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    // Match OpenShell's restriction: deny kill with a negative PID, including signal zero.
+    // This filter is installed only in the isolated fixture, never in the parent test runner.
+    let instruction = |code: u32, jt, jf, k| libc::sock_filter {
+        code: code as u16,
+        jt,
+        jf,
+        k,
+    };
+    let pid_offset = std::mem::offset_of!(libc::seccomp_data, args) as u32
+        + if cfg!(target_endian = "big") { 4 } else { 0 };
+    let filter = [
+        instruction(
+            libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
+            0,
+            0,
+            std::mem::offset_of!(libc::seccomp_data, nr) as u32,
+        ),
+        instruction(
+            libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+            0,
+            3,
+            libc::SYS_kill as u32,
+        ),
+        instruction(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, pid_offset),
+        instruction(
+            libc::BPF_JMP | libc::BPF_JSET | libc::BPF_K,
+            0,
+            1,
+            0x8000_0000,
+        ),
+        instruction(
+            libc::BPF_RET | libc::BPF_K,
+            0,
+            0,
+            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        ),
+        instruction(libc::BPF_RET | libc::BPF_K, 0, 0, libc::SECCOMP_RET_ALLOW),
+    ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_ptr() as *mut libc::sock_filter,
+    };
+    // SAFETY: The filter and its descriptor remain live through prctl, which copies them. The
+    // program only restricts kill calls; no-new-privileges and seccomp affect this fixture alone.
+    unsafe {
+        assert_eq!(libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), 0);
+        assert_eq!(
+            libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program),
+            0
+        );
+        assert_eq!(libc::kill(libc::getpid(), 0), 0);
+        assert_eq!(libc::kill(-libc::getpgrp(), 0), -1);
+    }
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    );
+
+    runtime.block_on(async {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .args(["-c", "echo started > \"$1\"", "sh"])
+            .arg(&marker);
+        let error = match SupervisedChild::spawn(&mut command).await {
+            Ok(mut child) => {
+                let _ = child.terminate().await;
+                panic!("agent launched despite blocked process-group signaling");
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let message = error.to_string();
+        assert!(message.contains("cannot launch coding agent"));
+        assert!(message.contains("Unix process-group signaling is unavailable"));
+        assert!(message.contains("standalone Relay gateway"));
+    });
+    assert!(!marker.exists(), "agent ran before the capability check");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn supervision_error_terminates_and_reaps_the_child_tree_first() {
