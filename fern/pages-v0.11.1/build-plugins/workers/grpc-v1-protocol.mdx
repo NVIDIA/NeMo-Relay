@@ -1,0 +1,604 @@
+---
+title: "grpc-v1 Protocol Reference"
+description: "Reference every worker RPC, registration surface, envelope, capability, and shutdown stage."
+position: 35
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+`grpc-v1` is the stable worker protocol implemented by the Rust and Python SDKs. The
+current source of truth is
+[`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/e748bb85eaea31a7718f4cea621970913a418011/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
+Use SDK helpers to manage the lifecycle. The diagnostics helper accepts generated
+observation and code-definition messages directly.
+
+## Diagnostic Delivery
+
+The optional `RelayDiagnostics` service shares the authenticated host endpoint.
+It exposes four RPCs:
+
+- `GetDiagnosticCapabilities`.
+- `OpenDiagnosticSession`.
+- `SubmitDiagnostic`.
+- `ReadDiagnosticPage`.
+
+Its decode and admission limits are separate from `RelayHostRuntime`, logging,
+and execution payload limits.
+
+Older hosts return `UNIMPLEMENTED`. For unsupported hosts or disabled collection,
+the SDK returns an inactive helper that skips lazy observation factories. Diagnostic
+availability does not decide whether a plugin executes.
+
+### Negotiate Settings and Authority
+
+The host returns `DiagnosticCapabilities` before opening a session and again when
+the session opens. Both values must agree. The SDK checks contract versions and
+its local safety ceilings. It then uses the host's exact request and response
+limits, queue capacity, retry count, and per-attempt timeout.
+
+A mismatch or unsupported limit produces an inactive `unsupported` helper.
+Plugin execution continues. The SDK does not negotiate different limits or use
+local delivery defaults. Bootstrap calls have a separate local safety timeout.
+Flush and shutdown drain also have local bounds. These are separate from the
+host's per-attempt RPC timeout.
+
+Recording uses activation credentials. Those credentials do not grant snapshot
+read access: `can_read_context` is false, and canonical reads are denied. Query
+filters do not grant permission. The read RPC reserves a separate access boundary.
+
+Opening an already live session returns the same session. The host assigns its
+UUID and ownership. Registration returns component and code handles. Code handles
+are one-based positions in the registration's code list.
+
+Workers can register common plugin failure codes, but not host-owned lifecycle
+codes. Extensions can describe failure, success, or unspecified outcomes under a
+host-assigned session namespace. Unknown authoring codes and failure classes are
+rejected. Detail and correlation limits come from the core context.
+
+### Submit and Retry Observations
+
+`SubmitDiagnostic` uses one sequence, starting at one, for registration, recording,
+component close, and session close. Positive counts of two and three add five
+occurrences. The host commits a digest and receipt atomically with the record.
+
+Receipts and sequence handling follow these rules:
+
+- Retrying the last request with identical content returns its receipt without
+  counting the observation again. Conflicts, gaps, and older sequences fail.
+- Malformed requests do not consume a sequence. A structurally valid request
+  rejected during admission consumes a sequence and returns a terminal `Rejected`
+  receipt.
+- `Recorded` confirms in-memory counts. Evidence can be retained, truncated, or
+  dropped. `Registered`, `Closed`, and `Disabled` add no occurrences.
+
+The SDK freezes request bytes and sends one request at a time. Each retry uses
+identical bytes, up to the host's attempt count and per-attempt deadline. If the
+SDK cannot confirm acceptance, it stops delivery. Pending observations are never
+replayed into a new session.
+
+This release allows one session per activation. A closed session keeps its last
+receipt until activation cleanup. Starting a new session requires a new activation.
+
+### Delivery Limits
+
+Delivery uses the following limits in addition to core storage limits:
+
+| Resource | Diagnostic Limit |
+| --- | --- |
+| Sessions | Up to 32 per host process, with one session per activation. |
+| Components | Eight registrations per session, including closed registrations. |
+| Extensions and codes | Up to 16 extensions per session and 32 codes per component. |
+| Registration metadata | 16 KiB per session, also subject to core capacity. |
+| Protobuf frame | Host-advertised maximum. The SDK reserves 256 bytes for credentials, session identity, sequence, and framing, then checks the complete frame against the exact limit. |
+| Extension name and description | 32 and 256 UTF-8 bytes, respectively. |
+| SDK queue | Host-advertised slots plus one in-flight request, within the SDK's safety ceiling. |
+| Host decode admission | Up to 16 concurrent diagnostic requests. There is no wait queue. |
+| Response ceiling | Host-advertised maximum, within the SDK's safety ceiling. |
+| Replay storage | One digest and bounded receipt per session. |
+
+The service takes a concurrency permit before decoding protobuf. A slow response
+keeps that permit until its body reaches its delivery deadline or is dropped.
+HTTP/2 buffers, channel state, allocator overhead, and core pools have separate
+costs. These limits do not cap whole-process RSS.
+
+### Handle Loss and Shutdown
+
+`delivery_stats` reports local dropped, rejected, and uncertain totals separately
+from host occurrence counts. An explicit `INVALID_ARGUMENT` response counts as
+rejected, even when the host leaves its sequence available for a corrected request.
+
+A host capacity rejection uses `RESOURCE_EXHAUSTED` with
+`nemo-relay-diagnostic-not-consumed: 1` status metadata. The SDK counts a definite
+rejection and preserves the sequence for later submissions. The metadata confirms
+only that attempt. If an earlier attempt had an uncertain result, the SDK keeps
+retrying the identical request within its policy. Without a receipt, delivery stays
+uncertain and stops. A client-side or unmarked capacity error is also uncertain.
+These decisions never depend on error-message text.
+
+`flush` waits for earlier queued work. It returns an error for uncertain delivery.
+Counters expose known losses. `close` drains and releases queued work within the
+shutdown allowance. Activation teardown stops submissions and closes registrations.
+The runtime context remains available.
+
+Restricted evidence uses state-only recording. It never enters `Log`, `EmitMark`,
+legacy reports, or exporters.
+
+## Execution Protocol Compatibility
+
+Relay 0.8 retains the `grpc-v1` identifier and `nemo.relay.worker.v1` package, but it
+changes the tool-result boundary to structural protobuf messages. Rebuild workers,
+regenerate custom bindings, and declare `compat.relay` beginning at `0.8.0`; an earlier
+worker cannot decode the current `ToolNext` response or tool-execution outcome.
+
+Relay 0.10 retains those protocol identifiers and adds execution codec context to
+`LlmInvocation`. The field is protobuf-compatible, but the 0.10 Rust and Python
+SDKs change non-streaming and streaming LLM execution callbacks to receive
+`LlmExecutionContext` before the continuation. Workers that register either
+surface must update their callback signatures, rebuild, and declare
+`compat.relay` beginning at `0.10.0`. Custom workers that register either
+surface must regenerate their bindings to read the field.
+
+The protocol consists of the worker-facing service implemented by the plugin process
+and the host-runtime service implemented by Relay. These are the current service
+definitions, including cancellation, codecs, and streaming continuations:
+
+```proto
+service PluginWorker {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc InvokeStream(InvokeRequest) returns (stream StreamChunk);
+  rpc CancelInvocation(CancelInvocationRequest) returns (WorkerAck);
+  rpc Shutdown(ShutdownRequest) returns (WorkerAck);
+}
+
+service RelayHostRuntime {
+  rpc Log(LogRequest) returns (HostAck);
+  rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest)
+      returns (GetCurrentScopeStackSnapshotResponse);
+  rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest)
+      returns (GetRuntimeDiagnosticsResponse);
+  rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
+  rpc PopScope(PopScopeRequest) returns (HostAck);
+  rpc CreateScopeStack(CreateScopeStackRequest)
+      returns (CreateScopeStackResponse);
+  rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
+  rpc ToolNext(ToolNextRequest) returns (ToolExecutionResultResponse);
+  rpc LlmNext(LlmNextRequest) returns (JsonResult);
+  rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
+  rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
+  rpc EncodeLlmCodecRequest(LlmCodecEncodeRequest) returns (JsonResult);
+  rpc DecodeLlmCodecResponse(LlmCodecDecodeResponse) returns (JsonResult);
+}
+```
+
+## Worker Service
+
+| RPC | Contract |
+|---|---|
+| `Handshake` | Relay supplies activation and plugin identity, Relay version, protocol, token, and host endpoint. The worker returns plugin identity and kind, multiple-component support, protocol, SDK and runtime metadata, and supported surfaces. |
+| `Health` | Confirms the authenticated activation, protocol, plugin identity, and current worker readiness. |
+| `Validate` | Receives component config in a JSON envelope and returns encoded diagnostics or a structured worker error. It must not register behavior. |
+| `Register` | Receives valid component config and returns owned registrations with local name, surface, priority, and `break_chain`. |
+| `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or unary execution callback and returns the surface-appropriate result. |
+| `InvokeStream` | Dispatches an LLM stream execution intercept and emits incremental value or error chunks. |
+| `CancelInvocation` | Cooperatively cancels one active invocation ID, waits for callback-owned cleanup, and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
+| `Shutdown` | Stops new work for an activation and begins orderly worker termination with a reason. |
+
+Each lifecycle message carries the following fields. Fields described as envelopes use
+the schema identifiers in the JSON envelope table later on this page.
+
+| RPC | Request Fields | Response Fields |
+|---|---|---|
+| `Handshake` | `activation_id`, manifest `plugin_id`, `relay_version`, `worker_protocol`, `auth_token`, and `host_endpoint` | `plugin_id`, `plugin_kind`, `allows_multiple_components`, `worker_protocol`, `sdk_name`, `sdk_version`, `runtime_name`, `runtime_version`, and `supported_surfaces` |
+| `Health` | `activation_id` and `auth_token` | `ok`, `message`, `plugin_id`, `worker_protocol`, SDK name and version, and runtime name and version |
+| `Validate` | `activation_id`, `plugin_id`, `auth_token`, and component `config` | A `diagnostics` envelope or `error` |
+| `Register` | `activation_id`, `plugin_id`, `auth_token`, and validated component `config` | Repeated `registrations` or `error`; each registration contains `local_name`, `surface`, `priority`, and `break_chain` |
+| `Invoke` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, LLM, or conditional-middleware payload | Exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. |
+| `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, LLM stream execution `surface`, `continuation_id`, captured `scope`, `auth_token`, and one LLM payload | Value chunks followed by clean stream closure or one terminal error chunk. |
+| `CancelInvocation` | `activation_id`, `invocation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
+| `Shutdown` | `activation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
+
+## Registration Surfaces
+
+| Value | Surface | Invocation Result |
+|---:|---|---|
+| 1 | Subscriber | Empty result. |
+| 2 | Event metadata injector | JSON object containing proposed metadata additions. |
+| 10 | Tool sanitize request guardrail | Sanitized JSON. |
+| 11 | Tool sanitize response guardrail | Sanitized JSON. |
+| 12 | Tool conditional execution guardrail | Optional block reason. |
+| 13 | Tool request intercept | Rewritten JSON. |
+| 14 | Tool execution intercept | Tool execution outcome envelope. |
+| 20 | LLM sanitize request guardrail | Optional sanitized request. |
+| 21 | LLM sanitize response guardrail | Optional sanitized response. |
+| 22 | LLM conditional execution guardrail | Optional block reason. |
+| 23 | LLM request intercept | Complete request-intercept outcome envelope. |
+| 24 | LLM execution intercept | Provider-response JSON. |
+| 25 | LLM stream execution intercept | Server stream of incremental chunks. |
+| 30 | Mark sanitize guardrail | Replacement event sanitization fields. |
+| 31 | Scope-start sanitize guardrail | Replacement event sanitization fields. |
+| 32 | Scope-end sanitize guardrail | Replacement event sanitization fields. |
+| 40 | Conditional middleware guardrail callback | Optional disable reason. |
+
+The numeric values are part of the wire contract. Unknown value zero never represents
+a valid registration.
+
+```proto
+enum RegistrationSurface {
+  REGISTRATION_SURFACE_UNSPECIFIED = 0;
+  SUBSCRIBER = 1;
+  EVENT_METADATA_INJECTOR = 2;
+  TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
+  TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
+  TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
+  TOOL_REQUEST_INTERCEPT = 13;
+  TOOL_EXECUTION_INTERCEPT = 14;
+  LLM_SANITIZE_REQUEST_GUARDRAIL = 20;
+  LLM_SANITIZE_RESPONSE_GUARDRAIL = 21;
+  LLM_CONDITIONAL_EXECUTION_GUARDRAIL = 22;
+  LLM_REQUEST_INTERCEPT = 23;
+  LLM_EXECUTION_INTERCEPT = 24;
+  LLM_STREAM_EXECUTION_INTERCEPT = 25;
+  MARK_SANITIZE_GUARDRAIL = 30;
+  SCOPE_SANITIZE_START_GUARDRAIL = 31;
+  SCOPE_SANITIZE_END_GUARDRAIL = 32;
+  CONDITIONAL_MIDDLEWARE_GUARDRAIL = 40;
+}
+```
+
+An invocation names the activation, invocation, registration, surface, optional
+continuation, captured scope, and token. Its payload is exactly one event, tool
+invocation, LLM invocation, or conditional middleware invocation. LLM sanitizer
+invocations additionally carry codec identity and an opaque invocation-scoped codec
+capability. LLM execution invocations carry separate request and completed-response
+codec context. Streaming execution carries only the request context.
+
+For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
+`InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
+proposed additions to `Event.metadata`. Relay validates and merges accepted additions
+before Event sanitizers run. A `WorkerError` omits that callback's additions without
+dropping the Event.
+
+```proto
+message InvokeRequest {
+  string activation_id = 1;
+  string invocation_id = 2;
+  string registration_name = 3;
+  RegistrationSurface surface = 4;
+  string continuation_id = 5;
+  ScopeContext scope = 6;
+  string auth_token = 7;
+
+  oneof payload {
+    JsonEnvelope event = 10;
+    ToolInvocation tool = 11;
+    LlmInvocation llm = 12;
+    ConditionalMiddlewareInvocation conditional_middleware = 13;
+  }
+}
+
+message ConditionalMiddlewareInvocation {
+  repeated RegistrationSurface kinds = 1;
+  string registration_name = 2;
+}
+
+message LlmInvocation {
+  string model_name = 1;
+  JsonEnvelope request = 2;
+  JsonEnvelope annotated_request = 3;
+  JsonEnvelope response = 4;
+  reserved 5, 6, 7, 8;
+  oneof sanitize_context {
+    LlmSanitizeRequestContext request_sanitize_context = 9;
+    LlmSanitizeResponseContext response_sanitize_context = 10;
+  }
+  LlmExecutionCodecContext execution_codec_context = 11;
+}
+
+message LlmExecutionCodecContext {
+  LlmSanitizeRequestContext request = 1;
+  LlmSanitizeResponseContext response = 2;
+}
+
+message ToolInvocation {
+  string tool_name = 1;
+  JsonEnvelope value = 2;
+  optional string tool_call_id = 3;
+}
+
+message LlmCodecIdentity {
+  LlmCodecKind kind = 1;
+  optional string id = 2;
+}
+
+message LlmSanitizeRequestContext {
+  LlmCodecIdentity codec = 1;
+  optional string codec_capability_id = 2;
+}
+
+message LlmSanitizeResponseContext {
+  LlmCodecIdentity codec = 1;
+  optional string codec_capability_id = 2;
+}
+
+message InvokeResponse {
+  oneof result {
+    EmptyResult empty = 1;
+    JsonResult json = 2;
+    GuardrailResult guardrail = 3;
+    LlmRequestInterceptResult llm_request = 4;
+    WorkerError error = 5;
+    ToolExecutionInterceptResult tool_execution = 6;
+  }
+}
+```
+
+Tool values remain JSON, but the result boundary is structural so Relay can keep an
+opaque annotation beside the application value without treating either field as a
+schema-tagged envelope.
+
+`ToolInvocation.tool_call_id` is set only for tool execution intercepts, and only
+when the managed tool call recorded a provider-issued identifier. The field is
+unchanged, so the `grpc-v1` identifier and `nemo.relay.worker.v1` protobuf
+package do not change. Beginning with Relay 0.9, worker SDKs surface it through
+the existing `register_tool_execution_intercept` callback. A worker plugin that
+registers this surface must declare a `compat.relay` range that excludes Relay
+0.8, such as `>=0.9,<1.0`.
+
+```proto
+message JsonValue {
+  bytes json = 1;
+}
+
+message ToolExecutionResultResponse {
+  ToolExecutionResult value = 1;
+  WorkerError error = 2;
+}
+
+message ToolExecutionResult {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+}
+
+message ToolExecutionInterceptOutcome {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+  JsonValue pending_marks = 3;
+}
+```
+
+`continuation_id` is present only for execution intercepts. `scope` captures the host
+context used for continuation and runtime calls. `registration_name` is the
+component-local name the worker returned in `RegisterResponse`; Relay separately owns
+its qualification in the host registries.
+
+`LlmCodecKind` has four wire values: unspecified, built-in, runtime, and opaque. A built-in
+identity carries `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`,
+or `gemini_generate_content`; a runtime identity carries its registered ID. An opaque
+identity deliberately withholds an ID. The capability ID is optional and
+invocation-scoped. A worker must treat it as a secret and must not use it after the owner
+invocation ends.
+
+For an LLM execution invocation, `execution_codec_context.request` is required.
+Its identity is present even when no codec resolves, and its capability ID is
+present only when host codec operations are available. Non-streaming execution
+also includes `response`; streaming execution omits it because Relay's response
+codecs require a complete provider response. The worker SDK hides both opaque
+capability IDs behind `resolve_codec()` proxies.
+
+## Host-Runtime Service
+
+| RPC | Contract |
+|---|---|
+| `Log` | Emits an authenticated operational log record through Relay's configured sinks. |
+| `EmitMark` | Emits mark data and metadata under the supplied scope context. |
+| `GetCurrentScopeStackSnapshot` | Reads detached scope UUID/type entries from the exact authenticated binding. |
+| `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
+| `PushScope` | Opens a typed scope with name, data, metadata, input, and an optional historical start timestamp, returning the handle required for pop. |
+| `PopScope` | Closes the owned scope handle with output, metadata, and an optional historical end timestamp. |
+| `CreateScopeStack` | Allocates an isolated stack and returns its opaque ID. |
+| `DropScopeStack` | Releases an isolated stack owned by the activation. |
+| `ToolNext` | Executes a tool continuation with JSON arguments and captured scope, returning a structural tool result or worker error. |
+| `LlmNext` | Executes a unary LLM continuation with a request and captured scope. |
+| `LlmStreamNext` | Executes a streaming LLM continuation and returns incremental chunks. |
+| `DecodeLlmCodecRequest` | Uses the invocation-scoped capability to decode a request into its annotated representation. |
+| `EncodeLlmCodecRequest` | Applies an annotated request to the original provider envelope. |
+| `DecodeLlmCodecResponse` | Decodes a provider response into its annotated representation. |
+
+The host-runtime request and response fields are complete in the following table:
+
+| RPC | Request Fields | Response Fields |
+|---|---|---|
+| `Log` | `activation_id`, `auth_token`, required `level`, optional `target`, `message`, and JSON-object `fields` | `HostAck.ok` or `HostAck.error` |
+| `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
+| `GetCurrentScopeStackSnapshot` | `activation_id`, `auth_token`, and optional current `scope` | Optional `snapshot` with ordered `scopes`, or `error`; binding/authentication failures may return gRPC status. |
+| `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
+| `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, `input`, and `timestamp_unix_micros` | `scope_handle_id` or `error` |
+| `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output`, `metadata`, and `timestamp_unix_micros` | `HostAck.ok` or `HostAck.error` |
+| `CreateScopeStack` | `activation_id` and `auth_token` | `scope_stack_id` or `error` |
+| `DropScopeStack` | `activation_id`, `auth_token`, and owned `scope_stack_id` | `HostAck.ok` or `HostAck.error` |
+| `ToolNext` | `activation_id`, `auth_token`, `continuation_id`, JSON `value`, and captured `scope` | `ToolExecutionResultResponse.value` or `error` |
+| `LlmNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | JSON `value` or `error` |
+| `LlmStreamNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | Incremental JSON value chunks, clean stream closure, or one terminal error chunk |
+| `DecodeLlmCodecRequest` | `activation_id`, `auth_token`, `codec_capability_id`, typed `request`, and owner `invocation_id` | Annotated LLM request or `error` |
+| `EncodeLlmCodecRequest` | `activation_id`, `auth_token`, `codec_capability_id`, `annotated_request`, `original_request`, and owner `invocation_id` | Typed LLM request or `error` |
+| `DecodeLlmCodecResponse` | `activation_id`, `auth_token`, `codec_capability_id`, provider `response`, and owner `invocation_id` | Annotated LLM response or `error` |
+
+`ScopeContext` contains `scope_stack_id` and `parent_scope_id`. `ScopeType` supports
+agent, function, tool, LLM, retriever, embedder, reranker, guardrail, evaluator, custom,
+and unknown scopes. The unspecified wire value is invalid for a pushed scope.
+
+Scope timestamps are signed Unix microseconds. Omitting the field preserves the normal
+host-clock behavior; an explicitly present zero records the Unix epoch. The fields are an
+additive `grpc-v1` extension. Workers that require historical timestamp preservation must
+declare a Relay compatibility range beginning at 0.10, because an older protobuf host can
+ignore an unknown field.
+
+`LogRequest.level` is one of `error`, `warn`, `info`, `debug`, or `trace`. Relay prefixes
+the optional target with its worker-plugin namespace and applies its configured log filter.
+`fields` is a lossless JSON object: its keys become structured log attributes, so JSONL sinks
+preserve nested values rather than flattening them into the message.
+
+`EmitMarkRequest.data_schema` uses the `nemo.relay.DataSchema@1` envelope,
+`severity` accepts `trace`, `debug`, `info`, `warn`, or `error`, and `category` is an
+optional semantic category for the emitted mark. Omitting these fields preserves the
+original mark behavior. `GetRuntimeDiagnostics` aggregates repeated codes, retains
+the latest message, sorts entries by code, and returns at most 32 entries. It is a
+host-level view, so it does not identify the plugin that recorded a diagnostic.
+
+## Authentication and Endpoints
+
+Relay creates a fresh activation ID and high-entropy token, passes the worker and host
+endpoints through the activation environment, and sends the same values in handshake.
+Every later worker and host-runtime request includes the activation ID and token. SDKs
+bind the endpoint locally, prefer Unix domain sockets where supported, constrain TCP
+fallback to loopback, and reject mismatched credentials. Local authentication prevents
+accidental cross-activation calls; it does not make untrusted worker code safe.
+
+Relay supplies the following process environment to Rust, Python, and custom-command
+workers:
+
+| Variable | Contract |
+|---|---|
+| `NEMO_RELAY_WORKER_ID` | Opaque activation ID used in every authenticated request. It is not the manifest plugin ID. |
+| `NEMO_RELAY_PLUGIN_ID` | Manifest plugin ID that the handshake response must match. |
+| `NEMO_RELAY_WORKER_TOKEN` | High-entropy activation token used in every worker and host-runtime request. Do not log or persist it. |
+| `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
+| `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
+| `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` | Host fallback override, replacing plugin `default_bytes` and `by_name` limits. When unset: plugin `default_bytes`, then 4 MiB. Relay forwards the resolved fallback to the worker. |
+| `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME` | JSON map of exact callback registration names to byte limits. Relay forwards resolved per-callback overrides to the worker. |
+
+Use [`load.forward_env`](/build-plugins/package-discoverable-plugins#forward-host-environment-variables)
+to pass selected host environment variables to the worker. Forwarded values cannot
+replace the settings that Relay supplies in the table.
+
+### Configure Execution Message Size
+
+Configure these tables in `relay-plugin.toml`, separate from the component
+configuration in `plugins.toml`. For timeout settings and a combined example,
+refer to [Worker Timeouts and Payload Limits](/configure-plugins/plugin-configuration-files#worker-timeouts-and-payload-limits).
+
+Use exact callback registration names, as shown in the following example:
+
+<Code src="../_code/worker-message-limits/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-8" showLineNumbers={false} />
+
+Relay uses the following settings in order, from highest to lowest priority:
+
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES_BY_NAME`: JSON callback-to-bytes map, such as `{"input_guardrail":16777216}`.
+- Host `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES`: decimal fallback for all RPCs.
+- Plugin `load.max_message_bytes.by_name`: exact callback registration name.
+- Plugin `load.max_message_bytes.default_bytes`, then 4 MiB.
+
+Limits must be whole numbers from 1 through 2,147,483,647 bytes. They apply to
+each sent or received message for that callback, including stream chunks and
+calls to continuations. They do not limit the total stream size. Control RPCs
+use the default limit. Zero is invalid. These limits do not change model
+context limits or provide automatic compaction. Reactivate the plugin after changing the manifest or host
+environment.
+
+## JSON Envelopes and Errors
+
+`JsonEnvelope` contains a schema identifier and UTF-8 JSON bytes. General values use
+`nemo.relay.Json@1`; typed request, annotation, outcome, and event schemas identify their
+own expected shape. The envelope owns its bytes for the message lifetime, so neither side
+borrows language-runtime objects across RPCs.
+
+The current envelope schemas are as follows:
+
+| Schema Identifier | Payload |
+|---|---|
+| `nemo.relay.Json@1` | General configuration, tool values, provider responses, stream chunks, mark fields, and scope fields. |
+| `nemo.relay.Event@1` | ATOF event supplied to subscribers and event sanitizers. |
+| `nemo.relay.LlmRequest@1` | Provider request envelope used by LLM middleware, continuations, and request codec operations. |
+| `nemo.relay.AnnotatedLlmRequest@2` | Normalized LLM request annotation carried through request intercepts and codec operations. |
+| `nemo.relay.LlmRequestInterceptOutcome@2` | Rewritten request, optional annotation, pending marks, and optimization contributions. |
+| `nemo.relay.ToolExecutionInterceptOutcome@2` | Application tool result, optional annotation, and Relay-owned pending marks. |
+| `nemo.relay.DataSchema@1` | Name and version for a mark data payload. |
+| `nemo.relay.PluginDiagnostics@1` | Diagnostics returned from worker validation. |
+
+`JsonValue` contains exactly one JSON value and carries arbitrary tool results without
+numeric coercion. `ToolExecutionResult` requires that value in `result` and permits an
+optional `annotation`; JSON `null` annotations normalize to absence. A tool execution
+intercept returns `ToolExecutionInterceptOutcome`, which adds an optional JSON array of
+Relay-owned `pending_marks`. Surface results otherwise use empty, JSON, guardrail, LLM
+request outcome, or structured error variants. Stream chunks contain one JSON value or
+one terminal error. `WorkerError` carries a stable code, human-readable message, and
+retryable flag; transport errors remain distinct from plugin callback errors.
+
+```proto
+message JsonEnvelope {
+  string schema = 1;
+  bytes json = 2;
+}
+
+message StreamChunk {
+  oneof item {
+    JsonEnvelope value = 1;
+    WorkerError error = 2;
+  }
+}
+
+message WorkerError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+```
+
+A clean stream ends when the server stream closes after its last value. A callback
+failure travels as the terminal `error` item. Transport cancellation or an unavailable
+process remains a gRPC status and must not be rewritten into a plugin `WorkerError` by a
+custom implementation.
+
+## Cancellation and Shutdown Sequence
+
+The host and worker use the following sequence to end active work and release the worker
+process:
+
+1. Relay stops routing new calls to the component and sends `CancelInvocation` for
+   in-flight work that cannot drain normally.
+2. The worker cooperatively cancels known active invocations and acknowledges only after
+   their callback tasks and stream-owned cleanup have completed. Managed stream close
+   waits for this acknowledgment, including after a terminal stream error. Flush exporters
+   after close to collect final cleanup events. Continuation and codec capabilities become
+   unusable when their owner invocation ends. Unmanaged background work started by a
+   callback remains the plugin's responsibility.
+3. Relay sends `Shutdown` with the activation ID, token, and reason. The worker stops its
+   service and closes the local endpoint.
+4. Relay waits for the managed process within its shutdown policy, terminates it if
+   necessary, removes component registrations, and deletes a managed Python environment
+   only during explicit package removal.
+
+Successful protocol verification covers authentication failures, envelope schema
+failures, every registration and result variant, repeated unary and incremental stream
+continuations, cancellation before and during callbacks, codec capability expiry, host
+runtime ownership errors, health, and orderly plus forced shutdown.
+
+
+## Scope Snapshot Extension
+
+`GetCurrentScopeStackSnapshot` is additive to `grpc-v1`. Existing enum numbers
+and RPCs remain unchanged. `ScopeStackEntry.scope_id` is a canonical UUID
+string; `scope_type` reuses the existing enum. `ScopeStackSnapshot.scopes`
+is ordered root to top and includes the implicit root. Snapshot decoders map
+UNSPECIFIED and future unknown numeric scope types to `Unknown`.
+
+A missing request `scope` returns response absence after authentication. A
+present context with an empty stack ID is invalid. Unknown, foreign, expired,
+cancelled, and dropped bindings return explicit errors. When supplied, a
+parent binding must be a live host-issued scope handle owned by the same stack.
+The getter reads that stack's visible entries. No ambient thread fallback or
+invocation-entry cache is used. Host cleanup and reads are ordered so the
+returned value is coherent and detached.
+
+Older hosts return gRPC `UNIMPLEMENTED`; SDKs surface an unsupported-operation
+error distinctly from absence. This operation uses RPC feature detection and
+requires no change to handshake registration-surface negotiation. Regenerate
+custom bindings to call it. See the
+[worker example](/build-plugins/workers/runtime-events-and-scopes#inspect-scope-identities)
+for nearest-Agent correlation and synthetic-root limitations.

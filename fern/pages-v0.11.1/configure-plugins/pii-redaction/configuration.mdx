@@ -1,0 +1,1253 @@
+---
+title: "PII Redaction Configuration"
+sidebar-title: "Configuration"
+description: "Look up PII redaction settings and compare configuration examples with input and published payloads."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Configure `kind = "pii_redaction"` in `plugins.toml`. Use the reference tables to
+look up settings, then use the [worked examples](#worked-examples) to compare
+input event data with the published result. For runtime placement and the
+middleware comparison, refer to [About](/configure-plugins/pii-redaction/about).
+For selection and preservation rules, refer to
+[Redaction Behavior](/configure-plugins/pii-redaction/redaction-behavior).
+
+There are two supported configuration forms:
+
+- **Profiles:** Define one or more policies under
+  `[[components.config.profiles]]`. Every enabled profile covers all supported
+  surfaces.
+- **Single policy:** Omit `profiles` and define a policy directly under
+  `[components.config]`. This form also provides surface flags.
+
+## Configuration Reference
+
+All configuration keys use `snake_case` in `plugins.toml` and every binding.
+A field shown as **Unset** has no configured value.
+
+### Component Shape
+
+The plugin document has root `version = 1`. Each `[[components]]` entry uses:
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `kind` | String | Required | Set to `pii_redaction`. |
+| `enabled` | Boolean | `true` | Enable or disable the whole component. |
+
+The following shared fields belong under `[components.config]` in either form:
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `version` | Integer | `1` | PII redaction configuration schema version. |
+| `codec` | String | Unset | Optional fallback API format for LLM calls that do not supply an active codec. For example, use `codec = "anthropic_messages"` for Anthropic Messages payloads. Omit this field when your integration supplies a codec; the call's active codec takes precedence. |
+| `profiles` | Array of objects | Unset | Ordered policies. Omit to use the single-policy form. |
+| `policy` | Object | See details | Handling of unknown components, unknown fields, and unsupported values. |
+
+#### How to choose a codec
+
+Choose the value by the API payload format:
+
+| LLM API Format | `codec` Value |
+| --- | --- |
+| OpenAI Chat Completions | `openai_chat` |
+| OpenAI Responses | `openai_responses` |
+| Anthropic Messages | `anthropic_messages` |
+| OCI Generative AI | `oci_genai` |
+| Gemini GenerateContent | `gemini_generate_content` |
+
+Omit `codec` when the managed call supplies an active codec. A configured value
+is only a fallback for a call without one; it cannot override an active codec.
+Request policies use the active codec's resolved decode/encode capability,
+including runtime and opaque codecs. Normalized response projection requires a
+recognized built-in codec because response codec capabilities are decode-only.
+
+For a mixed-provider gateway, rely on the active codec of each call. The
+[LLM request-only example](#targeting-and-composition) shows the selector boundary
+for an OpenAI Chat Completions request.
+
+<a id="configuration-policy" />
+
+#### Configuration validation policy
+
+Set these fields under `[components.config.policy]` to control configuration
+diagnostics. Each accepts `ignore`, `warn`, or `error`.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `unknown_component` | `warn` | Handling of an unknown component kind. |
+| `unknown_field` | `warn` | Handling of an unknown field on a known component. |
+| `unsupported_value` | `error` | Handling of an unsupported value on a known field. |
+
+The global plugin policy can also affect the resolved policy. Refer to
+[Configure](/configure-plugins/plugin-configuration-files) for precedence.
+
+### Profile Settings
+
+These fields belong under each `[[components.config.profiles]]` entry:
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | Boolean | `true` | Enable or disable this entire policy. |
+| `mode` | String | `builtin` | Backend: `builtin` or `local_model`. |
+| `priority` | Integer | `100` | Execution order; lower values run first. |
+| `builtin` | Object | Unset | Required for `mode = "builtin"`. See [Built-in Settings](#built-in-settings). |
+| `local` | Object | Unset | Provider-specific settings for `local_model` mode; requires a runtime-installed provider. |
+
+At least one profile must be enabled. Use either profiles or the
+[single-policy settings](#single-policy-settings); do not combine the two forms.
+
+#### How profiles compose and execute
+
+Profiles execute by ascending `priority`, with array order breaking ties.
+Relay assigns internal positional names such as `profile_0`; no user-supplied
+ID is required. Disabled profiles are still validated, but do not register
+callbacks. At least one profile must be enabled.
+
+Each enabled profile covers all supported sanitization surfaces. Profiles do
+not accept `input`, `output`, `mark`, `tool_input`, or `tool_output` flags.
+Use the [single-policy form](#single-policy-settings) when you need those controls.
+
+Profile lists concatenate during configuration layering, with higher-precedence
+profiles placed before lower-precedence profiles. Refer to
+[Configure](/configure-plugins/plugin-configuration-files) for file discovery
+and merge rules.
+
+<a id="built-in-mode" />
+
+### Built-in Settings
+
+Use `[components.config.profiles.builtin]` for a profile, or
+`[components.config.builtin]` for a single policy. The shipped `builtin` backend
+implements deterministic actions and detector presets.
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `preset` | String | Unset | Set to `trajectory_context` for broad conversational-content removal while retaining supported analytics. |
+| `action` | String | `remove` | `remove`, `redact`, `regex_replace`, `hash` (SHA-256), or `mask`. Choose an action explicitly, or use `preset`. |
+| `target_paths` | Array of strings | `[]` | Exact RFC 6901 pointers. Combined with `target_path_globs`. |
+| `target_path_globs` | Array of strings | `[]` | Pointer globs; each whole `*` segment matches one key or index. Recursive `**` is unsupported. |
+| `pattern` | String | Unset | Regex matcher. Use either `pattern` or `detector`, never both. |
+| `detector` | String | Unset | Built-in matcher such as `email` or `api_key`. See [Detector Presets](#detector-presets). |
+| `replacement` | String | `[REDACTED]` | Replacement for `redact`, `regex_replace`, and `trajectory_context`. |
+| `mask_char` | String | `*` | Masking token for `mask`. Must not be empty. |
+| `unmasked_prefix` | Nonnegative integer | `0` or detector default | Leading characters preserved by `mask`. |
+| `unmasked_suffix` | Nonnegative integer | `0` or detector default | Trailing characters preserved by `mask`. |
+| `custom_mark_payload_policy` | String | `redact_all_leaves` | Trajectory preset only. `preserve` retains unknown custom marks from trusted producers. |
+| `metric_string_attribute_allowlist` | Map of string arrays | `{}` | Trajectory preset only. Exact attribute names and bounded string values that typed metric marks may retain. |
+
+<a id="requirements" />
+
+<Note>
+`remove` requires at least one selector. `redact` and `regex_replace` require
+`pattern` or `detector`. For string actions, omitting both selector lists
+selects every string leaf within each payload boundary. Selecting a container
+with a string action does not select its descendant strings.
+
+`trajectory_context` defines its own policy. Do not combine it with `action`,
+`pattern`, `detector`, target selectors, or masking fields. It accepts
+`replacement`, `custom_mark_payload_policy`, and
+`metric_string_attribute_allowlist`.
+</Note>
+
+### Single-Policy Settings
+
+When `profiles` is omitted, set these fields directly under `[components.config]`:
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `mode` | String | `builtin` | Backend: `builtin` or `local_model`. |
+| `priority` | Integer | `100` | Sanitizer priority; lower values run first. |
+| `builtin` | Object | Unset | Required for `builtin` mode. |
+| `local` | Object | Unset | Provider-specific settings for `local_model` mode. |
+| `input` | Boolean | `true` | Managed LLM request sanitization and scope-start processing. |
+| `output` | Boolean | `true` | Managed LLM response sanitization and scope-end processing. |
+| `mark` | Boolean | `true` | Mark `data`, `category_profile`, and `metadata` sanitization. |
+| `tool_input` | Boolean | `true` | Tool-request observability sanitization and scope-start processing. |
+| `tool_output` | Boolean | `true` | Tool result and result annotation sanitization and scope-end processing. |
+
+At least one surface flag must be enabled. These fields cannot be combined
+with `profiles`; profile entries do not accept surface flags.
+
+**[Jump to Worked Examples](#worked-examples)**
+
+#### How surface flags apply to scope events
+
+Scope-start processing is enabled when either `input` or `tool_input` is `true`;
+scope-end processing is enabled when either `output` or `tool_output` is `true`.
+On LLM and tool events, metadata follows the corresponding LLM or tool flag.
+Other scope categories use the enabled shared scope-start or scope-end hook.
+
+### Local Backend Fields
+
+Use `[components.config.profiles.local]` or `[components.config.local]`:
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `backend` | String | Unset | Backend identifier resolved by the runtime's provider. |
+| `model_id` | String | Unset | Model identifier reserved for local-model runtimes. |
+| `detector_profile` | String | Unset | Detector profile reserved for local-model runtimes. |
+| `allow_network` | Boolean | Unset | Network access setting for a runtime-provided backend. |
+| `max_latency_ms` | Nonnegative integer | Unset | Target latency budget in milliseconds. |
+
+Refer to [Available Backends](/configure-plugins/pii-redaction/about#available-backends)
+for runtime availability and the current local-model implementation status.
+
+### Detector Presets
+
+<a id="supported-detectors-and-matching-rules" />
+
+#### Supported detectors
+
+The built-in detector presets are grouped into three deterministic families:
+
+**Common PII**
+
+- `email`
+- `phone`
+- `ip_address`
+- `ipv6`
+- `url`
+
+**Structured Secrets**
+
+- `api_key`
+- `uuid`
+- `bearer_token`
+- `jwt`
+- `credit_card`
+
+**Cloud Credentials**
+
+- `aws_access_key_id`
+- `aws_secret_access_key`
+- `gcp_api_key`
+- `azure_storage_account_key`
+
+They are deterministic regex-backed helpers, not model inference.
+
+Refer to [Detector Matching](/configure-plugins/pii-redaction/redaction-behavior#detector-matching) for matching behavior and detector limitations.
+
+### CLI Editor Support
+
+#### Setup and interactive editing
+
+The CLI and primary language bindings register the component. Direct Rust
+applications must call
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()` before
+validating or initializing a `pii_redaction` component.
+
+For file discovery, precedence, merge behavior, and gateway conflict rules,
+refer to [Configure](/configure-plugins/plugin-configuration-files).
+
+The NeMo Relay CLI plugin editor exposes `pii_redaction` directly through
+`nemo-relay plugins edit`.
+
+Use the editor when you want to:
+
+- Toggle the component on or off
+- Choose `builtin` or `local_model`
+- Add and order multiple redaction profiles
+- Enable or disable individual profiles
+- Set the LLM `codec`
+- Edit `builtin` action settings such as `action`, `target_paths`,
+  `target_path_globs`, `pattern`, `detector`, `replacement`, and masking fields
+- Edit `local.backend` for a runtime-provided future local-model backend
+
+The editor preserves unknown fields when it rewrites an existing
+`pii_redaction` component, so future or runtime-specific settings are not
+discarded by the interactive edit flow.
+
+If your policy needs callback code instead of editor or configuration fields,
+use raw middleware.
+
+<a id="detailed-behavior" />
+<a id="backend-support" />
+<a id="backend-support-and-local-model-settings" />
+<a id="local-model-mode" />
+<a id="current-status" />
+<a id="action-semantics" />
+<a id="how-each-action-changes-a-selected-value" />
+<a id="remove" />
+<a id="regex_replace" />
+<a id="redact" />
+<a id="hash" />
+<a id="mask" />
+<a id="observability-semantics" />
+<a id="payload-boundaries-and-event-publication" />
+<a id="path-semantics" />
+<a id="exact-pointers-globs-and-container-selection" />
+<a id="trajectory-context-preset" />
+<a id="what-the-trajectory-preset-removes-and-preserves" />
+<a id="typed-metric-marks" />
+<a id="typed-metric-sanitization-and-allowed-dimensions" />
+
+## Redaction Behavior
+
+The [Redaction Behavior](/configure-plugins/pii-redaction/redaction-behavior) page explains how a
+valid configuration selects, transforms, and preserves observability data:
+
+| Topic | Read More |
+| --- | --- |
+| Actions and detector matching | [Action Semantics](/configure-plugins/pii-redaction/redaction-behavior#action-semantics) and [Detector Matching](/configure-plugins/pii-redaction/redaction-behavior#detector-matching) |
+| Codec and event payload boundaries | [Observability Semantics](/configure-plugins/pii-redaction/redaction-behavior#observability-semantics) |
+| Exact paths, globs, and selected containers | [Path Semantics](/configure-plugins/pii-redaction/redaction-behavior#path-semantics) |
+| Broad trajectory-content removal | [Trajectory Context Preset](/configure-plugins/pii-redaction/redaction-behavior#trajectory-context-preset) |
+| Typed measurements and allowed dimensions | [Typed Metric Marks](/configure-plugins/pii-redaction/redaction-behavior#typed-metric-marks) |
+| Interpreting match diagnostics | [Selection Accounting](/configure-plugins/pii-redaction/redaction-behavior#selection-accounting) |
+
+For backend availability, refer to [Available Backends](/configure-plugins/pii-redaction/about#available-backends).
+
+## Worked Examples
+
+Each tab contains a complete `plugins.toml` document and synthetic event data.
+**Published payload** means the value delivered to subscribers and exporters;
+real provider requests, tool arguments, and application results retain their
+execution values. Tool results and result annotations are separate payloads.
+
+### Common Actions
+
+<Tabs>
+<Tab title="Redact email">
+
+Replace detected email addresses while preserving surrounding text.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "contact": "Email alice@example.com",
+  "attempt": 2
+}
+```
+
+**Published payload**
+
+```json
+{
+  "contact": "Email [REDACTED]",
+  "attempt": 2
+}
+```
+
+No selectors are needed: the detector inspects every string leaf. Numeric values remain unchanged.
+
+</Tab>
+<Tab title="Redact API keys">
+
+Replace a synthetic API key that matches the built-in `api_key` detector.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "api_key": "sk-example12345678",
+  "contact": "alice@example.com",
+  "operation": "lookup"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "api_key": "[REDACTED]",
+  "contact": "alice@example.com",
+  "operation": "lookup"
+}
+```
+
+No selectors are needed. This detector matches supported API-key patterns;
+the email remains unchanged because this profile uses only `api_key`. Use
+separate profiles to apply both email and API-key redaction.
+
+</Tab>
+<Tab title="Remove a field">
+
+Remove an entire credentials object from the event payload.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "remove"
+target_paths = ["/credentials"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "credentials": {
+    "token": "token-123"
+  },
+  "task": "lookup"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "task": "lookup"
+}
+```
+
+`remove` deletes the selected object field, including its nested values.
+
+</Tab>
+<Tab title="Mask text">
+
+Preserve only the last four characters of an account identifier.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "mask"
+target_paths = ["/account_id"]
+unmasked_suffix = 4
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "account_id": "abcdef1234"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "account_id": "******1234"
+}
+```
+
+Without a detector, the explicit suffix setting applies to the whole selected string.
+
+</Tab>
+<Tab title="Hash text (SHA-256)">
+
+Use `action = "hash"` to replace a customer identifier with its SHA-256
+hexadecimal digest.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "hash"
+target_paths = ["/customer_id"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "customer_id": "alice"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "customer_id": "2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90"
+}
+```
+
+Without a matcher, `hash` computes SHA-256 for the entire selected string.
+With a pattern or detector, it computes a separate digest for each matching
+substring, leaving the surrounding text unchanged.
+
+</Tab>
+<Tab title="Regex replacement">
+
+Preserve a token label while replacing the captured number.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "regex_replace"
+pattern = '(token)-(\d+)'
+replacement = '$1-[REDACTED]'
+target_paths = ["/note"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "note": "token-123 and token-456"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "note": "token-[REDACTED] and token-[REDACTED]"
+}
+```
+
+`regex_replace` expands capture references in `replacement` for every match. `redact` uses a literal replacement marker.
+
+</Tab>
+</Tabs>
+
+<a id="mixed-provider-gateway-example" />
+<a id="composed-pluginstoml-example" />
+
+### Targeting and Composition
+
+<Tabs>
+<Tab title="Nested content">
+
+Select string leaves inside content-parts arrays.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_path_globs = ["/messages/*/content/*/text"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "alice@example.com"
+        },
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Published payload**
+
+```json
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "[REDACTED]"
+        },
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ]
+}
+```
+
+This example is a JSON-native tool payload whose keys happen to be `messages`
+and `content`. Each `*` matches one array index. Selecting only
+`/messages/0/content` would select an array and leave the email unchanged.
+Putting `*` in `target_paths` would match literal keys instead of array indices.
+Refer to [Path Semantics](/configure-plugins/pii-redaction/redaction-behavior#path-semantics) for the matching contract.
+
+</Tab>
+<Tab title="Multiple profiles">
+
+Apply email redaction, then remove the credentials field.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_paths = ["/contact"]
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 90
+
+[components.config.profiles.builtin]
+action = "remove"
+target_paths = ["/credentials"]
+```
+
+**Input event payload: tool arguments**
+
+```json
+{
+  "contact": "alice@example.com",
+  "credentials": {
+    "token": "token-123"
+  },
+  "status": "ok"
+}
+```
+
+**Published payload**
+
+```json
+{
+  "contact": "[REDACTED]",
+  "status": "ok"
+}
+```
+
+Priority `80` runs before `90`. Each profile receives the payload produced by the preceding profile; array order breaks priority ties.
+
+</Tab>
+<Tab title="LLM request only">
+
+Redact request message content using an active OpenAI Chat Completions codec.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_path_globs = ["/messages/*/content"]
+```
+
+**Input event payload: OpenAI Chat Completions request body**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email alice@example.com"
+    }
+  ]
+}
+```
+
+**Published payload**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email [REDACTED]"
+    }
+  ]
+}
+```
+
+The managed call in this example supplies the OpenAI Chat Completions codec.
+Selectors address normalized Relay message content. Other APIs can use different
+provider payload shapes; select the normalized string leaves appropriate to
+the active codec. Omit `codec` for a gateway that supplies it per call. For a
+manual call without an active codec, the fallback for this API format is
+`codec = "openai_chat"` under `[components.config]`.
+
+These selectors cover request messages. The **LLM request and response** tab
+adds a selector for assistant response text.
+
+</Tab>
+<Tab title="LLM request and response">
+
+Use one policy to redact email addresses in both directions of an OpenAI Chat
+Completions call. The managed call supplies its active request and response codecs.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+target_path_globs = ["/messages/*/content", "/message"]
+```
+
+**Request: input event payload**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email alice@example.com"
+    }
+  ]
+}
+```
+
+**Request: published payload**
+
+```json
+{
+  "model": "example-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Email [REDACTED]"
+    }
+  ]
+}
+```
+
+**Response: input event payload**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "model": "example-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Contact bob@example.com"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+**Response: published payload**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "model": "example-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Contact [REDACTED]"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+The codec exposes request message text at `/messages/*/content` and assistant
+response text at `/message` in Relay's normalized representation. The response
+selector therefore uses `/message` even though the emitted provider-shaped
+response stores that text under `choices[0].message.content`. The selectors are
+evaluated independently for the request and response payloads.
+
+</Tab>
+<Tab title="Trajectory removal">
+
+Remove conversational content while preserving the structure of an OpenAI Chat
+exchange that uses native function calling. This example uses synthetic customer
+data captured before and after sanitization through managed LLM and tool calls.
+The managed LLM calls supply `OpenAIChatCodec` as their request and response codec.
+The payloads below show provider-shaped message bodies; LLM request headers are
+omitted from the display.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+preset = "trajectory_context"
+```
+
+The model first requests `lookup_customer` with
+`{"email":"alice@example.com"}` as its arguments. The tool returns
+`{"email":"alice@example.com","plan":"Enterprise"}`. The application then
+sends the tool result back to the model in the following request.
+
+**LLM request before sanitization**
+
+```json
+{
+  "messages": [
+    {
+      "content": "Which plan does alice@example.com have?",
+      "role": "user"
+    },
+    {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{\"email\":\"alice@example.com\"}",
+            "name": "lookup_customer"
+          },
+          "id": "call_lookup_1",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "{\"email\":\"alice@example.com\",\"plan\":\"Enterprise\"}",
+      "role": "tool",
+      "tool_call_id": "call_lookup_1"
+    }
+  ],
+  "model": "test-model",
+  "temperature": 0,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Find a customer account by email address.",
+        "name": "lookup_customer",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email"
+          ],
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "function"
+    }
+  ]
+}
+```
+
+**Published LLM request after sanitization**
+
+```json
+{
+  "messages": [
+    {
+      "content": "[REDACTED]",
+      "role": "user"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "function": {
+            "arguments": "{}",
+            "name": "lookup_customer"
+          },
+          "id": "call_lookup_1",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "content": "[REDACTED]",
+      "role": "tool",
+      "tool_call_id": "call_lookup_1"
+    }
+  ],
+  "model": "test-model",
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "[REDACTED]",
+        "name": "lookup_customer",
+        "parameters": {},
+        "strict": false
+      },
+      "type": "function"
+    }
+  ]
+}
+```
+
+The assistant's `tool_calls[0].id` and the tool message's `tool_call_id` both
+remain `call_lookup_1`. The tool name, message roles, model, and temperature
+remain available. The preset replaces user and tool-result text, empties tool
+arguments and the parameter schema, and replaces the function description.
+The minimal projection sets `strict` to `false` after discarding the schema.
+
+The final model response is sanitized independently:
+
+**LLM response before sanitization**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "alice@example.com has the Enterprise plan.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "id": "chatcmpl-private-2",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 10,
+    "prompt_tokens": 76,
+    "total_tokens": 86
+  }
+}
+```
+
+**Published LLM response after sanitization**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "[REDACTED]",
+        "role": "assistant"
+      }
+    }
+  ],
+  "id": "[REDACTED]",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 10,
+    "prompt_tokens": 76,
+    "total_tokens": 86
+  }
+}
+```
+
+Response text and the response ID use the replacement marker. Token counts,
+model, finish reason, and the assistant role remain available.
+
+#### Initial tool-call response and standalone tool events
+
+The first model response proposes the same tool call. Its correlation ID
+survives even though its arguments are removed:
+
+**Initial tool-call response before sanitization**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"email\":\"alice@example.com\"}",
+              "name": "lookup_customer"
+            },
+            "id": "call_lookup_1",
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "id": "chatcmpl-private-1",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 42,
+    "total_tokens": 54
+  }
+}
+```
+
+**Published initial tool-call response**
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{}",
+              "name": "lookup_customer"
+            },
+            "id": "call_lookup_1",
+            "type": "function"
+          }
+        ]
+      }
+    }
+  ],
+  "id": "[REDACTED]",
+  "model": "test-model",
+  "usage": {
+    "completion_tokens": 12,
+    "prompt_tokens": 42,
+    "total_tokens": 54
+  }
+}
+```
+
+The standalone tool execution is a separate pair of lifecycle events. Its
+published argument and result payloads are empty objects:
+
+| Tool Event | Original Payload | Published Payload |
+| --- | --- | --- |
+| Start arguments | `{"email":"alice@example.com"}` | `{}` |
+| End result | `{"email":"alice@example.com","plan":"Enterprise"}` | `{}` |
+
+Both events retain `tool_call_id = "call_lookup_1"`, so exporters can link the
+execution and result to the model's request. The application receives the
+original tool result and LLM responses; sanitization affects observability data.
+
+Refer to [Trajectory Context Preset](/configure-plugins/pii-redaction/redaction-behavior#trajectory-context-preset) for the full
+preservation contract, codec requirements, and custom-mark behavior.
+
+</Tab>
+<Tab title="Metric dimensions">
+
+Keep an approved metric dimension while removing other metric attributes.
+
+**Configuration**
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[[components.config.profiles]]
+mode = "builtin"
+
+[components.config.profiles.builtin]
+preset = "trajectory_context"
+
+[components.config.profiles.builtin.metric_string_attribute_allowlist]
+"gen_ai.operation.name" = ["chat", "text_completion"]
+```
+
+**Input event payload: typed metric mark data**
+
+```json
+{
+  "measurements": [
+    {
+      "name": "example.requests",
+      "kind": "counter",
+      "value_type": "u64",
+      "value": 1,
+      "description": "Requests from alice@example.com",
+      "attributes": {
+        "gen_ai.operation.name": "chat",
+        "owner": "alice@example.com",
+        "attempt": 2
+      },
+      "unit": "request",
+      "boundaries": null
+    }
+  ]
+}
+```
+
+**Published payload**
+
+```json
+{
+  "measurements": [
+    {
+      "name": "example.requests",
+      "kind": "counter",
+      "value_type": "u64",
+      "value": 1,
+      "description": "[REDACTED]",
+      "attributes": {
+        "gen_ai.operation.name": "chat"
+      },
+      "unit": "request",
+      "boundaries": null
+    }
+  ]
+}
+```
+
+This payload belongs to a mark with data schema
+`nemo.relay.metric_measurements`, version `1`. The preset preserves the typed
+measurement and approved `gen_ai.operation.name` value, replaces the description,
+and drops the other attributes. The allowlist requires an exact attribute name
+and value; see [Typed Metric Marks](/configure-plugins/pii-redaction/redaction-behavior#typed-metric-marks).
+
+</Tab>
+</Tabs>
+
+## Verify the Policy
+
+Valid selector syntax does not guarantee that the policy changes a payload.
+Enable [runtime diagnostics](/reference/diagnostics) at startup and inspect
+`pii_redaction.selector_evaluated` observations for the JSON documents the
+built-in sanitizer processes. Recording is best effort and depends on diagnostic
+admission and retention.
+
+| Detail | Meaning |
+| --- | --- |
+| `matched_paths` | Selected nodes in the original document. |
+| `eligible_string_leaves` | Selected string values in the original document. |
+| `affected_values` | Values actually changed or removed by the sanitizer. |
+
+For the **Nested content** example:
+
+| Selector Configuration | Result |
+| --- | --- |
+| `target_paths = ["/messages/*/content/*/text"]` | No matching array indices: `*` is literal in exact paths. |
+| `target_paths = ["/messages/0/content"]` | A container matches, but no string is selected for `redact`. |
+| `target_path_globs = ["/messages/*/content/*/text"]` | Two text leaves are selected; the email leaf changes. |
+| Neither selector list configured | All string leaves are eligible; the email leaf changes. |
+
+Zero counts are informational: some traffic legitimately lacks the configured
+path or a matching sensitive value. Diagnostic detail includes only bounded
+counts, never the original matched content.
+
+<a id="selection-accounting-and-component-keys" />
+
+### Diagnostic Component Keys
+
+Profile observations use component keys such as
+`pii_redaction.selector.profile_0`, even with a single profile. Single-policy
+observations use `pii_redaction.selector`.
+
+For container removal, omitted selectors, and unchanged selected values, refer
+to [Selection Accounting](/configure-plugins/pii-redaction/redaction-behavior#selection-accounting).
+The `trajectory_context` preset uses its semantic sanitization path rather than
+this selector diagnostic.

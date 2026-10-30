@@ -1,0 +1,517 @@
+---
+title: "Diagnostics"
+description: "Understand runtime-owned diagnostic recording, bounded retention, and producer boundaries."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Relay diagnostics records what happened in a running application. It keeps total
+counts and recent events in memory, within limits set at startup. Collection is
+built in and disabled by default. Enable it in your deployment's startup settings.
+Reading diagnostics does not change execution or reset counts. Your application
+decides whether it is healthy and how to recover from failures.
+
+## Choose a Guide
+
+| Task | Guide |
+| --- | --- |
+| Configure CLI commands, persistent gateways, or daemon workers | [CLI and Daemon Diagnostics](/reference/diagnostics/cli) |
+| Configure and read diagnostics from a language-hosted application | [Embedded Diagnostics](/reference/diagnostics/bindings) |
+| Discover capabilities, query snapshots, and handle errors | [Diagnostics API](/reference/diagnostics/api) |
+| Inspect retained entry and component storage and resource context | [Diagnostic Memory Inspection](/reference/diagnostics/memory) |
+| Record internal observations in native or worker plugins | [Plugin Diagnostics](/build-plugins/diagnostics) |
+
+The sections below explain how Rust records and stores diagnostics. A *producer*
+is the part of Relay that records an operation's outcome. A *context* owns the
+shared diagnostic storage for those producers and their readers.
+
+The shared data types live in `nemo-relay-types`. Registration, storage, and queries
+live in `nemo_relay::diagnostics`. Producers can submit diagnostic observations
+directly to the in-memory diagnostics service, which updates counters and retains
+bounded recent evidence. This requires no configured logger, active plugin, Tokio
+runtime, or HTTP listener.
+
+Diagnostic detail can contain private data that has not been sanitized. Only
+grant read access to callers allowed to inspect the whole context. Protect the
+results with the same access rules. Query filters do not limit a reader's authority.
+
+Stored evidence does not flow back to logs, subscribers, or exporters. Optional
+output callbacks, called *projections*, receive only an approved built-in summary.
+
+## Rust Context Startup
+
+Diagnostics is compiled in and **disabled by default**. The runtime owner selects
+`DiagnosticsSettings.enabled` when creating a context. This is a startup runtime
+setting, with no Cargo feature or live enable/disable switch.
+
+Pass the same context to producers and readers. Disabled recorders preserve the
+producer interface, skip lazy observation factories, and allocate no backend
+pools. Reading a disabled context returns `DiagnosticError::Disabled`.
+
+If you use process-wide convenience constructors, call
+`Diagnostics::install_process_default` before creating logging or plugin
+components. Otherwise, the first `Diagnostics::process_default()` call installs
+a disabled context. Existing handles keep that context.
+
+For an explicitly owned plugin host, use
+`nemo_relay::plugin::initialize_with_diagnostics(config, additional_plugins_toml, &diagnostics)`.
+The host passes that same context through configuration resolution and common
+component activation. The `initialize` convenience API resolves the embedded
+service settings in [Embedded Diagnostics](/reference/diagnostics/bindings)
+before plugin validation or activation.
+Standalone validation and discovery do not consume the process default.
+
+## Dynamic Plugin Diagnostics
+
+Native loaders and gRPC worker hosts reuse the selected context. They do not
+resolve diagnostic settings again or create a second store. Closing a plugin
+closes its registrations and session. The runtime context remains available.
+Standalone callers can select a context with `load_native_plugins_with_diagnostics`
+or `load_worker_plugins_with_diagnostics`.
+
+The host records these operations:
+
+- Policy checks, artifact verification, and schema validation.
+- Native plugin loading, validation, registration, and callback failures.
+- Worker launch, handshake, validation, registration, callback failures, and
+  transport failures.
+
+Callback and transport failures have different codes. Successful lifecycle
+operations have their own records. A successful process cleanup means cleanup
+completed. The application can still have exited with an error. Normal
+cancellation, native `StreamEnd`, and native `Backpressured` are not failures.
+
+Common activation summaries describe separate operations. Adding them to native
+or worker failure counts can count the same failed activation twice. Worker SDK
+authors should record internal operations that the host cannot already observe.
+Refer to [Native Plugin Diagnostics](/build-plugins/native/diagnostics) for native
+host coverage and SDK limits.
+
+Remote events can include a `remote` field that identifies where they came from.
+It contains host-issued activation and session UUIDs, the submission sequence,
+optional producer wall time, and host receipt wall and elapsed times. Host summaries
+and windows use receipt time because the producer's clock can differ from the
+host's clock. Local events omit this optional schema-1 field. Worker startup
+requires provenance contract 1.
+
+All dynamic-plugin observations use state-only recording. Restricted detail and
+correlation stay in diagnostic storage. Logging and event export paths never
+receive them. Legacy reports also exclude them.
+Existing emitters and legacy reports retain their contracts. The optional native
+diagnostics table follows the frozen execution ABI-8 prefix. Execution ABI 8 and
+manifest native API 1 remain unchanged. Fixed layouts and borrowed byte spans
+cross that boundary. Core recorders and Rust-owned objects remain inside the host.
+
+The native SDK can record internal observations and return synchronous acceptance
+receipts. An explicit host-policy grant also permits whole-context snapshot and
+memory reads. The grant defaults to false. Refer to
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics) for recording,
+read authority, limits, and cleanup.
+
+Worker recording permission does not grant whole-context snapshot access.
+`can_read_context` is false and canonical worker reads return `PERMISSION_DENIED`.
+Host owners use the existing core reader or authorized CLI diagnostics API.
+Legacy worker `runtime_diagnostics` still returns its existing report. Refer to
+[diagnostic delivery](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+for independent transport budgets and retry semantics.
+
+## Rust Component Recording and Reading
+
+Register the component's expected codes before recording. Each observation supplies
+a positive `NonZeroU64` count of new occurrences. For example, pass two for two new
+failures, not the total number of failures so far. Recording constructors reject
+zero. JSON snapshots encode these counts as decimal strings to preserve precision.
+
+This example records a sink failure and a success without configuring logging.
+Set the source identity to your deployed Relay version.
+
+<Code src="_code/overview/record_component.rs" language="rust" title="record_component.rs" lines="4-53" showLineNumbers={false} />
+
+`SnapshotLease::as_bytes()` borrows the page's canonical JSON. Drop the lease when
+you finish reading to return its reserved query workspace. `to_snapshot()` creates
+a separate value owned by the caller. That value uses memory outside the service's
+budget.
+
+The lease owns a copy of the page and does not borrow the query. You can reuse one
+`DiagnosticQuery` while polling. Update its continuation between pages to avoid
+cloning selector strings. Reads do not add occurrences or reset counters. A later
+success does not erase earlier failure counts.
+
+## Shared Payload Models
+
+Producers and decoded events share three payload types:
+
+- `Classification` describes the diagnostic code and failure class.
+- `PluginObservationContext` describes the plugin execution type and phase.
+- `DiagnosticCorrelation` carries request and session IDs.
+
+Typed catalogue constructors borrow canonical names without allocating strings.
+Decoded snapshots own their strings and preserve names that the reader does not
+yet recognize. `Classification` has private fields. Read them with `code()` and
+`failure_class()`.
+
+Typed constructors check built-in code and failure-class pairs.
+`from_opaque_names()` preserves names from the wire or an admitted extension.
+Decoding or constructing a value does not grant permission to record it. Core
+checks catalogue membership, ownership, and generation before accepting a record.
+`into_names()` transfers owned strings without cloning them.
+
+`DiagnosticCorrelation<'a>` can borrow request and session IDs during recording.
+Decoded events use `DiagnosticCorrelation<'static>` with owned strings. Received
+IDs do not need static storage. Decoding copies them from the input buffer.
+
+The payloads and `Observation` implement `Clone`, not `Copy`. Core validates input
+before changing counters, then encodes accepted names in fixed-size storage.
+Extensions require admitted handles with matching ownership and generation.
+
+Plugin context is checked separately from counter identity. Use `PluginExecution`
+and `PluginPhase` to construct known context names. Rust gives them distinct
+wrappers, so passing a phase as an execution type is a type error.
+`from_opaque_name()` and decoding preserve future strings. Readers can read those
+strings, but core rejects them as recording input until it supports them.
+
+`Observation` is recording input. `DiagnosticEvent` is accepted evidence with a
+runtime-assigned identity, sequence, and timestamps. Lazy detail formatting is
+also input. Retained detail is its stored result. Sharing these payload types
+adds no extra history or string store.
+
+## Accounting and Ownership
+
+Each new context has a source UUID. This distinguishes two runs even if the
+operating system reuses a process ID (PID). Each component registration also has
+its own instance and generation. Recreating a component starts a new lifetime.
+
+The service keeps totals for the context's lifetime and each component instance's
+lifetime. Each component also has one current `since_refresh` summary.
+`ComponentOwner::refresh` resets that summary and updates its configuration
+identity. Lifetime code counters and rolling outcome windows keep their values.
+The service does not archive old refresh summaries.
+
+Every accepted observation updates lifetime and current-summary totals when it
+is recorded. Work captured before a refresh can retain its original attribution
+on retained events while counting in the current summary.
+
+Event eviction preserves numeric totals. Closing a component retains its row
+until bounded reclamation requires space. Reclaiming that closed row removes
+its component aggregates. Context lifetime totals remain available. Closing the
+registration does not prove that its process exited.
+
+The embedding application or deployment owner decides health, readiness,
+alerts, and recovery. Relay records observations, outcomes, timing, and coverage.
+It has no active/recovered conditions or error-code closure operation.
+
+## Resource and Wire Boundaries
+
+An enabled context reserves memory at startup. Separate limits control these
+storage pools:
+
+- Component registrations and code counters.
+- Event headers and detail blocks.
+- Outcome buckets.
+- Query workspaces.
+- Projection workspaces.
+
+All components share one circular event history. New events can replace older
+events while summary counters keep updating. The history uses a `circular-buffer`
+allocation sized at startup. Callers cannot resize it. Its calculated memory
+includes the header, alignment, and event slots. If that allocation fails, it
+invokes the global allocation-error handler. Pool reservations that support
+fallible allocation return `DiagnosticError::Allocation`.
+
+`DiagnosticLimits.max_owned_bytes` limits the context's reserved storage. It does
+not limit total process RSS. The following memory is outside that budget:
+
+- Allocator overhead.
+- Caller-owned inputs and decoded snapshots.
+- Producer handles and callback captures.
+- Operational output storage.
+
+Logging configuration controls file-sink queues and on-disk retention.
+
+### Storage Limits and Sizing
+
+Configure these fields under `[diagnostics.limits]` at startup. Defaults below
+apply to one context. Capacities are shared across its components. Byte values
+are bytes in TOML. KiB and MiB in this table use powers of 1,024.
+
+| Setting | Default | Capacity and Exhaustion Behavior |
+| --- | --- | --- |
+| `max_components` | 64 | Active and retained closed registrations. Closed registrations can be reclaimed. Registration fails if capacity cannot be admitted. |
+| `max_counters` | 2,048 | Reserved lifetime code-counter slots. A producer cannot reserve more than the available slots. |
+| `max_events` | 256 | Shared circular-history slots. New evidence replaces older events. Zero retains summaries without event history. |
+| `max_window_buckets` | 3,840 | Shared outcome-bucket reservations. Window admission can fail independently of history capacity. |
+| `max_extensions` | 128 | Registered extension descriptors. Additional extension admission can fail. |
+| `max_metadata_bytes` | 64 KiB | Registration keys, ownership strings, and extension descriptions. Insufficient space rejects metadata admission. |
+| `max_identity_bytes` | 128 | Per-key or ownership-string admission limit. Oversized identities are rejected. |
+| `max_detail_bytes` | 4 KiB | Per-observation detail limit. Longer detail is truncated. |
+| `max_correlation_bytes` | 128 | Per-request/session correlation limit. Longer fields are truncated. |
+| `detail_pool_bytes` | 256 KiB | Shared payload capacity, rounded down to whole blocks. Retention can reclaim older evidence. Fields that cannot fit can be omitted. |
+| `detail_block_bytes` | 256 | Payload allocation granularity, at least four bytes. Smaller blocks reduce slack but increase block metadata. |
+| `max_projections` | 16 | Registered output callbacks. Further registration fails when full. |
+| `max_projection_workspaces` | 4 | Concurrent output publications. Exhaustion can omit projection delivery without undoing accepted recording. |
+| `max_owned_bytes` | 32 MiB | Admission ceiling for calculated core backing. Startup fails if the selected capacities exceed it. |
+
+Raising `max_owned_bytes` only permits a larger calculated allocation. It does
+not enlarge the history, detail pool, or any other capacity. Increase the specific
+capacity and ensure the resulting allocation fits the ceiling. Invalid profiles
+fail startup. The ceiling does not reserve that entire amount automatically.
+
+Use the [query limits below](#query-budgets) for response sizing and
+[Memory Inspection](/reference/diagnostics/memory) for actual reserved backing,
+occupancy, and compiled entry sizes. A practical tuning sequence is:
+
+1. Check loss and admission counters before changing limits. Frequent history
+   eviction can come from either event-slot pressure or detail-pool pressure.
+   Compare history occupancy and detail occupancy to identify which pool to grow.
+2. For rejected registrations, inspect component, counter, metadata, and extension
+   capacities. Raising `max_events` cannot repair a registration shortage.
+3. For `snapshot_capacity`, narrow the query or increase the relevant query row,
+   counter, window, text, or response budget. A larger retention pool alone does
+   not make a component row fit a page.
+4. For `busy`, release outstanding pages promptly and bound caller concurrency
+   before increasing `max_queries`. Each query workspace adds backing allocations.
+5. Include delivery storage separately: embedded copy buffers, HTTP response
+   buffers, daemon worker caches, and worker SDK queues are outside the core
+   ceiling. Caller-owned decoded pages and operational log sinks also need their
+   own allowance. None of these ceilings is a process RSS limit.
+
+### Query Budgets
+
+Query pages have independent startup capacities. `max_counters` and
+`max_window_buckets` reserve recording state across the source.
+`max_query_counters` and `max_query_window_buckets` bound copied rows in each
+query workspace. Smaller pages do not reduce recording or retention capacity.
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `max_queries` | 4 | Simultaneously leased query workspaces. |
+| `max_query_components`, `max_query_events` | 64, 256 | Component and event rows per page. |
+| `max_query_counters`, `max_query_window_buckets` | 256, 512 | Matched code counters and outcome buckets per page. |
+| `query_text_bytes` | 64 KiB | Copied text per workspace. |
+| `max_snapshot_bytes` | 128 KiB | Encoded JSON response per workspace. |
+
+Larger selections continue through `DiagnosticSnapshot.continuation`. Each
+component row is atomic: its matched counters and covered window buckets must
+fit together in a page, along with its text and encoded response. If a single
+selected component cannot fit, reading returns `DiagnosticError::SnapshotCapacity`.
+Increase the relevant page budgets or narrow the selection. This error does not
+change retained evidence or accepted totals. Event-only queries can set
+`max_components` to zero.
+
+For recording and projections without snapshot reads, set `max_queries` to zero
+at startup. The enabled context then allocates no query pool or page backing.
+Unused query capacities are ignored. Snapshot calls return
+`DiagnosticError::QueryDisabled`, while recording, retained history, and
+projections remain enabled. This is distinct from disabling the entire service.
+Enabled query paths remain preallocated and enforce their own capacities.
+
+### Inspect Memory
+
+Use `Diagnostics::memory_usage()` for aggregate backing and occupancy, or
+`DiagnosticsReader::inspect_memory(&query)` for bounded component/entry
+attribution with independently sampled resource context. Refer to
+[Diagnostic Memory Inspection](/reference/diagnostics/memory) for accounting,
+availability, query cost, and the distinction from process memory usage.
+
+Snapshot coverage reports rejected observations, truncated detail, eviction,
+and saturated counts. A saturated count is a lower bound. Inspect coverage when
+interpreting missing evidence. JSON encodes 64-bit counts and sequences as decimal
+strings to preserve precision in every supported language.
+
+Diagnostic detail and caller-supplied correlation can contain restricted data.
+Byte limits do not redact payloads or credentials. Authorize access to readers
+and their responses. Keep correlation out of aggregate keys. The service does
+not capture ordinary logs, prompts, or request bodies automatically.
+
+## Operational Logging and Legacy Reports
+
+Create the context before logging when startup failures need to be inspectable.
+Pass it to `LoggingRuntime::configure_with_diagnostics` to reuse existing
+filters, formatters, stderr, and file sinks. Eligible typed observations use an
+optional logging projection. Ordinary operational log lines do not automatically
+enter diagnostic history.
+
+Projection callbacks receive `DiagnosticOutputSummary`. It contains only these
+approved fields:
+
+- The validated built-in classification.
+- Severity and outcome.
+- Occurrence count and sequence.
+- Time.
+- A service-generated component UUID.
+
+The summary excludes these fields:
+
+- Diagnostic detail.
+- Component names.
+- Plugin context.
+- Configuration attribution.
+- Caller correlation.
+
+Extension observations remain readable but do not automatically produce output.
+
+Core builds the summary when it records an observation. The summary does not
+include retained evidence. This rule applies to ordinary and state-only recording.
+Readers never automatically replay evidence to logs, legacy reports, subscribers,
+or exporters. Existing event sanitization and export order stay the same.
+
+Recording is independent of log thresholds. Projections execute outside the
+state lock, and sink failures use a state-only recording path to avoid recursive
+delivery through a failing sink. Shutdown detaches projections before draining
+sinks. File sinks are required by default. An individual sink can use
+`failure_policy = "optional"` to record a filesystem initialization failure and
+allow startup with the other sinks. Failed optional sinks have no delivery queue
+and remain disabled until logging is reinitialized. A diagnostics service attached
+later observes their current unavailable state without replaying earlier records.
+Diagnostic retention remains independent of these delivery policies. Refer to
+[File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
+for configuration, loss semantics, and unchanged runtime delivery behavior.
+
+OpenTelemetry subscriber and ATOF stream sink delivery diagnostics remain
+legacy-only. Skipped automatic exporters contribute initialization evidence to
+runtime diagnostics:
+
+- **Diagnostics enabled and recorder admitted:** Each skipped exporter records
+  `plugin.exporter_initialization_failed` with activation phase, warning severity,
+  and the activation report's safe explanation.
+- **Diagnostics disabled or admission denied:** The legacy activation report remains
+  available. It is maintained independently and is never replayed from snapshots.
+- **Capacity limits reached:** Recording and retention are best effort. Coverage
+  reports admission and retention loss.
+
+The component keys `opentelemetry.automatic.traces`,
+`opentelemetry.automatic.logs`, and `opentelemetry.automatic.metrics` support
+signal-specific queries and counters without parsing optional detail. They retain
+the originating plugin's Plugin/Common ownership and leave the execution mechanism
+unset.
+
+Each recorder closes after its initialization attempt. Retained evidence describes
+that attempt rather than current exporter health.
+
+## Classifiers and Producer Coverage
+
+CLI, daemon, and embedded readers use the same snapshot contract. The
+[Diagnostics API](/reference/diagnostics/api) explains discovery and snapshot queries.
+It also covers pagination, errors, and numeric formats.
+
+A classifier maps an error to a diagnostic code and failure class. The shared
+`DiagnosticClassifier<E>` interface returns a `Classification` without recording
+anything or changing the error. Each producer classifies the operation it owns.
+Readers do not classify the evidence again.
+
+Relay uses `PluginErrorClassifier` and the crate-private `LoggingErrorClassifier`.
+Applications can implement the same classifier interface.
+
+`PluginError::InvalidConfig` combines configuration file-read failures and
+validation failures without preserving their structured causes. Its classifier
+therefore emits `plugin.configuration_invalid` with the `unknown` failure class.
+It never infers a cause from error text. A producer with structured validation
+evidence can explicitly author that code with `invalid_input`.
+
+### Catalogue Families and Extension Points
+
+`DiagnosticDomain` identifies the owning subsystem. `PluginDiagnosticFamily`
+groups related plugin codes within that domain. `Common` covers shared plugin
+operations across execution mechanisms. `PluginExecution` separately describes
+the observed execution mechanism when a producer can establish it.
+
+Domain and family come from the individual catalogue entry. Success, failure,
+and notice describe the observation kind and do not determine its owner.
+`DiagnosticDomain::Cli` owns the current CLI entries:
+
+- **Failures:** `cli.child.cleanup_failed`, `cli.upstream.response_failed`,
+  `cli.command_failed`, `cli.configuration_failed`, `cli.gateway.bind_failed`,
+  `cli.gateway.serve_failed`, `cli.acquire_failed`, `cli.child.spawn_failed`,
+  `cli.child.wait_failed`, `cli.hook.forward_failed`, and
+  `cli.upstream.transport_failed`.
+- **Successes:** `cli.upstream.headers_received`,
+  `cli.upstream.body_completed`, `cli.child.cleaned`, `cli.command_completed`,
+  `cli.gateway.bound`, `cli.gateway.stopped`, `cli.acquired`,
+  `cli.child.spawned`, `cli.child.waited`, and `cli.hook.forwarded`.
+- **Notices:** `cli.nonzero_exit`, `cli.policy_rejected`, and `cli.child.exited`.
+
+Daemon owns its operation success codes. Logging owns its three success codes.
+Native and worker lifecycle successes belong to Plugin/Operations
+(`PluginDiagnosticFamily::Operations`). Their `PluginOperationFailureCode` entries
+belong to the same family. The configuration-inheritance notice belongs to
+Plugin/Common. Select observations by each entry's reported domain and family,
+regardless of its outcome.
+
+For catalogue changes, refer to the contributor guidance on
+[diagnostic producer contracts](/contribute/runtime-contract-docs#diagnostic-producer-contracts).
+
+### Plugin Producer Boundaries
+
+The shared runtime service records host configuration and component activation
+alongside mechanism-specific observations from native loaders and worker
+integrations. It outlives individual plugin activations.
+
+| Surface | Production Coverage |
+| --- | --- |
+| Logging adapter and sinks | Typed recording and optional log projection |
+| Common component activation | Registration failures and activation unwinds, recorded once at the owning operation when diagnostics are enabled and admission succeeds |
+| Automatic OTel exporter initialization | Nonfatal construction failures under bounded per-signal keys, recorded once per failed attempt when diagnostics are enabled and admission succeeds; legacy activation warnings remain independent |
+| Shared host configuration | One canonical inheritance notice per contributing ambient file, preserving existing warnings/reports |
+| Native ABI and dynamic trust/policy | Records failures in policy, artifact, and schema checks. Also records native load, validation, registration, and callback failures. |
+| Worker host lifecycle and execution | Launch, handshake, validation, registration, callback and transport failures, cancellation, shutdown, exit, and process cleanup |
+| Native SDK observations | Synchronous internal recording with acceptance receipts and optional authorized canonical reads. |
+| Worker SDK observations | Bounded authenticated delivery of distinct internal observations into the host's selected context |
+
+Each adapter identifies the operation it records:
+
+- The common activation adapter supplies `PluginPhase::Activation`. It leaves
+  `PluginObservationContext.execution` unset.
+- The native host adapter supplies `PluginExecution::NativeAbi`.
+- The worker host adapter supplies `PluginExecution::WorkerProtocol`.
+
+Native and worker adapters also supply the phase observed at the operation
+boundary. That phase can be policy, validation, activation, or runtime.
+Common activation summaries describe separate operations. Do not add them to
+native or worker failure counts as if they were unique failed activations.
+Normal cancellation, stream completion, and native backpressure preserve their
+execution meanings and do not become diagnostic failures.
+Discovery reports build support. Events establish actual observations.
+
+`PluginObservationContext` wraps execution and phase names in distinct types:
+`PluginExecutionName` and `PluginPhaseName`. Decoding and re-encoding preserve
+future names. Missing or null fields remain absent. Non-string values are rejected.
+Core stores recognized context in a compact private format. Readers can forward
+unfamiliar decoded context, but cannot use it as accepted recording input or a
+counter key.
+
+Constructing known context and approved summary classifications borrows names
+without allocating strings. Decoding an owned snapshot allocates values for the
+caller. Transport adapters must check metadata and payload limits before creating
+those values. A supported snapshot version can contain future names. Unsupported
+snapshot versions fail compatibility checks.
+
+The common catalogue includes logging failures and successes, seven common plugin
+failures, and `ConfigurationInherited`. CLI, daemon, and dynamic plugin integrations
+add their own operation codes.
+
+Configuration resolution records one inheritance notice for each contributing
+file found through ambient discovery. It excludes an explicitly supplied file.
+A separate `plugin.configuration` recorder uses the host's selected context.
+This state-only recorder stores generic safe detail. Paths stay in the existing
+operational warning and configuration report. Reading or copying that report does
+not record another notice.
+
+Disabled collection or full diagnostic storage does not change configuration
+results. Standalone validation and discovery use the same configuration helpers,
+but do not record diagnostics or initialize the process default.
+
+The canonical catalogue does not emit a component-reenabled notice.
+CLI and daemon transport classifiers, native-status, dynamic trust/policy, and
+worker classifiers are integrated at their respective owning operations. Binding
+conversion does not classify or count an operation a second time. The integrated native/worker producers retain their owning boundaries.
+OTel failures, export successes, and context-expiration observations are not
+integrated into the canonical store.
+
+Rust readers access canonical JSON and can explicitly convert it into owned
+snapshots. Consuming a page never pins retained history. Detailed memory
+attribution and resource correlation are available through the separate memory
+view. Diagnostics adds no CPU attribution or durable restart history. Existing
+lifetime and timing fields remain available.
+The core API starts no diagnostics listener or background collection service.
+CLI inspection reuses the existing gateway listener.

@@ -1,0 +1,1171 @@
+---
+title: "Basic Usage"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+The `nemo-relay` binary observes coding agents that do not expose every
+LLM call site directly. It combines agent-specific hook endpoints with a
+passthrough LLM gateway so NeMo Relay owns both the agent lifecycle and the model
+request lifecycle.
+
+Use the gateway when you need one observability boundary for OpenAI Codex and
+Claude Code without replacing each agent's canonical hook payload.
+
+## Hook Endpoints
+
+Each hook endpoint accepts the agent's native hook JSON directly. Do not wrap
+the payload in a shared gateway envelope.
+
+- `POST /hooks/codex` accepts Codex hook JSON and returns the Codex-compatible
+  hook response object.
+- `POST /hooks/claude-code` accepts Claude Code hook JSON and returns
+  the Claude-compatible `continue` response after recording the hook.
+- `POST /hooks/pi` accepts the hook JSON posted by the NeMo Relay pi extension.
+  It returns an empty object for an allowed call, or
+  `{"tool_call": {"tool_call_id": "…", "input": {…}}}` when a request intercept
+  rewrote the arguments and the extension must execute those instead. It returns
+  HTTP 403 with `error.type = "nemo_relay_guardrail_rejected"` when a guardrail
+  blocks one.
+
+When a hook closes a turn, subagent, or session scope, Relay returns the hook
+response after subscribers finish processing that scope-end event. This makes
+synchronous outputs such as the final ATIF trajectory visible at the hook
+boundary without draining subscriber work queued later by another session.
+Full gateway shutdown uses a process-wide flush after closing all remaining
+sessions and before clearing plugins.
+
+The adapters preserve vendor fields such as session IDs, working directories,
+transcript paths, model names, tool payloads, shell payloads, MCP payloads, file
+payloads, user identity, and subagent metadata in NeMo Relay event metadata.
+
+## Gateway Routes
+
+The gateway supports these provider routes. Some routes record LLM lifecycle
+events. The passthrough routes described below forward requests without those
+events. Relay preserves provider JSON and forwards streaming responses as streams.
+For managed LLM routes, it records LLM start and end events under the active
+session scope. It removes headers used for the current network connection and
+private Relay authentication and routing headers before forwarding requests.
+
+- `POST /v1/responses`
+- `POST /v1/chat/completions`
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
+- `GET /v1/models`
+- `POST /v1/live` (also available as `/live`)
+- `POST /v1/live/sessions` (also available as `/live/sessions`)
+- `POST /v1/images/edits` (also available as `/images/edits`)
+- `POST /v1/memories/trace_summarize` (also available as `/memories/trace_summarize`)
+- `POST /v1/alpha/search` (also available as `/alpha/search`)
+- `POST /v1/realtime/calls` (also available as `/realtime/calls`)
+- `POST /v1/responses/compact` (also available as `/responses/compact`)
+- `GET /v1/live` and `GET /v1/realtime` with a WebSocket upgrade (also available
+  as `/live` and `/realtime`)
+
+### Passthrough Requests
+
+Voice call setup, Responses compaction, image editing, memory summarization, and
+experimental standalone search use passthrough mode. Relay forwards these
+requests without recording LLM lifecycle events or changing their contents.
+It preserves request bodies, including multipart data and Session Description
+Protocol (SDP) offers. For voice calls, it also preserves the upstream SDP answer
+and `Location` header.
+
+Live and Realtime WebSockets use passthrough mode in the standalone gateway and
+daemon. Relay checks the caller's credentials and connects to the upstream before
+accepting the client's connection. It removes private Relay headers and forwards
+WebSocket frames in both directions. The daemon keeps the selected worker assigned
+until the connection closes. It closes active connections when the worker's drain
+deadline expires.
+
+### WebRTC Sidebands
+
+A sideband is a WebSocket connection used to send session events and commands.
+WebRTC carries the primary audio. Your application runs tools and sends session
+updates.
+
+Use the following routes to create a call or session and attach its sideband.
+These examples use a local gateway at `127.0.0.1:8000`.
+
+- **Realtime:** Create a call with `POST /v1/realtime/calls`. Read the call ID from
+  the upstream `Location` header. Connect to
+  `ws://127.0.0.1:8000/v1/realtime?call_id=CALL_ID`.
+- **Codex Live:** Create a call with `POST /v1/live` or
+  `POST /v1/realtime/calls`, using the format required by the upstream provider.
+  Read the call ID from the upstream `Location` header. Connect to
+  `ws://127.0.0.1:8000/v1/live/CALL_ID`. Relay preserves query parameters,
+  including `intent` and `architecture`.
+- **Live:** Create a session with `POST /v1/live/sessions`. Read `session.id` from
+  the response. Connect to
+  `ws://127.0.0.1:8000/v1/live/sessions/SESSION_ID/attach`.
+
+Keep the returned ID unchanged. Use the credentials required by the upstream
+and the same Relay route credential for creation and attachment. Codex can use
+separate destinations for ChatGPT call creation and the OpenAI sideband.
+Live and Realtime connections use Relay's configured OpenAI upstream and keep
+the caller's provider credential.
+
+Live attach also supports `/live/sessions/SESSION_ID/attach`. Codex Live also
+supports `/live/CALL_ID`. In the standalone gateway, each HTTP passthrough route
+listed above and each sideband route supports the capability prefix
+`/v1/nemo-relay/CAPABILITY`. For example, use
+`/v1/nemo-relay/CAPABILITY/live/CALL_ID` to attach a Codex Live sideband.
+
+To send a Codex WebRTC sideband through Relay, set
+`experimental_realtime_ws_base_url` to the Relay base URL in your user-level
+Codex settings. Codex can choose its sideband URL separately from its model
+provider URL. Relay does not set this option for you.
+
+Relay forwards voice requests in the format it receives. Codex chooses ChatGPT's
+JSON call format when its call-creation base URL contains `/backend-api`.
+A local Relay URL without that path selects the public API format instead.
+For personal persistent installs with ChatGPT sign-in, Relay sets a separate
+call-creation URL ending in `/backend-api/codex`. It preserves an explicit
+call-creation URL that you already set.
+
+For a managed daemon deployment, set
+`experimental_realtime_webrtc_call_base_url` manually to the Relay URL ending
+in `/backend-api/codex`. Keep the model provider's `/v1` URL. Refer to
+[Managed Codex Configuration](/daemon/configuration#codex) for the setting
+and configuration locations.
+
+Refer to [OpenAI server-side controls](https://developers.openai.com/api/docs/guides/voice-server-controls)
+for details about the provider's sideband lifecycle.
+
+### Unmatched Routes
+
+When a request does not match a supported Relay path or method, Relay logs a
+`route_unmatched` record at error level. The record identifies the gateway,
+daemon, or worker that handled the request. It includes the HTTP method and
+response status.
+The path is `/<redacted>`, or `/v1/nemo-relay/<redacted>` for requests in the
+capability namespace. Relay does not log caller-supplied path segments, query
+strings, headers, or bodies. An upstream 404 response does not produce this
+record.
+
+## Transparent Run
+
+Use the agent shortcuts for local observability. The wrapper starts a gateway on
+a dynamic `127.0.0.1` port, injects the resolved hook and gateway configuration
+into the launched coding agent, and stops the gateway when the
+agent exits. Relay owns the launched wrapper and its descendants as one process
+tree, so a gateway failure cannot leave an agent running without its private
+gateway and hook configuration. Interactive Unix launches transfer foreground
+terminal ownership and preserve Ctrl-C and Ctrl-Z job control. Non-interactive
+Unix launches forward termination signals to the complete agent process tree
+before Relay removes the injected configuration.
+
+```bash
+nemo-relay codex
+nemo-relay claude
+nemo-relay pi
+```
+
+`nemo-relay codex` and `nemo-relay claude` need no install: the wrapper injects
+their hooks per run. `nemo-relay pi` is the exception. pi has no native
+hook-configuration file, so its hooks can only originate inside a NeMo Relay
+extension that is already installed. On a clean machine the first-time setup
+wizard offers to install it; once a Relay configuration exists the wizard no
+longer runs, so install it with `nemo-relay install pi`. See
+[pi](/nemo-relay-cli/pi).
+
+Use `nemo-relay run -- <command>` when you want to launch an explicit command
+instead of the built-in shortcut:
+
+```bash
+nemo-relay run -- codex
+```
+
+When `--agent` or an agent shortcut selects the host, pass only the host's
+arguments after `--`:
+
+```bash
+nemo-relay run --agent claude -- -p "Review this change"
+```
+
+Add `--dry-run` before `--` to validate and inspect the resolved launch plan
+without running setup, starting the gateway, or launching the agent. During
+dry-run validation, Relay logs a warning when the selected executable is
+repeated after `--`:
+
+```bash
+nemo-relay run --agent claude --dry-run -- claude
+nemo-relay claude --dry-run -- claude
+```
+
+Live launches do not perform this diagnostic or rewrite forwarded arguments.
+The selected agent receives the arguments exactly as provided.
+
+Dry-run output includes forwarded arguments. Do not share it when those
+arguments contain prompts, credentials, or other sensitive values.
+
+For Claude Code and Codex, transparent mode leaves the caller's source settings,
+selected profile, and installed plugin state unchanged. A process marker makes
+any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
+persistent hooks exit without forwarding; Codex disables the known Relay plugin
+hook identities in its process-local CLI state. Only the injected wrapper hooks
+deliver events.
+
+If a launcher or wrapper hides the real agent name, set that wrapper as the
+configured command and pass `--agent`. The same pattern applies to Claude Code
+and Codex:
+
+```toml
+[agents.codex]
+command = "my-codex-wrapper"
+```
+
+```bash
+nemo-relay run --agent codex
+```
+
+Use `--dry-run --print` to inspect the generated hook config, gateway
+environment, gateway URL, and final command without launching the agent.
+
+## Persistent Host Integrations
+
+Use persistent integration installation to let a coding agent load Relay without
+a wrapper command:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+nemo-relay install pi
+nemo-relay install all
+```
+
+`nemo-relay install pi` is not a marketplace install: pi has no marketplace, so
+Relay writes the extension into pi's own auto-discovery directory instead. See
+[pi](/nemo-relay-cli/pi).
+
+Claude Code and Codex use marketplace plugins. Their MCP clients can share the native gateway on
+`127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway when it
+launches. Claude Code uses `alwaysLoad` to wait for the MCP connection.
+
+For Claude Code and Codex, installation writes a local marketplace, installs
+the generated `nemo-relay-plugin`, and configures host-specific hooks and
+provider routing. Both paths use the local `nemo-relay` binary on `PATH`.
+
+Use plugin doctor and uninstall for the installed host state:
+
+```bash
+nemo-relay doctor --plugin codex
+nemo-relay uninstall codex
+```
+
+Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+install directories, host-specific behavior, and the shared-sidecar lifecycle.
+
+## Shared Configuration
+
+Shared TOML config is optional. The gateway loads defaults, then the explicit
+file when supplied or the XDG user file otherwise, and finally the system file.
+System config has the highest file-level priority. CLI flags and environment
+variables override file config. Repository-local `.nemo-relay/config.toml`
+files are ignored unless selected explicitly.
+
+### Interactive Setup
+
+Run `nemo-relay config` to set up Relay interactively:
+
+1. Select the coding agents that Relay should observe.
+2. Review and save the user `config.toml`.
+3. Choose whether to continue to the plugin editor.
+
+The base `config.toml` stores the agent settings. Select **Yes** at the plugin
+prompt to configure optional Relay components and save them separately in
+`plugins.toml`. Setup writes the XDG user configuration. When the top-level
+command receives `--config path/to/config.toml`, the plugin editor instead uses
+the sibling `path/to/plugins.toml`, matching runtime selection.
+
+Plugin files use the same file-level precedence order:
+explicit-or-user, then the system file. An
+explicit `--plugin-config-path`, or the sibling selected by `--config`,
+replaces the ambient XDG user plugin file. Likewise, an explicit `--config`
+replaces the ambient XDG user base file. Neither explicit file suppresses
+system configuration.
+
+Select **No** to finish after saving `config.toml`. Canceling the prompt or
+leaving the plugin editor does not remove the saved base configuration. You can
+open the plugin editor again later with the resume command printed by Relay.
+For an explicit `--config path/to/config.toml` flow, the equivalent command is
+`nemo-relay --config path/to/config.toml plugins edit`. Otherwise,
+use `nemo-relay plugins edit` for user configuration.
+
+### Edit Gateway Configuration
+
+Use the config editor to change settings in `config.toml`. Run the following
+command to open it:
+
+```bash
+nemo-relay config edit
+```
+
+#### Choose a File
+
+By default, the editor opens your user `config.toml`. To open a different file,
+pass `--config path/to/config.toml` before `config edit`. Both `config edit` and
+`config edit --user` use that file.
+
+Use `--global` to edit the system file. The path is
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows. On Unix, the editor saves
+system files with mode `0644`, which lets other users read them.
+
+These options choose the file to edit. At runtime, Relay combines config files
+in the order described under [Shared Configuration](#shared-configuration).
+
+#### Change Settings
+
+Choose a menu for the settings you want to change:
+
+- **Gateway limits**: Set request size limits in `[gateway]`.
+- **Provider upstreams**: Set provider URLs, credentials, and response timeouts
+  in `[upstream]`. This menu also includes the ChatGPT backend URL used by Codex.
+  Set the response timeout to `0` to turn it off.
+- **Agent commands**: Choose which command starts Claude Code, Codex, or Pi.
+- **Operational logging**: Set log output in `[logging]`.
+- **Daemon logging**: Set log output in `[daemon.logging]`.
+
+Clear a setting to use values from other config sources or the defaults.
+
+#### Provider Credentials
+
+In **Provider upstreams**, set, replace, or clear a credential source for OpenAI
+or Anthropic. Choose a static API key, an authorization header, or an API key
+helper. When you set one source, the editor removes the provider's other sources
+from the selected file.
+
+Helper setup replaces all fields in that helper. Set the command, arguments,
+timeout, and authentication scheme. Enter arguments as a JSON array of strings.
+Leave the arguments blank if the helper needs none. The editor hides credentials,
+helper commands, and helper arguments during entry and in **Preview**.
+
+The editor rejects authorization headers and static API keys in global files.
+Store those values in a user config or environment variables. For authorization
+headers, you can use `NEMO_RELAY_OPENAI_AUTH_HEADER` or
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`.
+
+#### Log Output
+
+Use **Operational logging** for `[logging]` and **Daemon logging** for
+`[daemon.logging]`. Both menus let you set log levels, standard error (stderr)
+output, and log files. You can turn stderr output on or off.
+
+For log files, use `sinks = [{ path = "relay.log" }]`, `[[logging.sinks]]`, or
+`[[daemon.logging.sinks]]`. The editor keeps the format you use.
+
+#### Save Changes
+
+Select **Preview** to review your changes. The editor keeps unrelated TOML
+sections. It creates a missing file only after you select **Save**.
+
+Select **Save** to check and save the file. The editor checks provider URLs,
+credential sources, helper settings, and log settings. If a check fails, the
+editor leaves the file unchanged. It stays open so you can fix the settings.
+These checks do not run API key helpers.
+
+Select **Cancel** to leave the editor without saving.
+
+### Edit Plugin Configuration
+
+Use the plugin editor to change `plugins.toml`. These settings include
+observability exporters and other Relay components. Run the following command
+to open it:
+
+```bash
+nemo-relay plugins edit
+```
+
+By default, the editor opens your user `plugins.toml`. Pass
+`--plugin-config-path path/to/plugins.toml` to choose another file. If you pass
+`--config path/to/config.toml`, the editor uses `path/to/plugins.toml` unless
+you also set `--plugin-config-path`. The default editor and `--user` both open
+the selected file. Put path options before `plugins edit`.
+
+Use `--global` to edit `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. Other users can read this
+file. On Unix, the editor saves it with mode `0644`. Keep credentials out of
+global plugin files. The editor rejects values that the plugin schema marks
+as secret.
+
+### Provider Upstreams
+
+Set provider base URLs under `[upstream]` when you want Relay to forward
+compatible requests to a proxy, enterprise endpoint, or another provider host:
+
+```toml
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+anthropic_base_url = "https://api.anthropic.com"
+chatgpt_codex_base_url = "https://chatgpt.com/backend-api/codex"
+```
+
+Provider base URLs require HTTPS by default. HTTP is allowed for loopback hosts
+such as `localhost`, `127.0.0.1`, and `::1`. Relay validates TOML values,
+environment variables, and command-line overrides at startup. Base URLs must not
+include user information, query strings, or fragments.
+
+### Credential-Free HTTP Model Upstreams
+
+For a personal gateway or managed worker connected to an unauthenticated HTTP inference gateway,
+explicitly list the trusted hosts in `config.toml`:
+
+```toml
+[upstream]
+openai_base_url = "http://inference-gateway.internal:8080/custom/v1"
+insecure_http_model_hosts = ["inference-gateway.internal"]
+```
+
+<Warning>
+HTTP exposes prompts, tool results, and model responses without encryption or
+transport integrity. Prefer HTTPS. This exception supports unauthenticated model
+upstreams only: Relay removes credential headers and does not inject environment
+API keys or invoke credential helpers for these requests. Model content and
+request query strings are forwarded; do not place credentials in either.
+</Warning>
+
+Entries are bare DNS hostnames or IP addresses. Matching is exact, ignores DNS
+case and one trailing DNS dot, and does not trust subdomains or DNS-resolved
+addresses automatically. Schemes, ports, paths, user information, wildcards, and
+alternate numeric IPv4 spellings are invalid entries. A listed host may use custom
+ports and paths, but each request must still target the origin of a configured
+OpenAI or Anthropic upstream. A higher-priority configuration list replaces the
+lower list; an empty list revokes trust.
+
+For hardened deployments, set an explicit empty list in the system `config.toml`
+to prevent lower-priority files from enabling remote HTTP model hosts:
+
+```toml
+[upstream]
+insecure_http_model_hosts = []
+```
+
+System configuration has the highest file-level priority. Omitting this setting
+preserves the lower-priority list; specifying `[]` replaces it. The interactive
+editor uses the same schema-backed list controls as plugin configuration, and
+Reset or Clear saves an explicit empty list.
+
+Remote HTTP upstreams conflict with that provider's configured `api_key`,
+`auth_header`, or `api_key_helper`, including `NEMO_RELAY_*_AUTH_HEADER` environment
+overrides. Startup fails on a conflict. Raw `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` environment fallbacks are ignored on these requests. Changing
+an upstream URL continues to clear credentials associated with the previous URL.
+
+Only content and protocol headers are forwarded: `Accept`, `Accept-Encoding`,
+`Content-Type`, `Content-Length`, `Content-Encoding`, `Content-Language`,
+`Anthropic-Version`, `Anthropic-Beta`, and `OpenAI-Beta`. Cookies, authorization,
+API keys, and custom headers are removed, including headers added by middleware.
+The HTTP client does not use environment proxies, follow redirects, or retry
+automatically. Existing HTTPS and loopback behavior is unchanged.
+
+This opt-in supports HTTP requests and SSE streaming in personal gateways,
+managed workers, and daemon pass-through routing. Managed workers load user
+configuration followed by system configuration, so administrators can deny remote
+HTTP model hosts with an explicit empty system list. Credential fields in request
+trailers are filtered by the same header allowlist.
+Remote HTTP WebSockets, ChatGPT credential backends,
+caller-selected destinations, MCP endpoints, and observability exporters retain
+their existing transport policies. The host list has no environment-variable or
+CLI override; configure it explicitly in the file. You can also edit it through
+`nemo-relay config edit` under **Provider upstreams**.
+
+For the ChatGPT Codex upstream, `--chatgpt-codex-base-url` overrides
+`NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, which overrides the TOML value. The flag
+is available at the top level and on `run`; an explicit `run` flag overrides
+an inherited top-level flag.
+
+
+Provider waits have no deadline by default so long compaction can finish. Caller
+cancellation ends the request. Set `[upstream] response_timeout_secs` to a
+positive number of seconds to limit response-header waits. In the standalone
+gateway, this also limits each idle response-body read; successful reads restart
+the timer. Set the value to `0` to disable these limits. Connection establishment
+and short plugin callbacks retain separate deadlines.
+
+Relay normally chooses the upstream from the request path, regardless of which
+compatible client sends the request. The gateway routes map to settings as
+follows:
+
+| Gateway Endpoint | Upstream Setting |
+| --- | --- |
+| `/responses`, `/v1/responses` | `openai_base_url` |
+| `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
+| `/responses/compact`, `/v1/responses/compact` | `openai_base_url` |
+| `/realtime/calls`, `/v1/realtime/calls` | `openai_base_url`; with the default base, recognized ChatGPT credentials use the ChatGPT backend |
+| `/live`, `/v1/live`, `/live/sessions`, `/v1/live/sessions` | `openai_base_url` |
+| `/realtime`, `/v1/realtime` | `openai_base_url` |
+| `/live/CALL_ID`, `/v1/live/CALL_ID` | `openai_base_url` |
+| `/live/sessions/SESSION_ID/attach`, `/v1/live/sessions/SESSION_ID/attach` | `openai_base_url` |
+| `/images/edits`, `/v1/images/edits` | `openai_base_url` |
+| `/memories/trace_summarize`, `/v1/memories/trace_summarize` | `openai_base_url` |
+| `/alpha/search`, `/v1/alpha/search` | `openai_base_url` |
+| `/models`, `/v1/models` | `openai_base_url` |
+| `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
+
+The client must have Relay access to use Relay's credentials. For managed
+provider requests and model lists, Relay resolves credentials in this order:
+
+1. If a helper is configured, its token replaces any provider credential
+   from the client. Relay runs the helper for each outbound request attempt
+   when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
+   the cached token until the cache interval ends.
+2. Without a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
+   `api-key`, or `anthropic-api-key` header.
+3. If the client sends no credential, Relay uses the configured API key or
+   custom authorization header for that provider.
+4. If no credential is configured, Relay uses `OPENAI_API_KEY` or
+   `ANTHROPIC_API_KEY` with the provider's standard authentication scheme.
+
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
+
+### Generate API Keys Per Request
+
+An API key helper is a command that returns a credential for a provider request.
+The following example configures separate helpers for OpenAI and Anthropic:
+
+```toml
+[upstream]
+openai_base_url = "https://gateway.example.com/v1"
+anthropic_base_url = "https://gateway.example.com"
+
+[upstream.openai_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
+timeout_ms = 10000
+auth_scheme = "bearer"
+
+[upstream.anthropic_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "anthropic"]
+timeout_ms = 10000
+auth_scheme = "bearer"
+```
+
+Replace the example URLs, helper path, and arguments with values for your setup.
+The helper must accept the arguments you provide.
+
+Relay runs `command` with `args`. Use a shell such as `/bin/sh` if the command
+needs pipes or shell expansion. The helper must exit successfully and write one
+token to stdout. Do not include a `Bearer` prefix or whitespace within the token.
+Relay removes whitespace before and after the token. It rejects empty output
+and limits the output to 16 KiB. Relay discards helper stderr to keep credentials
+out of logs.
+
+Set `timeout_ms` to a value greater than `0`. The value is in milliseconds.
+The default is `10000`, or 10 seconds. If the helper fails, Relay stops the
+request before sending it upstream. Relay does not use another credential.
+
+By default, Relay runs a separate helper process for each outbound request
+attempt. This also applies to requests sent at the same time. Omit
+`cache_ttl_ms` or set it to `0` to keep this behavior.
+
+To reuse tokens, set `cache_ttl_ms` to a value greater than `0`. The value is in
+milliseconds. The following example reuses tokens for up to five minutes:
+
+```toml
+[upstream.openai_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
+cache_ttl_ms = 300000
+```
+
+Relay starts this interval after it checks the helper's output. It reuses the
+token until the interval ends. Choose a value shorter than the token's remaining
+lifetime. Relay does not read an expiry time from the token or helper output.
+
+After the interval ends, the next request runs the helper again to refresh the
+token. Requests that arrive during a refresh wait for the same result. Relay
+does not refresh tokens on a timer. If a refresh fails, Relay stops the requests
+waiting for it. It does not use the old token or another credential. A later
+request can try the helper again.
+
+Relay keeps cached tokens in memory. Requests that use the same provider and
+loaded configuration share the cache. Separate processes do not share cached
+tokens. Relay does not reuse a token after the loaded helper settings or
+upstream base URL change. Configuration file edits do not change settings in a
+running Relay process. Restart that process to load the new settings and clear
+its cache. Relay does not save cached tokens to disk or include them in
+diagnostics.
+
+For a streaming request, Relay gets the token when it sends the request.
+Response chunks do not run the helper again. The stream can continue after the
+cache interval ends. WebSocket handshakes use the same rules.
+
+The HTTP client does not follow redirects or retry requests that use a helper.
+A middleware retry checks the cache before Relay sends the request again. It
+reuses the cached token if the cache interval has not ended. Otherwise, it runs
+the helper again. Requests without a helper keep their existing redirect and
+retry behavior.
+
+OpenAI helpers use `Authorization: Bearer <token>`. Anthropic helpers use
+`auth_scheme = "api_key"` by default. This sends `x-api-key: <token>`.
+Set `auth_scheme = "bearer"` for an Anthropic-compatible endpoint that requires
+bearer authentication, as shown above.
+
+Choose one credential source for each provider. You cannot combine a helper
+with a static API key or a custom authorization header. This rule also applies
+to settings inherited from other configuration layers. OpenAI and Anthropic can
+use different credential sources.
+
+For a static API key, set `openai_api_key` or `anthropic_api_key` under
+`[upstream]`. The key must be one token with no whitespace inside it.
+Relay rejects invalid keys when it loads configuration. Keep static keys in
+private user configuration. Without a helper, an environment authorization
+header replaces a static key from a configuration file.
+
+A higher-priority configuration layer that changes a provider's base URL clears
+its inherited API key and helper. Add the replacement credential in that same
+layer. Restating the same URL, including the default URL, keeps inherited
+credentials.
+
+A helper table in a higher-priority file replaces the entire inherited helper.
+Include `command` in the new table. Omitted settings use their defaults.
+For example, omitting `cache_ttl_ms` disables caching for the replacement helper.
+
+Relay uses helpers only for the configured upstream. It does not send helper
+tokens to endpoints named by a client or an interceptor. ChatGPT voice calls
+keep their separate ChatGPT backend credentials.
+
+Run `nemo-relay doctor --offline` to inspect the configured credential sources.
+Doctor reports each helper's timeout and authentication method. It warns about
+environment credentials that a helper ignores. It also reports configuration
+errors, such as combining a helper with a static API key.
+
+Doctor does not run helpers or check their tokens, even without `--offline`.
+The credential checks do not display API keys, helper commands, or helper
+arguments. Add `--json` to read these checks under
+`configuration.upstream_auth.checks`.
+
+Unmanaged routes forward only the provider credentials that the client sends.
+These routes include compaction, images, realtime, live sessions, search,
+and memory summarization. Relay never adds its configured
+provider credentials or API keys from environment variables to these requests.
+This rule also covers WebSocket upgrades, authenticated clients, and daemon
+requests.
+
+Relay still forwards requests that have no provider credentials. The upstream
+provider decides whether to accept them. Unmanaged routes do not run managed
+guardrails or use the managed cache. They also do not emit LLM lifecycle events.
+
+Set `openai_auth_header` or `anthropic_auth_header` under `[upstream]` only when
+an enterprise gateway, proxy, or compatible endpoint requires a complete
+`Authorization` value such as `Bearer ...` or `Basic ...`. Prefer the
+corresponding environment variables so you don't store credentials in
+`config.toml`:
+
+```bash
+export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
+export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
+```
+
+Configure a custom base URL and its authorization header in the same layer. For
+environment configuration, set `NEMO_RELAY_OPENAI_BASE_URL` with
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, or set the corresponding Anthropic variables
+together. A CLI `--openai-base-url` or `--anthropic-base-url` override can
+inherit an environment header only when the environment selected the same URL.
+If the CLI flag changes the URL, Relay clears the environment header; use the
+paired environment variables instead when the new endpoint requires custom
+authentication.
+
+The exact configured base URL is the upstream identity during file,
+environment, and command-line layering. A higher layer that keeps the same URL
+can inherit or replace the lower authorization header. A higher layer that
+changes the URL clears the lower header unless that same layer supplies a
+replacement, preventing credentials for one endpoint from being sent to
+another.
+
+Foreground gateways and MCP-managed gateways require Relay authentication
+before they use provider credentials from their configuration or environment.
+Clients can authenticate with a Relay client token, a provider capability URL,
+or a credential from a managed invocation. A missing or invalid client token
+does not grant access to the gateway's provider credentials.
+This requirement also applies when Relay replaces a Codex ChatGPT credential.
+
+Without Relay authentication, requests use only provider credentials sent by
+the client. If the client sends no credentials, the upstream provider receives
+the request without credentials.
+
+For direct gateway use without Relay authentication, set the provider API key
+in the client. To use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth
+header from the gateway, the client must authenticate to Relay.
+Use `nemo-relay run` to let Relay set up client authentication.
+
+Relay handles Codex ChatGPT credentials differently from other provider credentials.
+On ordinary OpenAI paths, Relay treats either of these as a ChatGPT credential:
+
+- A JSON Web Token (JWT) with an `iss` claim set to `https://auth.openai.com`.
+- A `Bearer at-...` access token with a `chatgpt-account-id` header that is not empty.
+
+On these paths, a token's prefix alone does not tell Relay to use the ChatGPT
+backend or replace the token.
+
+Explicit Codex paths such as `/backend-api/codex/responses` also support token
+prefixes for routing.
+They accept `Bearer at-...` without an account header and `Bearer eyJ...` without
+an issuer check. With the default OpenAI base and no replacement key, these
+prefixes select the ChatGPT backend. A custom `openai_base_url` still applies.
+Voice calls use the exception described below.
+
+On managed OpenAI routes, Relay can replace a ChatGPT credential with a provider
+credential. The replacement can come from `openai_auth_header`,
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY`. The value must not be
+empty. Relay then sends the request to `openai_base_url`.
+
+Without a replacement, managed routes keep the ChatGPT credential. Relay uses
+the ChatGPT backend only with the default `openai_base_url`,
+`https://api.openai.com/v1`.
+If you set a different `openai_base_url`, Relay uses that URL. ChatGPT voice calls
+use a separate rule, described below.
+
+The default ChatGPT backend is `https://chatgpt.com/backend-api/codex`. To use a
+different backend, set `chatgpt_codex_base_url` under `[upstream]`. Relay sends the
+caller's ChatGPT credential to this URL. Use a backend you trust with that
+credential.
+
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
+
+Model lists use the same auth rules as the provider's managed routes. These
+requests do not create LLM events. A configured helper replaces the caller's
+provider credential. Without a helper, Relay keeps provider API keys sent by
+the caller.
+
+OpenAI model requests normally use `openai_base_url`. With the default URL and
+no replacement credential, requests with recognized ChatGPT OAuth use the ChatGPT
+Codex backend instead. Anthropic model requests use `anthropic_base_url`.
+For the credential selection order and access requirement, refer to [Provider Upstreams](#provider-upstreams).
+
+If Relay has no replacement, OpenAI model requests keep the caller's credential.
+This also applies to a custom `openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
+
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
+They keep the caller's ChatGPT credential and use the ChatGPT backend
+(`chatgpt_codex_base_url` when set) even when a replacement credential is
+configured. With the default `openai_base_url` and a recognized ChatGPT
+credential, `POST /realtime/calls` and `POST /v1/realtime/calls` also use the
+ChatGPT backend. These voice calls never receive Relay's provider credentials,
+even when configured.
+
+Sideband attachment routes use `openai_base_url`. Relay never adds
+its own provider credentials to these requests. It keeps the caller's provider
+credential by default. With a custom `openai_base_url`, Relay removes recognized
+ChatGPT tokens and `chatgpt-account-id`. Refer to
+[Known Issues in 0.11.0](/about-nemo-relay/release-notes#known-issues-in-0110)
+before routing a ChatGPT voice sideband through a custom OpenAI upstream.
+
+Relay does not follow HTTP redirects from upstream servers. This stops Relay
+from sending provider credentials and request bodies to another destination.
+Relay keeps the upstream redirect status but removes its `Location` header.
+This stops callers from following the redirect and resending a prompt.
+Successful responses keep their `Location` headers. Managed requests treat the
+redirect as an upstream failure. Configure the final provider URL directly.
+
+### Operational Logging
+
+The CLI initializes operational logging before operational commands run.
+`nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
+logging settings do not prevent configuration repair.
+
+File sinks from layered `config.toml` files aggregate by their resolved
+destination `path`, with system entries first. A higher layer recursively
+overlays a sink with the same path; path aliases such as `relay.log` and
+`./relay.log` resolve to one sink, while distinct destinations remain active
+together.
+
+Configure temporary CLI settings with `--log-level` and
+`--log-stderr-format`, or select an absolute TOML file with
+`--log-config-path`.
+
+For defaults, source precedence, environment variables, TOML file sinks, and
+Rust APIs, refer to
+[Operational Logging](/reference/operational-logging).
+
+### Runtime Diagnostics
+
+Enable in-memory diagnostics with `[diagnostics]` in your configuration file.
+Use `--diagnostics=true` to enable collection at startup. Add
+`--diagnostics-http=true` to allow inspection with the gateway's private credentials.
+A running gateway keeps its settings until it restarts.
+
+Use `nemo-relay diagnostics --capabilities` to check the running owner's settings.
+This command does not start or recover a gateway. To inspect an existing local
+daemon, use `--daemon-url URL`. Add `--worker UUID` to read one authorized cached
+worker page. Daemon collection requires
+`[daemon.diagnostics].collect_workers = true`. Each worker must also enable reads.
+
+For configuration, read access, storage limits, and final command views, refer to
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli#cli-startup-and-inspection).
+
+## Add Model Pricing for Cost Estimates
+
+Model pricing is configured with the same `plugins.toml` discovery path as
+Observability. The configured sources apply to transparent agent runs,
+standalone gateway runs, and evals or custom agents that initialize the same
+gateway plugin config. Framework integrations, harnesses, and custom hosts do
+not need their own model pricing logic when they emit managed LLM calls or
+manual lifecycle events with normalized response annotations: Relay attaches
+cost to the annotated response when the provider reports cost or when a
+configured model pricing source matches the response model and token usage.
+
+Create a Relay model pricing catalog JSON file:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "aliases": ["openai/openai/gpt-4o-mini"],
+      "currency": "USD",
+      "unit": "per_token",
+      "rates": {
+        "input_per_million": 0.15,
+        "output_per_million": 0.6,
+        "cache_read_per_million": 0.075
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      },
+      "pricing_as_of": "2026-06-06",
+      "pricing_source": "internal-pricing-snapshot"
+    }
+  ]
+}
+```
+
+Validate and add the file-backed source:
+
+```bash
+nemo-relay model-pricing validate <path/to/pricing.json>
+nemo-relay model-pricing init --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
+```
+
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running either command. Use `--global` for `/etc/nemo-relay/plugins.toml` on
+Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. `model-pricing add-source`
+prepends the source by default, so the new file becomes the highest-priority
+source for that scope. Use `--append` to add it as a lower-priority fallback.
+
+Resolve a model before running an agent:
+
+```bash
+nemo-relay model-pricing resolve gpt-4o-mini \
+  --provider openai \
+  --prompt-tokens 1000 \
+  --completion-tokens 500
+```
+
+`model-pricing resolve` prints the source that won, the matched provider/model,
+and an estimated total when token counts are supplied. Use it to debug
+overlapping system, explicit, and user model pricing sources.
+
+Relay now treats missing rates for nonzero cache usage as unknown totals, not
+free usage. If a response reports nonzero cache-read or cache-write tokens and
+the matching catalog omits `cache_read_per_million` or
+`cache_write_per_million`, Relay omits the aggregate total instead of
+undercounting it. Set either rate to `0.0` when that category is intentionally
+free. Catalogs that define only input and output rates therefore emit no total
+for responses that report cached tokens.
+
+Relay does not ship a canonical price catalog. Unknown models and missing token
+fields leave cost absent instead of defaulting to zero. For the catalog schema,
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+
+## Check Configuration and Exporters
+
+Run `nemo-relay doctor` to check your settings and exporter destinations.
+The following command also checks the Codex integration:
+
+```bash
+nemo-relay doctor codex
+```
+
+Doctor fails when an enabled model pricing source is unreadable or contains an
+invalid catalog, and it reports passing sources as `Model pricing source`.
+
+Doctor lists each OpenTelemetry file sink, its trace type, its destination, and
+whether it's enabled. File checks also run with `--offline`. For folder checks,
+doctor creates and removes a temporary probe file in the folder it checks.
+It does not create or change telemetry files. If an output folder is
+missing, it checks the nearest parent folder that exists. A missing folder
+triggers a warning when that parent is writable. An invalid path or a lack of
+write access causes the check to fail. Output-file symlinks also fail because
+the exporter does not allow them. Doctor also rejects paths that use `..` to
+refer to a parent folder.
+
+The `Plugin component` warning identifies each component with `enabled = false`.
+Doctor also warns when an OpenTelemetry section has trace endpoints or file
+sinks but is disabled. This includes sections that omit `enabled = true`.
+The warning identifies the setting to change. Empty disabled sections do not
+trigger this warning. Doctor skips all probes for disabled destinations.
+
+The `PII redaction` entry lists the enabled policies or profiles and the data
+they cover. It also shows whether the component is missing or disabled. It hides
+policy values and payloads. Doctor does not run redaction or test whether it
+removed sensitive data. Invalid PII settings still fail validation.
+
+For enabled trace endpoints, doctor checks headers and reads the environment
+variables named in `header_env`. Missing, blank, or invalid values fail the
+check. This check also runs with `--offline` and never prints credential values.
+Live HTTP checks send a `GET` request without configured headers or trace data.
+A passing check, including HTTP 405, only shows that the endpoint answered.
+It does not prove that the collector accepts credentials or trace data.
+Doctor does not check `header_file` values. The exporter reads those files when
+it sends data.
+
+For dynamic plugins, doctor also includes the full redacted core plugin-host
+preflight in JSON output under `configuration.plugin_host_validation`. This is
+the same non-activating validation exposed by
+`nemo_relay::plugin::dynamic::validate` in Rust and `nemo_relay.plugin.validate`
+in Python: it reports per-plugin policy, integrity, authenticity, and
+configuration-schema failures. A dynamic validation failure makes doctor fail;
+live exporter and backend health checks remain separate doctor probes.
+
+Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
+port is discovered by the wrapper and exposed to hooks through
+`NEMO_RELAY_GATEWAY_URL`.
+
+Common environment variables for direct gateway server use are:
+
+- `NEMO_RELAY_GATEWAY_BIND`
+- `NEMO_RELAY_OPENAI_AUTH_HEADER`
+- `NEMO_RELAY_OPENAI_BASE_URL`
+- `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`
+- `NEMO_RELAY_ANTHROPIC_BASE_URL`
+- `NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES`
+- `NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES`
+
+The default hook payload limit is `20MiB`. The default provider passthrough body
+limit is `100MiB`. Set both values in bytes.
+
+Plugin configuration controls process-level Observability exporters. Per-session
+configuration controls structured metadata on the top-level agent begin event
+and the plugin configuration metadata associated with the session.
+
+For example, attach a user identity to a transparent run:
+
+```bash
+nemo-relay run --session-metadata '{"user_id":"alice"}' -- codex
+```
+
+The CLI emits one `session.start` mark for the lifecycle and copies the merged
+metadata onto each top-level trace scope. It also adds a non-overridable
+`session_instance_id` derived from the session's existing root scope UUID.
+Keep `user_id` a top-level string when OTLP exporters should expose it as
+`user.id`.
+
+`hook-forward` can also pass per-session configuration through headers:
+
+- `x-nemo-relay-config-profile`
+- `x-nemo-relay-session-metadata`
+- `x-nemo-relay-plugin-config`
+- `x-nemo-relay-gateway-mode`
+
+The accepted gateway mode values are `hook-only`, `passthrough`, and
+`required`. The gateway records this value as session metadata so downstream
+exporters and review tooling can distinguish hook-only traces from sessions
+where provider traffic was expected to pass through the gateway.
+
+## Runtime Mapping
+
+The gateway normalizes vendor hook payloads into private internal events before
+calling NeMo Relay APIs.
+
+- Agent start records session metadata on a dedicated `ScopeStackHandle`.
+  Harnesses with a reliable session boundary also open a top-level
+  `ScopeType::Agent` scope. Claude Code uses bounded turn scopes. Codex opens a
+  bounded `codex-task` agent scope for active work, with separate parent and child
+  turns. Its `session.start` mark waits for that exported task ancestor; other
+  harnesses emit the mark at agent start.
+- Subagent start opens a child `ScopeType::Agent` scope. Subagent stop closes
+  that scope when it is still active.
+- Tool pre-use evaluates conditional-execution guardrails before starting a
+  NeMo Relay tool span. A rejection blocks the tool. Tool post-use, denial, or
+  failure closes the span.
+- Generated `UserPromptSubmit` and `Stop` hooks are retained as private
+  correlation hints. The adapters
+  do the same when a custom or older integration delivers a response or
+  agent-thought hook. These hints are not emitted as NeMo Relay events.
+- Compaction, notification, and unknown hook events become mark events under
+  the active session scope.
+- Harnesses that report the *start* of a turn as well as its end open the turn
+  scope at that signal instead of lazily. pi does; Claude Code and Codex report
+  turn completion through `Stop`, so their turns stay lazily opened by the
+  first event of the turn. Claude Code also reports failed turns through
+  `StopFailure`, which closes the turn with an error while retaining the session.
+  For a harness with an explicit turn start, a mark that arrives between turns
+  is recorded on the session scope rather than opening a turn to hold it.
+- Gateway requests emit NeMo Relay LLM start and end events under the active
+  session scope. Before each LLM start, the gateway uses explicit subagent
+  headers, pending hints, shared conversation/generation/request identifiers,
+  and the previous correlated owner to choose the parent scope.
+- LLM responses that contain future tool-use suggestions are retained as
+  private tool-call hints. The next matching tool hook can then inherit the
+  subagent scope that owned the LLM response, even when the hook payload does
+  not include a subagent id.
+
+Gateway requests can provide explicit correlation identifiers with these
+headers:
+
+- `x-nemo-relay-session-id`
+- `x-nemo-relay-subagent-id`
+- `x-nemo-relay-conversation-id`
+- `x-nemo-relay-generation-id`
+- `x-nemo-relay-request-id`
+
+When those headers are absent, the gateway also looks for
+`conversation_id`/`conversationId`/`conversation.id`,
+`generation_id`/`generationId`/`generation.id`, and
+`request_id`/`requestId`/`request.id` fields in the provider request body.
+Correlation hints expire after five minutes. If the gateway cannot select one
+unambiguous hint, it falls back to the previous LLM owner, then to the only
+active subagent, then to the top-level agent scope.
+
+Every gateway LLM event includes `llm_correlation_status` metadata. Managed
+requests can use `explicit`, `single_hint`, `matched_hint`,
+`request_affinity`, `sticky_last_owner`, `recent_tool_owner`,
+`subagent_start`, `active_subagent`, `agent_fallback`, or
+`ambiguous_fallback`. Claude Code startup probes use `pre_turn_probe`. Matched
+hints can also add `llm_correlation_source`, `llm_correlation_subagent_id`,
+`llm_correlation_conversation_id`, `llm_correlation_generation_id`,
+`llm_correlation_request_id`, and `llm_correlation_agent_type`.
+
+Generated hook bundles subscribe to the events needed for that mapping. pi has
+no generated bundle — its extension posts these names directly:
+
+| Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
+| --- | --- | --- |
+| Claude Code | `UserPromptSubmit`, `Stop`, `StopFailure` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact`, `PostCompact` |
+| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact` |
+| pi | none — pi's LLM spans come from real gateway traffic, not from hooks | `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `session_before_compact`, `session_compact`, `model_redirect`, `tool_call`, `tool_arguments_transformed`, `tool_execution_end`, `user_bash`, `user_bash_end` |
+
+Three of pi's names are not pi hooks. The extension posts `model_redirect` after
+deciding whether to point the active model's provider at the gateway, from
+`session_start` and from every `model_select`; `tool_arguments_transformed` after
+applying a request intercept's rewrite; and `user_bash_end` to close the
+inline-shell span, because pi reports no completion for it. pi's own
+`tool_execution_start` is deliberately never forwarded — it fires before argument
+validation and for calls that never execute, so the extension uses it only to
+remember a tool name for the matching end.
+
+## Hook Forwarding
+
+Transparent Claude Code and Codex hooks invoke
+`nemo-relay hook-forward <agent>` with the canonical payload on standard input.
+The wrapper-owned hook command embeds its ephemeral gateway URL and is marked
+as transparent so it cannot recover the fixed gateway.
+
+Persistent Claude Code and Codex hooks also use
+`nemo-relay hook-forward <agent>`. Each generated command identifies the fixed
+gateway and its private install-generation fence, waits for the MCP-owned Relay
+gateway, verifies it, and forwards the unchanged payload once.
+
+`hook-forward` reads the canonical hook payload from standard input, sends it
+to the matching endpoint, and prints the endpoint response. Generated
+`PreToolUse` hooks use `--fail-closed`; generated observability hooks use
+`--fail-open`. This blocks tools when
+Relay cannot evaluate them without making observability-only hooks a runtime
+dependency.
+Rerun `nemo-relay install <agent> --force` after upgrading to replace legacy
+generated hooks.
+
+Hook forwarding uses a 30-second request timeout in gateway and daemon modes,
+including delivery to daemon workers. Generated Claude Code and Codex hook
+configs use the same 30-second limit. This allows LLM judge guardrails to take
+longer than two seconds; configure their evaluation timeouts to leave room for
+hook transport within that limit. Delivery timeouts follow the hook's failure
+policy, and timed-out requests are not retried.
+
+Without a policy flag, gateway and daemon hooks fail closed for events that
+run tools, including `PreToolUse`. Hooks also fail closed if Relay cannot read
+the payload,
+parse its JSON, or find an event name. Payloads that exceed the size limit
+also fail closed. Other named events fail open.
+
+Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed. An explicit
+`--fail-open` or `--fail-closed` flag overrides the environment and event defaults.
+
+For local hook requests, Relay checks the server's identity before sending
+credentials or payloads. It uses an encrypted TLS connection and a saved
+certificate for your user account. Gateway health checks also verify the
+server's address and running instance. Restart Relay gateways and daemons
+after upgrading to use this transport.
+
+Fail-closed delivery failures return exit code `2`, including connection errors,
+timeouts, and HTTP errors such as a daemon's `503` response when a required
+worker is unavailable. This applies to gateway hooks and managed daemon hooks,
+including hooks routed through a daemon worker. Fail-open delivery failures
+return exit code `0`; structured guardrail rejections return exit code `2` under
+either policy.
+
+These flags control delivery and metadata:
+
+- `--gateway-url <url>` selects the Relay gateway that receives the payload.
+- `--forward-only` allows source plugins and custom automation to use an
+  existing compatible gateway without an installer-owned generation fence. It
+  verifies the gateway but never launches or recovers Relay. Generated
+  installed hooks use a private generation fence instead.
+- `--session-metadata` sets `x-nemo-relay-session-metadata`.
+- `--profile` sets `x-nemo-relay-config-profile`.
+- `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
+- `--fail-open` allows the agent to continue after a delivery failure, even
+  when `NEMO_RELAY_FAIL_CLOSED=1` is set. Structured guardrail rejections still
+  return a failure.
+- `--fail-closed` returns a failure when delivery fails or Relay rejects the
+  hook.
+
+### Continue the Launcher Trace
+
+A host process can launch Claude Code or Codex with the standard
+OpenTelemetry `TRACEPARENT` and optional `TRACESTATE` environment variables.
+The agent runs its hook commands with that environment. `hook-forward` and
+`nemo-relay daemon hook` send the values as W3C `traceparent` and `tracestate`
+request headers.
+
+The hook that creates a session sets the session's remote parent. Top-level
+session scopes, such as the Codex `codex-task` scope or a Claude Code turn,
+export as children of the launcher's span. Their child spans stay in the
+launcher's trace. Later hooks for an open session do not change its parent.
+When the session ends, the next hook starts a new session with the context
+it carries.
+
+Relay validates the pair as described in
+[Cross-Process Propagation](/about-nemo-relay/concepts/scopes#cross-process-propagation).
+It ignores an invalid `traceparent` and keeps the session in a new trace
+without failing the hook. Relay ignores trace headers on provider requests for
+this purpose, because they describe a single request, not the launcher.
+
+## Agent Guides
+
+Use the per-agent guide for end-to-end setup, smoke tests, and GUI or
+application-mode caveats.
+
+- [Claude Code](/nemo-relay-cli/claude-code)
+- [Codex](/nemo-relay-cli/codex)
+- [pi](/nemo-relay-cli/pi)
+- [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
+
+Each guide covers transparent run setup, gateway routing, hook smoke tests,
+Agent Trajectory Interchange Format (ATIF) export verification at the host's
+supported snapshot boundary, and troubleshooting missing LLM lifecycle data.

@@ -1,0 +1,18 @@
+---
+title: "Function nemo_relay_diagnostics_reader"
+sidebar-title: "nemo_relay_diagnostics_reader"
+description: "Obtain an embedded reader without starting or enabling diagnostics. Errors set a stable machine-readable reason in nemo_relay_last_error."
+position: 57
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_diagnostics_reader(\n    out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-ffidiagnosticsreader\">FfiDiagnosticsReader</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Obtain an embedded reader without starting or enabling diagnostics. Errors set a stable machine-readable reason in nemo_relay_last_error.
+
+## Safety
+
+`out` must be writable pointer storage. Success transfers one reader allocation.
