@@ -541,7 +541,7 @@ void (async () => {
 ```rust
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-use nemo_relay::observability::plugin_component::{
+use nemo_relay_observability::plugin::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
@@ -632,10 +632,10 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay_observability::atif::{AtifAgentInfo};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let exporter = AtifExporter::new(
+    let exporter = nemo_relay::api::exporter::atif(
         "session-1".to_string(),
         AtifAgentInfo {
             name: "agent".to_string(),

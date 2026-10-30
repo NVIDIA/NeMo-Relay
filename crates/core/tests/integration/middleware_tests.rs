@@ -80,10 +80,10 @@ use nemo_relay::codec::optimization::{
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::json::Json;
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use nemo_relay::plugin::{PluginRegistrationContext, rollback_registrations};
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay_observability::otel::OpenTelemetrySubscriber;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
 
@@ -1495,7 +1495,8 @@ async fn managed_tool_call_id_projects_to_atif_and_otel() {
             tool_definitions: None,
             extra: None,
         },
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber("managed_tool_exporter_atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
@@ -1503,7 +1504,8 @@ async fn managed_tool_call_id_projects_to_atif_and_otel() {
         .with_simple_exporter(otel_exporter.clone())
         .build();
     let otel =
-        OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "managed-tool-exporter-otel");
+        OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "managed-tool-exporter-otel")
+            .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber("managed_tool_exporter_otel", otel.subscriber()).unwrap();
 
     let tool_call_id = "call-managed-exporter-42";
@@ -1620,7 +1622,8 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
             tool_definitions: None,
             extra: None,
         },
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber("managed_tool_projection_atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
@@ -1630,7 +1633,8 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     let otel = OpenTelemetrySubscriber::from_tracer_provider(
         otel_provider,
         "managed-tool-projection-otel",
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber("managed_tool_projection_otel", otel.subscriber()).unwrap();
 
     let openinference_exporter = InMemorySpanExporterBuilder::new().build();
@@ -1641,7 +1645,8 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         openinference_provider,
         "managed-tool-projection-openinference",
         OpenTelemetryType::OpenInference,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber(
         "managed_tool_projection_openinference",
         openinference.subscriber(),

@@ -18,13 +18,13 @@ default = [
     "object-store",
 ]
 atof-streaming = [
-    "dep:tokio-tungstenite",
+    "nemo-relay-observability/atof-streaming",
     "tokio/io-util",
     "tokio/net",
     "tokio/rt-multi-thread",
     "tokio/time",
 ]
-schema = ["nemo-relay-plugin/schema", "dep:schemars", "nemo-relay-types/schema", "nemo-relay-model-pricing/schema"]
+schema = ["dep:schemars", "nemo-relay-types/schema", "nemo-relay-plugin/schema", "nemo-relay-model-pricing/schema", "nemo-relay-observability/schema"]
 # Internal CLI gateway support; no compatibility guarantee.
 __internal-gateway = []
 # Private test hook for suppressing implicit user/system plugin discovery.
@@ -32,7 +32,7 @@ __skip-implicit-config = []
 # Private compatibility-free test harness for migrating legacy lifecycle tests.
 __test-plugin-host = []
 object-store = [
-    "dep:object_store",
+    "nemo-relay-observability/object-store",
     "tokio/net",
     "tokio/time",
 ]
@@ -52,8 +52,9 @@ worker-grpc = [
 
 [dependencies]
 # First-party crates.
-nemo-relay-model-pricing.workspace = true
 nemo-relay-resource-metrics.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-model-pricing.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }
@@ -73,18 +74,12 @@ hyper-util = { workspace = true, features = ["tokio"], optional = true }
 jsonschema.workspace = true
 libloading.workspace = true
 log = { workspace = true, features = ["kv", "kv_serde"] }
-object_store = { workspace = true, features = ["aws"], optional = true }
 opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
-opentelemetry-http.workspace = true
-opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
-opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
-opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
-opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
 percent-encoding.workspace = true
 prost.workspace = true
 reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
 ring.workspace = true
-rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 schemars = { workspace = true, optional = true }
 semver.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
@@ -97,13 +92,11 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { workspace = true, features = ["sync"] }
-tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"], optional = true }
 toml.workspace = true
 tonic.workspace = true
 tower = { workspace = true, features = ["util"], optional = true }
 tracing = { workspace = true, features = ["std", "log"] }
 typed-builder.workspace = true
-unicode-general-category.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -113,8 +106,14 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
-sysinfo = { workspace = true, features = ["system", "network"] }
+opentelemetry-http.workspace = true
+opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
+nemo-relay-observability = { workspace = true, features = ["__test-support"] }
+sysinfo = { workspace = true, features = ["system", "network"] }
 futures.workspace = true
 object_store = { workspace = true, features = ["aws"] }
 opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }

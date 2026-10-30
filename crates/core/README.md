@@ -178,16 +178,16 @@ marks, then deregister, force-flush, and shut them down during graceful
 teardown. The metric subscriber has the same lifecycle:
 
 ```rust
-use nemo_relay::observability::{
-    otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber},
-    otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
+use nemo_relay_observability::{
+    otel_logs::OpenTelemetryLogConfig,
+    otel_metrics::OpenTelemetryMetricConfig,
 };
 
 // Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
-let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+let logs = nemo_relay::api::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
     "http://localhost:4318",
 ))?;
-let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+let metrics = nemo_relay::api::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
     "http://localhost:4318",
 ))?;
 logs.register("otlp-logs")?;

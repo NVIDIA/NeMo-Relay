@@ -57,7 +57,6 @@ use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
 use crate::codec::response::{AnnotatedLlmResponse, FinishReason};
-
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
 use crate::json::Json;

@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::plugin_component::{
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::plugin::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
-use nemo_relay::plugin::PluginConfig;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;

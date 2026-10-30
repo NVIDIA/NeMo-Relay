@@ -481,6 +481,7 @@ local_dependencies = (
     "nemo-relay-types",
     "nemo-relay-model-pricing",
     "nemo-relay-resource-metrics",
+    "nemo-relay-observability",
     "nemo-relay-worker-proto",
     "nemo-relay-worker",
     "nemo-relay",
@@ -847,6 +848,7 @@ published_cargo_packages() {
         nemo-relay-plugin \
         nemo-relay-model-pricing \
         nemo-relay-resource-metrics \
+        nemo-relay-observability \
         nemo-relay-worker-proto \
         nemo-relay-worker \
         nemo-relay \
@@ -1891,8 +1893,15 @@ package-rust:
             cargo_package_args+=(--allow-dirty)
         fi
         case "$package" in
-            nemo-relay)
+            nemo-relay-observability)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                ;;
+            nemo-relay)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
@@ -1900,6 +1909,8 @@ package-rust:
             nemo-relay-adaptive)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
@@ -1918,6 +1929,8 @@ package-rust:
             nemo-relay-pii-redaction)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
@@ -1925,6 +1938,8 @@ package-rust:
             nemo-relay-ffi|nemo-relay-cli)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')

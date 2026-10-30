@@ -709,11 +709,11 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     Json::Object(metadata)
 }
 
-fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
+fn parse_otel_type(value: &str) -> napi::Result<nemo_relay_observability::OpenTelemetryType> {
     match value {
-        "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
-        "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
-        "openinference" => Ok(nemo_relay::observability::OpenTelemetryType::OpenInference),
+        "full" => Ok(nemo_relay_observability::OpenTelemetryType::Full),
+        "gen_ai" => Ok(nemo_relay_observability::OpenTelemetryType::GenAi),
+        "openinference" => Ok(nemo_relay_observability::OpenTelemetryType::OpenInference),
         other => Err(napi::Error::from_reason(format!(
             "type must be 'full', 'gen_ai', or 'openinference', got {other:?}",
         ))),
@@ -722,10 +722,10 @@ fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenT
 
 fn parse_otel_transport(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpTransport> {
+) -> napi::Result<nemo_relay_observability::otel::OtlpTransport> {
     match value.as_deref().unwrap_or("http_binary") {
-        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
-        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        "http_binary" => Ok(nemo_relay_observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay_observability::otel::OtlpTransport::Grpc),
         other => Err(napi::Error::from_reason(format!(
             "transport must be 'http_binary' or 'grpc', got {other:?}",
         ))),
@@ -734,20 +734,20 @@ fn parse_otel_transport(
 
 fn parse_mark_projection(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::MarkProjection> {
+) -> napi::Result<nemo_relay_observability::MarkProjection> {
     serde_json::from_value(Json::String(value.unwrap_or_else(|| "inherit".to_string())))
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 fn parse_attribute_mappings(
     value: Option<Json>,
-) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+) -> napi::Result<Vec<nemo_relay_observability::OtlpAttributeMapping>> {
     let mappings = match value {
         Some(value) => serde_json::from_value(value)
             .map_err(|error| napi::Error::from_reason(format!("attributeMappings: {error}")))?,
         None => Vec::new(),
     };
-    nemo_relay::observability::validate_attribute_mappings(&mappings)
+    nemo_relay_observability::validate_attribute_mappings(&mappings)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     Ok(mappings)
 }
@@ -757,8 +757,8 @@ fn parse_otel_file_sink(
     filename: Option<&str>,
     format: Option<&str>,
     mode: Option<&str>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
-    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+) -> napi::Result<nemo_relay_observability::otel::OtlpFileSinkSettings> {
+    nemo_relay_observability::otel::OtlpFileSinkSettings::from_parts(
         output_directory,
         filename,
         format,
@@ -769,7 +769,7 @@ fn parse_otel_file_sink(
 
 fn build_otel_config(
     options: OpenTelemetryConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
@@ -788,7 +788,7 @@ fn build_otel_config(
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
 
-    let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
+    let mut config = nemo_relay_observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_service_name(service_name)
@@ -823,7 +823,7 @@ fn build_otel_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -855,7 +855,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
         .transpose()?
         .unwrap_or_else(|| {
             u64::try_from(
-                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+                nemo_relay_observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
             )
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
@@ -864,7 +864,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
 
 fn build_otel_log_config(
     options: OpenTelemetryLogConfig,
-) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+) -> napi::Result<nemo_relay_observability::otel_logs::OpenTelemetryLogConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -873,7 +873,7 @@ fn build_otel_log_config(
     }
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
-    let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
+    let mut config = nemo_relay_observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
             options
@@ -925,7 +925,7 @@ fn build_otel_log_config(
 
 fn build_otel_metric_config(
     options: OpenTelemetryMetricConfig,
-) -> napi::Result<nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig> {
+) -> napi::Result<nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -933,7 +933,7 @@ fn build_otel_metric_config(
         ));
     }
     let mut config =
-        nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
+        nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
             .with_transport(parse_otel_transport(options.transport)?)
             .with_service_name(
                 options
@@ -981,7 +981,7 @@ fn build_otel_metric_config(
 }
 
 fn exporter_runtime_diagnostics_json(
-    diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
+    diagnostics: nemo_relay_observability::ExporterRuntimeDiagnostics,
 ) -> Json {
     Json::Array(
         diagnostics
@@ -1000,11 +1000,11 @@ fn exporter_runtime_diagnostics_json(
 
 fn build_atof_config(
     options: Option<AtofExporterConfig>,
-) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
+) -> napi::Result<nemo_relay_observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
     match options.r#type.as_deref().unwrap_or("file") {
         "file" => {
-            let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
+            let mut config = nemo_relay_observability::atof::AtofExporterConfig::new();
             if let Some(output_directory) = options.output_directory {
                 config = config.with_output_directory(PathBuf::from(output_directory));
             }
@@ -1012,7 +1012,7 @@ fn build_atof_config(
                 config = config.with_filename(filename);
             }
             if let Some(mode) = options.mode {
-                let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode)
+                let Some(mode) = nemo_relay_observability::atof::AtofExporterMode::parse(&mode)
                 else {
                     return Err(napi::Error::from_reason(
                         "mode must be 'append' or 'overwrite'",
@@ -1028,14 +1028,14 @@ fn build_atof_config(
                 .ok_or_else(|| napi::Error::from_reason("stream sink requires url"))?;
             let transport = options.transport.unwrap_or_else(|| "http_post".to_string());
             let Some(transport) =
-                nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
+                nemo_relay_observability::atof::AtofEndpointTransport::parse(&transport)
             else {
                 return Err(napi::Error::from_reason(
                     "stream transport must be 'http_post', 'websocket', or 'ndjson'",
                 ));
             };
             let mut sink =
-                nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
+                nemo_relay_observability::atof::AtofStreamSinkConfig::new(url, transport);
             if let Some(timeout_millis) = options.timeout_millis {
                 sink = sink.with_timeout_millis(timeout_millis.into());
             }
@@ -1044,7 +1044,7 @@ fn build_atof_config(
             }
             if let Some(field_name_policy) = options.field_name_policy {
                 let Some(field_name_policy) =
-                    nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                    nemo_relay_observability::atof::AtofEndpointFieldNamePolicy::parse(
                         &field_name_policy,
                     )
                 else {
@@ -1060,7 +1060,7 @@ fn build_atof_config(
             for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
                 sink = sink.with_header_env(key, variable);
             }
-            Ok(nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
+            Ok(nemo_relay_observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
         }
         _ => Err(napi::Error::from_reason(
             "ATOF sink type must be 'file' or 'stream'",
@@ -5485,7 +5485,7 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct AtifExporter {
-    inner: nemo_relay::observability::atif::AtifExporter,
+    inner: nemo_relay_observability::atif::AtifExporter,
 }
 
 #[napi]
@@ -5501,7 +5501,7 @@ impl AtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay_observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -5509,7 +5509,7 @@ impl AtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay::api::exporter::atif(session_id, agent_info),
         })
     }
 
@@ -5582,7 +5582,7 @@ pub struct AtofExporterConfig {
 /// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 #[napi]
 pub struct AtofExporter {
-    inner: nemo_relay::observability::atof::AtofExporter,
+    inner: nemo_relay_observability::atof::AtofExporter,
 }
 
 #[napi]
@@ -5591,7 +5591,7 @@ impl AtofExporter {
     /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::atof::AtofExporter::new(build_atof_config(config)?)
+        let inner = nemo_relay::api::exporter::atof(build_atof_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -5706,7 +5706,7 @@ pub struct OpenTelemetryTlsConfig {
     pub private_key: Option<String>,
 }
 
-impl From<OpenTelemetryTlsConfig> for nemo_relay::observability::OpenTelemetryTlsConfig {
+impl From<OpenTelemetryTlsConfig> for nemo_relay_observability::OpenTelemetryTlsConfig {
     fn from(value: OpenTelemetryTlsConfig) -> Self {
         Self {
             certificate: value.certificate,
@@ -5763,7 +5763,7 @@ pub struct OpenTelemetryFileSinkConfig {
 
 fn build_otel_file_sink_config(
     options: OpenTelemetryFileSinkConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryFileSinkConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let directory = options.output_directory.trim();
     if directory.is_empty() {
@@ -5778,7 +5778,7 @@ fn build_otel_file_sink_config(
         options.mode.as_deref(),
     )?;
     let mut config =
-        nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
+        nemo_relay_observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
             .with_instrumentation_scope(
                 options
                     .instrumentation_scope
@@ -5806,7 +5806,7 @@ fn build_otel_file_sink_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -5821,7 +5821,7 @@ fn build_otel_file_sink_config(
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
-    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay_observability::otel::OpenTelemetrySubscriber,
 }
 
 #[napi]
@@ -5829,20 +5829,17 @@ impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
-            build_otel_config(config)?,
-        )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let inner = nemo_relay::api::exporter::opentelemetry(build_otel_config(config)?)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
 
     /// Create a subscriber that writes OTLP to a local file.
     #[napi(factory)]
     pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
-            build_otel_file_sink_config(config)?,
-        )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let inner =
+            nemo_relay::api::exporter::opentelemetry_file(build_otel_file_sink_config(config)?)
+                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -5934,7 +5931,7 @@ pub struct OpenTelemetryLogConfig {
 /// Subscriber that exports severity-tagged marks through OTLP logs.
 #[napi]
 pub struct OpenTelemetryLogSubscriber {
-    inner: nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+    inner: nemo_relay_observability::otel_logs::OpenTelemetryLogSubscriber,
 }
 
 #[napi]
@@ -5942,10 +5939,8 @@ impl OpenTelemetryLogSubscriber {
     /// Create a log subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryLogConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber::new(
-            build_otel_log_config(config)?,
-        )
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner = nemo_relay::api::exporter::opentelemetry_logs(build_otel_log_config(config)?)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -6035,7 +6030,7 @@ pub struct OpenTelemetryMetricConfig {
 /// Subscriber that records metric marks and exports them through OTLP metrics.
 #[napi]
 pub struct OpenTelemetryMetricSubscriber {
-    inner: nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+    inner: nemo_relay_observability::otel_metrics::OpenTelemetryMetricSubscriber,
 }
 
 #[napi]
@@ -6043,10 +6038,9 @@ impl OpenTelemetryMetricSubscriber {
     /// Create a metric subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryMetricConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber::new(
-            build_otel_metric_config(config)?,
-        )
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner =
+            nemo_relay::api::exporter::opentelemetry_metrics(build_otel_metric_config(config)?)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 

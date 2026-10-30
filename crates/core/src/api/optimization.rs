@@ -15,7 +15,6 @@ use crate::codec::optimization::{
     LlmOptimizationSummaryStatus, LlmOptimizationTokens,
 };
 use crate::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
-
 use nemo_relay_model_pricing::PricingResolver;
 use nemo_relay_model_pricing::{InputSplit, input_split};
 

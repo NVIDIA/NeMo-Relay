@@ -111,7 +111,8 @@ fn trajectory_redaction_preserves_exported_success_and_error_status() {
             .with_simple_exporter(exporter.clone())
             .build();
         let subscriber =
-            OpenTelemetrySubscriber::from_tracer_provider_with_type(provider, "test", projection);
+            OpenTelemetrySubscriber::from_tracer_provider_with_type(provider, "test", projection)
+                .with_host(nemo_relay::api::subscriber::observability_host());
         subscriber.register(name).unwrap();
         (name, subscriber, exporter)
     })

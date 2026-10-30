@@ -8,12 +8,12 @@ use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
-use nemo_relay::observability::plugin_component::{
-    AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
-};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay_observability::plugin::{
+    AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+};
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 use serde_json::Map;
 use std::path::PathBuf;

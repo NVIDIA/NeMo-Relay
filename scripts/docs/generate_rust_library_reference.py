@@ -22,10 +22,17 @@ from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
     ("nemo-relay", "nemo_relay", "Core Rust runtime APIs for NeMo Relay."),
+    ("nemo-relay-model-pricing", "nemo_relay_model_pricing", "Model pricing catalogs and cost estimation."),
+    (
+        "nemo-relay-resource-metrics",
+        "nemo_relay_resource_metrics",
+        "System resource collection and measurement configuration.",
+    ),
+    ("nemo-relay-observability", "nemo_relay_observability", "Observability exporters and projections."),
     ("nemo-relay-adaptive", "nemo_relay_adaptive", "Adaptive runtime primitives and plugin components."),
     ("nemo-relay-pii-redaction", "nemo_relay_pii_redaction", "PII redaction plugin components for NeMo Relay."),
     ("nemo-relay-ffi", "nemo_relay_ffi", "C-compatible FFI surface for NeMo Relay."),
-    ("nemo-relay-types", "nemo_relay_types", "Shared serializable data model types for NeMo Relay."),
+    ("nemo-relay-types", "nemo_relay_types", "Shared data models and runtime contracts for NeMo Relay."),
     ("nemo-relay-plugin", "nemo_relay_plugin", "Rust SDK and stable ABI for native NeMo Relay plugins."),
     (
         "nemo-relay-worker-proto",

@@ -342,16 +342,17 @@ fn test_valid_free_functions_and_none_backed_accessors() {
     unsafe { nemo_relay_scope_stack_free(stack_ptr) };
 
     let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(
-        nemo_relay::observability::atif::AtifExporter::new(
+        nemo_relay_observability::atif::AtifExporter::new(
             "session".into(),
-            nemo_relay::observability::atif::AtifAgentInfo {
+            nemo_relay_observability::atif::AtifAgentInfo {
                 name: "ffi-agent".into(),
                 version: "1.0.0".into(),
                 model_name: None,
                 tool_definitions: None,
                 extra: None,
             },
-        ),
+        )
+        .with_host(nemo_relay::api::subscriber::observability_host()),
     )));
     unsafe { nemo_relay_atif_exporter_free(exporter_ptr) };
 

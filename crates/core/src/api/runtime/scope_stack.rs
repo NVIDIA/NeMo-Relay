@@ -100,7 +100,7 @@ impl PropagationContext {
                 "rootless propagation context cannot be converted to traceparent".into(),
             ));
         };
-        Ok(crate::observability::format_traceparent(
+        Ok(nemo_relay_observability::format_traceparent(
             root_uuid,
             self.parent_uuid,
         ))
@@ -845,8 +845,9 @@ pub fn capture_propagation_context() -> Result<PropagationContext> {
         .map_err(|error| FlowError::Internal(error.to_string()))?;
     let root_uuid = stack_guard.event_propagation_root_uuid();
     let (traceparent, tracestate) = captured_w3c_headers(&stack_guard, active_uuid, parent_uuid);
-    let traceparent = traceparent
-        .or_else(|| active_uuid.map(|uuid| crate::observability::format_traceparent(uuid, uuid)));
+    let traceparent = traceparent.or_else(|| {
+        active_uuid.map(|uuid| nemo_relay_observability::format_traceparent(uuid, uuid))
+    });
     let context = PropagationContext {
         version: PropagationContext::VERSION,
         root_uuid,
@@ -932,8 +933,8 @@ impl ScopeStack {
             return None;
         }
         Some(SpanContext::new(
-            crate::observability::relay_trace_id(root_uuid),
-            crate::observability::relay_span_id(uuid),
+            nemo_relay_observability::relay_trace_id(root_uuid),
+            nemo_relay_observability::relay_span_id(uuid),
             TraceFlags::SAMPLED,
             true,
             TraceState::default(),
@@ -989,14 +990,14 @@ impl ScopeStack {
         let context = match parent_context {
             Some(parent) => SpanContext::new(
                 parent.trace_id(),
-                crate::observability::relay_span_id(uuid),
+                nemo_relay_observability::relay_span_id(uuid),
                 parent.trace_flags(),
                 false,
                 parent.trace_state().clone(),
             ),
             None => SpanContext::new(
-                crate::observability::relay_trace_id(uuid),
-                crate::observability::relay_span_id(uuid),
+                nemo_relay_observability::relay_trace_id(uuid),
+                nemo_relay_observability::relay_span_id(uuid),
                 TraceFlags::SAMPLED,
                 false,
                 TraceState::default(),
@@ -1054,7 +1055,7 @@ fn w3c_headers_for_parent(
 ) -> (Option<String>, Option<String>) {
     let child = SpanContext::new(
         parent.trace_id(),
-        crate::observability::relay_span_id(parent_uuid),
+        nemo_relay_observability::relay_span_id(parent_uuid),
         parent.trace_flags(),
         false,
         parent.trace_state().clone(),
@@ -1090,7 +1091,7 @@ pub(crate) fn trace_context_for_managed_span(
     };
     W3cTraceContext::new(
         traceparent
-            .unwrap_or_else(|| crate::observability::format_traceparent(span_uuid, span_uuid)),
+            .unwrap_or_else(|| nemo_relay_observability::format_traceparent(span_uuid, span_uuid)),
         tracestate,
     )
 }

@@ -21,6 +21,7 @@ test = false
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-observability.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true, features = ["atof-streaming", "object-store", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }

@@ -185,7 +185,7 @@ pub enum MetricTemporality {
     LowMemory,
 }
 
-impl From<MetricTemporality> for nemo_relay::observability::otel_metrics::MetricTemporality {
+impl From<MetricTemporality> for nemo_relay_observability::otel_metrics::MetricTemporality {
     fn from(value: MetricTemporality) -> Self {
         match value {
             MetricTemporality::Cumulative => Self::Cumulative,

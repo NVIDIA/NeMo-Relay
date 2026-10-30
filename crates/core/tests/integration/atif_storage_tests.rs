@@ -23,8 +23,8 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::flush_subscribers;
-use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
+use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use plugin_host_test_support::{
     test_close_plugin_host, test_initialize_plugin_host_exact, test_plugin_host_report,

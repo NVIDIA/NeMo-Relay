@@ -35,7 +35,8 @@ async fn recursive_selectors_reach_atif_and_otlp_without_changing_execution() {
                 tool_definitions: None,
                 extra: None,
             },
-        );
+        )
+        .with_host(nemo_relay::api::subscriber::observability_host());
         register_subscriber("recursive-export-atif", atif.subscriber()).unwrap();
         let exporters: Vec<_> = [
             (
@@ -61,6 +62,9 @@ async fn recursive_selectors_reach_atif_and_otlp_without_changing_execution() {
             let receiver = capture_one_otlp_request(listener);
             let subscriber =
                 OpenTelemetrySubscriber::new(OpenTelemetryConfig::new(projection, endpoint))
+                    .map(|exporter| {
+                        exporter.with_host(nemo_relay::api::subscriber::observability_host())
+                    })
                     .unwrap();
             subscriber.register(name).unwrap();
             (name, id_key, subscriber, receiver)

@@ -1436,7 +1436,7 @@ observability projection.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
+from nemo_relay import OpenTelemetryConfig
 
 config = OpenTelemetryConfig(
     "gen_ai",
@@ -1461,8 +1461,8 @@ const subscriber = new OpenTelemetrySubscriber({
 </Tab>
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::otel::{OpenTelemetryConfig};
 
 let config = OpenTelemetryConfig::new(
     OpenTelemetryType::GenAi,
@@ -1470,7 +1470,7 @@ let config = OpenTelemetryConfig::new(
 )
 .with_service_name("agent-service")
 .with_header_env("authorization", "OTEL_AUTHORIZATION");
-let subscriber = OpenTelemetrySubscriber::new(config)?;
+let subscriber = nemo_relay::api::exporter::opentelemetry(config)?;
 ```
 </Tab>
 </Tabs>
@@ -1582,15 +1582,15 @@ try {
 </Tab>
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::observability::{
-    otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber},
-    otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
+use nemo_relay_observability::{
+    otel_logs::OpenTelemetryLogConfig,
+    otel_metrics::OpenTelemetryMetricConfig,
 };
 
-let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+let logs = nemo_relay::api::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
     "http://localhost:4318/v1/logs",
 ))?;
-let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+let metrics = nemo_relay::api::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
     "http://localhost:4318/v1/metrics",
 ))?;
 logs.register("otlp-logs")?;

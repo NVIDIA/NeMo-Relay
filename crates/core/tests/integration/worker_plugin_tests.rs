@@ -28,15 +28,15 @@ use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::Result as FlowResult;
-use nemo_relay::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
-use nemo_relay::observability::otel_metrics::{
-    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
-};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec, WorkerPluginActivation,
     WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_diagnostics,
 };
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
+use nemo_relay_observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
+use nemo_relay_observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use prost::Message;
@@ -1568,9 +1568,11 @@ async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
         OpenTelemetryMetricConfig::new(metric_endpoint)
             .with_instrumentation_scope("worker-tokenomics-metric-test"),
     )
+    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .expect("metric subscriber should build");
     let log_subscriber =
         OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"))
+            .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
             .expect("log subscriber should build without connecting");
     let metric_name = "worker_tokenomics_metric_metrics";
     let log_name = "worker_tokenomics_metric_logs";

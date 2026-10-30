@@ -61,18 +61,18 @@ pub struct FfiThreadScopeStackBinding {
     pub(crate) override_stack: Option<ScopeStackHandle>,
 }
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nemo_relay_observability::atif::AtifExporter);
 /// Opaque ATOF JSONL exporter handle.
-pub struct FfiAtofExporter(pub nemo_relay::observability::atof::AtofExporter);
+pub struct FfiAtofExporter(pub nemo_relay_observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
-pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenTelemetrySubscriber);
+pub struct FfiOpenTelemetrySubscriber(pub nemo_relay_observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenTelemetry log subscriber handle.
 pub struct FfiOpenTelemetryLogSubscriber(
-    pub nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+    pub nemo_relay_observability::otel_logs::OpenTelemetryLogSubscriber,
 );
 /// Opaque OpenTelemetry metric subscriber handle.
 pub struct FfiOpenTelemetryMetricSubscriber(
-    pub nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+    pub nemo_relay_observability::otel_metrics::OpenTelemetryMetricSubscriber,
 );
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);

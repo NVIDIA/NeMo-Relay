@@ -117,10 +117,11 @@ enum PluginMutationOwner {
 pub type Result<T> = std::result::Result<T, PluginError>;
 
 /// Identifies teardown errors caused by recoverable ATIF delivery failures.
+#[cfg(test)]
 pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
 /// Identifies teardown errors caused by recoverable OpenTelemetry delivery failures.
-pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
-    "OpenTelemetry runtime delivery failures";
+#[cfg(test)]
+pub(crate) use nemo_relay_observability::host::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 /// Canonical plugin configuration document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1067,9 +1068,9 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
             PluginError::Internal(format!("plugin registry lock poisoned: {err}"))
         })?;
         [
-            crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND,
-            crate::plugins::model_pricing::PRICING_PLUGIN_KIND,
-            crate::plugins::resource_metrics::RESOURCE_METRICS_PLUGIN_KIND,
+            nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND,
+            nemo_relay_model_pricing::plugin::PRICING_PLUGIN_KIND,
+            nemo_relay_resource_metrics::plugin::RESOURCE_METRICS_PLUGIN_KIND,
         ]
         .iter()
         .all(|kind| {
@@ -1085,9 +1086,18 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
     // Registration is idempotent for genuine built-ins. Revalidate on every
     // call so a removed built-in is restored, a replacement is rejected, and
     // a corrected ownership conflict can be retried without restarting Relay.
-    crate::observability::plugin_component::register_observability_component()?;
-    crate::plugins::model_pricing::register_pricing_component()?;
-    crate::plugins::resource_metrics::register_resource_metrics_component()
+    register_builtin_plugin(Arc::new(
+        nemo_relay_observability::plugin::ObservabilityPlugin::new(
+            crate::observability_runtime::core_host(),
+        ),
+    ))?;
+    register_builtin_plugin(Arc::new(nemo_relay_model_pricing::plugin::PricingPlugin))?;
+    register_builtin_plugin(Arc::new(
+        nemo_relay_resource_metrics::plugin::ResourceMetricsPlugin::new(|| {
+            crate::api::resource_metrics::polling_snapshot_sink()
+                .map_err(|error| PluginError::RegistrationFailed(error.to_string()))
+        }),
+    ))
 }
 
 /// Removes a previously registered plugin.

@@ -43,11 +43,11 @@ use futures::StreamExt;
 use nemo_relay::diagnostics::{
     DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
 };
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
-use nemo_relay::observability::otel_metrics::{
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig};
+use nemo_relay_observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay_observability::otel_metrics::{
     OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
 };
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
@@ -2538,6 +2538,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         OpenTelemetryType::Full,
         trace_endpoint,
     ))
+    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     trace_subscriber
         .register("pii-target-glob-e2e-traces")
@@ -2549,6 +2550,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
     let metric_request = capture_otlp_requests(metric_listener, 2);
     let metric_subscriber =
         OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
+            .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
             .unwrap();
     metric_subscriber
         .register("pii-target-glob-e2e-metrics")
@@ -4168,6 +4170,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             .with_output_directory(output.path())
             .with_filename("events.jsonl"),
     )
+    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     atof.register("pii-regression-atof").unwrap();
     let atif = AtifExporter::new(
@@ -4179,14 +4182,16 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             tool_definitions: None,
             extra: None,
         },
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     register_subscriber("pii-regression-atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression");
+    let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression")
+        .with_host(nemo_relay::api::subscriber::observability_host());
     otel.register("pii-regression-otel").unwrap();
 
     let genai_exporter = InMemorySpanExporterBuilder::new().build();
@@ -4197,7 +4202,8 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         genai_provider,
         "pii-regression",
         OpenTelemetryType::GenAi,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     genai.register("pii-regression-genai").unwrap();
 
     let openinference_exporter = InMemorySpanExporterBuilder::new().build();
@@ -4208,7 +4214,8 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         openinference_provider,
         "pii-regression",
         OpenTelemetryType::OpenInference,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     openinference
         .register("pii-regression-openinference")
         .unwrap();

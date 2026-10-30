@@ -13,10 +13,10 @@ use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
 use nemo_relay::error::FlowError;
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
-use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use nemo_relay::plugin::{PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact};
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
+use nemo_relay_observability::otel::OpenTelemetrySubscriber;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
@@ -1276,6 +1276,7 @@ fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExpor
             .with_filename(filename)
             .with_mode(AtofExporterMode::Overwrite),
     )
+    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap()
 }
 
@@ -1312,7 +1313,8 @@ fn make_typed_test_subscriber(
         provider,
         scope.to_string(),
         otel_type,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     (subscriber, exporter)
 }
 
@@ -2065,7 +2067,8 @@ fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
         provider,
         "harness-tool-metadata",
         OpenTelemetryType::GenAi,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     for event in events {
         subscriber.subscriber()(event);
     }
@@ -9318,11 +9321,12 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
         provider,
         "mcp-normalization",
         OpenTelemetryType::GenAi,
-        nemo_relay::observability::otel::OpenTelemetrySubscriberOptions {
+        nemo_relay_observability::otel::OpenTelemetrySubscriberOptions {
             promote_metadata_prefixes: vec!["mcp.method.name".into()],
             ..Default::default()
         },
     )
+    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     for event in events.iter() {
         subscriber.subscriber()(event);
@@ -9361,7 +9365,8 @@ fn assert_mcp_failure_projections(events: &[Event]) {
             provider,
             "tool-failure",
             projection,
-        );
+        )
+        .with_host(nemo_relay::api::subscriber::observability_host());
         for event in events.iter() {
             subscriber.subscriber()(event);
         }
@@ -9435,7 +9440,8 @@ fn assert_completion_marks_omitted_from_genai(events: &[Event]) {
         provider,
         "partial-hooks",
         OpenTelemetryType::GenAi,
-    );
+    )
+    .with_host(nemo_relay::api::subscriber::observability_host());
     for event in events {
         subscriber.subscriber()(event);
     }
@@ -10222,7 +10228,8 @@ async fn codex_gateway_results_recover_missing_mcp_completions_by_id_and_owner()
             provider,
             "mcp-recovery",
             OpenTelemetryType::GenAi,
-        );
+        )
+        .with_host(nemo_relay::api::subscriber::observability_host());
         for event in events.iter() {
             subscriber.subscriber()(event);
         }

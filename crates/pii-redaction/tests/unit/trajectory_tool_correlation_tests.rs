@@ -33,7 +33,8 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
                 tool_definitions: None,
                 extra: None,
             },
-        );
+        )
+        .with_host(nemo_relay::api::subscriber::observability_host());
         register_subscriber("tool-correlation-atif", atif.subscriber()).unwrap();
         let exporters: Vec<_> = [
             ("tool-correlation-full", OpenTelemetryType::Full),
@@ -51,7 +52,8 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
                 .build();
             let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
                 provider, "test", projection,
-            );
+            )
+            .with_host(nemo_relay::api::subscriber::observability_host());
             subscriber.register(name).unwrap();
             (name, subscriber, memory)
         })

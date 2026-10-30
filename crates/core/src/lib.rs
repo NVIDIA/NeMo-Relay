@@ -35,9 +35,9 @@
 //! - [`error`] — Error types ([`error::FlowError`]) and the [`error::Result`] type alias.
 //! - [`json`] — JSON type alias ([`json::Json`]) and the [`json::merge_json`] utility.
 //! - [`logging`] — Process operational logging (`log` facade + configurable stderr/file sinks).
-//! - [`observability`] — Built-in observability backends including
-//!   [`atif::AtifExporter`](observability::atif::AtifExporter),
-//!   [`otel::OpenTelemetrySubscriber`](observability::otel::OpenTelemetrySubscriber),
+//! - [`nemo_relay_observability`] — Built-in observability backends including
+//!   [`atif::AtifExporter`](nemo_relay_observability::atif::AtifExporter),
+//!   [`otel::OpenTelemetrySubscriber`](nemo_relay_observability::otel::OpenTelemetrySubscriber),
 //!   with full, GenAI, or OpenInference projection.
 //! - [`stream`] — [`stream::LlmStreamWrapper`] — a stream adapter that applies per-chunk
 //!   intercepts and aggregates streaming LLM responses.
@@ -62,9 +62,11 @@ pub mod diagnostics;
 pub mod error;
 pub mod json;
 pub mod logging;
-pub mod observability;
+mod observability_runtime;
+#[cfg(test)]
+#[path = "../tests/support/observability/mod.rs"]
+mod observability_test_support;
 pub mod plugin;
-pub mod plugins;
 mod registry;
 #[cfg(test)]
 #[path = "../tests/support/resource_metrics/mod.rs"]

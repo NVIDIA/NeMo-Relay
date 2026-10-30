@@ -18,6 +18,7 @@ default = []
 schema = ["dep:schemars", "nemo-relay/schema"]
 
 [dependencies]
+nemo-relay-observability.workspace = true
 # First-party crates.
 nemo-relay.workspace = true
 

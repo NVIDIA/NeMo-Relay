@@ -8,20 +8,16 @@ use super::{
     set_last_error, status_from_error, str_to_c_string, tokio_runtime,
 };
 
-type AtofExporter = nemo_relay::observability::atof::AtofExporter;
-type AtofExporterConfig = nemo_relay::observability::atof::AtofExporterConfig;
-type AtofExporterError = nemo_relay::observability::atof::AtofExporterError;
-type AtofExporterMode = nemo_relay::observability::atof::AtofExporterMode;
-type OpenTelemetryConfig = nemo_relay::observability::otel::OpenTelemetryConfig;
-type OpenTelemetryFileSinkConfig = nemo_relay::observability::otel::OpenTelemetryFileSinkConfig;
-type OpenTelemetrySubscriber = nemo_relay::observability::otel::OpenTelemetrySubscriber;
-type OpenTelemetryLogConfig = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig;
-type OpenTelemetryLogSubscriber = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber;
-type OpenTelemetryMetricConfig = nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig;
-type OpenTelemetryMetricSubscriber =
-    nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber;
-type ObservabilityComponentSpec = nemo_relay::observability::plugin_component::ComponentSpec;
-type ObservabilityConfig = nemo_relay::observability::plugin_component::ObservabilityConfig;
+type AtofExporterConfig = nemo_relay_observability::atof::AtofExporterConfig;
+type AtofExporterError = nemo_relay_observability::atof::AtofExporterError;
+type AtofExporterMode = nemo_relay_observability::atof::AtofExporterMode;
+type OpenTelemetryConfig = nemo_relay_observability::otel::OpenTelemetryConfig;
+type OpenTelemetryFileSinkConfig = nemo_relay_observability::otel::OpenTelemetryFileSinkConfig;
+type OpenTelemetrySubscriber = nemo_relay_observability::otel::OpenTelemetrySubscriber;
+type OpenTelemetryLogConfig = nemo_relay_observability::otel_logs::OpenTelemetryLogConfig;
+type OpenTelemetryMetricConfig = nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
+type ObservabilityComponentSpec = nemo_relay_observability::plugin::ComponentSpec;
+type ObservabilityConfig = nemo_relay_observability::plugin::ObservabilityConfig;
 
 fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
     set_last_error(&error.to_string());
@@ -37,7 +33,7 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
 /// # Safety
 /// `out_json` must point to writable storage for one C-string pointer.
 unsafe fn write_runtime_diagnostics(
-    diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
+    diagnostics: nemo_relay_observability::ExporterRuntimeDiagnostics,
     out_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     let entries = serde_json::Value::Array(
@@ -66,7 +62,7 @@ unsafe fn write_runtime_diagnostics(
 /// The caller owns the returned string and must free it with `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_observability_plugin_kind() -> *mut c_char {
-    str_to_c_string(nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND)
+    str_to_c_string(nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND)
 }
 
 /// Return the default observability plugin config as JSON.
@@ -188,7 +184,7 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
         }
     };
 
-    let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
+    let agent_info = nemo_relay_observability::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
@@ -196,7 +192,7 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info);
+    let exporter = nemo_relay::api::exporter::atif(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
     NemoRelayStatus::Ok
 }
@@ -363,7 +359,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
         config = config.with_filename(filename);
     }
 
-    match AtofExporter::new(config) {
+    match nemo_relay::api::exporter::atof(config) {
         Ok(exporter) => {
             unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
             NemoRelayStatus::Ok
@@ -407,7 +403,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create_from_json(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match AtofExporter::new(config) {
+    match nemo_relay::api::exporter::atof(config) {
         Ok(exporter) => {
             unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
             NemoRelayStatus::Ok
@@ -649,16 +645,16 @@ fn parse_transport(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
 
 fn parse_otlp_transport(
     ptr: *const c_char,
-) -> Result<nemo_relay::observability::otel::OtlpTransport, NemoRelayStatus> {
+) -> Result<nemo_relay_observability::otel::OtlpTransport, NemoRelayStatus> {
     transport_from_str(&parse_transport(ptr)?)
 }
 
 fn transport_from_str(
     value: &str,
-) -> Result<nemo_relay::observability::otel::OtlpTransport, NemoRelayStatus> {
+) -> Result<nemo_relay_observability::otel::OtlpTransport, NemoRelayStatus> {
     match value {
-        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
-        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        "http_binary" => Ok(nemo_relay_observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay_observability::otel::OtlpTransport::Grpc),
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -670,7 +666,7 @@ fn transport_from_str(
 
 fn parse_mark_projection(
     ptr: *const c_char,
-) -> Result<nemo_relay::observability::MarkProjection, NemoRelayStatus> {
+) -> Result<nemo_relay_observability::MarkProjection, NemoRelayStatus> {
     let value = parse_string_or_default(ptr, "inherit")?;
     serde_json::from_value(serde_json::Value::String(value)).map_err(|error| {
         set_last_error(&error.to_string());
@@ -680,7 +676,7 @@ fn parse_mark_projection(
 
 fn parse_mark_exclude_names(ptr: *const c_char) -> Result<Vec<String>, NemoRelayStatus> {
     if ptr.is_null() {
-        return Ok(nemo_relay::observability::default_mark_exclude_names());
+        return Ok(nemo_relay_observability::default_mark_exclude_names());
     }
     let Some(value) = c_str_to_json(ptr) else {
         return Err(NemoRelayStatus::InvalidJson);
@@ -706,32 +702,30 @@ fn parse_promote_metadata_prefixes(ptr: *const c_char) -> Result<Vec<String>, Ne
         ));
         NemoRelayStatus::InvalidArg
     })?;
-    nemo_relay::observability::validate_metadata_promotion_prefixes(&prefixes).map_err(
-        |error| {
-            set_last_error(&error);
-            NemoRelayStatus::InvalidArg
-        },
-    )?;
+    nemo_relay_observability::validate_metadata_promotion_prefixes(&prefixes).map_err(|error| {
+        set_last_error(&error);
+        NemoRelayStatus::InvalidArg
+    })?;
     Ok(prefixes)
 }
 
 fn parse_attribute_mappings(
     ptr: *const c_char,
-) -> Result<Vec<nemo_relay::observability::OtlpAttributeMapping>, NemoRelayStatus> {
+) -> Result<Vec<nemo_relay_observability::OtlpAttributeMapping>, NemoRelayStatus> {
     if ptr.is_null() {
         return Ok(Vec::new());
     }
     let Some(value) = c_str_to_json(ptr) else {
         return Err(NemoRelayStatus::InvalidJson);
     };
-    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
+    let mappings: Vec<nemo_relay_observability::OtlpAttributeMapping> =
         serde_json::from_value(value).map_err(|error| {
             set_last_error(&format!(
                 "attribute_mappings must be an array of mappings: {error}"
             ));
             NemoRelayStatus::InvalidArg
         })?;
-    nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
+    nemo_relay_observability::validate_attribute_mappings(&mappings).map_err(|error| {
         set_last_error(&error.to_string());
         NemoRelayStatus::InvalidArg
     })?;
@@ -740,7 +734,7 @@ fn parse_attribute_mappings(
 
 fn otel_config_for_transport(
     transport: &str,
-    otel_type: nemo_relay::observability::OpenTelemetryType,
+    otel_type: nemo_relay_observability::OpenTelemetryType,
     endpoint: String,
     service_name: String,
 ) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
@@ -754,7 +748,7 @@ fn create_otel_file_sink_subscriber(
     config: OpenTelemetryFileSinkConfig,
 ) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
-    OpenTelemetrySubscriber::new_file_sink(config).map_err(|error| {
+    nemo_relay::api::exporter::opentelemetry_file(config).map_err(|error| {
         set_last_error(&error.to_string());
         NemoRelayStatus::Internal
     })
@@ -764,7 +758,7 @@ fn create_otel_subscriber(
     config: OpenTelemetryConfig,
 ) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
-    OpenTelemetrySubscriber::new(config).map_err(|error| {
+    nemo_relay::api::exporter::opentelemetry(config).map_err(|error| {
         set_last_error(&error.to_string());
         NemoRelayStatus::Internal
     })
@@ -772,12 +766,12 @@ fn create_otel_subscriber(
 
 fn parse_otel_type(
     ptr: *const c_char,
-) -> Result<nemo_relay::observability::OpenTelemetryType, NemoRelayStatus> {
+) -> Result<nemo_relay_observability::OpenTelemetryType, NemoRelayStatus> {
     match parse_optional_string(ptr)? {
-        Some(value) if value == "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
-        Some(value) if value == "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
+        Some(value) if value == "full" => Ok(nemo_relay_observability::OpenTelemetryType::Full),
+        Some(value) if value == "gen_ai" => Ok(nemo_relay_observability::OpenTelemetryType::GenAi),
         Some(value) if value == "openinference" => {
-            Ok(nemo_relay::observability::OpenTelemetryType::OpenInference)
+            Ok(nemo_relay_observability::OpenTelemetryType::OpenInference)
         }
         Some(value) => {
             set_last_error(&format!(
@@ -1051,12 +1045,12 @@ fn parse_ffi_file_sink_settings(
     filename: *const c_char,
     format: *const c_char,
     mode: *const c_char,
-) -> Result<nemo_relay::observability::otel::OtlpFileSinkSettings, NemoRelayStatus> {
+) -> Result<nemo_relay_observability::otel::OtlpFileSinkSettings, NemoRelayStatus> {
     let output_directory = parse_optional_string(output_directory)?.unwrap_or_default();
     let filename = parse_optional_string(filename)?;
     let format = parse_optional_string(format)?;
     let mode = parse_optional_string(mode)?;
-    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+    nemo_relay_observability::otel::OtlpFileSinkSettings::from_parts(
         &output_directory,
         filename.as_deref(),
         format.as_deref(),
@@ -2178,7 +2172,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_with_tls(
         Err(status) => return status,
     };
     let _runtime_guard = tokio_runtime().enter();
-    match OpenTelemetryLogSubscriber::new(config) {
+    match nemo_relay::api::exporter::opentelemetry_logs(config) {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetryLogSubscriber(subscriber))) };
             NemoRelayStatus::Ok
@@ -2248,7 +2242,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_with_tls(
         Err(status) => return status,
     };
     let _runtime_guard = tokio_runtime().enter();
-    match OpenTelemetryMetricSubscriber::new(config) {
+    match nemo_relay::api::exporter::opentelemetry_metrics(config) {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetryMetricSubscriber(subscriber))) };
             NemoRelayStatus::Ok
@@ -2262,7 +2256,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_with_tls(
 
 fn parse_ffi_otel_tls(
     value: *const c_char,
-) -> Result<Option<nemo_relay::observability::OpenTelemetryTlsConfig>, NemoRelayStatus> {
+) -> Result<Option<nemo_relay_observability::OpenTelemetryTlsConfig>, NemoRelayStatus> {
     let Some(value) = parse_optional_string(value)? else {
         return Ok(None);
     };

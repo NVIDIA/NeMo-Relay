@@ -14,7 +14,6 @@ use crate::codec::optimization::{
     LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
 };
 use crate::codec::response::{ApiSpecificResponse, CostEstimate, CostSource, Usage};
-
 use crate::json::Json;
 use nemo_relay_model_pricing::PricingSource;
 use nemo_relay_model_pricing::{PricingCatalog, PricingCatalogError};

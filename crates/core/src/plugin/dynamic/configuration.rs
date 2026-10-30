@@ -275,10 +275,10 @@ fn validate_static_preflight_configuration(
     let mut report = crate::plugin::validate_static_plugin_config(configuration);
     for component in &configuration.components {
         if component.enabled
-            && component.kind == crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND
+            && component.kind == nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND
         {
             report.diagnostics.extend(
-                crate::observability::plugin_component::validate_observability_plaintext_destinations(
+                nemo_relay_observability::plugin::validate_observability_plaintext_destinations(
                     &component.config,
                 ),
             );
