@@ -9,11 +9,15 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginWorkerLoadContract &#123;\n    pub runtime: <a href=\"enum-workerruntime\">WorkerRuntime</a>,\n    pub entrypoint: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub max_message_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-workermessagelimits\">WorkerMessageLimits</a>&gt;,\n    pub callback_timeouts: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-workercallbacktimeouts\">WorkerCallbackTimeouts</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginWorkerLoadContract &#123;\n    pub forward_env: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub runtime: <a href=\"enum-workerruntime\">WorkerRuntime</a>,\n    pub entrypoint: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub max_message_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-workermessagelimits\">WorkerMessageLimits</a>&gt;,\n    pub callback_timeouts: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-workercallbacktimeouts\">WorkerCallbackTimeouts</a>&gt;,\n&#125;"}} /></pre>
 
 Lane-specific load contract for worker plugins.
 
 ## Fields
+
+### `forward_env: Vec<String>`
+
+Host environment names or trailing-wildcard prefixes to forward at launch.
 
 ### `runtime: WorkerRuntime`
 
