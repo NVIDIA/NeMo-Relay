@@ -696,8 +696,8 @@ fn test_annotated_event_accessors_and_codec_handles() {
             completion_tokens: Some(5),
             total_tokens: Some(15),
             cache_read_tokens: None,
-            cache_write_tokens: None,
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(4),
+            cache_write_1h_tokens: Some(2),
             uncached_input_tokens: None,
             cost: Some(nemo_relay::codec::response::CostEstimate {
                 total: Some(0.000_01),
@@ -741,6 +741,10 @@ fn test_annotated_event_accessors_and_codec_handles() {
     assert_eq!(annotated_response_value["id"], json!("resp_123"));
     assert!(annotated_response_value.get("model_provider").is_none());
     assert_eq!(annotated_response_value["trace"], json!(true));
+    assert_eq!(
+        annotated_response_value["usage"]["cache_write_1h_tokens"],
+        json!(2)
+    );
     assert_eq!(
         annotated_response_value["usage"]["cost"]["pricing_provider"],
         json!("ffi-provider")

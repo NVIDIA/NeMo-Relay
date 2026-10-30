@@ -368,13 +368,15 @@ impl ModelPricing {
         let has_unpriced_cache_write = (cache_write_5m_tokens > 0
             && rates.cache_write_per_million.is_none())
             || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
-        let cache_write_cost = (!has_unpriced_cache_write)
-            .then(|| match (cache_write_5m_cost, cache_write_1h_cost) {
+        let cache_write_cost = if has_unpriced_cache_write {
+            None
+        } else {
+            match (cache_write_5m_cost, cache_write_1h_cost) {
                 (Some(short), Some(long)) => Some(short + long),
                 (Some(cost), None) | (None, Some(cost)) => Some(cost),
                 (None, None) => None,
-            })
-            .flatten();
+            }
+        };
         let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()

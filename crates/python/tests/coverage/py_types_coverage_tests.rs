@@ -1811,8 +1811,8 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                         completion_tokens: Some(3),
                         total_tokens: Some(5),
                         cache_read_tokens: Some(1),
-                        cache_write_tokens: None,
-                        cache_write_1h_tokens: None,
+                        cache_write_tokens: Some(4),
+                        cache_write_1h_tokens: Some(2),
                         uncached_input_tokens: None,
                         cost: Some(CostEstimate {
                             total: Some(0.000_001),
@@ -1860,6 +1860,10 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
             assert_eq!(
                 py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["total_tokens"],
                 json!(5)
+            );
+            assert_eq!(
+                py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["cache_write_1h_tokens"],
+                json!(2)
             );
             assert_eq!(
                 py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["cost"]["pricing_provider"],
