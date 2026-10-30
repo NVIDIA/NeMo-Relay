@@ -4,6 +4,8 @@
 //! Unit coverage for the native plugin host ABI adapter.
 
 use super::*;
+#[cfg(unix)]
+use crate::PluginRegistrationContext;
 
 fn native_test_diagnostic_context() -> nemo_relay_diagnostics::Diagnostics {
     nemo_relay_diagnostics::Diagnostics::from_settings(

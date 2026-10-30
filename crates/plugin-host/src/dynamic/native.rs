@@ -7,8 +7,6 @@
 mod native_diagnostics;
 
 #[cfg(test)]
-use crate::PluginRegistrationContext;
-#[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
 #[cfg(test)]
