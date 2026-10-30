@@ -152,6 +152,22 @@ fn usage_extracts_nested_anthropic_one_hour_cache_writes() {
 }
 
 #[test]
+fn usage_prefers_nested_one_hour_cache_writes_from_usage_map() {
+    let output = json!({
+        "usage": {
+            "cache_creation_input_tokens": 50,
+            "cache_creation": {"ephemeral_1h_input_tokens": 20}
+        },
+        "token_usage": {
+            "cache_creation_1h_input_tokens": 0
+        }
+    });
+    let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
+    assert_eq!(usage.cache_write_tokens, Some(50));
+    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+}
+
+#[test]
 fn model_name_extraction() {
     assert_eq!(
         model_name_from_manual_llm_output(Some(&json!({"model": "m"}))),

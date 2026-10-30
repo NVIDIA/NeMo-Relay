@@ -949,26 +949,31 @@ fn anthropic_usage(
         let cache_read_tokens = iterations
             .and_then(|values| sum_iteration_field(values, |value| value.cache_read_input_tokens))
             .or(u.cache_read_input_tokens);
-        let cache_write_tokens = iterations
-            .and_then(|values| {
-                sum_iteration_field(values, |value| value.cache_creation_input_tokens)
-            })
-            .or(u.cache_creation_input_tokens);
+        let iteration_cache_write_tokens = iterations.and_then(|values| {
+            sum_iteration_field(values, |value| value.cache_creation_input_tokens)
+        });
+        let cache_write_tokens = iteration_cache_write_tokens.or(u.cache_creation_input_tokens);
         let cache_write_1h_tokens = iterations
-            .map(|values| {
-                values.iter().fold(0_u64, |total, value| {
-                    total.saturating_add(
-                        value
-                            .cache_creation
-                            .as_ref()
-                            .and_then(|cache| cache.ephemeral_1h_input_tokens)
-                            .unwrap_or_default(),
-                    )
+            .and_then(|values| {
+                sum_iteration_field(values, |value| {
+                    value
+                        .cache_creation
+                        .as_ref()
+                        .and_then(|cache| cache.ephemeral_1h_input_tokens)
                 })
             })
             .or_else(|| {
-                u.cache_creation
-                    .and_then(|cache| cache.ephemeral_1h_input_tokens)
+                // A top-level cache split can describe the same writes when
+                // iterations merely repeat the aggregate. Do not apply it to
+                // compaction-inclusive iteration totals that differ.
+                (iterations.is_none()
+                    || iteration_cache_write_tokens == u.cache_creation_input_tokens)
+                    .then(|| {
+                        u.cache_creation
+                            .as_ref()
+                            .and_then(|cache| cache.ephemeral_1h_input_tokens)
+                    })
+                    .flatten()
             });
         let mut usage = Usage {
             prompt_tokens: prompt,

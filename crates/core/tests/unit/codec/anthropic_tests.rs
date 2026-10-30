@@ -159,6 +159,68 @@ fn test_decode_response_usage_prefers_iteration_totals() {
 }
 
 #[test]
+fn test_decode_response_uses_matching_top_level_one_hour_split_when_iterations_omit_it() {
+    let response = json!({
+        "id": "msg_iteration_without_cache_breakdown",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_creation_input_tokens": 50,
+            "cache_creation": {"ephemeral_1h_input_tokens": 20},
+            "iterations": [{
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 50,
+                "cache_creation": null
+            }]
+        }
+    });
+
+    let usage = AnthropicMessagesCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.cache_write_tokens, Some(50));
+    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+}
+
+#[test]
+fn test_decode_response_does_not_apply_top_level_split_to_larger_iteration_total() {
+    let response = json!({
+        "id": "msg_compaction_without_cache_breakdown",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "answer"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_creation_input_tokens": 50,
+            "cache_creation": {"ephemeral_1h_input_tokens": 20},
+            "iterations": [{
+                "input_tokens": 30,
+                "output_tokens": 4,
+                "cache_creation_input_tokens": 70,
+                "cache_creation": null
+            }]
+        }
+    });
+
+    let usage = AnthropicMessagesCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.cache_write_tokens, Some(70));
+    assert_eq!(usage.cache_write_1h_tokens, None);
+}
+
+#[test]
 fn test_decode_response_omits_estimated_cost_for_cross_model_iterations() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     let _reset_guard = ResetPricingResolverGuard;
