@@ -55,6 +55,7 @@ func TestLlmCallEndStatusMetadata(t *testing.T) {
 
 	for _, tc := range []struct{ name, metadata, want string }{
 		{"manual_ok", `{"request_id":"request-123"}`, "OK"},
+		{"manual_cancelled", `{"request_id":"request-123","otel.status_code":"UNSET"}`, "UNSET"},
 		{"manual_error", `{"request_id":"request-123","otel.status_code":"ERROR","otel.status_description":"provider timed out","error.type":"TimeoutError"}`, "ERROR"},
 	} {
 		handle, err := LlmCall(tc.name, makeRequest())

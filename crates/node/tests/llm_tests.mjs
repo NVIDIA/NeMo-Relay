@@ -113,13 +113,17 @@ function unprintableError() {
 // ===========================================================================
 
 describe('LLM lifecycle', () => {
-  it('manual llm end preserves explicit errors and defaults to OK', async () => {
+  it('manual llm end preserves ERROR and UNSET and defaults to OK', async () => {
     const events = [];
     registerSubscriber('manual_llm_status', (event) => events.push(event));
     try {
-      for (const failed of [false, true]) {
-        const name = failed ? 'manual_llm_error' : 'manual_llm_ok';
+      for (const status of ['OK', 'ERROR', 'UNSET']) {
+        const failed = status === 'ERROR';
+        const name = `manual_llm_${status}`;
         const metadata = { request_id: 'request-123' };
+        if (status === 'UNSET') {
+          metadata['otel.status_code'] = 'UNSET';
+        }
         if (failed) {
           Object.assign(metadata, {
             'otel.status_code': 'ERROR',
@@ -132,7 +136,7 @@ describe('LLM lifecycle', () => {
         await flushSubscriberCallbacks();
         const end = events.find((event) => event.name === name && event.scope_category === 'end');
         assert.ok(end);
-        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': failed ? 'ERROR' : 'OK' });
+        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': status });
       }
     } finally {
       deregisterSubscriber('manual_llm_status');

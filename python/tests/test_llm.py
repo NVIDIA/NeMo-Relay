@@ -122,9 +122,12 @@ class TestLLM:
         assert request.content["messages"][0]["content"] == "private"
         assert request.headers == {"Authorization": "Bearer secret"}
 
-    @pytest.mark.parametrize("failed", [False, True])
-    def test_manual_call_end_status(self, subscribed_events: list[Event], failed: bool) -> None:
+    @pytest.mark.parametrize("status", ["OK", "ERROR", "UNSET"])
+    def test_manual_call_end_status(self, subscribed_events: list[Event], status: str) -> None:
         metadata: dict[str, Json] = {"request_id": "request-123"}
+        failed = status == "ERROR"
+        if status == "UNSET":
+            metadata["otel.status_code"] = "UNSET"
         if failed:
             metadata.update(
                 {
@@ -138,7 +141,7 @@ class TestLLM:
         subscribers.flush()
 
         end = _llm_event(subscribed_events, "manual_status", "end")
-        assert end.metadata == {**metadata, "otel.status_code": "ERROR" if failed else "OK"}
+        assert end.metadata == {**metadata, "otel.status_code": status}
 
     def test_call_and_call_end(self) -> None:
         request = make_request()
