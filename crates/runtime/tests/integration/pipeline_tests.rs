@@ -15,26 +15,23 @@ use test_support::ready;
 use futures::StreamExt;
 use serde_json::json;
 
-use nemo_relay::api::event::{Event, PendingMarkSpec, ScopeCategory};
-use nemo_relay::api::llm::{
-    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call,
-    llm_call_end, llm_call_execute, llm_stream_call_execute,
-};
-use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::optimization::record_llm_optimization_contribution;
-use nemo_relay::api::registry::{
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-};
-use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::error::{FlowError, Result};
 use nemo_relay_codecs::anthropic::AnthropicMessagesCodec;
 use nemo_relay_codecs::oci_genai::OCIGenAIChatCodec;
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
+use nemo_relay_runtime::api::event::{Event, PendingMarkSpec, ScopeCategory};
+use nemo_relay_runtime::api::llm::{
+    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call,
+    llm_call_end, llm_call_execute, llm_stream_call_execute,
+};
+use nemo_relay_runtime::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_runtime::api::optimization::record_llm_optimization_contribution;
+use nemo_relay_runtime::api::registry::{
+    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
+    deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
 };
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
@@ -43,6 +40,10 @@ use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn,
 };
 use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay_runtime::api::scope::{EmitMarkEventParams, ScopeType, event};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
 use nemo_relay_runtime::json::Json;
 use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
@@ -52,6 +53,7 @@ use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message
 use nemo_relay_types::codec::response::FinishReason;
 use nemo_relay_types::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::error::{FlowError, Result};
 
 // ---------------------------------------------------------------------------
 // Test isolation
@@ -72,7 +74,7 @@ fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCat
 }
 
 fn reset_global() {
-    nemo_relay::initialize_runtime();
+    test_support::initialize_runtime_services();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
@@ -387,9 +389,7 @@ async fn test_decode_runs_before_intercepts() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cap.lock().unwrap() = Some(annotated.clone());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -442,10 +442,7 @@ async fn test_encode_runs_after_intercepts() {
             let mut ann = annotated.unwrap();
             ann.model = Some("modified".into());
             req.headers.insert("x-codec-route".into(), json!("blue"));
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req,
-                Some(ann),
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, Some(ann)))
         }),
     )
     .unwrap();
@@ -790,9 +787,7 @@ async fn test_annotated_intercept_receives_both() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cp.lock().unwrap() = Some((req.clone(), annotated.clone()));
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -848,9 +843,7 @@ async fn test_canonical_intercept_with_and_without_codec() {
         Arc::new(move |_name, mut req, annotated| {
             *lc1.lock().unwrap() = true;
             req.headers.insert("x-legacy".into(), json!("was-here"));
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -894,9 +887,7 @@ async fn test_canonical_intercept_with_and_without_codec() {
         Arc::new(move |_name, mut req, annotated| {
             *lc2.lock().unwrap() = true;
             req.headers.insert("x-legacy-2".into(), json!("also-here"));
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -952,9 +943,7 @@ async fn test_stream_path_also_decodes() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -1019,9 +1008,7 @@ async fn test_shared_helper_both_paths() {
         false,
         Arc::new(move |_name, req, annotated| {
             *acc.lock().unwrap() += 1;
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -1098,9 +1085,7 @@ async fn test_explicit_codec_param_overrides() {
             if let Some(ref ann) = annotated {
                 *cm.lock().unwrap() = ann.model.clone();
             }
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -1147,10 +1132,7 @@ async fn test_encode_merge_not_replace() {
         Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("new_model".into());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req,
-                Some(ann),
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, Some(ann)))
         }),
     )
     .unwrap();
@@ -1218,9 +1200,7 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl1.lock().unwrap().push("legacy_p10".into());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -1233,9 +1213,7 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl2.lock().unwrap().push("annotated_p5".into());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();
@@ -1283,9 +1261,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                req, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(req, annotated))
         }),
     )
     .unwrap();

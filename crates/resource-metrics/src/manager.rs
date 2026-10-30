@@ -937,3 +937,7 @@ pub fn latest_memory_view(
 #[cfg(test)]
 #[path = "../tests/unit/resource_metrics/manager_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/resource_metrics/diagnostic_integration_tests.rs"]
+mod diagnostic_integration_tests;

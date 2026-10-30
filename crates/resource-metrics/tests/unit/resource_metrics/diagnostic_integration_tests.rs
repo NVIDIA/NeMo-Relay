@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::api::resource_metrics::{CpuMetrics, DataUnit, DurationUnit};
 use nemo_relay_diagnostics::{DiagnosticMemoryPage, DiagnosticQuery, Diagnostics};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn isolated_resource_manager_test() -> bool {
     nemo_relay_diagnostics::integration::install_resource_memory(
-        nemo_relay_resource_metrics::manager::latest_memory_view,
+        crate::manager::latest_memory_view,
     );
     // Isolate process-global ownership markers and bound regressions that could deadlock.
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_RESOURCE_MANAGER_OWNER_CHILD";

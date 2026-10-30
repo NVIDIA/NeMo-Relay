@@ -16,25 +16,31 @@ workspace = true
 [features]
 __skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 [dependencies]
-nemo-relay-plugin-host.workspace = true
-nemo-relay-diagnostics.workspace = true
+# First-party crates.
 nemo-relay-codecs.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-model-pricing.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-plugin.workspace = true
+nemo-relay-resource-metrics.workspace = true
 nemo-relay-runtime.workspace = true
 nemo-relay-types.workspace = true
-nemo-relay-plugin.workspace = true
-nemo-relay-model-pricing.workspace = true
-nemo-relay-resource-metrics.workspace = true
-nemo-relay-observability.workspace = true
+
+# Third-party dependencies.
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace"] }
 uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
+# First-party crates.
 nemo-relay-logging.workspace = true
-nemo-relay-resource-metrics.workspace = true
 nemo-relay-plugin.workspace = true
+nemo-relay-resource-metrics.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true }
+
+# Third-party dependencies.
 arrayvec.workspace = true
 async-trait.workspace = true
 base64.workspace = true
@@ -90,52 +96,8 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [[test]]
-name = "codec_integration"
-path = "tests/integration/codec_tests.rs"
-
-[[test]]
-name = "context_isolation_integration"
-path = "tests/integration/context_isolation_tests.rs"
-
-[[test]]
-name = "native_plugin_integration"
-path = "tests/integration/native_plugin_tests.rs"
-
-[[test]]
 name = "plugin_host_builtin_ownership"
 path = "tests/integration/plugin_host_builtin_ownership_tests.rs"
-
-[[test]]
-name = "worker_plugin_integration"
-path = "tests/integration/worker_plugin_tests.rs"
-
-[[test]]
-name = "middleware_integration"
-path = "tests/integration/middleware_tests.rs"
-
-[[test]]
-name = "pipeline_integration"
-path = "tests/integration/pipeline_tests.rs"
-
-[[test]]
-name = "scope_local_integration"
-path = "tests/integration/scope_local_tests.rs"
-
-[[test]]
-name = "stream_integration"
-path = "tests/integration/stream_tests.rs"
-
-[[test]]
-name = "subscriber_dispatcher_integration"
-path = "tests/integration/subscriber_dispatcher_tests.rs"
-
-[[test]]
-name = "api_surface_integration"
-path = "tests/integration/api_surface_tests.rs"
-
-[[test]]
-name = "atif_storage_integration"
-path = "tests/integration/atif_storage_tests.rs"
 
 [[test]]
 name = "embedded_diagnostics_startup"

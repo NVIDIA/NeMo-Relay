@@ -7,22 +7,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use nemo_relay::api::event::Event;
-use nemo_relay::api::registry::{
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::registry::{
     deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
     deregister_tool_sanitize_request_guardrail, register_mark_sanitize_guardrail,
     register_scope_sanitize_end_guardrail, register_tool_sanitize_request_guardrail,
 };
-use nemo_relay::api::scope::{
-    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
-};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
-use nemo_relay::error::FlowError;
 use nemo_relay_runtime::api::runtime::{
     NemoRelayContextState, create_scope_stack, current_scope_stack, global_context,
     set_thread_scope_stack,
 };
+use nemo_relay_runtime::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
+use nemo_relay_types::error::FlowError;
 use serde_json::json;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());

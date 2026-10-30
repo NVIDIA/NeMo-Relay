@@ -5,7 +5,7 @@ use nemo_relay_types::codec::request::MessageContent;
 use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
 use nemo_relay_types::codec::traits::LlmResponseCodec;
 use nemo_relay_types::error::{FlowError, Result};
-use nemo_relay_runtime::json::Json;
+use nemo_relay_types::Json;
 use serde::Deserialize;
 use serde_json::Map;
 

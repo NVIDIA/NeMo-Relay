@@ -14,8 +14,8 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-nemo-relay-codecs.workspace = true
 # First-party crates.
+nemo-relay-codecs.workspace = true
 nemo-relay-types.workspace = true
 
 # Third-party dependencies.
@@ -35,8 +35,14 @@ typed-builder.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
+# First-party crates.
 nemo-relay-diagnostics.workspace = true
+nemo-relay-model-pricing = { workspace = true }
+nemo-relay-observability = { workspace = true }
 nemo-relay-plugin.workspace = true
+nemo-relay-resource-metrics.workspace = true
+
+# Third-party dependencies.
 async-trait.workspace = true
 base64.workspace = true
 http.workspace = true
@@ -46,14 +52,11 @@ ring.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 toml.workspace = true
-nemo-relay-resource-metrics.workspace = true
-nemo-relay-observability = { workspace = true }
 opentelemetry-http.workspace = true
 opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
-nemo-relay-model-pricing = { workspace = true }
 sysinfo = { workspace = true, features = ["system", "network"] }
 futures.workspace = true
 object_store = { workspace = true, features = ["aws"] }
@@ -65,3 +68,31 @@ tokio = { workspace = true, default-features = true, features = ["rt", "macros",
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
 tokio-stream = { workspace = true, default-features = true, features = ["net"] }
 tonic = { workspace = true, default-features = true, features = ["transport"] }
+
+[[test]]
+name = "codec_integration"
+path = "tests/integration/codec_tests.rs"
+
+[[test]]
+name = "context_isolation_integration"
+path = "tests/integration/context_isolation_tests.rs"
+
+[[test]]
+name = "pipeline_integration"
+path = "tests/integration/pipeline_tests.rs"
+
+[[test]]
+name = "scope_local_integration"
+path = "tests/integration/scope_local_tests.rs"
+
+[[test]]
+name = "stream_integration"
+path = "tests/integration/stream_tests.rs"
+
+[[test]]
+name = "subscriber_dispatcher_integration"
+path = "tests/integration/subscriber_dispatcher_tests.rs"
+
+[[test]]
+name = "api_surface_integration"
+path = "tests/integration/api_surface_tests.rs"

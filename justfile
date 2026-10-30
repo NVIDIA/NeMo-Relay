@@ -852,13 +852,13 @@ published_cargo_packages() {
         nemo-relay-types \
         nemo-relay-codecs \
         nemo-relay-plugin \
+        nemo-relay-diagnostics \
+        nemo-relay-logging \
         nemo-relay-model-pricing \
         nemo-relay-resource-metrics \
         nemo-relay-observability \
         nemo-relay-worker-proto \
         nemo-relay-worker \
-        nemo-relay-diagnostics \
-        nemo-relay-logging \
         nemo-relay-runtime \
         nemo-relay-plugin-host \
         nemo-relay \
@@ -1081,7 +1081,7 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay --test documentation_examples
+    cargo test --locked -p nemo-relay-types --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
@@ -1920,8 +1920,6 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 ;;
             nemo-relay-diagnostics)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
@@ -1966,6 +1964,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
             nemo-relay-resource-metrics|nemo-relay-model-pricing)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;

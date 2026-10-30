@@ -13,8 +13,11 @@ description = "System resource collection and unit conversion for NeMo Relay."
 workspace = true
 
 [dependencies]
+# First-party crates.
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
+
+# Third-party dependencies.
 chrono = { workspace = true, features = ["std", "now"] }
 libloading.workspace = true
 log = { workspace = true, features = ["kv", "kv_serde"] }
@@ -31,5 +34,9 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# First-party crates.
+nemo-relay-diagnostics.workspace = true
+
+# Third-party dependencies.
 tempfile.workspace = true
 serde_json.workspace = true

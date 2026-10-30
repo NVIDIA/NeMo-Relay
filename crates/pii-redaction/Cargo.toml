@@ -14,13 +14,13 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-nemo-relay-plugin-host.workspace = true
-nemo-relay-diagnostics.workspace = true
-nemo-relay-codecs.workspace = true
-nemo-relay-types.workspace = true
-nemo-relay-observability.workspace = true
 # First-party crates.
+nemo-relay-codecs.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-plugin-host.workspace = true
 nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 log = { workspace = true, features = ["kv"] }
@@ -31,9 +31,9 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
-nemo-relay-logging.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true }
+nemo-relay-logging.workspace = true
 
 # Third-party dependencies.
 futures.workspace = true

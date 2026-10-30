@@ -3146,3 +3146,19 @@ mod resource_plugin_tests;
 #[cfg(test)]
 #[path = "../tests/support/composition.rs"]
 mod test_composition;
+
+#[cfg(test)]
+#[path = "../tests/integration/native_plugin_tests.rs"]
+mod native_plugin_integration_tests;
+
+#[cfg(test)]
+#[path = "../tests/integration/worker_plugin_tests.rs"]
+mod worker_plugin_integration_tests;
+
+#[cfg(test)]
+#[path = "../tests/integration/middleware_tests.rs"]
+mod middleware_integration_tests;
+
+#[cfg(test)]
+#[path = "../tests/integration/atif_storage_tests.rs"]
+mod atif_storage_integration_tests;

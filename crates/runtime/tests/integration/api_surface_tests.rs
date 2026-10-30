@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for api surface in the NeMo Relay core crate.
+//! Integration tests for api surface in the NeMo Relay runtime crate.
 
 #![allow(clippy::await_holding_lock)]
 
@@ -13,13 +13,13 @@ use test_support::ready;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
-use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
-use nemo_relay::api::llm::{
+use nemo_relay_runtime::api::event::{CategoryProfile, Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_runtime::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_call_end,
     llm_call_execute, llm_conditional_execution, llm_request_intercepts, llm_stream_call_execute,
 };
-use nemo_relay::api::registry::{
+use nemo_relay_runtime::api::registry::{
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
@@ -53,38 +53,38 @@ use nemo_relay::api::registry::{
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
-use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::scope::{event, pop_scope, push_scope};
-use nemo_relay::api::subscriber::{
-    deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
-    scope_register_subscriber,
-};
-use nemo_relay::api::tool::{ToolAttributes, ToolExecutionResult};
-use nemo_relay::api::tool::{
-    tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
-    tool_request_intercepts,
-};
-use nemo_relay::error::{FlowError, Result};
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay_runtime::api::scope::ScopeType;
+use nemo_relay_runtime::api::scope::{event, pop_scope, push_scope};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
+    scope_register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{ToolAttributes, ToolExecutionResult};
+use nemo_relay_runtime::api::tool::{
+    tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
+    tool_request_intercepts,
+};
 use nemo_relay_runtime::json::Json;
 use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_types::error::{FlowError, Result};
 use serde_json::{Map, json};
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn runtime_registration_dtos_reexport_shared_types() {
-    let identity = nemo_relay::api::registry::RuntimeRegistrationIdentity {
-        kind: nemo_relay::api::registry::RuntimeRegistrationKind::Subscriber,
+    let identity = nemo_relay_runtime::api::registry::RuntimeRegistrationIdentity {
+        kind: nemo_relay_runtime::api::registry::RuntimeRegistrationKind::Subscriber,
         local_name: "subscriber".into(),
         effective_name: "subscriber".into(),
-        owner: nemo_relay::api::registry::RuntimeRegistrationOwner {
-            kind: nemo_relay::api::registry::RuntimeRegistrationOwnerKind::GlobalApi,
+        owner: nemo_relay_runtime::api::registry::RuntimeRegistrationOwner {
+            kind: nemo_relay_runtime::api::registry::RuntimeRegistrationOwnerKind::GlobalApi,
             plugin_kind: None,
             component_ordinal: None,
         },
@@ -186,7 +186,7 @@ fn event_metadata_injectors_are_insert_only_ordered_and_failure_safe() {
     .unwrap();
 
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("metadata-injection")
             .metadata(json!({"nv.test.existing": "original"}))
             .build(),
@@ -249,7 +249,7 @@ fn event_sanitizers_rewrite_only_observability_fields_in_priority_order() {
     .unwrap();
 
     let handle = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("sanitized-scope")
             .scope_type(ScopeType::Custom)
             .input(json!({"secret": "raw"}))
@@ -272,7 +272,7 @@ fn event_sanitizers_rewrite_only_observability_fields_in_priority_order() {
     assert_eq!(start.category().unwrap().as_str(), "custom");
 
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -308,7 +308,7 @@ fn mark_and_scope_local_sanitizers_cover_marks_and_tool_scopes() {
     .unwrap();
 
     let owner = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("owner")
             .scope_type(ScopeType::Agent)
             .build(),
@@ -346,27 +346,27 @@ fn mark_and_scope_local_sanitizers_cover_marks_and_tool_scopes() {
     .unwrap();
 
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("sanitized-mark")
             .data(json!({"secret": "raw"}))
             .build(),
     )
     .unwrap();
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("sanitized-empty-mark")
             .build(),
     )
     .unwrap();
     let tool = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("sanitized-tool")
             .args(json!({"input": true}))
             .build(),
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool)
             .execution_result(json!({"output": true}).into())
             .build(),
@@ -405,7 +405,7 @@ fn mark_and_scope_local_sanitizers_cover_marks_and_tool_scopes() {
     assert_eq!(tool_end.metadata().unwrap(), &json!({"scope_end": true}));
 
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&owner.uuid)
             .build(),
     )
@@ -488,14 +488,14 @@ fn manual_tool_result_annotation_is_projected_on_the_end_event() {
 
     let events = capture_events("manual-tool-result-annotation");
     let handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("manual-annotated-tool")
             .args(json!({"input": true}))
             .build(),
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&handle)
             .execution_result(ToolExecutionResult::annotated(
                 json!({"output": true}),
@@ -530,7 +530,7 @@ fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
 
     let events = capture_events("skill-load-api-events");
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("read_multiple_files")
             .args(json!({
                 "paths": [
@@ -543,7 +543,7 @@ fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -580,14 +580,14 @@ fn mcp_resource_read_emits_minimal_tool_parented_skill_load_mark() {
 
     let events = capture_events("mcp-resource-skill-load-api-events");
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("mcp__resources__read_resource")
             .args(json!({"uri": "file:///skills/review/SKILL.md"}))
             .build(),
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -621,7 +621,7 @@ fn integration_owned_skill_load_metadata_suppresses_core_detection() {
 
     let events = capture_events("handled-skill-load-api-events");
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("read_file")
             .args(json!({"path": "/skills/review/SKILL.md"}))
             .metadata(json!({"nemo_relay.skill_load_handled": true}))
@@ -629,7 +629,7 @@ fn integration_owned_skill_load_metadata_suppresses_core_detection() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -651,7 +651,7 @@ fn integration_precomputed_skill_load_survives_stripped_tool_arguments() {
 
     let events = capture_events("precomputed-skill-load-api-events");
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("read_file")
             .args(json!({"stripped": true, "argKeys": ["path"]}))
             .metadata(json!({
@@ -664,7 +664,7 @@ fn integration_precomputed_skill_load_survives_stripped_tool_arguments() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -701,14 +701,14 @@ fn skill_load_detection_uses_original_arguments_before_observability_sanitizatio
     .unwrap();
     let events = capture_events("sanitized-skill-load-api-events");
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("read_file")
             .args(json!({"path": "/skills/review/SKILL.md"}))
             .build(),
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -734,7 +734,7 @@ async fn managed_skill_load_marks_survive_failures_repeat_per_call_and_skip_bloc
     let skill_args = json!({"path": "/skills/review/SKILL.md"});
 
     let error = tool_call_execute(
-        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
             .name("read_file")
             .args(skill_args.clone())
             .func(failing_tool_exec())
@@ -746,7 +746,7 @@ async fn managed_skill_load_marks_survive_failures_repeat_per_call_and_skip_bloc
 
     for _ in 0..2 {
         tool_call_execute(
-            nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
                 .name("read_file")
                 .args(skill_args.clone())
                 .func(noop_tool_exec())
@@ -763,7 +763,7 @@ async fn managed_skill_load_marks_survive_failures_repeat_per_call_and_skip_bloc
     )
     .unwrap();
     let blocked = tool_call_execute(
-        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
             .name("read_file")
             .args(skill_args)
             .func(noop_tool_exec())
@@ -810,7 +810,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     let scope_end = utc_timestamp("2026-01-01T00:00:06.723456Z");
 
     let scope_handle = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("timestamp-scope")
             .scope_type(ScopeType::Agent)
             .timestamp(scope_start)
@@ -818,7 +818,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("timestamp-mark")
             .parent(&scope_handle)
             .timestamp(mark_timestamp)
@@ -826,7 +826,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("timestamp-tool")
             .args(json!({"x": 1}))
             .timestamp(tool_start)
@@ -834,7 +834,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .timestamp(tool_end)
@@ -852,7 +852,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     llm_call_end(
-        nemo_relay::api::llm::LlmCallEndParams::builder()
+        nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
             .handle(&llm_handle)
             .response(json!({"ok": true}))
             .timestamp(llm_end)
@@ -860,7 +860,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_handle.uuid)
             .timestamp(scope_end)
             .build(),
@@ -912,7 +912,7 @@ fn test_manual_llm_end_queues_optimization_marks_before_end_event() {
     );
 
     llm_call_end(
-        nemo_relay::api::llm::LlmCallEndParams::builder()
+        nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
             .handle(&handle)
             .response(json!({"ok": true}))
             .build(),
@@ -955,7 +955,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     let llm_start = utc_timestamp("2099-02-01T00:00:02.333333Z");
 
     let scope_handle = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("default_ts_scope")
             .scope_type(ScopeType::Agent)
             .timestamp(scope_start)
@@ -963,7 +963,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     let tool_handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("default_ts_tool")
             .args(json!({"x": 1}))
             .timestamp(tool_start)
@@ -971,7 +971,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .execution_result(json!({"ok": true}).into())
             .build(),
@@ -988,14 +988,14 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     llm_call_end(
-        nemo_relay::api::llm::LlmCallEndParams::builder()
+        nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
             .handle(&llm_handle)
             .response(json!({"ok": true}))
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_handle.uuid)
             .build(),
     )
@@ -1201,9 +1201,7 @@ fn assert_global_llm_registry() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(request, annotated))
         }),
     )
     .unwrap();
@@ -1262,7 +1260,7 @@ fn test_deregister_after_emit_preserves_queued_subscriber_snapshot() {
     .unwrap();
 
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("queued-before-deregister")
             .build(),
     )
@@ -1283,7 +1281,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     setup_isolated_thread();
 
     let scope = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("scope-registry")
             .scope_type(ScopeType::Function)
             .build(),
@@ -1296,7 +1294,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     assert_scope_subscriber_registry(&scope.uuid);
 
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope.uuid)
             .build(),
     )
@@ -1467,9 +1465,7 @@ fn assert_scope_llm_registry(scope_uuid: &uuid::Uuid) {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(request, annotated))
         }),
     )
     .unwrap();
@@ -1637,7 +1633,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     .unwrap();
 
     let handle = tool_call(
-        nemo_relay::api::tool::ToolCallParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallParams::builder()
             .name("tool-api")
             .args(json!({"value": 1}))
             .attributes(ToolAttributes::REMOTE)
@@ -1648,7 +1644,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
     tool_call_end(
-        nemo_relay::api::tool::ToolCallEndParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
             .handle(&handle)
             .execution_result(json!({"ok": true}).into())
             .data(json!({"phase": "end"}))
@@ -1713,7 +1709,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     ));
     assert!(matches!(
         tool_call_execute(
-            nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
                 .name("tool-api")
                 .args(json!({"value": 3}))
                 .func(noop_tool_exec())
@@ -1736,7 +1732,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     let baseline = captured_events_snapshot(&events).len();
     assert!(matches!(
         tool_call_execute(
-            nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
                 .name("tool-api")
                 .args(json!({"value": 4}))
                 .func(failing_tool_exec())
@@ -1812,7 +1808,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
     llm_call_end(
-        nemo_relay::api::llm::LlmCallEndParams::builder()
+        nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
             .handle(&handle)
             .response(json!({"response": "ok"}))
             .data(json!({"phase": "end"}))
@@ -1847,9 +1843,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         false,
         Arc::new(|_name, mut request, annotated| {
             request.headers.insert("x-intercepted".into(), json!(true));
-            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            ready(nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(request, annotated))
         }),
     )
     .unwrap();
@@ -2228,7 +2222,7 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         Some("stream-error-model")
     );
     event(
-        nemo_relay::api::scope::EmitMarkEventParams::builder()
+        nemo_relay_runtime::api::scope::EmitMarkEventParams::builder()
             .name("standalone-mark")
             .data(json!({"seen": true}))
             .build(),

@@ -14,8 +14,11 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-log = { workspace = true, features = ["kv", "kv_serde"] }
+# First-party crates.
 nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+log = { workspace = true, features = ["kv", "kv_serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio-stream.workspace = true

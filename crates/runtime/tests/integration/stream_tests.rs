@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for stream in the NeMo Relay core crate.
+//! Integration tests for stream in the NeMo Relay runtime crate.
 
 #![allow(clippy::await_holding_lock)]
 
@@ -13,23 +13,19 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::llm::{
-    LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_stream_call_execute,
-};
-use nemo_relay::api::optimization::LlmOptimizationRecorder;
-use nemo_relay::api::registry::{
-    deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
-};
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::error::FlowError;
-use nemo_relay::error::Result;
 use nemo_relay_codecs::anthropic::AnthropicMessagesCodec;
 use nemo_relay_codecs::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
+use nemo_relay_runtime::api::llm::{
+    LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_stream_call_execute,
+};
+use nemo_relay_runtime::api::optimization::LlmOptimizationRecorder;
+use nemo_relay_runtime::api::registry::{
+    deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
 };
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
@@ -37,10 +33,18 @@ use nemo_relay_runtime::api::runtime::{
     LlmBorrowedCollectorFn, LlmCollector, LlmFinalizer, LlmJsonStream, LlmStreamInner,
     NemoRelayContextState,
 };
+use nemo_relay_runtime::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
+};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
 use nemo_relay_runtime::json::Json;
 use nemo_relay_runtime::stream::LlmStreamWrapper;
 use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
 use nemo_relay_types::codec::streaming::StreamingCodec;
+use nemo_relay_types::error::FlowError;
+use nemo_relay_types::error::Result;
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt};
 
@@ -56,7 +60,7 @@ impl Drop for ResetPricingResolverGuard {
 }
 
 fn is_llm_end(event: &Event) -> bool {
-    event.scope_type() == Some(nemo_relay::api::scope::ScopeType::Llm)
+    event.scope_type() == Some(nemo_relay_runtime::api::scope::ScopeType::Llm)
         && event.scope_category() == Some(ScopeCategory::End)
 }
 
@@ -167,7 +171,7 @@ async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publi
         let published = Arc::new(AtomicUsize::new(0));
         let finalized = Arc::new(AtomicUsize::new(0));
         if sanitize {
-            nemo_relay::api::registry::register_llm_sanitize_response_guardrail(
+            nemo_relay_runtime::api::registry::register_llm_sanitize_response_guardrail(
                 "observer-order",
                 1,
                 Arc::new({
@@ -207,7 +211,7 @@ async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publi
             }),
         )
         .unwrap();
-        let observer: nemo_relay::api::llm::gateway::ResponseCompletionFn = Box::new({
+        let observer: nemo_relay_runtime::api::llm::gateway::ResponseCompletionFn = Box::new({
             let started = started.clone();
             let release = release.clone();
             move |response| {
@@ -237,7 +241,7 @@ async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publi
         } else {
             finalize.into()
         };
-        let mut stream = nemo_relay::api::llm::gateway::execute(
+        let mut stream = nemo_relay_runtime::api::llm::gateway::execute(
             LlmStreamCallExecuteParams::builder()
                 .name("observer-order")
                 .request(LlmRequest {
@@ -288,7 +292,7 @@ async fn response_completion_termination_and_failures_preserve_single_end_public
             )
             .unwrap();
             let observer_calls = observed.clone();
-            let observer: nemo_relay::api::llm::gateway::ResponseCompletionFn =
+            let observer: nemo_relay_runtime::api::llm::gateway::ResponseCompletionFn =
                 Box::new(move |_| {
                     observer_calls.fetch_add(1, Ordering::SeqCst);
                     assert_ne!(
@@ -306,7 +310,7 @@ async fn response_completion_termination_and_failures_preserve_single_end_public
                     })
                 });
             let finalizer_calls = finalized.clone();
-            let mut stream = nemo_relay::api::llm::gateway::execute(
+            let mut stream = nemo_relay_runtime::api::llm::gateway::execute(
                 LlmStreamCallExecuteParams::builder()
                     .name("observer-failures")
                     .request(LlmRequest {

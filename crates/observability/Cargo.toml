@@ -13,13 +13,14 @@ description = "Built-in observability exporters and projections for NeMo Relay."
 workspace = true
 
 [dependencies]
-nemo-relay-plugin.workspace = true
-object_store = { workspace = true, features = ["aws"] }
 # First-party crates.
 nemo-relay-model-pricing.workspace = true
+nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
 
 # Third-party dependencies.
+object_store = { workspace = true, features = ["aws"] }
+
 async-trait.workspace = true
 base64.workspace = true
 chrono = { workspace = true, default-features = true, features = ["serde"] }

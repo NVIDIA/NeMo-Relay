@@ -3,25 +3,12 @@
 
 //! Integration coverage for gRPC worker dynamic plugins.
 
-mod plugin_host_test_support;
+use crate::test_support::plugin_host as plugin_host_test_support;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
-};
-use nemo_relay::api::scope::{
-    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
-};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{
-    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
-};
-use nemo_relay::error::Result as FlowResult;
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_observability::otel_logs::OpenTelemetryLogConfig;
 use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
@@ -30,11 +17,26 @@ use nemo_relay_plugin_host::dynamic::{
     load_worker_plugins, load_worker_plugins_with_diagnostics,
 };
 use nemo_relay_plugin_host::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
 use nemo_relay_runtime::api::runtime::LlmCodecIdentity;
 use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
+use nemo_relay_runtime::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
+};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::error::Result as FlowResult;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use prost::Message;
@@ -303,10 +305,11 @@ async fn worker_registration_discovers_static_observability() {
     failing_spec
         .config
         .insert("register_error".into(), json!(true));
-    let error = nemo_relay::plugin::initialize_with_verified_specs(config.clone(), [failing_spec])
-        .await
-        .err()
-        .expect("registration failure must abort activation");
+    let error =
+        crate::PluginHostActivation::initialize_with_verified_specs(config.clone(), [failing_spec])
+            .await
+            .err()
+            .expect("registration failure must abort activation");
     assert!(
         error
             .to_string()
@@ -314,7 +317,7 @@ async fn worker_registration_discovers_static_observability() {
         "{error}"
     );
     assert!(
-        nemo_relay::api::registry::list_runtime_registrations(None)
+        nemo_relay_runtime::api::registry::list_runtime_registrations(None)
             .unwrap()
             .is_empty()
     );
@@ -324,9 +327,10 @@ async fn worker_registration_discovers_static_observability() {
             .any(|kind| kind == "fixture_worker")
     );
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(config, [spec])
-        .await
-        .expect("worker must discover static subscribers during Register after rollback");
+    let (mut activation, _) =
+        crate::PluginHostActivation::initialize_with_verified_specs(config, [spec])
+            .await
+            .expect("worker must discover static subscribers during Register after rollback");
     TASK_SCOPE_STACK
         .scope(create_scope_stack(), async {
             let scope = push_scope(
@@ -347,7 +351,7 @@ async fn worker_registration_discovers_static_observability() {
         "the discovered gate must prevent OTLP export"
     );
     assert!(
-        nemo_relay::api::registry::list_runtime_registrations(None)
+        nemo_relay_runtime::api::registry::list_runtime_registrations(None)
             .unwrap()
             .is_empty()
     );
@@ -358,7 +362,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -400,7 +404,7 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -526,7 +530,7 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
 
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -573,7 +577,7 @@ async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -623,7 +627,7 @@ async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delive
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -675,7 +679,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -698,7 +702,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     assert!(error.contains("fixture_worker"), "{error}");
     assert!(error.contains("shutdown"), "{error}");
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -1014,12 +1018,12 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                 })
                 .func(Arc::new(move |_| {
                     Box::pin(async move {
-                        Err(nemo_relay::error::FlowError::Upstream(
-                            nemo_relay::error::UpstreamFailure {
+                        Err(nemo_relay_types::error::FlowError::Upstream(
+                            nemo_relay_types::error::UpstreamFailure {
                                 status: Some(status),
                                 body: "provider failure".into(),
                                 headers: Default::default(),
-                                class: nemo_relay::error::UpstreamFailureClass::Other,
+                                class: nemo_relay_types::error::UpstreamFailureClass::Other,
                             },
                         ))
                     })
@@ -1029,7 +1033,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         .await
         .unwrap_err();
         assert!(
-            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_worker': provider failure" && !failure.is_retryable())
+            matches!(error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_worker': provider failure" && !failure.is_retryable())
         );
     }
     flush_subscribers().expect("worker HTTP errors should flush");
@@ -1560,14 +1564,14 @@ async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", listener.local_addr().unwrap());
     let metric_request = capture_one_otlp_request(listener);
-    let metric_subscriber = nemo_relay::api::exporter::opentelemetry_metrics(
+    let metric_subscriber = crate::exporter::opentelemetry_metrics(
         OpenTelemetryMetricConfig::new(metric_endpoint)
             .with_instrumentation_scope("worker-tokenomics-metric-test"),
     )
     .expect("metric subscriber should build");
-    let log_subscriber = nemo_relay::api::exporter::opentelemetry_logs(
-        OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"),
-    )
+    let log_subscriber = crate::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+        "http://127.0.0.1:9/v1/logs",
+    ))
     .expect("log subscriber should build without connecting");
     let metric_name = "worker_tokenomics_metric_metrics";
     let log_name = "worker_tokenomics_metric_logs";

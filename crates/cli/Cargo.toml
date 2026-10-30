@@ -26,18 +26,18 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
-nemo-relay-plugin-host.workspace = true
-nemo-relay-logging.workspace = true
-nemo-relay-diagnostics.workspace = true
-nemo-relay-codecs.workspace = true
-nemo-relay-runtime.workspace = true
-nemo-relay-model-pricing.workspace = true
-nemo-relay-resource-metrics.workspace = true
-nemo-relay-observability.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true }
 nemo-relay-adaptive = { workspace = true }
+nemo-relay-codecs.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-logging.workspace = true
+nemo-relay-model-pricing.workspace = true
+nemo-relay-observability.workspace = true
 nemo-relay-pii-redaction.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-resource-metrics.workspace = true
+nemo-relay-runtime.workspace = true
 nemo-relay-types.workspace = true
 
 # Third-party dependencies.

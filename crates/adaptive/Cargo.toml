@@ -14,12 +14,12 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-nemo-relay-plugin-host.workspace = true
-nemo-relay-codecs.workspace = true
-nemo-relay-types.workspace = true
-nemo-relay-model-pricing.workspace = true
 # First-party crates.
+nemo-relay-codecs.workspace = true
+nemo-relay-model-pricing.workspace = true
+nemo-relay-plugin-host.workspace = true
 nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 chrono = { workspace = true, default-features = true, features = ["serde"] }
@@ -41,9 +41,9 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 __skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dev-dependencies]
-nemo-relay-logging.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true }
+nemo-relay-logging.workspace = true
 
 # Third-party dependencies.
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }

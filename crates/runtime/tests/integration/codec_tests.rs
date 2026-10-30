@@ -6,14 +6,14 @@
 
 use serde_json::json;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::error::Result;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::request::{
     ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message, MessageContent,
     ToolCall, ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
 use nemo_relay_types::codec::traits::LlmCodec;
+use nemo_relay_types::error::Result;
 
 // ---------------------------------------------------------------------------
 // Mock Codec for registry and resolution tests

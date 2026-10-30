@@ -5,10 +5,6 @@
 
 use std::sync::Arc;
 
-use nemo_relay::api::scope::{
-    PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
-};
-use nemo_relay::error::FlowError;
 use nemo_relay_runtime::api::runtime::{
     PropagationContext, ScopeStack, TASK_SCOPE_STACK, ThreadScopeStackBinding,
     capture_rootless_propagation_context, capture_thread_scope_stack, capture_traceparent,
@@ -17,6 +13,10 @@ use nemo_relay_runtime::api::runtime::{
     set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
     task_scope_top, with_scope_stack,
 };
+use nemo_relay_runtime::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
+};
+use nemo_relay_types::error::FlowError;
 use uuid::Uuid;
 
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);

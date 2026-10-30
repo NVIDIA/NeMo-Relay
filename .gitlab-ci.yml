@@ -324,7 +324,7 @@ publish:artifactory:cargo:
       artifactory = { index = "sparse+${NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
       export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="Bearer ${NEMO_RELAY_CI_ARTIFACTORY_KEY}"
-      export NEMO_RELAY_ARTIFACTORY_CRATE_DIRS="types codecs plugin model-pricing resource-metrics observability worker-proto worker diagnostics logging runtime plugin-host core adaptive pii-redaction ffi cli"
+      export NEMO_RELAY_ARTIFACTORY_CRATE_DIRS="types codecs plugin diagnostics logging model-pricing resource-metrics observability worker-proto worker runtime plugin-host core adaptive pii-redaction ffi cli"
 
       crates="$(
         uv run --no-project python - <<'PY'

@@ -3,7 +3,7 @@
 
 //! Integration coverage for SDK-built native dynamic plugins.
 
-mod plugin_host_test_support;
+use crate::test_support::plugin_host as plugin_host_test_support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,19 +11,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{
-    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams,
-    llm_call, llm_call_end, llm_call_execute, llm_stream_call_execute,
-};
-use nemo_relay::api::scope::{
-    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event as emit_scope_mark,
-    pop_scope, push_scope,
-};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{
-    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
-};
 use nemo_relay_plugin_host::dynamic::{
     DynamicPluginKind, NativePluginLoadSpec, VerifiedDynamicPluginSpec, initialize,
     load_native_plugins,
@@ -32,9 +19,24 @@ use nemo_relay_plugin_host::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, Result as PluginResult,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{
+    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams,
+    llm_call, llm_call_end, llm_call_execute, llm_stream_call_execute,
+};
 use nemo_relay_runtime::api::runtime::{
     LlmJsonStream, TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_thread_scope_stack,
     create_scope_stack, restore_thread_scope_stack, set_thread_scope_stack,
+};
+use nemo_relay_runtime::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event as emit_scope_mark,
+    pop_scope, push_scope,
+};
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
 };
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
@@ -700,12 +702,12 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
                 })
                 .func(Arc::new(move |_request| {
                     Box::pin(async move {
-                        Err(nemo_relay::error::FlowError::Upstream(
-                            nemo_relay::error::UpstreamFailure {
+                        Err(nemo_relay_types::error::FlowError::Upstream(
+                            nemo_relay_types::error::UpstreamFailure {
                                 status: Some(status),
                                 body: "provider denied access".into(),
                                 headers: Default::default(),
-                                class: nemo_relay::error::UpstreamFailureClass::Other,
+                                class: nemo_relay_types::error::UpstreamFailureClass::Other,
                             },
                         ))
                     })
@@ -715,7 +717,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         .await
         .unwrap_err();
         assert!(
-            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_native': provider denied access" && !failure.is_retryable())
+            matches!(error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_native': provider denied access" && !failure.is_retryable())
         );
     }
     let callback_error = llm_call_execute(
@@ -733,7 +735,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     .await
     .unwrap_err();
     assert!(
-        matches!(callback_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+        matches!(callback_error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
     );
     let stream_error = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
@@ -756,7 +758,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     .expect("stream reports the callback failure")
     .unwrap_err();
     assert!(
-        matches!(stream_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+        matches!(stream_error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
     );
     flush_subscribers().expect("HTTP error events should flush");
 
@@ -1823,7 +1825,7 @@ async fn plugin_host_activation_owns_configuration_until_close() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -1842,14 +1844,14 @@ async fn plugin_host_activation_owns_configuration_until_close() {
         .expect("host-owned intercept should run");
     assert_eq!(rewritten["native_plugin"], true);
 
-    let initialize_error = match nemo_relay::plugin::initialize_exact(PluginConfig::default()).await
-    {
-        Ok(mut unexpected) => {
-            unexpected.close().expect("unexpected host should close");
-            panic!("a second host replaced the active host");
-        }
-        Err(error) => error.to_string(),
-    };
+    let initialize_error =
+        match crate::PluginHostActivation::initialize_exact(PluginConfig::default()).await {
+            Ok(mut unexpected) => {
+                unexpected.close().expect("unexpected host should close");
+                panic!("a second host replaced the active host");
+            }
+            Err(error) => error.to_string(),
+        };
     assert!(initialize_error.contains("active dynamic plugin host"));
 
     activation.close().expect("plugin host should close");
@@ -1883,7 +1885,7 @@ async fn native_registration_discovers_static_observability() {
     spec.config = Map::from_iter([("discover_observability".into(), json!(true))]);
 
     let (mut activation, report) =
-        nemo_relay::plugin::initialize_with_verified_specs(config, [spec])
+        crate::PluginHostActivation::initialize_with_verified_specs(config, [spec])
             .await
             .expect("native registration must discover static OpenTelemetry subscribers");
     assert!(!report.has_errors());
@@ -1891,7 +1893,7 @@ async fn native_registration_discovers_static_observability() {
         .close()
         .expect("native host should close cleanly");
     assert!(
-        nemo_relay::api::registry::list_runtime_registrations(None)
+        nemo_relay_runtime::api::registry::list_runtime_registrations(None)
             .unwrap()
             .is_empty()
     );
@@ -1931,10 +1933,12 @@ async fn native_conditional_callbacks_block_allow_fail_open_and_clear() {
 
     let mut spec = host_spec("fixture_native", &manifest_ref);
     spec.config = Map::from_iter([("conditional_gate_test".into(), json!(true))]);
-    let (mut activation, report) =
-        nemo_relay::plugin::initialize_with_verified_specs(PluginConfig::default(), [spec])
-            .await
-            .expect("native plugin host should activate callback gates");
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
+        PluginConfig::default(),
+        [spec],
+    )
+    .await
+    .expect("native plugin host should activate callback gates");
     assert!(!report.has_errors());
     flush_subscribers().expect("activation events should flush");
     let baselines = registrations
@@ -1971,10 +1975,12 @@ async fn native_event_metadata_injector_enriches_events_and_is_removed_on_clear(
     let manifest_ref = write_manifest(&fixture);
     let mut spec = host_spec("fixture_native", &manifest_ref);
     spec.config = Map::from_iter([("event_metadata_injector_only".into(), json!(true))]);
-    let (mut activation, report) =
-        nemo_relay::plugin::initialize_with_verified_specs(PluginConfig::default(), [spec])
-            .await
-            .expect("native plugin host should activate");
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
+        PluginConfig::default(),
+        [spec],
+    )
+    .await
+    .expect("native plugin host should activate");
     assert!(!report.has_errors());
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
@@ -2036,10 +2042,12 @@ async fn native_event_metadata_injector_error_preserves_event_delivery() {
         ("event_metadata_injector_only".into(), json!(true)),
         ("event_metadata_injector_error".into(), json!(true)),
     ]);
-    let (mut activation, _) =
-        nemo_relay::plugin::initialize_with_verified_specs(PluginConfig::default(), [spec])
-            .await
-            .expect("native plugin host should activate");
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
+        PluginConfig::default(),
+        [spec],
+    )
+    .await
+    .expect("native plugin host should activate");
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = events.clone();
@@ -2086,7 +2094,7 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
         enabled: true,
         config: Map::new(),
     });
-    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, report) = crate::PluginHostActivation::initialize_with_verified_specs(
         base_config,
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2183,7 +2191,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2207,16 +2215,16 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
                     let release_rx = Arc::clone(&release_rx);
                     Box::pin(async move {
                         entered_tx.send(()).map_err(|error| {
-                            nemo_relay::error::FlowError::Internal(error.to_string())
+                            nemo_relay_types::error::FlowError::Internal(error.to_string())
                         })?;
                         release_rx
                             .lock()
                             .map_err(|error| {
-                                nemo_relay::error::FlowError::Internal(error.to_string())
+                                nemo_relay_types::error::FlowError::Internal(error.to_string())
                             })?
                             .recv()
                             .map_err(|error| {
-                                nemo_relay::error::FlowError::Internal(error.to_string())
+                                nemo_relay_types::error::FlowError::Internal(error.to_string())
                             })?;
                         Ok(ToolExecutionResult::new(
                             json!({ "tool_callback": true, "args": args }),
@@ -2264,7 +2272,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
     }))
     .expect("blocking base plugin should register");
 
-    let caller = tokio::spawn(nemo_relay::plugin::initialize_with_verified_specs(
+    let caller = tokio::spawn(crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig {
             components: vec![PluginComponentSpec::new("fixture_blocking_host_base")],
             ..PluginConfig::default()
@@ -2291,7 +2299,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
     .await
     .expect("canceled activation should clear its completed host result");
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2304,7 +2312,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
 #[tokio::test]
 async fn plugin_host_rejects_empty_dynamic_specs_without_claiming_ownership() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         Vec::<VerifiedDynamicPluginSpec>::new(),
     )
@@ -2334,7 +2342,7 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
     let manifest_ref = write_manifest(&fixture);
 
     {
-        let (activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+        let (activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
             PluginConfig::default(),
             [host_spec("fixture_native", &manifest_ref)],
         )
@@ -2348,7 +2356,7 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
             .iter()
             .any(|kind| kind == "fixture_native")
     );
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2367,7 +2375,7 @@ async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
         "nemo_relay_fixture_observability_collision",
     );
 
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("observability", &collision_manifest)],
     )
@@ -2385,7 +2393,7 @@ async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
     assert!(error.contains("already registered"), "{error}");
 
     let manifest_ref = write_manifest(&fixture);
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2403,7 +2411,7 @@ async fn plugin_host_rejects_duplicate_ids_before_loading() {
     let manifest_ref = write_manifest(&fixture);
     let spec = host_spec("fixture_native", &manifest_ref);
 
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [spec.clone(), spec],
     )
@@ -2425,7 +2433,7 @@ async fn plugin_host_rejects_duplicate_ids_before_loading() {
             .any(|kind| kind == "fixture_native")
     );
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2439,7 +2447,7 @@ async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2454,7 +2462,7 @@ async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
     assert!(error.contains("fixture_native"), "{error}");
     assert!(error.contains("was not registered"), "{error}");
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2468,7 +2476,7 @@ async fn plugin_host_clear_preserves_a_replacement_registration() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2492,7 +2500,7 @@ async fn plugin_host_clear_preserves_a_replacement_registration() {
     assert!(Arc::ptr_eq(&registered, &replacement));
     assert!(deregister_plugin("fixture_native"));
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2508,7 +2516,7 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
     let manifest_ref = write_manifest(&fixture);
     let missing_manifest = manifest_ref.with_file_name("missing-relay-plugin.toml");
 
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [
             host_spec("fixture_native", &manifest_ref),
@@ -2532,7 +2540,7 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
             .any(|kind| kind == "fixture_native")
     );
 
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
+    let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2548,11 +2556,11 @@ async fn plugin_host_rejects_a_second_active_host() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let mut existing = nemo_relay::plugin::initialize_exact(PluginConfig::default())
+    let mut existing = crate::PluginHostActivation::initialize_exact(PluginConfig::default())
         .await
         .expect("first host should initialize");
 
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
     )
@@ -2573,7 +2581,7 @@ async fn plugin_host_rejects_a_second_active_host() {
     existing.close().expect("first host should close");
 }
 
-async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plugin::Result<()> {
+async fn initialize_fixture_native(config: Map<String, Json>) -> crate::Result<()> {
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(PluginComponentSpec {
         kind: "fixture_native".into(),
@@ -2922,12 +2930,9 @@ registration_failure = {failure}
             ),
         )
         .unwrap();
-        let activated = nemo_relay::plugin::initialize_with_diagnostics(
-            PluginConfig::default(),
-            Some(config),
-            &context,
-        )
-        .await;
+        let activated =
+            crate::initialize_with_diagnostics(PluginConfig::default(), Some(config), &context)
+                .await;
         if failure {
             assert!(
                 activated

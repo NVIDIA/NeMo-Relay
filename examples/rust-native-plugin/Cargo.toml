@@ -24,10 +24,10 @@ serde_json.workspace = true
 tokio = { workspace = true, default-features = true, features = ["io-util", "macros", "time"] }
 
 [dev-dependencies]
-nemo-relay-plugin-host.workspace = true
-nemo-relay-runtime.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true, features = ["__skip-implicit-config"] }
+nemo-relay-plugin-host.workspace = true
+nemo-relay-runtime.workspace = true
 
 # Third-party dependencies.
 sha2.workspace = true

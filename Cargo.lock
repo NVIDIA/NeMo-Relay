@@ -2420,6 +2420,7 @@ dependencies = [
  "chrono",
  "libloading",
  "log",
+ "nemo-relay-diagnostics",
  "nemo-relay-plugin",
  "nemo-relay-types",
  "rustix",
