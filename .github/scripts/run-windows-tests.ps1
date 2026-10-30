@@ -145,6 +145,16 @@ if ($Worker) {
     exit $exitCode
 }
 
+# An explicit request lets native-shell harnesses preserve their disposable
+# provider configuration without broadening the default CI environment allowlist.
+$requestedEnvironment = $null
+if ($PayloadPath) {
+    $request = Get-Content -Raw -LiteralPath $PayloadPath | ConvertFrom-Json -AsHashtable
+    $Executable = $request.Executable
+    $CommandArguments = @($request.Arguments)
+    $requestedEnvironment = $request.Environment
+}
+
 if (!$Executable) {
     throw "A test executable is required."
 }
@@ -197,6 +207,7 @@ try {
             $environment[$entry.Key] = $entry.Value
         }
     }
+    if ($null -ne $requestedEnvironment) { $environment = $requestedEnvironment }
     $payload = @{
         JobName = $jobName
         Directory = (Get-Location).Path

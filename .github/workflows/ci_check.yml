@@ -207,6 +207,12 @@ jobs:
 
       - name: Validate quickstart contracts
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          # Document jq expressions use fixture data and need no repository token.
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+          GH_ENTERPRISE_TOKEN: ''
+          GITHUB_ENTERPRISE_TOKEN: ''
         run: just check-quickstarts
 
       - name: pre-commit
