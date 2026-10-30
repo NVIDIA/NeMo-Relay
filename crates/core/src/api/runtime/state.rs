@@ -46,7 +46,7 @@ use crate::api::runtime::llm_execution_context::LlmExecutionCodecLeaseGuard;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{LlmExecutionContext, LlmExecutionFn, LlmStreamExecutionFn};
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
-use crate::api::shared::snapshot_event_sanitizers;
+use crate::api::shared::{metadata_with_otel_status, snapshot_event_sanitizers};
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{
     CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
@@ -791,6 +791,16 @@ impl NemoRelayContextState {
     /// An LLM-end [`Event`] derived from the provided parameters.
     pub fn build_llm_end_event(&self, params: EndLlmHandleParams<'_>) -> Event {
         let handle = params.handle;
+        let metadata = merge_json(handle.metadata.clone(), params.metadata);
+        let metadata = match metadata
+            .as_ref()
+            .and_then(|value| value.get("otel.status_code"))
+            .and_then(Json::as_str)
+        {
+            Some("OK") => metadata_with_otel_status(metadata, "OK", None),
+            Some("UNSET") => metadata_with_otel_status(metadata, "UNSET", None),
+            _ => metadata,
+        };
         Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
                 .parent_uuid_opt(handle.parent_uuid)
@@ -802,7 +812,7 @@ impl NemoRelayContextState {
                 )
                 .name(handle.name.as_str())
                 .data_opt(params.data)
-                .metadata_opt(merge_json(handle.metadata.clone(), params.metadata))
+                .metadata_opt(metadata)
                 .build(),
             ScopeCategory::End,
             llm_attributes_to_strings(handle.attributes),
