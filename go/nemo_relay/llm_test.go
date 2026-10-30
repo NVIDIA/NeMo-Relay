@@ -58,7 +58,7 @@ func TestLlmCallEndStatusMetadata(t *testing.T) {
 		{"manual_cancelled", `{"request_id":"request-123","otel.status_code":"UNSET"}`, "UNSET"},
 		{"manual_error", `{"request_id":"request-123","otel.status_code":"ERROR","otel.status_description":"provider timed out","error.type":"TimeoutError"}`, "ERROR"},
 	} {
-		handle, err := LlmCall(tc.name, makeRequest())
+		handle, err := LlmCall(tc.name, makeRequest(), WithLLMMetadata(json.RawMessage(`{"otel.status_description":"stale at call start"}`)))
 		if err != nil {
 			t.Fatalf(llmCallFailed, err)
 		}
@@ -76,6 +76,14 @@ func TestLlmCallEndStatusMetadata(t *testing.T) {
 		if tc.want == "ERROR" {
 			assertJSONFieldString(t, metadata, "otel.status_description", "provider timed out")
 			assertJSONFieldString(t, metadata, "error.type", "TimeoutError")
+		} else {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(metadata, &fields); err != nil {
+				t.Fatalf("unmarshal status metadata failed: %v", err)
+			}
+			if _, exists := fields["otel.status_description"]; exists {
+				t.Fatalf("non-error status retained a stale description: %s", metadata)
+			}
 		}
 	}
 }

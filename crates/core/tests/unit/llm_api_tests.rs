@@ -2481,6 +2481,7 @@ fn manual_llm_call_end_preserves_explicit_error_metadata() {
         LlmCallParams::builder()
             .name("manual-error")
             .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
             .build(),
     )
     .unwrap();
@@ -2524,6 +2525,7 @@ fn manual_llm_call_end_defaults_to_ok_without_an_error_status() {
         LlmCallParams::builder()
             .name("manual-ok")
             .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
             .build(),
     )
     .unwrap();
@@ -2563,6 +2565,7 @@ fn manual_llm_call_end_preserves_unset_for_cancelled_observations() {
         LlmCallParams::builder()
             .name("manual-cancelled")
             .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
             .build(),
     )
     .unwrap();

@@ -131,7 +131,9 @@ describe('LLM lifecycle', () => {
             'error.type': 'TimeoutError',
           });
         }
-        const handle = llmCall(name, makeNative());
+        const handle = llmCall(name, makeNative(), null, null, null, {
+          'otel.status_description': 'stale at call start',
+        });
         llmCallEnd(handle, failed ? null : { text: 'hello' }, null, metadata);
         await flushSubscriberCallbacks();
         const end = events.find((event) => event.name === name && event.scope_category === 'end');

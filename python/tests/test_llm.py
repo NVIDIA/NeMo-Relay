@@ -136,7 +136,7 @@ class TestLLM:
                     "error.type": "TimeoutError",
                 }
             )
-        handle = llm.call("manual_status", make_request())
+        handle = llm.call("manual_status", make_request(), metadata={"otel.status_description": "stale at call start"})
         llm.call_end(handle, None if failed else {"text": "hello"}, metadata=metadata)
         subscribers.flush()
 
