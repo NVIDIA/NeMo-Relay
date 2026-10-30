@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use dialoguer::theme::ColorfulTheme;
-use nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest;
+use nemo_relay_plugin_host::dynamic::DynamicPluginManifest;
 use serde_json::{Map, Value};
 
 use crate::error::CliError;

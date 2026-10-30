@@ -17,7 +17,7 @@ use std::ffi::CString;
 use libc::c_char;
 
 use nemo_relay::error::FlowError;
-use nemo_relay_runtime::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 
 /// Status codes returned by all FFI functions.
 ///

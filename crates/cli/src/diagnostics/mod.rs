@@ -34,14 +34,14 @@ use nemo_relay_adaptive::{ResponseCacheConfig, response_cache};
 use nemo_relay_model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay_observability::otel::resolve_http_trace_endpoint;
 use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
-use nemo_relay_runtime::plugin::dynamic::validate as validate_plugin_host;
+use nemo_relay_plugin_host::dynamic::validate as validate_plugin_host;
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 use {
-    nemo_relay::plugin::validate_static_plugin_config, nemo_relay_runtime::plugin::DiagnosticLevel,
-    nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay::plugin::validate_static_plugin_config, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::PluginConfig,
 };
 
 use crate::agents::CodingAgent;

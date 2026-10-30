@@ -6,8 +6,7 @@ use crate::error::NemoRelayStatus;
 use nemo_relay_diagnostics::DiagnosticsSettings;
 use std::ffi::{CStr, CString};
 use {
-    nemo_relay_runtime::plugin::dynamic::PluginHostConfig,
-    nemo_relay_runtime::plugin::dynamic::initialize,
+    nemo_relay_plugin_host::dynamic::PluginHostConfig, nemo_relay_plugin_host::dynamic::initialize,
 };
 
 #[test]

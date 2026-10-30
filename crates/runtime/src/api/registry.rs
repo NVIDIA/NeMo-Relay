@@ -80,7 +80,7 @@ pub fn deregister_conditional_middleware_guardrail(name: &str) -> Result<bool> {
 
 /// Return whether one global runtime registration is enabled by every
 /// matching conditional middleware guardrail.
-pub(crate) fn runtime_registration_is_enabled(
+pub fn runtime_registration_is_enabled(
     kind: RuntimeRegistrationKind,
     effective_name: &str,
 ) -> bool {
@@ -140,7 +140,7 @@ fn registration_identity(
     effective_name: &str,
 ) -> RuntimeRegistrationIdentity {
     let Some((plugin_kind, component_ordinal, local_name)) =
-        crate::plugin::decode_plugin_component_effective_name(effective_name)
+        nemo_relay_types::plugin::decode_plugin_component_effective_name(effective_name)
     else {
         return RuntimeRegistrationIdentity {
             kind,
@@ -328,18 +328,18 @@ pub fn list_runtime_registrations(
 /// Registry records carry the common entry metadata used by all middleware
 /// registries plus the caller-provided payload.
 #[derive(Clone)]
-pub(crate) struct RegistryRecord<T> {
+pub struct RegistryRecord<T> {
     /// Unique middleware name within its registry.
-    pub(crate) name: String,
+    pub name: String,
     /// Lower values run earlier in the chain.
-    pub(crate) priority: i32,
+    pub priority: i32,
     /// The caller-provided registry payload.
-    pub(crate) payload: T,
+    pub payload: T,
 }
 
 impl<T> RegistryRecord<T> {
     /// Create a new priority-ordered registry record.
-    pub(crate) fn new(name: impl Into<String>, priority: i32, payload: T) -> Self {
+    pub fn new(name: impl Into<String>, priority: i32, payload: T) -> Self {
         Self {
             name: name.into(),
             priority,

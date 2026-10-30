@@ -104,7 +104,7 @@ impl Plugin for FfiHostedPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -200,12 +200,12 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config::<nemo_relay_runtime::plugin::dynamic::PluginHostConfig>(
-        config_json,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
+    let config =
+        match parse_plugin_config::<nemo_relay_plugin_host::dynamic::PluginHostConfig>(config_json)
+        {
+            Ok(config) => config,
+            Err(status) => return status,
+        };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {
@@ -342,12 +342,12 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config::<nemo_relay_runtime::plugin::dynamic::PluginHostConfig>(
-        config_json,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
+    let config =
+        match parse_plugin_config::<nemo_relay_plugin_host::dynamic::PluginHostConfig>(config_json)
+        {
+            Ok(config) => config,
+            Err(status) => return status,
+        };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {

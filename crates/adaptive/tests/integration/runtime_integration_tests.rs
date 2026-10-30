@@ -49,12 +49,12 @@ use {
     crate::plugin_host_test_support::test_close_plugin_host,
     crate::plugin_host_test_support::test_initialize_plugin_host_exact,
     crate::plugin_host_test_support::test_validate_static_plugin_config,
-    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::DiagnosticLevel,
-    nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginComponentSpec,
-    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginError,
-    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginComponentSpec,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginError,
+    nemo_relay_plugin_host::deregister_plugin, nemo_relay_plugin_host::register_plugin,
 };
-use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
+use {nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::UnsupportedBehavior};
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 static TEST_LOGGING: Once = Once::new();
@@ -724,7 +724,7 @@ impl Plugin for HeaderPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         let plugin_config = plugin_config.clone();
@@ -980,7 +980,7 @@ impl Plugin for FailingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         Box::pin(async move {

@@ -9,7 +9,7 @@ use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::plugin::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
-use nemo_relay_runtime::plugin::PluginConfig;
+use nemo_relay_plugin_host::PluginConfig;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;

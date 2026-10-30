@@ -10,7 +10,7 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::registry::{RuntimeRegistrationKind, list_runtime_registrations};
-use nemo_relay_runtime::plugin::rollback_registrations;
+use nemo_relay_plugin_host::rollback_registrations;
 use pyo3::types::PyModule;
 use serde_json::json;
 

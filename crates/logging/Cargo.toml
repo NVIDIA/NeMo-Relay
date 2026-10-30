@@ -22,6 +22,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
 toml.workspace = true
+# Forward third-party tracing diagnostics into the log facade.
 tracing = { workspace = true, features = ["std", "log"] }
 uuid = { workspace = true, features = ["v7"] }
 

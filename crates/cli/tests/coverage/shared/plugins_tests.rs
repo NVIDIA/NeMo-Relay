@@ -17,13 +17,13 @@ use nemo_relay_runtime::config_editor::{
 use serde_json::Map;
 use std::path::PathBuf;
 use {
-    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::PluginComponentSpec,
-    nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::PluginComponentSpec,
+    nemo_relay_plugin_host::PluginConfig,
 };
 
 #[test]
 fn plugin_document_policy_edits_preserve_host_extensions_and_prune_default_fields() {
-    use nemo_relay_runtime::plugin::UnsupportedBehavior;
+    use nemo_relay_plugin_host::UnsupportedBehavior;
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("plugins.toml");

@@ -240,13 +240,14 @@ pub fn w3c_span_context(
 
 /// Validated W3C Trace Context retained internally across local stack forks.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct W3cTraceContext {
+pub struct W3cTraceContext {
     traceparent: String,
     tracestate: Option<String>,
 }
 
 impl W3cTraceContext {
-    pub(crate) fn new(traceparent: impl Into<String>, tracestate: Option<String>) -> Result<Self> {
+    /// Validate incoming W3C propagation headers.
+    pub fn new(traceparent: impl Into<String>, tracestate: Option<String>) -> Result<Self> {
         let traceparent = traceparent.into();
         let (traceparent, tracestate, _) =
             normalize_w3c_headers(Some(&traceparent), tracestate.as_deref());
@@ -261,15 +262,18 @@ impl W3cTraceContext {
         })
     }
 
-    pub(crate) fn traceparent(&self) -> &str {
+    /// Return the normalized traceparent header.
+    pub fn traceparent(&self) -> &str {
         &self.traceparent
     }
 
-    pub(crate) fn tracestate(&self) -> Option<&str> {
+    /// Return the normalized tracestate header.
+    pub fn tracestate(&self) -> Option<&str> {
         self.tracestate.as_deref()
     }
 
-    pub(crate) fn span_context(&self) -> Option<SpanContext> {
+    /// Decode the retained OpenTelemetry span context.
+    pub fn span_context(&self) -> Option<SpanContext> {
         w3c_span_context(Some(&self.traceparent), self.tracestate.as_deref())
     }
 }
@@ -458,7 +462,7 @@ impl ScopeStack {
     }
 
     /// Return the causal root that should be attached to emitted events.
-    pub(crate) fn event_propagation_root_uuid(&self) -> Option<Uuid> {
+    pub fn event_propagation_root_uuid(&self) -> Option<Uuid> {
         self.propagated_root_uuid
             .or_else(|| {
                 self.stack
@@ -660,7 +664,7 @@ impl ScopeStack {
     /// # Returns
     /// A vector of subscribers collected from each active scope that owns
     /// scope-local registries.
-    pub(crate) fn collect_scope_local_subscribers(&self) -> Vec<EventSubscriberFn> {
+    pub fn collect_scope_local_subscribers(&self) -> Vec<EventSubscriberFn> {
         self.stack
             .iter()
             .filter_map(|handle| self.scope_registries.get(&handle.uuid))
@@ -744,7 +748,7 @@ pub(crate) fn root_scope_stack_snapshot(stack: &ScopeStackHandle) -> Result<Scop
 
 /// Clone a scope stack into an isolated emission-time snapshot.
 #[doc(hidden)]
-pub(crate) fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
+pub fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
     let stack = handle
         .read()
         .unwrap_or_else(|error| error.into_inner())
@@ -1116,7 +1120,8 @@ pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = 
     with_active_event_trace_context(uuid, None, future).await
 }
 
-pub(crate) async fn with_active_event_trace_context<T>(
+/// Bind trace context to an active event while polling an operation.
+pub async fn with_active_event_trace_context<T>(
     uuid: Uuid,
     trace_context: Option<W3cTraceContext>,
     future: impl Future<Output = T>,
@@ -1203,14 +1208,16 @@ pub(crate) fn rebind_active_event_to_stack(
     }
 }
 
-pub(crate) fn active_event_uuid() -> Option<Uuid> {
+/// Return the current active lifecycle event identity.
+pub fn active_event_uuid() -> Option<Uuid> {
     ACTIVE_EVENT
         .try_with(|event| event.event_uuid)
         .ok()
         .or_else(thread_active_event_uuid)
 }
 
-pub(crate) fn active_event_trace_context() -> Option<W3cTraceContext> {
+/// Return trace propagation context for the current active event.
+pub fn active_event_trace_context() -> Option<W3cTraceContext> {
     match ACTIVE_EVENT_TRACE_CONTEXT.try_with(Clone::clone) {
         Ok(context) => context,
         Err(_) => {
@@ -1469,7 +1476,7 @@ fn clear_thread_active_event_for_stack_change(handle: &ScopeStackHandle) {
 /// the callback's visible stack before crossing that boundary, so the managed
 /// event must be rebound to the snapshot's allocation while retaining its
 /// original scope anchor and W3C context.
-pub(crate) fn sync_thread_active_event_for_stack(scope_stack: &ScopeStackHandle) {
+pub fn sync_thread_active_event_for_stack(scope_stack: &ScopeStackHandle) {
     let active_event = capture_anchored_active_event()
         .map(|active_event| rebind_active_event_to_stack(active_event, scope_stack));
     let trace_context = active_event

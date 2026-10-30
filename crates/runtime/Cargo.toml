@@ -7,70 +7,45 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Execution engine, registries, diagnostics, and host lifecycle for NeMo Relay."
+description = "Execution engine, scopes, registries, and continuation handling for NeMo Relay."
 readme = "README.md"
 
 [lints]
 workspace = true
 
-[features]
-# Private test hook for suppressing implicit user/system plugin discovery.
-__skip-implicit-config = []
 [dependencies]
-nemo-relay-diagnostics.workspace = true
 nemo-relay-codecs.workspace = true
 # First-party crates.
-nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
-nemo-relay-worker-proto = { workspace = true }
 
 # Third-party dependencies.
-arrayvec.workspace = true
-async-trait.workspace = true
-base64.workspace = true
 bitflags = { workspace = true, features = ["serde"] }
 chrono = { workspace = true, default-features = true, features = ["serde"] }
-circular-buffer.workspace = true
-enumset.workspace = true
 futures-util.workspace = true
-http.workspace = true
-http-body.workspace = true
-hyper-util = { workspace = true, features = ["tokio"] }
-jsonschema.workspace = true
-libloading.workspace = true
 log = { workspace = true, features = ["kv", "kv_serde"] }
 opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["trace"] }
-percent-encoding.workspace = true
-prost.workspace = true
-reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
-ring.workspace = true
-schemars = { workspace = true }
-semver.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
-sha2.workspace = true
 shell-words.workspace = true
 strum = { workspace = true, features = ["derive"] }
-tempfile.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
 tokio-stream = { workspace = true, features = ["sync", "net"] }
-toml.workspace = true
-tonic = { workspace = true, features = ["codegen", "router", "transport"] }
-tower = { workspace = true, features = ["util"] }
-tracing = { workspace = true, features = ["std", "log"] }
 typed-builder.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
 
-[target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["fs", "param"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
-
 [dev-dependencies]
-nemo-relay-logging.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-plugin.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+http.workspace = true
+prost.workspace = true
+reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
+ring.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+toml.workspace = true
 nemo-relay-resource-metrics.workspace = true
 nemo-relay-observability = { workspace = true }
 opentelemetry-http.workspace = true

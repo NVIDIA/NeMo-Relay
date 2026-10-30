@@ -26,6 +26,7 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-plugin-host.workspace = true
 nemo-relay-logging.workspace = true
 nemo-relay-diagnostics.workspace = true
 nemo-relay-codecs.workspace = true

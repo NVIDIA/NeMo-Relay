@@ -3,7 +3,6 @@
 
 //! Component services supplied by an SDK or embedding host.
 
-use crate::plugin::{ConfigDiagnostic, PluginConfig, Result};
 use nemo_relay_types::{
     api::resource_metrics::ResourceMetricsSnapshot,
     codec::{
@@ -19,10 +18,6 @@ pub type SnapshotSink = Arc<dyn Fn(&ResourceMetricsSnapshot) + Send + Sync>;
 /// Composition callbacks owned by the SDK, independent from the runtime engine.
 #[derive(Clone, Copy)]
 pub struct RuntimeServices {
-    /// Restore the embedding host's built-in plugin registrations.
-    pub register_builtin_plugins: fn() -> Result<()>,
-    /// Run host-specific component preflight checks.
-    pub preflight: fn(&PluginConfig) -> Vec<ConfigDiagnostic>,
     /// Capture the current immutable pricing resolver.
     pub pricing_snapshot: fn() -> Arc<dyn CostEstimator>,
     /// Infer the provider label used for price lookup.
@@ -45,8 +40,6 @@ impl CostEstimator for NoPricing {
 impl Default for RuntimeServices {
     fn default() -> Self {
         Self {
-            register_builtin_plugins: || Ok(()),
-            preflight: |_| Vec::new(),
             pricing_snapshot: || Arc::new(NoPricing),
             infer_model_provider: |provider, _| Some(provider.to_string()),
             attach_estimated_cost: |_, _| {},

@@ -4,7 +4,7 @@
 //! Unit tests for registry in the NeMo Relay FFI crate.
 
 use super::*;
-use nemo_relay_runtime::plugin::rollback_registrations;
+use nemo_relay_plugin_host::rollback_registrations;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver};

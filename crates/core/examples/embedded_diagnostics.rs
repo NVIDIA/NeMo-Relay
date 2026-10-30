@@ -3,7 +3,7 @@
 
 //! Run with `cargo run -p nemo-relay --example embedded_diagnostics`.
 use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings, embedded};
-use nemo_relay_runtime::plugin::dynamic::PluginHostConfig;
+use nemo_relay_plugin_host::dynamic::PluginHostConfig;
 
 use nemo_relay::plugin::{initialize, validate};
 

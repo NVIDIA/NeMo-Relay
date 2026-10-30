@@ -87,11 +87,13 @@ impl MiddlewareContinuationContext {
         })
     }
 
-    pub(crate) fn scope_stack(&self) -> ScopeStackHandle {
+    /// Return the scope stack captured by this continuation.
+    pub fn scope_stack(&self) -> ScopeStackHandle {
         self.scope_stack.clone()
     }
 
-    pub(crate) fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
+    /// Run a synchronous operation with this continuation installed.
+    pub fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
         struct RestoreThreadContext(Option<crate::api::runtime::ThreadScopeStackBinding>);
 
         impl Drop for RestoreThreadContext {
@@ -116,7 +118,7 @@ impl MiddlewareContinuationContext {
     }
 
     /// Clone this context with the scope selection visible to a continuation call.
-    pub(crate) fn isolated_for_current_invocation(&self) -> Result<Self> {
+    pub fn isolated_for_current_invocation(&self) -> Result<Self> {
         let visible_scope_stack = current_context_scope_stack().unwrap_or_else(|| {
             if tokio::task::try_id().is_none() && scope_stack_active() {
                 current_scope_stack()
@@ -168,7 +170,7 @@ impl MiddlewareContinuationContext {
 }
 
 /// A continuation that remains valid while its owning interceptor is running.
-pub(crate) struct MiddlewareContinuationLease {
+pub struct MiddlewareContinuationLease {
     context: MiddlewareContinuationContext,
     revoked: tokio::sync::watch::Receiver<bool>,
 }
@@ -183,7 +185,7 @@ impl Clone for MiddlewareContinuationLease {
 }
 
 /// Revokes a middleware continuation when its interceptor settles or is dropped.
-pub(crate) struct MiddlewareContinuationGuard {
+pub struct MiddlewareContinuationGuard {
     revoke: tokio::sync::watch::Sender<bool>,
 }
 
@@ -194,14 +196,14 @@ impl Drop for MiddlewareContinuationGuard {
 }
 
 /// One isolated invocation of a middleware continuation.
-pub(crate) struct MiddlewareContinuationInvocation {
+pub struct MiddlewareContinuationInvocation {
     context: MiddlewareContinuationContext,
     revoked: tokio::sync::watch::Receiver<bool>,
 }
 
 impl MiddlewareContinuationLease {
     /// Capture the current Relay context and create its callback-lifetime guard.
-    pub(crate) fn capture() -> (Self, MiddlewareContinuationGuard) {
+    pub fn capture() -> (Self, MiddlewareContinuationGuard) {
         let (revoke, revoked) = tokio::sync::watch::channel(false);
         (
             Self {
@@ -213,7 +215,7 @@ impl MiddlewareContinuationLease {
     }
 
     /// Begin a `next` call with an invocation-time scope-stack snapshot.
-    pub(crate) fn begin(&self) -> Result<MiddlewareContinuationInvocation> {
+    pub fn begin(&self) -> Result<MiddlewareContinuationInvocation> {
         if *self.revoked.borrow() {
             return Err(inactive_continuation_error());
         }
@@ -227,12 +229,12 @@ impl MiddlewareContinuationLease {
 
 impl MiddlewareContinuationInvocation {
     /// Return the isolated Relay context for work that outlives construction.
-    pub(crate) fn context(&self) -> &MiddlewareContinuationContext {
+    pub fn context(&self) -> &MiddlewareContinuationContext {
         &self.context
     }
 
     /// Run downstream work until it completes or the owning interceptor settles.
-    pub(crate) async fn invoke<C, F, T>(mut self, callback: C) -> Result<T>
+    pub async fn invoke<C, F, T>(mut self, callback: C) -> Result<T>
     where
         C: FnOnce() -> F,
         F: Future<Output = Result<T>>,

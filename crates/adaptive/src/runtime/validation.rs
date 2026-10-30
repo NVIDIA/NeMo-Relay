@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use nemo_relay_runtime::plugin::{
+use nemo_relay_plugin_host::{
     ConfigDiagnostic, ConfigPolicy, ConfigReport, DiagnosticLevel, UnsupportedBehavior,
 };
 use serde_json::Value as Json;

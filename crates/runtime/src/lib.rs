@@ -3,7 +3,7 @@
 
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 
-//! Runtime execution, registries, scopes, diagnostics, and plugin hosting for NeMo Relay.
+//! Runtime execution, registries, scopes, and continuation handling for NeMo Relay.
 //! Component implementations are supplied by the embedding SDK or application.
 
 #[cfg(test)]
@@ -17,14 +17,7 @@ mod context;
 pub mod error;
 pub mod json;
 
-#[cfg(test)]
-#[path = "../tests/support/observability_runtime.rs"]
-mod observability_runtime;
-#[cfg(test)]
-#[path = "../tests/support/observability/mod.rs"]
-mod observability_test_support;
-pub mod plugin;
-mod registry;
+pub mod registry;
 #[cfg(test)]
 #[path = "../tests/support/resource_metrics/mod.rs"]
 mod resource_metrics;

@@ -27,16 +27,16 @@ use axum::{Json, Router};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(test)]
-use nemo_relay_runtime::plugin::PluginComponentSpec;
-use nemo_relay_runtime::plugin::PluginConfig;
+use nemo_relay_plugin_host::PluginComponentSpec;
+use nemo_relay_plugin_host::PluginConfig;
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
 use {
-    nemo_relay_runtime::plugin::dynamic::PluginHostActivation,
-    nemo_relay_runtime::plugin::dynamic::VerifiedDynamicPluginSpec,
+    nemo_relay_plugin_host::dynamic::PluginHostActivation,
+    nemo_relay_plugin_host::dynamic::VerifiedDynamicPluginSpec,
 };
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};

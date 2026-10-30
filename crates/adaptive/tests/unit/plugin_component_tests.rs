@@ -12,11 +12,11 @@ use nemo_relay_runtime::api::runtime::global_context;
 use serde_json::json;
 use {
     crate::test_support::plugin_host::test_close_plugin_host,
-    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::UnsupportedBehavior,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::UnsupportedBehavior,
 };
 use {
-    nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginRegistrationContext,
-    nemo_relay_runtime::plugin::rollback_registrations,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginRegistrationContext,
+    nemo_relay_plugin_host::rollback_registrations,
 };
 fn reset_global() {
     test_close_plugin_host().expect("test plugin host must close");
@@ -284,35 +284,35 @@ fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
 fn assert_adaptive_config_and_lookup_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::InvalidConfig("bad".into())),
-        nemo_relay_runtime::plugin::PluginError::InvalidConfig(message) if message == "bad"
+        nemo_relay_plugin_host::PluginError::InvalidConfig(message) if message == "bad"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::NotFound("missing".into())),
-        nemo_relay_runtime::plugin::PluginError::NotFound(message) if message == "missing"
+        nemo_relay_plugin_host::PluginError::NotFound(message) if message == "missing"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Storage("store".into())),
-        nemo_relay_runtime::plugin::PluginError::Internal(message) if message == "store"
+        nemo_relay_plugin_host::PluginError::Internal(message) if message == "store"
     ));
 }
 
 fn assert_adaptive_internal_and_serialization_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Internal("internal".into())),
-        nemo_relay_runtime::plugin::PluginError::Internal(message) if message == "internal"
+        nemo_relay_plugin_host::PluginError::Internal(message) if message == "internal"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::RegistrationFailed("register".into())),
-        nemo_relay_runtime::plugin::PluginError::RegistrationFailed(message) if message == "register"
+        nemo_relay_plugin_host::PluginError::RegistrationFailed(message) if message == "register"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::ChannelClosed("closed".into())),
-        nemo_relay_runtime::plugin::PluginError::Internal(message) if message == "closed"
+        nemo_relay_plugin_host::PluginError::Internal(message) if message == "closed"
     ));
     let serde_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Serialization(serde_error)),
-        nemo_relay_runtime::plugin::PluginError::Serialization(_)
+        nemo_relay_plugin_host::PluginError::Serialization(_)
     ));
 }
 
@@ -321,7 +321,7 @@ fn adaptive_to_plugin_error_maps_redis_variant() {
     let redis_error = redis::Client::open("redis://bad host").unwrap_err();
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Redis(redis_error)),
-        nemo_relay_runtime::plugin::PluginError::Internal(message) if message.contains("Redis URL")
+        nemo_relay_plugin_host::PluginError::Internal(message) if message.contains("Redis URL")
     ));
 }
 

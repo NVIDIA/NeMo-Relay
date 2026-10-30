@@ -122,7 +122,7 @@ pub unsafe extern "C" fn nemo_relay_observability_component_spec_json(
             }
         }
     };
-    let component: nemo_relay_runtime::plugin::PluginComponentSpec =
+    let component: nemo_relay_plugin_host::PluginComponentSpec =
         ObservabilityComponentSpec { enabled, config }.into();
     let component_json = match serde_json::to_value(component) {
         Ok(value) => value,

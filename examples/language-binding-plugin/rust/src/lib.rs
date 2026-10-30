@@ -26,15 +26,13 @@ use nemo_relay_runtime::api::runtime::callbacks::LlmJsonStream;
 use nemo_relay_runtime::api::runtime::{create_scope_stack, with_scope_stack};
 use serde_json::{Map, Value as Json, json};
 use {
-    nemo_relay::plugin::list_plugin_kinds, nemo_relay_runtime::plugin::ConfigDiagnostic,
-    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::Plugin,
-    nemo_relay_runtime::plugin::PluginComponentSpec, nemo_relay_runtime::plugin::PluginConfig,
-    nemo_relay_runtime::plugin::Result as PluginResult,
-    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay::plugin::list_plugin_kinds, nemo_relay_plugin_host::ConfigDiagnostic,
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginComponentSpec, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::Result as PluginResult, nemo_relay_plugin_host::deregister_plugin,
+    nemo_relay_plugin_host::register_plugin,
 };
-use {
-    nemo_relay_runtime::plugin::dynamic::initialize, nemo_relay_runtime::plugin::dynamic::validate,
-};
+use {nemo_relay_plugin_host::dynamic::initialize, nemo_relay_plugin_host::dynamic::validate};
 
 pub struct DocumentationPlugin;
 
@@ -61,12 +59,12 @@ impl Plugin for DocumentationPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        context: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        context: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {
             let settings = config::parse(&config)
-                .map_err(nemo_relay_runtime::plugin::PluginError::InvalidConfig)?;
+                .map_err(nemo_relay_plugin_host::PluginError::InvalidConfig)?;
             if settings.registration_control.enabled {
                 let reason = settings.registration_control.reason.clone();
                 context.register_conditional_middleware_guardrail(

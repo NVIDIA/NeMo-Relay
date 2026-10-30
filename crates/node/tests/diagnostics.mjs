@@ -13,7 +13,7 @@ const queryContract = require('../diagnostics_query_contract.js');
 
 test('query adapter matches the shared cross-binding contract fixture', () => {
   const fixture = JSON.parse(
-    fs.readFileSync(new URL('../../runtime/tests/fixtures/diagnostics_query_contract.json', import.meta.url), 'utf8'),
+    fs.readFileSync(new URL('../../diagnostics/tests/fixtures/diagnostics_query_contract.json', import.meta.url), 'utf8'),
   );
   assert.equal(queryContract.MAX_QUERY_BYTES, fixture.max_query_bytes);
   assert.equal(queryContract.MAX_QUERY_NODES, fixture.adapter_limits.max_query_nodes);

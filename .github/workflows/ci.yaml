@@ -439,6 +439,7 @@ jobs:
             nemo-relay-diagnostics
             nemo-relay-logging
             nemo-relay-runtime
+            nemo-relay-plugin-host
             nemo-relay
             nemo-relay-adaptive
             nemo-relay-pii-redaction

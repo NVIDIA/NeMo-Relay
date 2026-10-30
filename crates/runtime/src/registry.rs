@@ -15,7 +15,7 @@ use std::sync::Arc;
 ///
 /// Registry entries carry their own identity so snapshots can be cloned or
 /// copied without pairing a separately stored map key with the entry value.
-pub(crate) trait RegistryEntry {
+pub trait RegistryEntry {
     /// Unique entry name within one registry.
     fn name(&self) -> &str;
 
@@ -45,7 +45,7 @@ pub(crate) trait RegistryEntry {
 /// a duplicate name returns an error. Use [`deregister`](SortedRegistry::deregister) first
 /// to remove an existing entry before re-registering.
 #[derive(Clone)]
-pub(crate) struct SortedRegistry<T: RegistryEntry> {
+pub struct SortedRegistry<T: RegistryEntry> {
     // Empty registries remain allocation-free. Snapshots share populated storage until mutation.
     storage: Option<Arc<RegistryStorage<T>>>,
 }
@@ -61,7 +61,7 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     ///
     /// # Returns
     /// A new empty [`SortedRegistry`] with no entries.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { storage: None }
     }
 
@@ -78,7 +78,7 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful registration eagerly re-sorts the cached priority order.
-    pub(crate) fn register(&mut self, entry: T) -> Result<(), String>
+    pub fn register(&mut self, entry: T) -> Result<(), String>
     where
         T: Clone,
     {
@@ -114,7 +114,7 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful removal eagerly re-sorts the cached priority order.
-    pub(crate) fn deregister(&mut self, name: &str) -> bool
+    pub fn deregister(&mut self, name: &str) -> bool
     where
         T: Clone,
     {
@@ -138,7 +138,7 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     /// # Returns
     /// Shared references ordered from lowest priority to highest priority,
     /// without allocating an intermediate collection.
-    pub(crate) fn sorted_values(&self) -> impl Iterator<Item = &T> {
+    pub fn sorted_values(&self) -> impl Iterator<Item = &T> {
         self.storage.iter().flat_map(|storage| {
             storage
                 .sorted_keys
@@ -148,14 +148,14 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     }
 
     /// Whether this registry contains no entries, without scanning retained storage.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.storage
             .as_ref()
             .is_none_or(|storage| storage.entries.is_empty())
     }
 
     /// Return every entry without imposing priority order.
-    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+    pub fn values(&self) -> impl Iterator<Item = &T> {
         self.storage
             .iter()
             .flat_map(|storage| storage.entries.values())

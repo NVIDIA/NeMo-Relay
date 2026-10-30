@@ -21,11 +21,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::MutexGuard;
 use {
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginAttestationMode,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginKind,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginStartupClass,
+    nemo_relay_plugin_host::dynamic::DynamicPluginAttestationMode,
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::DynamicPluginKind,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass,
 };
 
 use crate::plugins::policy::{

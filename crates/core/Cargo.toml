@@ -14,8 +14,9 @@ readme = "README.md"
 workspace = true
 
 [features]
-__skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 [dependencies]
+nemo-relay-plugin-host.workspace = true
 nemo-relay-diagnostics.workspace = true
 nemo-relay-codecs.workspace = true
 nemo-relay-runtime.workspace = true

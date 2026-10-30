@@ -7,7 +7,7 @@
 fn sdk_and_runtime_share_state_and_builtin_registrations() {
     nemo_relay::initialize_runtime();
     let sdk_plugins = nemo_relay::plugin::list_plugin_kinds();
-    assert_eq!(sdk_plugins, nemo_relay_runtime::plugin::list_plugin_kinds());
+    assert_eq!(sdk_plugins, nemo_relay_plugin_host::list_plugin_kinds());
     for kind in ["observability", "pricing", "resource_metrics"] {
         assert!(sdk_plugins.iter().any(|registered| registered == kind));
     }

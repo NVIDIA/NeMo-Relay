@@ -14,8 +14,8 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use {
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
-    nemo_relay_runtime::plugin::dynamic::relay_version_matches,
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::relay_version_matches,
 };
 
 use super::*;

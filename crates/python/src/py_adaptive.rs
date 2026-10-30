@@ -28,7 +28,7 @@ pub struct PyAdaptiveRuntime {
 enum PyAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_relay_runtime::plugin::ConfigReport,
+        report: nemo_relay_plugin_host::ConfigReport,
     },
     Ready(AdaptiveRuntime),
 }
@@ -236,13 +236,13 @@ impl PyAdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> PyResult<nemo_relay_runtime::plugin::ConfigReport> {
+) -> PyResult<nemo_relay_plugin_host::ConfigReport> {
     let report = AdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
             .diagnostics
             .iter()
-            .filter(|diag| diag.level == nemo_relay_runtime::plugin::DiagnosticLevel::Error)
+            .filter(|diag| diag.level == nemo_relay_plugin_host::DiagnosticLevel::Error)
             .map(|diag| diag.message.as_str())
             .collect::<Vec<_>>()
             .join("; ");

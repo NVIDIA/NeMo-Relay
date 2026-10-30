@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::plugin::validate_static_plugin_config;
-use nemo_relay_runtime::plugin::dynamic::{DynamicPluginKind, VerifiedDynamicPluginSpec};
-use nemo_relay_runtime::plugin::{
+use nemo_relay_plugin_host::dynamic::{DynamicPluginKind, VerifiedDynamicPluginSpec};
+use nemo_relay_plugin_host::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, Result,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };

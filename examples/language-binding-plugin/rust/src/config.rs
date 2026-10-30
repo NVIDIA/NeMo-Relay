@@ -8,8 +8,8 @@ use nemo_relay::api::registry::RuntimeRegistrationKind;
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 use {
-    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::ConfigPolicy,
-    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::UnsupportedBehavior,
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::ConfigPolicy,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::UnsupportedBehavior,
 };
 
 #[derive(Clone, Deserialize)]

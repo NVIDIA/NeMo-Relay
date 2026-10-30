@@ -4,7 +4,7 @@
 //! Coverage tests for error in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_relay_runtime::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 
 #[test]
 fn test_not_found_display() {

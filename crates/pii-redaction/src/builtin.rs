@@ -17,6 +17,7 @@ use nemo_relay_codecs::resolve::{
 use nemo_relay_diagnostics::{
     ComponentRecorder, DiagnosticDetailRef, DiagnosticOutcome, ExtensionHandle, Observation,
 };
+use nemo_relay_plugin_host::{PluginError, Result as PluginResult};
 use nemo_relay_runtime::api::event::{CategoryProfile, Event, MetricEnvelope, ScopeCategory};
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::runtime::{
@@ -24,7 +25,6 @@ use nemo_relay_runtime::api::runtime::{
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
 use nemo_relay_runtime::codec::response_codec as build_response_codec;
-use nemo_relay_runtime::plugin::{PluginError, Result as PluginResult};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 

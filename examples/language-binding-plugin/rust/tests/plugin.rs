@@ -21,13 +21,13 @@ use nemo_relay_runtime::api::runtime::callbacks::LlmJsonStream;
 use serde_json::{Map, json};
 use tokio::sync::{Mutex, MutexGuard};
 use {
-    nemo_relay::plugin::list_plugin_kinds, nemo_relay_runtime::plugin::ConfigReport,
-    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::Plugin,
-    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay::plugin::list_plugin_kinds, nemo_relay_plugin_host::ConfigReport,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::deregister_plugin, nemo_relay_plugin_host::register_plugin,
 };
 use {
-    nemo_relay_runtime::plugin::dynamic::PluginHostActivation,
-    nemo_relay_runtime::plugin::dynamic::initialize, nemo_relay_runtime::plugin::dynamic::validate,
+    nemo_relay_plugin_host::dynamic::PluginHostActivation,
+    nemo_relay_plugin_host::dynamic::initialize, nemo_relay_plugin_host::dynamic::validate,
 };
 
 static PLUGIN_TEST_LOCK: Mutex<()> = Mutex::const_new(());
@@ -63,14 +63,14 @@ async fn register_only() -> RegisteredPlugin {
     RegisteredPlugin { _lock: lock }
 }
 
-async fn activate_with(plugin_config: nemo_relay_runtime::plugin::PluginConfig) -> ActivePlugin {
+async fn activate_with(plugin_config: nemo_relay_plugin_host::PluginConfig) -> ActivePlugin {
     let registration = register_only().await;
     activate_registered(registration, plugin_config).await
 }
 
 async fn activate_registered(
     registration: RegisteredPlugin,
-    plugin_config: nemo_relay_runtime::plugin::PluginConfig,
+    plugin_config: nemo_relay_plugin_host::PluginConfig,
 ) -> ActivePlugin {
     let activation = initialize(plugin_config, None)
         .await

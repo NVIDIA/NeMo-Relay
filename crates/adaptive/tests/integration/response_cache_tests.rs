@@ -42,7 +42,7 @@ use {
     crate::plugin_host_test_support::test_close_plugin_host,
     crate::plugin_host_test_support::test_initialize_plugin_host_exact,
     crate::plugin_host_test_support::test_validate_static_plugin_config,
-    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::PluginConfig,
 };
 
 #[path = "response_cache_common.rs"]
@@ -3556,7 +3556,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
             }
         }
     });
-    let component = nemo_relay_runtime::plugin::PluginComponentSpec {
+    let component = nemo_relay_plugin_host::PluginComponentSpec {
         kind: "adaptive".to_string(),
         enabled: true,
         config: adaptive_json.as_object().unwrap().clone(),

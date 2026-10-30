@@ -14,6 +14,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+nemo-relay-plugin-host.workspace = true
 nemo-relay-codecs.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-model-pricing.workspace = true
@@ -37,7 +38,7 @@ tokio-stream = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [features]
-__skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dev-dependencies]
 nemo-relay-logging.workspace = true

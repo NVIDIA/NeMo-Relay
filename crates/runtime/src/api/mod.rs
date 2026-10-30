@@ -5,10 +5,6 @@
 
 /// Lifecycle event types and builder-backed event constructors.
 pub mod event;
-/// Exporter constructors with core runtime services supplied internally.
-#[cfg(test)]
-#[path = "../../tests/support/exporter.rs"]
-pub mod exporter;
 /// LLM lifecycle helpers and managed execution entry points.
 pub mod llm;
 /// Plugin-neutral evidence recording for managed LLM calls.

@@ -3,18 +3,14 @@
 
 //! The execution engine is usable without SDK defaults or concrete plugin dependencies.
 
-use nemo_relay_runtime::{
-    api::{
-        scope::{self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType},
-        subscriber,
-    },
-    plugin,
+use nemo_relay_runtime::api::{
+    scope::{self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType},
+    subscriber,
 };
 use std::sync::{Arc, Mutex};
 
 #[test]
 fn runtime_executes_without_sdk_composition() {
-    assert!(plugin::list_plugin_kinds().is_empty());
     let names = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&names);
     subscriber::register_subscriber(
@@ -41,6 +37,5 @@ fn runtime_executes_without_sdk_composition() {
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build()).unwrap();
     subscriber::flush_subscribers().unwrap();
     assert_eq!(*names.lock().unwrap(), ["standalone", "mark", "standalone"]);
-    assert!(plugin::list_plugin_kinds().is_empty());
     subscriber::deregister_subscriber("runtime-only").unwrap();
 }

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay_runtime::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 
 use super::builtin::mask_text;
 

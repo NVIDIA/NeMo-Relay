@@ -9,8 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 use {
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginRecord,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginRegistry,
+    nemo_relay_plugin_host::dynamic::DynamicPluginRecord,
+    nemo_relay_plugin_host::dynamic::DynamicPluginRegistry,
 };
 
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};

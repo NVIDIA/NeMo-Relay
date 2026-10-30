@@ -19,7 +19,7 @@ use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
+use {nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::UnsupportedBehavior};
 
 const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
@@ -295,7 +295,7 @@ fn validate_config_reports_unknown_backend_and_acg_provider_per_policy() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "adaptive.unknown_backend"
-                && diag.level == nemo_relay_runtime::plugin::DiagnosticLevel::Warning)
+                && diag.level == nemo_relay_plugin_host::DiagnosticLevel::Warning)
     );
     assert!(
         warn_report

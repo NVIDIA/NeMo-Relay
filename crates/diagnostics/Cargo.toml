@@ -24,7 +24,6 @@ log = { workspace = true, features = ["kv", "kv_serde"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
 uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]

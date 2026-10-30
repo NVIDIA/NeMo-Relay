@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use {
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifestLoad,
-    nemo_relay_runtime::plugin::dynamic::WorkerRuntime,
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifestLoad,
+    nemo_relay_plugin_host::dynamic::WorkerRuntime,
 };
 
 pub(super) const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";

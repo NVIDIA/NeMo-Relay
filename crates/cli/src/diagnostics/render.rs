@@ -220,13 +220,13 @@ pub(super) fn format_human_plugin_configuration(out: &mut String, report: &Docto
     if let Some(validation) = &report.configuration.plugin_host_validation.report {
         for diagnostic in &validation.config.diagnostics {
             let status = match diagnostic.level {
-                nemo_relay_runtime::plugin::DiagnosticLevel::Error => Status::Fail,
-                nemo_relay_runtime::plugin::DiagnosticLevel::Warning
+                nemo_relay_plugin_host::DiagnosticLevel::Error => Status::Fail,
+                nemo_relay_plugin_host::DiagnosticLevel::Warning
                     if diagnostic.code == super::INHERITED_PLUGIN_CONFIGURATION_DIAGNOSTIC =>
                 {
                     Status::Info
                 }
-                nemo_relay_runtime::plugin::DiagnosticLevel::Warning => Status::Warn,
+                nemo_relay_plugin_host::DiagnosticLevel::Warning => Status::Warn,
             };
             out.push_str(&format!(
                 "    Static     {} {}: {}\n",

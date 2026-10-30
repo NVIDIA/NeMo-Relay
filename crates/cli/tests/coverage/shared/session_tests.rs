@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use {
     crate::test_support::plugin_host::test_close_plugin_host,
     crate::test_support::plugin_host::test_initialize_plugin_host_exact,
-    nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_plugin_host::PluginConfig,
 };
 
 use super::*;

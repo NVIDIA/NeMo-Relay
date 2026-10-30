@@ -4,7 +4,7 @@
 //! Public embedded startup contract. Each test requires process isolation (nextest).
 use nemo_relay_diagnostics::{DiagnosticSnapshot, Diagnostics, embedded};
 use nemo_relay_logging::{LoggingConfig, LoggingRuntime};
-use nemo_relay_runtime::plugin::dynamic::PluginHostConfig;
+use nemo_relay_plugin_host::dynamic::PluginHostConfig;
 
 use nemo_relay::plugin::{initialize, validate};
 

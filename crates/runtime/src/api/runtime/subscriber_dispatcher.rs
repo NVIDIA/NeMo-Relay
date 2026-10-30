@@ -306,7 +306,8 @@ mod native {
     struct ThreadPublicationBufferGuard(Option<PublicationBuffer>);
     struct ThreadPublicationLineageGuard(Option<Arc<PublicationLineage>>);
 
-    pub(crate) struct AsyncPublication {
+    /// A dispatcher reservation retained by an asynchronous operation.
+    pub struct AsyncPublication {
         pub(super) sender: Sender<Vec<DispatcherMessage>>,
     }
 
@@ -1467,7 +1468,7 @@ pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -
 
 /// Queue a snapshot for serial event sanitization followed by subscriber
 /// delivery. Used by synchronous scope and mark APIs.
-pub(crate) fn dispatch_sanitized_event(
+pub fn dispatch_sanitized_event(
     event: Event,
     sanitizers: Vec<Guardrail<EventSanitizeFn>>,
     subscribers: &[EventSubscriberFn],
@@ -1511,11 +1512,12 @@ pub(crate) fn dispatch_transformed_event(
 ///
 /// Dropping the returned publication handle releases the barrier, so error
 /// paths cannot leave the dispatcher blocked.
-pub(crate) fn register_async_publication() -> Option<native::AsyncPublication> {
+pub fn register_async_publication() -> Option<native::AsyncPublication> {
     native::register_async_publication()
 }
 
-pub(crate) use native::{AsyncPublication, PendingPublication};
+pub use native::AsyncPublication;
+pub(crate) use native::PendingPublication;
 
 /// Register pending asynchronous work that must finish before a later
 /// subscriber flush can complete.
@@ -1544,7 +1546,7 @@ pub(crate) async fn with_pending_publication<F: Future>(
 ///
 /// Re-entrant subscriber flushes are no-ops in this context because the
 /// publication's FIFO barrier cannot complete until the middleware returns.
-pub(crate) async fn with_async_publication_context<F: Future>(
+pub async fn with_async_publication_context<F: Future>(
     publication: Option<native::AsyncPublication>,
     future: F,
 ) -> F::Output {
@@ -1578,7 +1580,7 @@ pub fn flush_subscribers_with_started_signal(started: std::sync::mpsc::Sender<()
 ///
 /// Plugin teardown uses this legacy barrier so it can detach registries while
 /// managed callbacks from an earlier snapshot remain in flight.
-pub(crate) fn flush_queued_subscribers() -> Result<()> {
+pub fn flush_queued_subscribers() -> Result<()> {
     native::flush_queued_subscribers()
 }
 

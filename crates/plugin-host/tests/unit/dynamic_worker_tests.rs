@@ -1,0 +1,6265 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_runtime::api::event::{BaseEvent, Event, MarkEvent, ScopeCategory};
+use nemo_relay_runtime::api::optimization::{
+    LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
+};
+use nemo_relay_runtime::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmExecutionContext, LlmExecutionNextFn,
+    LlmSanitizeRequestContext, LlmSanitizeResponseContext, MiddlewareContinuationLease,
+    NemoRelayContextState,
+};
+use nemo_relay_runtime::api::tool::ToolExecutionResult;
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
+use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
+use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
+use nemo_relay_worker_proto::v1::{
+    CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
+    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HealthResponse, JsonEnvelope, JsonResult, JsonValue,
+    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest,
+    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    Registration, ScopeContext, ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
+    ValidateResponse, WorkerAck,
+};
+use nemo_relay_worker_proto::{decode_json_value, json_envelope};
+use serde_json::json;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::Request;
+use tonic::transport::Server;
+
+use super::*;
+
+const ACTIVATION_ID: &str = "activation-test";
+const AUTH_TOKEN: &str = "auth-test";
+
+/// Uses a worker-specific registry target so native gate tests can run concurrently.
+#[tokio::test]
+async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    struct GateCleanup(Arc<WorkerHostRuntimeState>);
+    impl Drop for GateCleanup {
+        /// Remove global gates even when a test assertion unwinds.
+        fn drop(&mut self) {
+            self.0.cleanup_conditional_middleware_guardrails();
+        }
+    }
+    let _cleanup = GateCleanup(Arc::clone(&state));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let valid = RegisterConditionalMiddlewareGuardrailRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        name: "owned-gate".into(),
+        kinds: vec![RegistrationSurface::Subscriber as i32],
+        registration_name: "worker-fixture-subscriber".into(),
+        reason: "disabled".into(),
+        callback: false,
+    };
+    for (request, expected) in [
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                auth_token: "wrong".into(),
+                ..valid.clone()
+            },
+            tonic::Code::PermissionDenied,
+        ),
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                kinds: vec![i32::MAX],
+                ..valid.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                kinds: vec![],
+                ..valid.clone()
+            },
+            tonic::Code::Internal,
+        ),
+    ] {
+        assert_eq!(
+            service
+                .register_conditional_middleware_guardrail(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+    let handle = service
+        .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+        .await
+        .unwrap()
+        .into_inner()
+        .handle;
+    assert!(
+        !nemo_relay_runtime::api::registry::runtime_registration_is_enabled(
+            RuntimeRegistrationKind::Subscriber,
+            "worker-fixture-subscriber"
+        )
+    );
+    assert_eq!(
+        service
+            .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+    let foreign_service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            "other-activation".into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    let removal = DeregisterConditionalMiddlewareGuardrailRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        handle: handle.clone(),
+    };
+    let foreign = foreign_service
+        .deregister_conditional_middleware_guardrail(Request::new(
+            DeregisterConditionalMiddlewareGuardrailRequest {
+                activation_id: "other-activation".into(),
+                ..removal.clone()
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!foreign.removed);
+    assert_eq!(
+        service
+            .deregister_conditional_middleware_guardrail(Request::new(
+                DeregisterConditionalMiddlewareGuardrailRequest {
+                    auth_token: "wrong".into(),
+                    ..removal.clone()
+                }
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    assert!(
+        service
+            .deregister_conditional_middleware_guardrail(Request::new(removal.clone()))
+            .await
+            .unwrap()
+            .into_inner()
+            .removed
+    );
+    assert!(
+        !service
+            .deregister_conditional_middleware_guardrail(Request::new(removal))
+            .await
+            .unwrap()
+            .into_inner()
+            .removed
+    );
+    assert!(
+        nemo_relay_runtime::api::registry::runtime_registration_is_enabled(
+            RuntimeRegistrationKind::Subscriber,
+            "worker-fixture-subscriber"
+        )
+    );
+    service
+        .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+        .await
+        .unwrap();
+    state.cleanup_conditional_middleware_guardrails();
+    assert!(
+        state
+            .conditional_middleware_guardrails
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        nemo_relay_runtime::api::registry::runtime_registration_is_enabled(
+            RuntimeRegistrationKind::Subscriber,
+            "worker-fixture-subscriber"
+        )
+    );
+    assert_eq!(
+        service
+            .register_conditional_middleware_guardrail(Request::new(valid))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+}
+
+#[test]
+fn worker_logging_authenticates_and_preserves_structured_records() {
+    use nemo_relay_logging::{
+        FileLogSinkConfig, LogFormat, LogLevel as RelayLogLevel, LogSinkConfig, LoggingConfig,
+        init_logging,
+    };
+
+    let _logging = crate::test_support::lock_test_logging();
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    executor.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("worker.jsonl");
+        let runtime = init_logging(&LoggingConfig {
+            level: RelayLogLevel::Trace,
+            stderr_enabled: false,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                level: RelayLogLevel::Trace,
+                format: LogFormat::Jsonl,
+                ..FileLogSinkConfig::default()
+            })],
+            ..LoggingConfig::default()
+        })
+        .unwrap();
+        let service = WorkerHostRuntimeService {
+            state: Arc::new(WorkerHostRuntimeState::new(
+                ACTIVATION_ID.into(),
+                AUTH_TOKEN.into(),
+            )),
+        };
+        let fields = json!({"nested": {"ok": true}, "ordinal": 9007199254740993_u64});
+        for level in [
+            LogLevel::Trace,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ] {
+            let ack = service
+                .log(Request::new(LogRequest {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                    level: level as i32,
+                    target: "fixture.logging".into(),
+                    message: "worker message".into(),
+                    fields: Some(json_value(&fields).unwrap()),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(ack.ok);
+            assert!(ack.error.is_none());
+        }
+        service
+            .log(Request::new(LogRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                level: LogLevel::Info as i32,
+                message: "default target".into(),
+                ..LogRequest::default()
+            }))
+            .await
+            .unwrap();
+        runtime.shutdown();
+        let records: Vec<Json> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|record: &Json| {
+                record["target"]
+                    .as_str()
+                    .is_some_and(|target| target.starts_with("nemo_relay.plugin.worker"))
+            })
+            .collect();
+        assert_eq!(records.len(), 6);
+        for (record, level) in records
+            .iter()
+            .zip(["trace", "debug", "info", "warn", "error"])
+        {
+            assert_eq!(record["level"], level);
+            assert_eq!(record["target"], "nemo_relay.plugin.worker.fixture.logging");
+            assert_eq!(record["message"], "worker message");
+            assert_eq!(record["fields"], fields);
+        }
+        assert_eq!(records[5]["target"], "nemo_relay.plugin.worker");
+    });
+}
+
+#[tokio::test]
+async fn worker_logging_rejects_unauthorized_and_malformed_requests() {
+    let service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    let valid = LogRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        level: LogLevel::Info as i32,
+        target: "fixture".into(),
+        message: "message".into(),
+        fields: None,
+    };
+    for request in [
+        LogRequest {
+            activation_id: "wrong".into(),
+            ..valid.clone()
+        },
+        LogRequest {
+            auth_token: "wrong".into(),
+            ..valid.clone()
+        },
+    ] {
+        assert_eq!(
+            service.log(Request::new(request)).await.unwrap_err().code(),
+            tonic::Code::PermissionDenied
+        );
+    }
+    let mut invalid = vec![
+        LogRequest {
+            level: 0,
+            ..valid.clone()
+        },
+        LogRequest {
+            level: i32::MAX,
+            ..valid.clone()
+        },
+        LogRequest {
+            fields: Some(JsonValue {
+                json: b"not-json".to_vec(),
+            }),
+            ..valid.clone()
+        },
+    ];
+    for target in ["x".repeat(257), "bad\ntarget".into(), "bad\0target".into()] {
+        invalid.push(LogRequest {
+            target,
+            ..valid.clone()
+        });
+    }
+    for fields in [json!([]), json!(true), Json::Null] {
+        invalid.push(LogRequest {
+            fields: Some(json_value(&fields).unwrap()),
+            ..valid.clone()
+        });
+    }
+    for request in invalid {
+        assert_eq!(
+            service.log(Request::new(request)).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+    let longest = "x".repeat(256);
+    assert_eq!(
+        worker_log_target(&longest).unwrap(),
+        format!("nemo_relay.plugin.worker.{longest}")
+    );
+}
+
+#[test]
+fn worker_registration_kinds_round_trip_and_reject_non_registration_surfaces() {
+    for (kind, surface) in [
+        (
+            RuntimeRegistrationKind::Subscriber,
+            RegistrationSurface::Subscriber,
+        ),
+        (
+            RuntimeRegistrationKind::EventMetadataInjector,
+            RegistrationSurface::EventMetadataInjector,
+        ),
+        (
+            RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            RegistrationSurface::MarkSanitizeGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+            RegistrationSurface::ToolSanitizeRequestGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+            RegistrationSurface::ToolSanitizeResponseGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+            RegistrationSurface::ToolConditionalExecutionGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolRequestIntercept,
+            RegistrationSurface::ToolRequestIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::ToolExecutionIntercept,
+            RegistrationSurface::ToolExecutionIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+            RegistrationSurface::LlmConditionalExecutionGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmRequestIntercept,
+            RegistrationSurface::LlmRequestIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmExecutionIntercept,
+            RegistrationSurface::LlmExecutionIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+            RegistrationSurface::LlmStreamExecutionIntercept,
+        ),
+    ] {
+        assert_eq!(registration_surface_from_kind(kind), surface);
+        assert_eq!(
+            runtime_registration_kind_from_surface(surface).unwrap(),
+            kind
+        );
+    }
+    for surface in [
+        RegistrationSurface::Unspecified,
+        RegistrationSurface::ConditionalMiddlewareGuardrail,
+    ] {
+        assert_eq!(
+            runtime_registration_kind_from_surface(surface)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+}
+
+#[test]
+fn worker_runtime_rejects_gate_registration_after_cleanup() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state.cleanup_conditional_middleware_guardrails();
+
+    let error = state
+        .register_owned_conditional_middleware_guardrail(
+            "late-gate".into(),
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "target-subscriber".into(),
+            "disabled".into(),
+            false,
+        )
+        .expect_err("gate registration after cleanup must fail");
+
+    assert!(matches!(error, FlowError::NotFound(_)));
+}
+
+#[test]
+fn worker_gate_cleanup_recovers_a_poisoned_ownership_lock() {
+    let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
+    state
+        .conditional_middleware_guardrails
+        .lock()
+        .expect("gate ownership lock")
+        .insert(
+            "gate-handle".into(),
+            WorkerOwnedGate {
+                local_name: "owned-gate".into(),
+                qualified_name: "missing-global-gate".into(),
+            },
+        );
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = state
+            .conditional_middleware_guardrails
+            .lock()
+            .expect("gate ownership lock");
+        panic!("poison gate ownership lock");
+    }));
+
+    state.cleanup_conditional_middleware_guardrails();
+
+    assert!(
+        state
+            .conditional_middleware_guardrails
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+    );
+}
+
+fn enable_operational_logs() {
+    log::set_max_level(log::LevelFilter::Info);
+}
+
+#[tokio::test]
+async fn continuation_context_preserves_optimization_recorder_across_tasks() {
+    for producer in ["worker-unary-next", "worker-stream-next"] {
+        let recorder = LlmOptimizationRecorder::default();
+        let context = scope_llm_optimization_recorder(recorder.clone(), async {
+            MiddlewareContinuationContext::capture()
+        })
+        .await;
+        tokio::spawn(async move {
+            context
+                .run(async move {
+                    tokio::task::yield_now().await;
+                    assert!(record_llm_optimization_contribution(
+                        LlmOptimizationContribution::new(producer, "worker_next")
+                    ));
+                })
+                .await;
+        })
+        .await
+        .unwrap();
+        let contributions: Vec<_> = recorder
+            .unemitted_with_timestamps()
+            .into_iter()
+            .map(|(value, _)| value)
+            .collect();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].producer, producer);
+    }
+}
+
+#[test]
+fn python_environment_resolution_requires_lifecycle_managed_path() {
+    enable_operational_logs();
+    let plugin_id = "acme.python";
+    let digest = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temp = tempfile::tempdir().unwrap();
+    let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
+    let python = resolve_python_executable(plugin_id, managed.to_str()).unwrap();
+    assert!(python.starts_with(&managed));
+
+    let outside = std::env::temp_dir().join("unmanaged-python-environment");
+    let error = resolve_python_executable(plugin_id, outside.to_str())
+        .expect_err("an arbitrary environment path should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("is not the lifecycle-managed path")
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let target = temp.path().join("symlink-target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        symlink(&target, &managed).unwrap();
+
+        let error = resolve_python_executable(plugin_id, managed.to_str())
+            .expect_err("a symlinked environment should be rejected");
+        assert!(error.to_string().contains("must not be a symbolic link"));
+    }
+}
+
+#[test]
+fn python_worker_launch_clears_host_python_environment() {
+    enable_operational_logs();
+    let mut command = Command::new("python");
+    clear_host_python_environment(&mut command);
+    let removed = command
+        .get_envs()
+        .filter_map(|(key, value)| value.is_none().then_some(key))
+        .collect::<Vec<_>>();
+    for key in ["PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"] {
+        assert!(removed.contains(&std::ffi::OsStr::new(key)));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+/// Preserves interpreter selection and forwards endpoint and transport settings.
+fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
+    const CHILD: &str = "RELAY_FORWARD_LAUNCH_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "plugin::dynamic::worker::tests::python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file", "--nocapture"])
+            .env(CHILD, "1")
+            .env("NEMO_RELAY_WORKER_TOKEN", "stale token")
+            .env("NEMO_RELAY_WORKER_ENDPOINT_FILE", "stale path")
+            .env("RELAY_FORWARD_LAUNCH", "forwarded value")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+
+    let plugin_id = "acme.python.launch";
+    let digest = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temp = tempfile::tempdir().unwrap();
+    let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
+    let interpreter = managed.join("bin/python");
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    let probe = temp.path().join("launch-probe");
+    std::fs::write(
+        &interpreter,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$0\" \"$NEMO_RELAY_WORKER_ENDPOINT_FILE\" \"$NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES\" \"$NEMO_RELAY_WORKER_TOKEN\" \"$RELAY_FORWARD_LAUNCH\" > '{}'\nexit 0\n",
+            probe.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&interpreter).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&interpreter, permissions).unwrap();
+
+    let endpoint_file = temp.path().join("worker-endpoint");
+    for endpoint in [Some(endpoint_file.as_path()), None] {
+        let mut child = spawn_worker_process(WorkerProcessLaunch {
+            forward_env: &["NEMO_RELAY_*".into(), "RELAY_FORWARD_LAUNCH".into()],
+            runtime: WorkerRuntime::Python,
+            manifest_path: &temp.path().join("plugin.toml"),
+            environment_ref: managed.to_str(),
+            plugin_id,
+            entrypoint: "acme_worker:create_plugin",
+            activation_id: "activation",
+            auth_token: "token",
+            host_endpoint: "http://127.0.0.1:1",
+            worker_endpoint: "http://127.0.0.1:2",
+            worker_endpoint_file: endpoint,
+            max_message_bytes: &WorkerCallbackMessageLimits {
+                default_bytes: 16 * 1024 * 1024,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        assert!(child.wait().unwrap().success());
+        let recorded = std::fs::read_to_string(&probe).unwrap();
+        let mut lines = recorded.lines();
+        assert_eq!(lines.next(), interpreter.to_str());
+        assert_eq!(
+            lines.next(),
+            Some(endpoint.and_then(Path::to_str).unwrap_or(""))
+        );
+        assert_eq!(lines.next(), Some("16777216"));
+        assert_eq!(lines.next(), Some("token"));
+        assert_eq!(lines.next(), Some("forwarded value"));
+        assert_eq!(lines.next(), None);
+    }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn empty_worker_endpoint_announcement_is_retried() {
+    let temp = tempfile::tempdir().unwrap();
+    let announcement = temp.path().join("worker-endpoint");
+    let missing = temp.path().join("missing-endpoint");
+    let directory = temp.path().join("endpoint-directory");
+    std::fs::create_dir(&directory).unwrap();
+
+    assert_eq!(
+        normalize_worker_tcp_endpoint(" tcp://127.0.0.1:50051 ").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert_eq!(
+        normalize_worker_tcp_endpoint("http://127.0.0.1:50051").unwrap(),
+        "http://127.0.0.1:50051"
+    );
+    assert!(normalize_worker_tcp_endpoint("tcp://").is_err());
+    assert!(normalize_worker_tcp_endpoint("https://127.0.0.1").is_err());
+    assert!(
+        resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(missing))
+            .unwrap()
+            .is_none()
+    );
+    assert!(resolve_worker_connect_endpoint(&WorkerConnectEndpoint::Announced(directory)).is_err());
+    std::fs::write(&announcement, "").unwrap();
+
+    let endpoint = WorkerConnectEndpoint::Announced(announcement);
+    assert!(
+        resolve_worker_connect_endpoint(&endpoint)
+            .unwrap()
+            .is_none(),
+        "an empty announcement file is a transient publication state"
+    );
+}
+
+fn test_worker_error() -> WorkerError {
+    WorkerError {
+        code: "worker.failed".into(),
+        message: "boom".into(),
+        retryable: false,
+        downstream_continuation_id: None,
+    }
+}
+
+#[test]
+fn worker_protocol_error_and_json_helpers_preserve_failure_semantics() {
+    let error = test_worker_error();
+    assert!(matches!(
+        worker_error_to_flow(error.clone()),
+        FlowError::Internal(message) if message.contains("worker.failed")
+    ));
+    assert!(matches!(
+        worker_error_to_plugin(error, "fallback"),
+        PluginError::RegistrationFailed(message) if message.contains("worker.failed")
+    ));
+    assert_eq!(
+        json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: Some(JsonEnvelope {
+                    schema: "test".into(),
+                    json: b"{\"ok\":true}".to_vec(),
+                }),
+                error: None,
+            })),
+        })
+        .unwrap(),
+        serde_json::json!({"ok": true})
+    );
+    assert!(
+        json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Error(test_worker_error())),
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn response_helpers_cover_json_and_guardrail_error_shapes() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
+
+    let error = json_from_invoke_response(InvokeResponse {
+        result: Some(InvokeResult::Json(JsonResult {
+            value: None,
+            error: Some(worker_error.clone()),
+        })),
+    })
+    .expect_err("json result worker error should surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let error = json_from_invoke_response(InvokeResponse {
+        result: Some(InvokeResult::Error(worker_error.clone())),
+    })
+    .expect_err("top-level worker error should surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let error = json_from_invoke_response(InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .expect_err("unexpected JSON result shape should fail");
+    assert!(error.to_string().contains("unexpected invoke result"));
+
+    let error = json_from_invoke_response(InvokeResponse {
+        result: Some(InvokeResult::Json(JsonResult {
+            value: Some(JsonEnvelope {
+                schema: JSON_SCHEMA.into(),
+                json: b"{".to_vec(),
+            }),
+            error: None,
+        })),
+    })
+    .expect_err("invalid JSON envelope should fail");
+    assert!(error.to_string().contains("invalid JSON result"));
+
+    assert_eq!(
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Guardrail(GuardrailResult {
+                block_reason: String::new(),
+            })),
+        })
+        .expect("empty block reason is allowed"),
+        None
+    );
+    assert_eq!(
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Guardrail(GuardrailResult {
+                block_reason: "blocked".into(),
+            })),
+        })
+        .expect("block reason should parse"),
+        Some("blocked".into())
+    );
+    assert!(
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Error(worker_error.clone())),
+        })
+        .expect_err("guardrail worker error should surface")
+        .to_string()
+        .contains("worker.failed")
+    );
+    assert!(
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        })
+        .expect_err("unexpected guardrail shape should fail")
+        .to_string()
+        .contains("guardrail returned unexpected")
+    );
+}
+
+#[test]
+fn response_helpers_cover_stream_optional_and_cancellation_errors() {
+    enable_operational_logs();
+    let worker_error = test_worker_error();
+
+    assert!(
+        json_from_stream_chunk(StreamChunk {
+            item: Some(StreamItem::Error(worker_error.clone())),
+        })
+        .expect_err("stream worker error should surface")
+        .to_string()
+        .contains("worker.failed")
+    );
+    assert!(
+        json_from_stream_chunk(StreamChunk {
+            item: Some(StreamItem::Value(JsonEnvelope {
+                schema: JSON_SCHEMA.into(),
+                json: b"{".to_vec(),
+            })),
+        })
+        .expect_err("invalid stream JSON envelope should fail")
+        .to_string()
+        .contains("invalid worker stream chunk")
+    );
+    assert!(
+        json_from_stream_chunk(StreamChunk { item: None })
+            .expect_err("empty stream chunk should fail")
+            .to_string()
+            .contains("stream chunk was empty")
+    );
+
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(worker_error.clone()),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("worker.failed")
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: Some(JsonEnvelope {
+                    schema: JSON_SCHEMA.into(),
+                    json: b"{".to_vec(),
+                }),
+                error: None,
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("invalid JSON result")
+    );
+    assert_eq!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        })
+        .expect("empty result must map to no replacement JSON"),
+        None
+    );
+    assert!(
+        optional_json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Guardrail(GuardrailResult {
+                block_reason: String::new(),
+            })),
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("unexpected LLM sanitizer result")
+    );
+
+    let typed_error = typed_json_result::<Json>(
+        JSON_SCHEMA,
+        Err(FlowError::Internal("typed result failed".into())),
+    );
+    assert!(typed_error.value.is_none());
+    assert!(
+        typed_error
+            .error
+            .is_some_and(|error| error.message.contains("typed result failed"))
+    );
+    assert!(
+        worker_error_to_flow(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "cancelled by caller".into(),
+            retryable: false,
+            downstream_continuation_id: None,
+        })
+        .to_string()
+        .contains("worker invocation cancelled")
+    );
+    assert!(
+        worker_status_to_flow("unused", Status::cancelled("cancelled by transport"))
+            .to_string()
+            .contains("worker invocation cancelled")
+    );
+}
+
+#[test]
+fn envelope_and_error_helpers_cover_failure_paths() {
+    enable_operational_logs();
+    assert!(
+        required_envelope(None, "required test")
+            .expect_err("missing envelope should fail")
+            .to_string()
+            .contains("required test is missing")
+    );
+    assert!(
+        optional_envelope_to_json(Some(JsonEnvelope {
+            schema: JSON_SCHEMA.into(),
+            json: b"not-json".to_vec(),
+        }))
+        .expect_err("invalid optional envelope should fail")
+        .to_string()
+        .contains("invalid JSON envelope")
+    );
+
+    let ack = host_ack(Err(FlowError::Internal("host failed".into())));
+    assert!(!ack.ok);
+    assert_eq!(ack.error.expect("host error").code, "host.runtime_error");
+
+    let result = json_result(Err(FlowError::Internal("json failed".into())));
+    assert!(result.value.is_none());
+    assert_eq!(result.error.expect("json error").code, "host.runtime_error");
+
+    let fallback = worker_error_to_plugin(
+        WorkerError {
+            code: "worker.empty".into(),
+            message: String::new(),
+            retryable: false,
+            downstream_continuation_id: None,
+        },
+        "fallback message",
+    );
+    assert!(fallback.to_string().contains("fallback message"));
+
+    let status = status_from_flow(FlowError::Internal("status failed".into()));
+    assert_eq!(status.code(), tonic::Code::Internal);
+    assert!(status.message().contains("status failed"));
+}
+
+#[test]
+fn registration_plan_and_scope_type_helpers_validate_edges() {
+    enable_operational_logs();
+    let empty_name = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: " ".into(),
+                surface: RegistrationSurface::Subscriber as i32,
+                priority: 0,
+                break_chain: false,
+            }],
+            error: None,
+            conditional_middleware_guardrails: Vec::new(),
+        },
+    )
+    .expect_err("empty registration names should fail");
+    assert!(empty_name.to_string().contains("empty local_name"));
+
+    let unsupported = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: "bad".into(),
+                surface: 999,
+                priority: 0,
+                break_chain: false,
+            }],
+            error: None,
+            conditional_middleware_guardrails: Vec::new(),
+        },
+    )
+    .expect_err("unsupported registration surfaces should fail");
+    assert!(
+        unsupported
+            .to_string()
+            .contains("unsupported registration surface")
+    );
+
+    let unspecified = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: "bad".into(),
+                surface: RegistrationSurface::Unspecified as i32,
+                priority: 0,
+                break_chain: false,
+            }],
+            error: None,
+            conditional_middleware_guardrails: Vec::new(),
+        },
+    )
+    .expect_err("unspecified registration surfaces should fail");
+    assert!(
+        unspecified
+            .to_string()
+            .contains("unspecified registration surface")
+    );
+
+    let cases = [
+        (
+            ProtoScopeType::Agent,
+            nemo_relay_runtime::api::scope::ScopeType::Agent,
+        ),
+        (
+            ProtoScopeType::Function,
+            nemo_relay_runtime::api::scope::ScopeType::Function,
+        ),
+        (
+            ProtoScopeType::Tool,
+            nemo_relay_runtime::api::scope::ScopeType::Tool,
+        ),
+        (
+            ProtoScopeType::Llm,
+            nemo_relay_runtime::api::scope::ScopeType::Llm,
+        ),
+        (
+            ProtoScopeType::Retriever,
+            nemo_relay_runtime::api::scope::ScopeType::Retriever,
+        ),
+        (
+            ProtoScopeType::Embedder,
+            nemo_relay_runtime::api::scope::ScopeType::Embedder,
+        ),
+        (
+            ProtoScopeType::Reranker,
+            nemo_relay_runtime::api::scope::ScopeType::Reranker,
+        ),
+        (
+            ProtoScopeType::Guardrail,
+            nemo_relay_runtime::api::scope::ScopeType::Guardrail,
+        ),
+        (
+            ProtoScopeType::Evaluator,
+            nemo_relay_runtime::api::scope::ScopeType::Evaluator,
+        ),
+        (
+            ProtoScopeType::Custom,
+            nemo_relay_runtime::api::scope::ScopeType::Custom,
+        ),
+        (
+            ProtoScopeType::Unknown,
+            nemo_relay_runtime::api::scope::ScopeType::Unknown,
+        ),
+    ];
+    for (proto, expected) in cases {
+        assert_eq!(proto_scope_type(proto as i32), expected);
+    }
+    assert_eq!(
+        proto_scope_type(999),
+        nemo_relay_runtime::api::scope::ScopeType::Custom
+    );
+}
+
+#[test]
+fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
+    enable_operational_logs();
+    assert!(
+        validate_relay_compatibility(None)
+            .expect_err("missing relay compatibility should fail")
+            .to_string()
+            .contains("compat.relay is required")
+    );
+    assert!(
+        validate_relay_compatibility(Some("not semver"))
+            .expect_err("invalid relay compatibility should fail")
+            .to_string()
+            .contains("invalid compat.relay")
+    );
+
+    let runtime = RuntimeBuilder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    assert_eq!(block_on_runtime(&runtime, async { 42 }), 42);
+}
+
+#[test]
+fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
+    let mut handshake = HandshakeResponse {
+        plugin_id: "fixture_worker".into(),
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: false,
+        worker_protocol: "grpc-v2".into(),
+        sdk_name: "unit".into(),
+        sdk_version: "0".into(),
+        runtime_name: "unit".into(),
+        runtime_version: "0".into(),
+        supported_surfaces: Vec::new(),
+    };
+
+    let error = validate_worker_handshake("fixture_worker", &handshake)
+        .expect_err("a grpc-v2 handshake response must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported worker_protocol 'grpc-v2'")
+    );
+
+    handshake.worker_protocol = WORKER_PROTOCOL_GRPC_V1.into();
+    validate_worker_handshake("fixture_worker", &handshake)
+        .expect("a grpc-v1 handshake response should be accepted");
+}
+
+#[test]
+#[cfg(unix)]
+fn worker_endpoints_fail_when_host_socket_cannot_bind() {
+    enable_operational_logs();
+    let activation_dir = std::env::temp_dir().join(format!("nmrw-unit-{}", Uuid::now_v7()));
+    let host_socket = activation_dir.join("host.sock");
+    std::fs::create_dir_all(&host_socket).expect("host socket directory should be created");
+
+    let error = match WorkerEndpoints::new(&activation_dir) {
+        Ok(_) => panic!("endpoint creation should fail when host socket path is a directory"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("failed to bind worker host runtime socket")
+    );
+
+    let _ = std::fs::remove_dir_all(&activation_dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_unix_connection_reports_a_missing_socket() {
+    let missing = std::env::temp_dir().join(format!("nmrw-missing-{}", Uuid::now_v7()));
+    let error = connect_worker(&WorkerConnectEndpoint::Unix(missing.clone()))
+        .await
+        .expect_err("a missing worker socket should fail to connect");
+    assert!(error.to_string().contains(&missing.display().to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_helpers_cover_worker_response_edges() {
+    enable_operational_logs();
+    let worker_error = WorkerError {
+        code: "worker.failed".into(),
+        message: "boom".into(),
+        retryable: false,
+        downstream_continuation_id: None,
+    };
+    let (callback, _shutdown) = fake_callback_service({
+        let worker_error = worker_error.clone();
+        move |request| match request.registration_name.as_str() {
+            "subscriber_error" => InvokeResponse {
+                result: Some(InvokeResult::Error(worker_error.clone())),
+            },
+            "subscriber_unexpected" | "llm_intercept_unexpected" => InvokeResponse {
+                result: Some(InvokeResult::Json(JsonResult {
+                    value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+                    error: None,
+                })),
+            },
+            "llm_json_invalid" | "event_fields_invalid" => InvokeResponse {
+                result: Some(InvokeResult::Json(JsonResult {
+                    value: Some(json_envelope(JSON_SCHEMA, &json!(null)).expect("json envelope")),
+                    error: None,
+                })),
+            },
+            "llm_intercept_invalid_request" => InvokeResponse {
+                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
+                        json: br#"{"request":null}"#.to_vec(),
+                    }),
+                })),
+            },
+            "llm_intercept_missing_annotated" => InvokeResponse {
+                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LegacyLlmRequestInterceptResult@1".into(),
+                        json: br#"{}"#.to_vec(),
+                    }),
+                })),
+            },
+            "llm_intercept_invalid_annotated" => InvokeResponse {
+                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
+                        json: serde_json::to_vec(&json!({
+                            "request": valid_llm_request(),
+                            "annotated_request": 3,
+                            "pending_marks": [],
+                        }))
+                        .unwrap(),
+                    }),
+                })),
+            },
+            "llm_intercept_error" => InvokeResponse {
+                result: Some(InvokeResult::Error(worker_error.clone())),
+            },
+            "tool_intercept_missing_result" => InvokeResponse {
+                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
+                    outcome: Some(ProtoToolExecutionInterceptOutcome {
+                        result: None,
+                        annotation: None,
+                        pending_marks: None,
+                    }),
+                })),
+            },
+            "tool_intercept_invalid_result" => InvokeResponse {
+                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
+                    outcome: Some(ProtoToolExecutionInterceptOutcome {
+                        result: Some(JsonValue {
+                            json: b"{".to_vec(),
+                        }),
+                        annotation: None,
+                        pending_marks: None,
+                    }),
+                })),
+            },
+            _ => InvokeResponse {
+                result: Some(InvokeResult::Empty(EmptyResult {})),
+            },
+        }
+    })
+    .await;
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("callback-edge").build(),
+        None,
+        None,
+    ));
+
+    let error = callback
+        .invoke_subscriber("subscriber_error", &event)
+        .expect_err("subscriber worker error should surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let error = callback
+        .invoke_subscriber("subscriber_unexpected", &event)
+        .expect_err("unexpected subscriber result should fail");
+    assert!(error.to_string().contains("subscriber returned unexpected"));
+
+    let error = callback
+        .invoke_event_sanitize(
+            "event_fields_invalid",
+            RegistrationSurface::MarkSanitizeGuardrail,
+            &event,
+        )
+        .await
+        .expect_err("invalid event sanitizer fields should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("worker returned invalid event sanitize fields")
+    );
+
+    let error = callback
+        .invoke_llm_sanitize_request(
+            "llm_json_invalid",
+            valid_llm_request(),
+            LlmSanitizeRequestContext::default(),
+        )
+        .await
+        .expect_err("invalid LLM JSON result should fail");
+    assert!(error.to_string().contains("invalid type"));
+
+    let error = callback
+        .invoke_llm_request_intercept(
+            "llm_intercept_invalid_request",
+            "model",
+            valid_llm_request(),
+            None,
+        )
+        .await
+        .expect_err("invalid LLM intercept request should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
+
+    let error = callback
+        .invoke_llm_request_intercept(
+            "llm_intercept_missing_annotated",
+            "model",
+            valid_llm_request(),
+            None,
+        )
+        .await
+        .expect_err("legacy outcome schema should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported LLM request intercept outcome schema")
+    );
+
+    let error = callback
+        .invoke_llm_request_intercept(
+            "llm_intercept_invalid_annotated",
+            "model",
+            valid_llm_request(),
+            None,
+        )
+        .await
+        .expect_err("invalid annotated request should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
+
+    let error = callback
+        .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
+        .await
+        .expect_err("LLM intercept worker error should surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let error = callback
+        .invoke_tool_execution(
+            "tool_intercept_missing_result",
+            "lookup",
+            json!({}),
+            None,
+            Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
+        )
+        .await
+        .expect_err("tool outcome without its required result should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("tool execution intercept outcome result is missing")
+    );
+
+    let error = callback
+        .invoke_tool_execution(
+            "tool_intercept_invalid_result",
+            "lookup",
+            json!({}),
+            None,
+            Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
+        )
+        .await
+        .expect_err("tool outcome with invalid result JSON should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid worker tool execution result JSON")
+    );
+
+    let error = callback
+        .invoke_llm_request_intercept(
+            "llm_intercept_unexpected",
+            "model",
+            valid_llm_request(),
+            None,
+        )
+        .await
+        .expect_err("unexpected LLM intercept result should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("LLM request intercept returned unexpected")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
+    enable_operational_logs();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let seen = seen.clone();
+        move |request| {
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            assert!(
+                invocation.execution_codec_context.is_none(),
+                "sanitizers must not receive execution codec context"
+            );
+            let codec = match invocation.sanitize_context.as_ref() {
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
+                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
+                None => None,
+            };
+            seen.lock().unwrap().push((
+                request.registration_name,
+                codec
+                    .map(|codec| codec.kind)
+                    .unwrap_or(LlmCodecKind::Unspecified as i32),
+                codec.and_then(|codec| codec.id.clone()),
+                invocation.request.is_some(),
+                invocation.response.is_some(),
+            ));
+            InvokeResponse {
+                result: Some(InvokeResult::Empty(EmptyResult {})),
+            }
+        }
+    })
+    .await;
+
+    let identities = [
+        LlmCodecIdentity::None,
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
+        LlmCodecIdentity::Runtime("com.example.chat.v1".into()),
+        LlmCodecIdentity::Opaque,
+    ];
+    for identity in identities {
+        assert!(
+            callback
+                .invoke_llm_sanitize_request(
+                    "request",
+                    valid_llm_request(),
+                    LlmSanitizeRequestContext::with_identity(identity.clone()),
+                )
+                .await
+                .expect("empty worker result must represent request omission")
+                .is_none()
+        );
+        assert!(
+            callback
+                .invoke_llm_sanitize_response(
+                    "response",
+                    json!({"secret": "value"}),
+                    LlmSanitizeResponseContext::with_identity(identity),
+                )
+                .await
+                .expect("empty worker result must represent response omission")
+                .is_none()
+        );
+    }
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        [
+            (
+                "request".into(),
+                LlmCodecKind::Unspecified as i32,
+                None,
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Unspecified as i32,
+                None,
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Builtin as i32,
+                Some("openai_responses".into()),
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Builtin as i32,
+                Some("openai_responses".into()),
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Runtime as i32,
+                Some("com.example.chat.v1".into()),
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Runtime as i32,
+                Some("com.example.chat.v1".into()),
+                false,
+                true,
+            ),
+            (
+                "request".into(),
+                LlmCodecKind::Opaque as i32,
+                None,
+                true,
+                false,
+            ),
+            (
+                "response".into(),
+                LlmCodecKind::Opaque as i32,
+                None,
+                false,
+                true,
+            ),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocation() {
+    enable_operational_logs();
+    type SeenCapability = (String, String, String);
+
+    let host_state = Arc::new(Mutex::new(None::<Arc<WorkerHostRuntimeState>>));
+    let seen = Arc::new(Mutex::new(Vec::<SeenCapability>::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let host_state = host_state.clone();
+        let seen = seen.clone();
+        move |request| {
+            let invocation_id = request.invocation_id.clone();
+            let registration_name = request.registration_name.clone();
+            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
+                request.payload
+            else {
+                panic!("LLM sanitizer must receive an LLM invocation");
+            };
+            assert!(
+                invocation.execution_codec_context.is_none(),
+                "sanitizers must not receive execution codec context"
+            );
+            let state = host_state
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("host state must be installed before invoking the worker");
+            let capability_id = match invocation
+                .sanitize_context
+                .as_ref()
+                .expect("codec context must be forwarded")
+            {
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active request codec must receive a capability");
+                    let codec = state
+                        .request_codec(id, &invocation_id)
+                        .expect("request capability must resolve during invocation");
+                    let request: LlmRequest = decode_json_envelope(
+                        invocation.request.as_ref().expect("request payload"),
+                    )
+                    .expect("request payload must decode");
+                    let annotated = codec
+                        .decode(&request)
+                        .expect("resolved request codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
+                    context,
+                ) => {
+                    let id = context
+                        .codec_capability_id
+                        .as_deref()
+                        .expect("active response codec must receive a capability");
+                    let codec = state
+                        .response_codec(id, &invocation_id)
+                        .expect("response capability must resolve during invocation");
+                    let response: Json = decode_json_envelope(
+                        invocation.response.as_ref().expect("response payload"),
+                    )
+                    .expect("response payload must decode");
+                    let annotated = codec
+                        .decode_response(&response)
+                        .expect("resolved response codec must be usable");
+                    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+                    id.to_owned()
+                }
+            };
+            seen.lock().unwrap().push((
+                registration_name.clone(),
+                capability_id,
+                invocation_id,
+            ));
+            if registration_name == "response-error" {
+                InvokeResponse {
+                    result: Some(InvokeResult::Error(
+                        nemo_relay_worker_proto::v1::WorkerError {
+                            code: "worker.failed".into(),
+                            message: "boom".into(),
+                            retryable: false,
+                            downstream_continuation_id: None,
+                        },
+                    )),
+                }
+            } else {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            }
+        }
+    })
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let codec = Arc::new(OpenAIChatCodec);
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    assert!(
+        callback
+            .invoke_llm_sanitize_request(
+                "request-success",
+                request,
+                LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+            )
+            .await
+            .expect("request sanitizer must succeed")
+            .is_none()
+    );
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let error = callback
+        .invoke_llm_sanitize_response(
+            "response-error",
+            response,
+            LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        )
+        .await
+        .expect_err("worker sanitizer error must surface");
+    assert!(error.to_string().contains("worker.failed: boom"));
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    let (_, request_capability, request_invocation) = &seen[0];
+    assert_eq!(
+        callback
+            .host_state
+            .request_codec(request_capability, request_invocation)
+            .err()
+            .expect("successful invocation must expire its request capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+    let (_, response_capability, response_invocation) = &seen[1];
+    assert_eq!(
+        callback
+            .host_state
+            .response_codec(response_capability, response_invocation)
+            .err()
+            .expect("failed invocation must expire its response capability")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
+    enable_operational_logs();
+    let host_state = shared_worker_host_state();
+    let seen = Arc::new(Mutex::new(None::<ExecutionCodecCapabilities>));
+    let (callback, _shutdown) = fake_callback_service({
+        let host_state = Arc::clone(&host_state);
+        let seen = Arc::clone(&seen);
+        move |request| {
+            let (request_id, response_id, invocation_id) = execution_codec_capabilities(request);
+            let response_id = response_id.expect("response capability must be present");
+            let state = host_state.lock().unwrap().clone().unwrap();
+            state
+                .request_codec(&request_id, &invocation_id)
+                .expect("request capability resolves during callback");
+            state
+                .response_codec(&response_id, &invocation_id)
+                .expect("response capability resolves during callback");
+            *seen.lock().unwrap() = Some((request_id, Some(response_id), invocation_id));
+            InvokeResponse {
+                result: Some(InvokeResult::Json(JsonResult {
+                    value: Some(json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap()),
+                    error: None,
+                })),
+            }
+        }
+    })
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let next: LlmExecutionNextFn = Arc::new(|_| Box::pin(async { Ok(json!({"unused": true})) }));
+    callback
+        .invoke_llm_execution(
+            "context",
+            "model",
+            valid_llm_request(),
+            openai_execution_codec_context(),
+            next,
+        )
+        .await
+        .unwrap();
+
+    let (request_id, response_id, invocation_id) = seen.lock().unwrap().take().unwrap();
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+    assert_response_codec_expired(
+        &callback.host_state,
+        response_id.as_deref().unwrap(),
+        &invocation_id,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_execution_rejects_mismatched_response_codec_context() {
+    enable_operational_logs();
+    let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+    let result = callback
+        .invoke_llm_stream_execution(
+            "invalid-stream-context",
+            "model",
+            valid_llm_request(),
+            openai_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("streaming response codec context must be rejected");
+    };
+
+    assert!(matches!(error, FlowError::InvalidArgument(_)));
+
+    let error = callback
+        .invoke_llm_execution(
+            "invalid-complete-response-context",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(json!({})) })),
+        )
+        .await
+        .expect_err("complete-response execution must require response codec context");
+    assert!(matches!(error, FlowError::InvalidArgument(_)));
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_worker_execution_expires_context_and_continuation_state() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = Arc::clone(&started_tx);
+            move |request| {
+                let started_tx = Arc::clone(&started_tx);
+                Box::pin(async move {
+                    let (request_id, response_id, invocation_id) =
+                        execution_codec_capabilities(request);
+                    if let Some(started) = started_tx.lock().unwrap().take() {
+                        let _ = started.send((request_id, response_id, invocation_id));
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_llm_execution(
+                "cancel-context-execution",
+                "model",
+                valid_llm_request(),
+                openai_execution_codec_context(),
+                Arc::new(|request| Box::pin(async move { Ok(request.content) })),
+            )
+            .await
+    });
+    let (request_id, response_id, invocation_id) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("worker execution must start")
+            .expect("worker execution must publish its capabilities");
+    let response_id = response_id.expect("response capability must be present");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability must be active while the worker is pending");
+    callback
+        .host_state
+        .response_codec(&response_id, &invocation_id)
+        .expect("response capability must be active while the worker is pending");
+
+    task.abort();
+    let _ = task.await;
+
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("caller cancellation must reach the worker")
+        .expect("cancellation channel remains open");
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("host caller cancelled"));
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+    assert_response_codec_expired(&callback.host_state, &response_id, &invocation_id);
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_worker_stream_codec_context_is_request_only_and_expires_at_eof() {
+    enable_operational_logs();
+    let host_state = shared_worker_host_state();
+    let seen = Arc::new(Mutex::new(None::<(String, String)>));
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    let chunk_rx = Arc::new(Mutex::new(Some(chunk_rx)));
+    let (callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        },
+        {
+            let host_state = Arc::clone(&host_state);
+            let seen = Arc::clone(&seen);
+            let chunk_rx = Arc::clone(&chunk_rx);
+            move |request| {
+                let (request_id, response_id, invocation_id) =
+                    execution_codec_capabilities(request);
+                assert!(
+                    response_id.is_none(),
+                    "stream must not expose a response decoder"
+                );
+                host_state
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("host state")
+                    .request_codec(&request_id, &invocation_id)
+                    .expect("request capability resolves during stream invocation");
+                *seen.lock().unwrap() = Some((request_id, invocation_id));
+                let receiver = chunk_rx
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("test stream created once");
+                Box::pin(tokio_stream::wrappers::ReceiverStream::new(receiver)) as FakeInvokeStream
+            }
+        },
+    )
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+
+    let mut stream = callback
+        .invoke_llm_stream_execution(
+            "context-stream",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream");
+    let (request_id, invocation_id) = seen.lock().unwrap().clone().expect("stream context seen");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability remains active while the stream is open");
+
+    chunk_tx
+        .send(Ok(StreamChunk {
+            item: Some(StreamItem::Value(
+                json_envelope(JSON_SCHEMA, &json!({"done": true})).unwrap(),
+            )),
+        }))
+        .await
+        .expect("stream chunk accepted");
+    drop(chunk_tx);
+    assert_eq!(stream.next().await.unwrap().unwrap(), json!({"done": true}));
+    assert!(stream.next().await.is_none());
+    assert_request_codec_expired(&callback.host_state, &request_id, &invocation_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_worker_sanitizer_expires_codec_capability() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, _cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = Arc::clone(&started_tx);
+            move |request| {
+                let started_tx = Arc::clone(&started_tx);
+                Box::pin(async move {
+                    let invocation_id = request.invocation_id;
+                    let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload
+                    else {
+                        panic!("LLM sanitizer must receive an LLM invocation");
+                    };
+                    let Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) =
+                        invocation.sanitize_context
+                    else {
+                        panic!("request sanitizer context must be present");
+                    };
+                    let capability_id = context
+                        .codec_capability_id
+                        .expect("request codec capability must be present");
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send((capability_id, invocation_id));
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_llm_sanitize_request(
+                "cancel-codec",
+                valid_llm_request(),
+                LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+            )
+            .await
+    });
+    let (capability_id, invocation_id) =
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("worker sanitizer should start")
+            .expect("worker sanitizer should publish its capability");
+    callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+        .expect("capability must be active while the sanitizer is pending");
+
+    task.abort();
+    let _ = task.await;
+    let error = match callback
+        .host_state
+        .request_codec(&capability_id, &invocation_id)
+    {
+        Ok(_) => panic!("cancelled sanitizer must expire its codec capability"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_stream_transport_error_surfaces_to_host_stream() {
+    enable_operational_logs();
+    let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+
+    let mut stream = callback
+        .invoke_llm_stream_execution(
+            "stream_transport_error",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream should be returned");
+
+    let error = stream
+        .next()
+        .await
+        .expect("transport error should be yielded")
+        .expect_err("stream transport error should surface");
+    assert!(error.to_string().contains("worker stream transport failed"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_stream_stops_when_host_receiver_is_dropped() {
+    enable_operational_logs();
+    let (yield_tx, yield_rx) = oneshot::channel();
+    let (stream_dropped_tx, stream_dropped_rx) = oneshot::channel();
+    let stream_dropped_tx = Arc::new(Mutex::new(Some(stream_dropped_tx)));
+    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
+    let (callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        },
+        {
+            let stream_dropped_tx = stream_dropped_tx.clone();
+            let yield_rx = yield_rx.clone();
+            move |_| {
+                let dropped = stream_dropped_tx
+                    .lock()
+                    .expect("stream drop signal lock should not be poisoned")
+                    .take()
+                    .expect("test stream should be created once");
+                let yield_rx = yield_rx
+                    .lock()
+                    .expect("stream yield signal lock should not be poisoned")
+                    .take()
+                    .expect("test stream should be created once");
+                Box::pin(SignalChunkThenPendingStream {
+                    yield_rx,
+                    dropped: Some(dropped),
+                    first_chunk: Some(Ok(StreamChunk {
+                        item: Some(StreamItem::Value(
+                            json_envelope(JSON_SCHEMA, &json!({ "after_receiver_drop": true }))
+                                .expect("test stream chunk should encode"),
+                        )),
+                    })),
+                }) as FakeInvokeStream
+            }
+        },
+    )
+    .await;
+
+    let mut stream = callback
+        .invoke_llm_stream_execution(
+            "stream_receiver_drop",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream should be returned");
+    yield_tx
+        .send(())
+        .expect("worker stream yield signal should be delivered");
+    tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .expect("worker stream should yield before timing out")
+        .expect("worker stream ended before yielding a chunk")
+        .expect("worker stream chunk should be valid");
+    drop(stream);
+    tokio::time::timeout(std::time::Duration::from_secs(1), stream_dropped_rx)
+        .await
+        .expect("worker stream should be dropped after host receiver is dropped")
+        .expect("worker stream drop signal should be delivered");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Checks that a timeout reports the callback's identity and sends cancellation.
+async fn callback_timeout_sends_explicit_worker_cancellation() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+    let request = callback
+        .base_request(
+            "timeout",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            Some(invoke_request_payload_tool("tool", json!({}), None)),
+        )
+        .expect("worker invocation request should build");
+    let invocation_id = request.invocation_id.clone();
+
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_async_with_timeout(request, Some(std::time::Duration::from_millis(10)))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        .await
+        .expect("worker invocation should start before timeout assertion")
+        .expect("worker invocation should start");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("timed out invocation should complete")
+        .expect("timed out invocation task should join");
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation after timeout")
+        .expect("cancellation channel should remain open");
+
+    let error = result
+        .expect_err("worker invocation should time out")
+        .to_string();
+    assert!(error.contains("worker invocation timed out"), "{error}");
+    assert!(error.contains("surface=TOOL_REQUEST_INTERCEPT"), "{error}");
+    assert!(error.contains("callback=timeout"), "{error}");
+    assert!(error.contains("worker RPC timed out after 10ms"), "{error}");
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("timed out"));
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+    let snapshot = diagnostics
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.events.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.worker.transport_failed");
+    assert_eq!(event.classification.failure_class(), Some("timeout"));
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
+}
+
+/// Checks that execution callbacks ignore short deadlines and honor caller cancellation.
+#[tokio::test]
+async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable() {
+    for surface in [
+        RegistrationSurface::ToolExecutionIntercept,
+        RegistrationSurface::LlmExecutionIntercept,
+    ] {
+        for cancel in [false, true] {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+                {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    move |_| {
+                        let started = Arc::clone(&started);
+                        let release = Arc::clone(&release);
+                        Box::pin(async move {
+                            started.notify_one();
+                            release.notified().await;
+                            InvokeResponse {
+                                result: Some(InvokeResult::Empty(EmptyResult {})),
+                            }
+                        })
+                    }
+                },
+                |_| Box::pin(tokio_stream::empty()),
+            )
+            .await;
+            callback.callback_timeouts = serde_json::from_value(serde_json::json!({
+                "default_ms": 1,
+                "by_name": {"long_execution": 1}
+            }))
+            .unwrap();
+            let request = callback
+                .base_request("long_execution", surface, None, None)
+                .unwrap();
+            let invocation_id = request.invocation_id.clone();
+            let running_callback = callback.clone();
+            let task = tokio::spawn(async move { running_callback.invoke_async(request).await });
+            tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            tokio::time::pause();
+            tokio::time::advance(std::time::Duration::from_secs(3600)).await;
+            tokio::task::yield_now().await;
+            tokio::time::resume();
+            assert!(
+                !task.is_finished(),
+                "execution must wait for completion or caller cancellation"
+            );
+            if cancel {
+                task.abort();
+                assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+                let cancellation =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(cancellation.invocation_id, invocation_id);
+            } else {
+                release.notify_one();
+                task.await.unwrap().unwrap();
+                assert!(
+                    cancel_rx.try_recv().is_err(),
+                    "successful completion must not cancel the worker"
+                );
+            }
+            assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+        }
+    }
+}
+
+/// Checks deadline selection, worker cancellation, and host cleanup after a timeout.
+#[tokio::test]
+async fn short_callbacks_use_configured_deadlines_and_cancel_on_expiry() {
+    for (settings, deadline_ms) in [
+        (serde_json::json!({}), 30_000),
+        (serde_json::json!({"default_ms": 60_000}), 60_000),
+        (
+            serde_json::json!({"default_ms": 60_000, "by_name": {"short_callback": 5_000}}),
+            5_000,
+        ),
+        (
+            serde_json::json!({"by_name": {"another_callback": 5_000}}),
+            30_000,
+        ),
+    ] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+            {
+                let started = Arc::clone(&started);
+                move |_| {
+                    let started = Arc::clone(&started);
+                    Box::pin(async move {
+                        started.notify_one();
+                        std::future::pending::<InvokeResponse>().await
+                    })
+                }
+            },
+            |_| Box::pin(tokio_stream::empty()),
+        )
+        .await;
+        callback.callback_timeouts = serde_json::from_value(settings).unwrap();
+        let host_state = callback.host_state.clone();
+        let request = callback
+            .base_request(
+                "short_callback",
+                RegistrationSurface::ToolRequestIntercept,
+                None,
+                None,
+            )
+            .unwrap();
+        let invocation_id = request.invocation_id.clone();
+        let task = tokio::spawn(async move { callback.invoke_async(request).await });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_millis(deadline_ms * 3 / 4)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "callback must survive until its configured deadline"
+        );
+        tokio::time::advance(std::time::Duration::from_millis(deadline_ms / 4 + 1000)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            task.await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("worker invocation timed out")
+        );
+        let cancellation =
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(cancellation.invocation_id, invocation_id);
+        assert!(host_state.scope_stacks.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn streaming_execution_can_wait_for_slow_response_headers() {
+    for cancel in [false, true] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_async_handlers(
+            |_| {
+                Box::pin(async {
+                    InvokeResponse {
+                        result: Some(InvokeResult::Empty(EmptyResult {})),
+                    }
+                })
+            },
+            {
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move |_| {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    Box::pin(async move {
+                        started.notify_one();
+                        release.notified().await;
+                        Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream)
+                    })
+                }
+            },
+        )
+        .await;
+        let (callback, _shutdown) = callback_for_client(client, shutdown);
+        let running_callback = callback.clone();
+        let task = tokio::spawn(async move {
+            running_callback
+                .invoke_llm_stream_execution(
+                    "slow_stream",
+                    "model",
+                    valid_llm_request(),
+                    openai_stream_execution_codec_context(),
+                    Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !task.is_finished(),
+            "opening a stream must not have a fixed RPC deadline"
+        );
+        if cancel {
+            task.abort();
+            assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        } else {
+            release.notify_one();
+            let mut stream = task.await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+            stream.close().await.unwrap();
+            assert!(cancel_rx.try_recv().is_err());
+        }
+        // The cancellation RPC can arrive before the host forwarding task finishes cleanup.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !callback.host_state.scope_stacks.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream invocation must release its scope state");
+        assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_tool_lifecycle_subscriber_marks_keep_the_observed_tool_parent() {
+    let host_state = Arc::new(Mutex::new(None::<Arc<WorkerHostRuntimeState>>));
+    let handler_state = host_state.clone();
+    let (callback, _shutdown, _cancel) = fake_callback_service_with_handlers(
+        move |request| {
+            let state = handler_state.lock().unwrap().as_ref().unwrap().clone();
+            Box::pin(async move {
+                let event = match request.payload.unwrap() {
+                    invoke_request_payload::Payload::Event(event) => {
+                        nemo_relay_worker_proto::decode_json_envelope::<Event>(&event).unwrap()
+                    }
+                    _ => panic!("expected lifecycle event"),
+                };
+                let mark_name = match event.scope_category().unwrap() {
+                    ScopeCategory::Start => "nv.agent.tool.start",
+                    ScopeCategory::End => "nv.agent.tool.end",
+                };
+                let ack = WorkerHostRuntimeService { state }
+                    .emit_mark(Request::new(EmitMarkRequest {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: AUTH_TOKEN.into(),
+                        scope: request.scope,
+                        name: mark_name.into(),
+                        ..EmitMarkRequest::default()
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert!(ack.ok);
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+    let callback = Arc::new(callback);
+    let marks = Arc::new(Mutex::new(Vec::new()));
+    let recorded = marks.clone();
+    let tool_uuid = tokio::task::spawn_blocking(move || {
+        nemo_relay_runtime::api::runtime::with_scope_stack(
+            nemo_relay_runtime::api::runtime::create_scope_stack(),
+            || {
+                let root = nemo_relay_runtime::api::runtime::task_scope_top().uuid;
+                nemo_relay_runtime::api::subscriber::scope_register_subscriber(
+                    &root,
+                    "worker-tool-logs",
+                    Arc::new(move |event| {
+                        if event.scope_type() == Some(ScopeType::Tool) {
+                            callback.invoke_subscriber("tool-logs", event).unwrap();
+                        }
+                    }),
+                )
+                .unwrap();
+                nemo_relay_runtime::api::subscriber::scope_register_subscriber(
+                    &root,
+                    "worker-tool-log-capture",
+                    Arc::new(move |event| {
+                        if matches!(event.name(), "nv.agent.tool.start" | "nv.agent.tool.end") {
+                            recorded.lock().unwrap().push(event.clone());
+                        }
+                    }),
+                )
+                .unwrap();
+                let turn = push_scope(
+                    PushScopeParams::builder()
+                        .name("turn")
+                        .scope_type(ScopeType::Agent)
+                        .build(),
+                )
+                .unwrap();
+                let tool = nemo_relay_runtime::api::tool::tool_call(
+                    nemo_relay_runtime::api::tool::ToolCallParams::builder()
+                        .name("Bash")
+                        .args(json!({"command": "true"}))
+                        .build(),
+                )
+                .unwrap();
+                nemo_relay_runtime::api::tool::tool_call_end(
+                    nemo_relay_runtime::api::tool::ToolCallEndParams::builder()
+                        .handle(&tool)
+                        .execution_result(json!({"exit_code": 0}).into())
+                        .build(),
+                )
+                .unwrap();
+                pop_scope(PopScopeParams::builder().handle_uuid(&turn.uuid).build()).unwrap();
+                nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+                tool.uuid
+            },
+        )
+    })
+    .await
+    .unwrap();
+    let marks = marks.lock().unwrap();
+    assert_eq!(marks.len(), 2);
+    for mark in marks.iter() {
+        assert_eq!(mark.parent_uuid(), Some(tool_uuid));
+    }
+    assert!(
+        host_state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .scope_stacks
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
+    enable_operational_logs();
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let continuation_id = callback
+        .host_state
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
+            Box::pin(async move { Ok(ToolExecutionResult::new(value)) })
+        })))
+        .expect("continuation should insert");
+    let request = callback
+        .base_request(
+            "cancel",
+            RegistrationSurface::ToolExecutionIntercept,
+            Some(continuation_id),
+            Some(invoke_request_payload_tool("tool", json!({}), None)),
+        )
+        .expect("worker invocation request should build");
+    let scope_stack_id = request
+        .scope
+        .as_ref()
+        .expect("worker invocation should have a scope stack")
+        .scope_stack_id
+        .clone();
+    let invocation_stack = callback
+        .host_state
+        .stack(&scope_stack_id)
+        .expect("invocation scope stack lookup should succeed")
+        .expect("invocation scope stack should exist");
+    let baseline_depth = invocation_stack
+        .read()
+        .expect("invocation scope stack lock")
+        .scopes()
+        .len();
+    let host_runtime = WorkerHostRuntimeService {
+        state: callback.host_state.clone(),
+    };
+    for name in ["cancelled-outer", "cancelled-inner"] {
+        let pushed = host_runtime
+            .push_scope(Request::new(PushScopeRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                scope: Some(ScopeContext {
+                    scope_stack_id: scope_stack_id.clone(),
+                    parent_scope_id: String::new(),
+                }),
+                name: name.into(),
+                scope_type: ProtoScopeType::Custom as i32,
+                data: None,
+                metadata: None,
+                input: None,
+                timestamp_unix_micros: None,
+            }))
+            .await
+            .expect("worker scope should push")
+            .into_inner();
+        assert!(pushed.error.is_none());
+    }
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth + 2
+    );
+    let overlapping_scope_stack_id = callback
+        .host_state
+        .insert_invocation_scope_stack(invocation_stack.clone(), None)
+        .expect("overlapping invocation scope stack should insert");
+    let overlapping_stack = callback
+        .host_state
+        .stack(&overlapping_scope_stack_id)
+        .expect("overlapping scope stack lookup should succeed")
+        .expect("overlapping scope stack should exist");
+    assert!(!Arc::ptr_eq(&invocation_stack, &overlapping_stack));
+    let invocation_id = request.invocation_id.clone();
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move { callback_task.invoke_async(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        .await
+        .expect("worker invocation should start before caller abort")
+        .expect("worker invocation should start");
+
+    task.abort();
+    let _ = task.await;
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation when caller drops")
+        .expect("cancellation channel should remain open");
+
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("caller cancelled"));
+    assert!(
+        callback
+            .host_state
+            .continuations
+            .lock()
+            .expect("continuation lock")
+            .is_empty()
+    );
+    assert!(
+        callback
+            .host_state
+            .scope_handles
+            .lock()
+            .expect("scope handle lock")
+            .is_empty()
+    );
+    assert_eq!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope lock")
+            .len(),
+        1
+    );
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+    assert_eq!(
+        overlapping_stack
+            .read()
+            .expect("overlapping scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth + 2
+    );
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&overlapping_scope_stack_id);
+    assert!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope lock")
+            .is_empty()
+    );
+    assert!(
+        callback
+            .host_state
+            .pending_scope_cleanups
+            .lock()
+            .expect("pending cleanup lock")
+            .is_empty()
+    );
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+    assert_eq!(
+        overlapping_stack
+            .read()
+            .expect("overlapping scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth + 2
+    );
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&scope_stack_id);
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&overlapping_scope_stack_id);
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+}
+
+#[test]
+fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+    let scope_stack_id = state
+        .insert_invocation_scope_stack(stack.clone(), None)
+        .expect("invocation scope stack should insert");
+    let invocation_stack = state
+        .stack(&scope_stack_id)
+        .expect("invocation scope stack lookup should succeed")
+        .expect("invocation scope stack should exist");
+    let baseline_depth = invocation_stack
+        .read()
+        .expect("scope stack lock")
+        .scopes()
+        .len();
+    with_scope_stack(invocation_stack.clone(), || {
+        push_scope(
+            PushScopeParams::builder()
+                .name("cleanup-lock-test")
+                .scope_type(ScopeType::Custom)
+                .build(),
+        )
+    })
+    .expect("worker scope should push");
+
+    let stack_guard = invocation_stack.write().expect("scope stack lock");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let cleanup_state = state.clone();
+    let cleanup = std::thread::spawn(move || {
+        cleanup_state.cleanup_invocation_scope_stack(&scope_stack_id);
+        let _ = done_tx.send(());
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let cleanup_registered = state
+            .scope_stack_cleanups
+            .lock()
+            .expect("scope cleanup lock")
+            .iter()
+            .any(|handle| Arc::ptr_eq(handle, &invocation_stack));
+        if cleanup_registered
+            && state.scope_stacks.try_lock().is_ok()
+            && state.pending_scope_cleanups.try_lock().is_ok()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "scope cleanup should release host state locks before unwinding"
+        );
+        std::thread::yield_now();
+    }
+
+    drop(stack_guard);
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("scope cleanup thread should finish before timing out");
+    cleanup.join().expect("scope cleanup thread should finish");
+
+    assert!(
+        state
+            .scope_stack_cleanups
+            .lock()
+            .expect("scope cleanup lock")
+            .is_empty()
+    );
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_host_stream_sends_explicit_worker_cancellation() {
+    enable_operational_logs();
+    let mut fixture = pending_worker_stream_with_codec_context("cancel_stream").await;
+    fixture
+        .yield_tx
+        .take()
+        .expect("yield signal sent once")
+        .send(())
+        .expect("worker stream yield signal should be delivered");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture.stream.as_mut().unwrap().next(),
+    )
+    .await
+    .expect("worker stream should yield before abandonment")
+    .expect("worker stream should yield before abandonment")
+    .expect("worker stream chunk should be valid");
+    drop(fixture.stream.take());
+
+    assert_worker_stream_cancelled_and_cleaned(&mut fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_worker_stream_waits_for_cancellation_and_codec_cleanup() {
+    enable_operational_logs();
+    let mut fixture = pending_worker_stream_with_codec_context("close_stream").await;
+
+    fixture
+        .stream
+        .as_mut()
+        .unwrap()
+        .close()
+        .await
+        .expect("explicit close must wait for worker stream cleanup");
+
+    let cancellation = fixture
+        .cancel_rx
+        .try_recv()
+        .expect("close must wait for worker cancellation");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
+    assert!(cancellation.reason.contains("stopped consuming"));
+    assert_request_codec_expired(
+        &fixture.callback.host_state,
+        &fixture.request_id,
+        &fixture.invocation_id,
+    );
+    assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn terminal_worker_stream_error_releases_resources_while_host_stream_is_retained() {
+    enable_operational_logs();
+    let mut fixture = pending_worker_stream_with_first_chunk(
+        "terminal-stream-error",
+        Ok(StreamChunk {
+            item: Some(StreamItem::Error(test_worker_error())),
+        }),
+    )
+    .await;
+    fixture
+        .yield_tx
+        .take()
+        .expect("yield signal sent once")
+        .send(())
+        .expect("worker stream yield signal should be delivered");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture.stream.as_mut().expect("host stream").next(),
+    )
+    .await
+    .expect("worker error should arrive promptly")
+    .expect("worker stream should yield its terminal error")
+    .expect_err("worker error should remain an error");
+    assert!(error.to_string().contains("worker.failed"));
+    fixture.stream.as_mut().unwrap().close().await.unwrap();
+    let cancellation = fixture
+        .cancel_rx
+        .try_recv()
+        .expect("terminal error close must wait for worker cleanup acknowledgment");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
+
+    assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            fixture
+                .stream
+                .as_mut()
+                .expect("retained host stream")
+                .next(),
+        )
+        .await
+        .expect("host stream should close after its terminal error")
+        .is_none()
+    );
+
+    // Keep the consumer object alive through every cleanup assertion.
+    drop(fixture.stream.take());
+}
+
+#[test]
+fn terminalizing_forwarded_worker_stream_disconnects_its_producer() {
+    let (tx, rx) = mpsc::channel(1);
+    let (_completion_tx, completion_rx) = watch::channel(None);
+    let mut stream = WorkerForwardedLlmStream {
+        receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+        completion: completion_rx,
+        close_result: None,
+    };
+
+    Pin::new(&mut stream).terminalize();
+
+    assert!(tx.is_closed());
+}
+
+#[tokio::test]
+async fn retrying_worker_stream_close_still_waits_after_the_first_future_is_cancelled() {
+    let (_stream_tx, stream_rx) = mpsc::channel(1);
+    let (completion_tx, completion_rx) = watch::channel(None);
+    let mut stream = WorkerForwardedLlmStream {
+        receiver: Some(tokio_stream::wrappers::ReceiverStream::new(stream_rx)),
+        completion: completion_rx,
+        close_result: None,
+    };
+
+    // Creating close initiates shutdown by dropping the receiver. Cancelling
+    // that future must not consume the only observer of producer cleanup.
+    drop(Pin::new(&mut stream).close());
+
+    let mut retry = Pin::new(&mut stream).close();
+    tokio::select! {
+        biased;
+        result = retry.as_mut() => {
+            panic!("retry completed before producer cleanup: {result:?}");
+        }
+        _ = tokio::task::yield_now() => {}
+    }
+
+    completion_tx.send_replace(Some(Ok(())));
+    retry.await.expect("retry must observe producer cleanup");
+    Pin::new(&mut stream)
+        .close()
+        .await
+        .expect("completed close remains idempotent");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex serializes global registrations.
+async fn install_registrations_covers_registry_error_edges() {
+    let _runtime_guard = crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    enable_operational_logs();
+    for surface in [
+        RegistrationSurface::Subscriber,
+        RegistrationSurface::ToolSanitizeRequestGuardrail,
+        RegistrationSurface::ToolSanitizeResponseGuardrail,
+        RegistrationSurface::ToolConditionalExecutionGuardrail,
+        RegistrationSurface::ToolRequestIntercept,
+        RegistrationSurface::ToolExecutionIntercept,
+        RegistrationSurface::LlmSanitizeRequestGuardrail,
+        RegistrationSurface::LlmSanitizeResponseGuardrail,
+        RegistrationSurface::LlmConditionalExecutionGuardrail,
+        RegistrationSurface::LlmRequestIntercept,
+        RegistrationSurface::LlmExecutionIntercept,
+        RegistrationSurface::LlmStreamExecutionIntercept,
+    ] {
+        let duplicate_name = format!("duplicate_worker_{surface:?}");
+        let (instance, _shutdown) = fake_worker_instance(vec![
+            registration(surface, &duplicate_name),
+            registration(surface, &duplicate_name),
+        ])
+        .await;
+        let mut ctx = PluginRegistrationContext::new();
+        let error = match instance.install_registrations(&mut ctx) {
+            Err(error) => error,
+            Ok(()) => panic!("{surface:?}: duplicate worker registration should fail"),
+        };
+        assert!(
+            error.to_string().contains("duplicate")
+                || error.to_string().contains("already registered"),
+            "{surface:?}: {error}"
+        );
+        let mut registrations = ctx.into_registrations();
+        crate::rollback_registrations(&mut registrations);
+    }
+
+    let (instance, _shutdown) = fake_worker_instance(vec![Registration {
+        surface: 999,
+        ..registration(RegistrationSurface::Subscriber, "bad")
+    }])
+    .await;
+    let mut ctx = PluginRegistrationContext::new();
+    assert!(
+        instance
+            .install_registrations(&mut ctx)
+            .expect_err("unsupported registration surface should fail")
+            .to_string()
+            .contains("unsupported registration surface")
+    );
+
+    let (instance, _shutdown) =
+        fake_worker_instance(vec![registration(RegistrationSurface::Unspecified, "bad")]).await;
+    let mut ctx = PluginRegistrationContext::new();
+    assert!(
+        instance
+            .install_registrations(&mut ctx)
+            .expect_err("unspecified registration surface should fail")
+            .to_string()
+            .contains("unspecified registration surface")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // The process-wide test mutex intentionally serializes runtime state.
+async fn installed_callbacks_apply_surface_specific_fallbacks() {
+    struct RuntimeCleanup {
+        registrations: Option<PluginRegistrationContext>,
+    }
+
+    impl Drop for RuntimeCleanup {
+        fn drop(&mut self) {
+            if let Some(context) = self.registrations.take() {
+                let mut registrations = context.into_registrations();
+                crate::rollback_registrations(&mut registrations);
+            }
+            let context = nemo_relay_runtime::api::runtime::global_context();
+            *context.write().unwrap_or_else(|error| error.into_inner()) =
+                NemoRelayContextState::new();
+        }
+    }
+
+    enable_operational_logs();
+    let registrations = vec![
+        registration(RegistrationSurface::Subscriber, "fallback_subscriber"),
+        registration(RegistrationSurface::MarkSanitizeGuardrail, "fallback_mark"),
+        registration(
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+            "fallback_scope_start",
+        ),
+        registration(
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+            "fallback_scope_end",
+        ),
+        registration(
+            RegistrationSurface::ToolSanitizeRequestGuardrail,
+            "fallback_tool_request",
+        ),
+        registration(
+            RegistrationSurface::ToolSanitizeResponseGuardrail,
+            "fallback_tool_response",
+        ),
+        registration(
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            "fallback_llm_request",
+        ),
+        registration(
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+            "fallback_llm_response",
+        ),
+    ];
+    let (mut instance, _instance_shutdown) = fake_worker_instance(registrations).await;
+    let (error_client, _error_shutdown) = fake_worker_client(|_| InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.failed".into(),
+            message: "callback unavailable".into(),
+            retryable: false,
+            downstream_continuation_id: None,
+        })),
+    })
+    .await;
+    instance.client = error_client;
+
+    let _runtime_guard = crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let context = nemo_relay_runtime::api::runtime::global_context();
+    *context.write().unwrap() = NemoRelayContextState::new();
+
+    let mut registration_context = PluginRegistrationContext::new();
+    instance
+        .install_registrations(&mut registration_context)
+        .expect("worker registrations should install");
+    let _cleanup = RuntimeCleanup {
+        registrations: Some(registration_context),
+    };
+
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("fallback-event")
+            .data(json!({"preserved": true}))
+            .metadata(json!({"preserved": true}))
+            .build(),
+        None,
+        None,
+    ));
+    let tool_request = json!({"request": "preserved"});
+    let tool_response = json!({"response": "preserved"});
+    let llm_request = valid_llm_request();
+    let llm_response = json!({"response": "preserved"});
+
+    let (
+        subscribers,
+        mark_entries,
+        scope_start_entries,
+        scope_end_entries,
+        tool_request_entries,
+        tool_response_entries,
+        llm_request_entries,
+        llm_response_entries,
+    ) = {
+        let state = context.read().unwrap();
+        (
+            state.collect_event_subscribers(&[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.mark_sanitize_guardrails,
+                &[],
+                nemo_relay_runtime::api::registry::RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            ),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_start_guardrails,
+                &[],
+                nemo_relay_runtime::api::registry::RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+            ),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.scope_sanitize_end_guardrails,
+                &[],
+                nemo_relay_runtime::api::registry::RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+            ),
+            state.tool_sanitize_request_entries(&[]),
+            state.tool_sanitize_response_entries(&[]),
+            state.llm_sanitize_request_entries(&[]),
+            state.llm_sanitize_response_entries(&[]),
+        )
+    };
+    nemo_relay_runtime::api::runtime::subscriber_dispatcher::dispatch_sanitized_event(
+        event.clone(),
+        Vec::new(),
+        &subscribers,
+        nemo_relay_runtime::api::runtime::current_scope_stack(),
+    );
+
+    for entries in [mark_entries, scope_start_entries, scope_end_entries] {
+        let sanitized =
+            NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries).await;
+        assert_eq!(sanitized.data(), None);
+        assert_eq!(sanitized.metadata(), None);
+    }
+
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+            "tool",
+            tool_request.clone(),
+            &tool_request_entries,
+        )
+        .await,
+        None
+    );
+    assert_eq!(
+        NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+            "tool",
+            tool_response.clone(),
+            &tool_response_entries,
+        )
+        .await,
+        None
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+            llm_request.clone(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::default(),
+            &llm_request_entries,
+        )
+        .await,
+        None,
+    );
+    assert_eq!(
+        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+            llm_response.clone(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default(),
+            &llm_response_entries,
+        )
+        .await,
+        None,
+    );
+    nemo_relay_runtime::api::subscriber::flush_subscribers()
+        .expect("subscriber callback should flush");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adapter_register_rejects_config_drift_even_without_validation_call() {
+    enable_operational_logs();
+    let (instance, _shutdown) = fake_worker_instance(Vec::new()).await;
+    let adapter = WorkerPluginAdapter {
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: false,
+        instance: Arc::new(instance),
+    };
+    let mut ctx = PluginRegistrationContext::new();
+    let changed = serde_json::Map::from_iter([("changed".into(), json!(true))]);
+
+    let error = adapter
+        .register(&changed, &mut ctx)
+        .await
+        .expect_err("config drift should fail registration");
+    assert!(error.to_string().contains("config changed"), "{error}");
+}
+
+#[tokio::test]
+async fn install_registrations_requires_a_prepared_plan() {
+    enable_operational_logs();
+    let (mut instance, _shutdown) = fake_worker_instance(Vec::new()).await;
+    instance.registrations = tokio::sync::OnceCell::new();
+    let mut ctx = PluginRegistrationContext::new();
+
+    let error = instance
+        .install_registrations(&mut ctx)
+        .expect_err("an unprepared worker registration plan must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("worker registration plan is not prepared"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn adapter_registration_requests_the_deferred_plan_once() {
+    enable_operational_logs();
+    let (client, _worker_shutdown, _cancel_rx, register_calls) = fake_worker_client_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        |_| Box::pin(tokio_stream::empty()) as FakeInvokeStream,
+    )
+    .await;
+    let (mut instance, _instance_shutdown) = fake_worker_instance(Vec::new()).await;
+    instance.client = client;
+    instance.registrations = tokio::sync::OnceCell::new();
+    let adapter = WorkerPluginAdapter {
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: true,
+        instance: Arc::new(instance),
+    };
+    let config = serde_json::Map::new();
+
+    assert_eq!(register_calls.load(Ordering::Relaxed), 0);
+    adapter
+        .register(&config, &mut PluginRegistrationContext::new())
+        .await
+        .expect("the first component registration should request the plan");
+    adapter
+        .register(&config, &mut PluginRegistrationContext::new())
+        .await
+        .expect("the second component registration should reuse the plan");
+    assert_eq!(register_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+
+    let diagnostics_auth_error = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: "wrong".into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect_err("bad activation id should fail diagnostics auth");
+    assert_eq!(diagnostics_auth_error.code(), tonic::Code::PermissionDenied);
+    let diagnostics = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("diagnostics request should succeed")
+        .into_inner();
+    assert!(diagnostics.entries.len() <= 32);
+
+    let auth_error = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: "wrong".into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "auth-failure".into(),
+            scope: None,
+            data: None,
+            metadata: None,
+            data_schema: None,
+            severity: String::new(),
+            category: String::new(),
+        }))
+        .await
+        .expect_err("bad activation id should fail auth");
+    assert_eq!(auth_error.code(), tonic::Code::PermissionDenied);
+
+    let ack = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "missing-stack".into(),
+            scope: Some(ScopeContext {
+                scope_stack_id: "missing-stack".into(),
+                parent_scope_id: String::new(),
+            }),
+            data: None,
+            metadata: None,
+            data_schema: None,
+            severity: String::new(),
+            category: String::new(),
+        }))
+        .await
+        .expect("missing stack should return host ack")
+        .into_inner();
+    assert!(!ack.ok);
+    assert!(
+        ack.error
+            .expect("missing stack error")
+            .message
+            .contains("not found")
+    );
+
+    let ack = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "no-scope".into(),
+            scope: None,
+            data: None,
+            metadata: None,
+            data_schema: None,
+            severity: String::new(),
+            category: String::new(),
+        }))
+        .await
+        .expect("no-scope mark should succeed")
+        .into_inner();
+    assert!(ack.ok);
+
+    let ack = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "telemetry-options".into(),
+            scope: None,
+            data: Some(json_envelope("nemo.relay.Json@1", &json!({"measurements": []})).unwrap()),
+            metadata: None,
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({
+                        "name": "nemo.relay.metric_measurements",
+                        "version": "1"
+                    }),
+                )
+                .unwrap(),
+            ),
+            severity: "warning".into(),
+            category: "custom".into(),
+        }))
+        .await
+        .expect("typed mark options should return host ack")
+        .into_inner();
+    assert!(ack.ok, "{:?}", ack.error);
+
+    for request in [
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-schema".into(),
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({"name": 7, "version": "1"}),
+                )
+                .unwrap(),
+            ),
+            ..EmitMarkRequest::default()
+        },
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-severity".into(),
+            severity: "fatal".into(),
+            ..EmitMarkRequest::default()
+        },
+    ] {
+        let ack = service
+            .emit_mark(Request::new(request))
+            .await
+            .expect("invalid mark options should return host ack")
+            .into_inner();
+        assert!(!ack.ok);
+        assert!(
+            ack.error
+                .expect("invalid mark error")
+                .message
+                .contains("invalid argument")
+        );
+    }
+
+    let push = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: None,
+            name: "invalid-json-scope".into(),
+            scope_type: ProtoScopeType::Custom as i32,
+            data: Some(JsonEnvelope {
+                schema: JSON_SCHEMA.into(),
+                json: b"not-json".to_vec(),
+            }),
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .expect("invalid JSON should be structured")
+        .into_inner();
+    assert!(
+        push.error
+            .expect("push error")
+            .message
+            .contains("invalid JSON")
+    );
+
+    let historical_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_historical_events = Arc::clone(&historical_events);
+    nemo_relay_runtime::api::subscriber::register_subscriber(
+        "worker-historical-scope-timestamps",
+        Arc::new(move |event| {
+            if event.name() == "historical-scope" {
+                captured_historical_events
+                    .lock()
+                    .expect("historical events lock")
+                    .push(event.clone());
+            }
+        }),
+    )
+    .expect("historical timestamp subscriber should register");
+
+    let historical_push = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: None,
+            name: "historical-scope".into(),
+            scope_type: ProtoScopeType::Custom as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: Some(-2),
+        }))
+        .await
+        .expect("historical scope should push")
+        .into_inner();
+    assert!(historical_push.error.is_none());
+    let historical_handle_id = historical_push.scope_handle_id;
+    assert_eq!(
+        state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .get(&historical_handle_id)
+            .expect("historical scope handle")
+            .handle
+            .started_at
+            .timestamp_micros(),
+        -2
+    );
+
+    let invalid_pop = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: historical_handle_id.clone(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: Some(i64::MAX),
+        }))
+        .await
+        .expect("invalid timestamp should return a host ack")
+        .into_inner();
+    assert!(!invalid_pop.ok);
+    assert!(
+        invalid_pop
+            .error
+            .expect("invalid timestamp error")
+            .message
+            .contains("outside supported range")
+    );
+    assert!(
+        state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .contains_key(&historical_handle_id),
+        "an invalid timestamp must not consume the pop handle"
+    );
+
+    let historical_pop = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: historical_handle_id.clone(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: Some(0),
+        }))
+        .await
+        .expect("epoch timestamp should pop")
+        .into_inner();
+    assert!(historical_pop.ok, "{:?}", historical_pop.error);
+    assert!(
+        !state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .contains_key(&historical_handle_id)
+    );
+    nemo_relay_runtime::api::subscriber::flush_subscribers()
+        .expect("historical timestamp events should flush");
+    assert!(
+        nemo_relay_runtime::api::subscriber::deregister_subscriber(
+            "worker-historical-scope-timestamps"
+        )
+        .expect("historical timestamp subscriber should deregister")
+    );
+    {
+        let historical_events = historical_events.lock().expect("historical events lock");
+        let historical_start = historical_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+            .expect("historical start event");
+        let historical_end = historical_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::End))
+            .expect("historical end event");
+        assert_eq!(historical_start.timestamp().timestamp_micros(), -2);
+        assert_eq!(historical_end.timestamp().timestamp_micros(), 0);
+    }
+
+    let pop_error = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: "missing-scope".into(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .expect_err("missing scope handle should fail");
+    assert_eq!(pop_error.code(), tonic::Code::NotFound);
+
+    let created = service
+        .create_scope_stack(Request::new(CreateScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("scope stack should be created")
+        .into_inner();
+    let scope_stack_id = created.scope_stack_id.clone();
+    assert!(
+        state
+            .stack("")
+            .expect("empty stack id should be valid")
+            .is_none()
+    );
+    let dropped = service
+        .drop_scope_stack(Request::new(DropScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_stack_id: scope_stack_id.clone(),
+        }))
+        .await
+        .expect("scope stack should be dropped")
+        .into_inner();
+    assert!(dropped.ok);
+    assert_eq!(
+        state
+            .stack(&scope_stack_id)
+            .expect_err("dropped stack should be removed")
+            .code(),
+        tonic::Code::NotFound
+    );
+
+    assert_eq!(
+        service
+            .with_stack(
+                Some(&ScopeContext {
+                    scope_stack_id: String::new(),
+                    parent_scope_id: String::new(),
+                }),
+                || Ok(7),
+            )
+            .expect("empty explicit stack id should run without binding"),
+        7
+    );
+}
+
+#[tokio::test]
+async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemeral() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let codec = Arc::new(OpenAIChatCodec);
+    let request_codec: Arc<dyn LlmCodec> = codec.clone();
+    let response_codec: Arc<dyn LlmResponseCodec> = codec.clone();
+    let invocation_id = "sanitize-invocation";
+    let request_capability_guard = state
+        .issue_request_codec(invocation_id, request_codec)
+        .unwrap();
+    let response_capability_guard = state
+        .issue_response_codec(invocation_id, response_codec)
+        .unwrap();
+    let request_capability = request_capability_guard.id().to_owned();
+    let response_capability = response_capability_guard.id().to_owned();
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}],
+            "preserve": true
+        }),
+    };
+
+    let unauthorized = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: "wrong".into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("wrong activation credentials must be rejected");
+    assert_eq!(unauthorized.code(), tonic::Code::PermissionDenied);
+
+    let forged = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: "codec-forged".into(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("forged capability must be rejected");
+    assert_eq!(forged.code(), tonic::Code::NotFound);
+
+    let wrong_direction = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("response capability cannot decode requests");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
+
+    let wrong_invocation = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: "another-invocation".into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("a capability cannot be reused by another invocation");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_invocation = state
+        .response_codec(&response_capability, "another-invocation")
+        .err()
+        .expect("response capability must remain invocation-bound");
+    assert_eq!(wrong_invocation.code(), tonic::Code::PermissionDenied);
+
+    let wrong_direction = state
+        .response_codec(&request_capability, invocation_id)
+        .err()
+        .expect("request capability cannot decode responses");
+    assert_eq!(wrong_direction.code(), tonic::Code::InvalidArgument);
+
+    let decoded = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+    let decoded = decoded.value.expect("decoded request value");
+    assert_eq!(decoded.schema, "nemo.relay.AnnotatedLlmRequest@2");
+    let annotated: AnnotatedLlmRequest = decode_json_envelope(&decoded).unwrap();
+    assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
+
+    let encoded = service
+        .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability.clone(),
+            invocation_id: invocation_id.into(),
+            annotated_request: Some(
+                json_envelope("nemo.relay.AnnotatedLlmRequest@2", &annotated).unwrap(),
+            ),
+            original_request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect("active request capability encodes")
+        .into_inner();
+    assert!(encoded.error.is_none());
+    let encoded = encoded.value.expect("encoded request value");
+    assert_eq!(encoded.schema, "nemo.relay.LlmRequest@1");
+    let encoded: LlmRequest = decode_json_envelope(&encoded).unwrap();
+    assert_eq!(encoded.content["preserve"], json!(true));
+
+    let response = json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "secret"},
+            "finish_reason": "stop"
+        }]
+    });
+    let decoded = service
+        .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: response_capability.clone(),
+            invocation_id: invocation_id.into(),
+            response: Some(json_envelope(JSON_SCHEMA, &response).unwrap()),
+        }))
+        .await
+        .expect("active response capability decodes")
+        .into_inner();
+    assert!(decoded.error.is_none());
+
+    drop(request_capability_guard);
+    drop(response_capability_guard);
+    let expired = service
+        .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            codec_capability_id: request_capability,
+            invocation_id: invocation_id.into(),
+            request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+        }))
+        .await
+        .expect_err("removed capability must expire");
+    assert_eq!(expired.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn host_runtime_service_reports_poisoned_internal_locks() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    poison_mutex({
+        let state = state.clone();
+        move || {
+            let _guard = state.scope_handles.lock().expect("scope handles lock");
+            panic!("poison scope handles");
+        }
+    });
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let push_error = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: None,
+            name: "poisoned".into(),
+            scope_type: ProtoScopeType::Custom as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .expect_err("poisoned scope handle lock should fail");
+    assert_eq!(push_error.code(), tonic::Code::Internal);
+
+    let pop_error = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: "missing".into(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .expect_err("poisoned scope handle lock should fail");
+    assert_eq!(pop_error.code(), tonic::Code::Internal);
+
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    poison_mutex({
+        let state = state.clone();
+        move || {
+            let _guard = state.scope_stacks.lock().expect("scope stacks lock");
+            panic!("poison scope stacks");
+        }
+    });
+    let service = WorkerHostRuntimeService { state };
+    let create_error = service
+        .create_scope_stack(Request::new(CreateScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect_err("poisoned scope stack lock should fail");
+    assert_eq!(create_error.code(), tonic::Code::Internal);
+
+    let drop_error = service
+        .drop_scope_stack(Request::new(DropScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_stack_id: "stack".into(),
+        }))
+        .await
+        .expect_err("poisoned scope stack lock should fail");
+    assert_eq!(drop_error.code(), tonic::Code::Internal);
+
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    poison_mutex({
+        let state = state.clone();
+        move || {
+            let _guard = state.codecs.lock().expect("codecs lock");
+            panic!("poison codecs");
+        }
+    });
+    let insert_error = match state.issue_request_codec("invocation", Arc::new(OpenAIChatCodec)) {
+        Ok(_) => panic!("poisoned codec lock should reject capability insertion"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        insert_error,
+        FlowError::Internal(message) if message.contains("codec lock poisoned")
+    ));
+
+    let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+    poison_mutex({
+        let state = callback.host_state.clone();
+        move || {
+            let _guard = state.codecs.lock().expect("codecs lock");
+            panic!("poison callback codecs");
+        }
+    });
+    let codec = Arc::new(OpenAIChatCodec);
+    let context = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
+    );
+    let error = callback
+        .invoke_llm_execution(
+            "poisoned-codec-context",
+            "model",
+            valid_llm_request(),
+            context,
+            Arc::new(|request| Box::pin(async move { Ok(request.content) })),
+        )
+        .await
+        .expect_err("poisoned codec setup must fail before invoking the worker");
+    assert!(matches!(
+        error,
+        FlowError::Internal(message) if message.contains("codec lock poisoned")
+    ));
+    assert!(
+        callback
+            .host_state
+            .continuations
+            .lock()
+            .expect("continuation lock")
+            .is_empty(),
+        "failed codec setup must remove its continuation"
+    );
+    assert!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope stack lock")
+            .is_empty(),
+        "failed codec setup must remove its invocation scope stack"
+    );
+}
+
+#[test]
+fn owned_worker_runtime_drop_is_idempotent_when_runtime_already_taken() {
+    enable_operational_logs();
+    drop(OwnedWorkerRuntime { runtime: None });
+}
+
+#[tokio::test]
+async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+
+    let llm_continuation = state
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
+            Box::pin(async move { Ok(request.content) })
+        })))
+        .expect("llm continuation should insert");
+    let wrong_type = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: llm_continuation,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect_err("wrong continuation type should fail");
+    assert_eq!(wrong_type.code(), tonic::Code::InvalidArgument);
+
+    let tool_continuation = state
+        .insert_continuation(Continuation::tool(Arc::new(|value| {
+            Box::pin(async move { Ok(ToolExecutionResult::new(value)) })
+        })))
+        .expect("tool continuation should insert");
+    let invalid_tool_json = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_continuation,
+            value: Some(JsonEnvelope {
+                schema: JSON_SCHEMA.into(),
+                json: b"not-json".to_vec(),
+            }),
+            scope: None,
+        }))
+        .await
+        .expect_err("invalid tool next JSON should fail");
+    assert_eq!(invalid_tool_json.code(), tonic::Code::InvalidArgument);
+
+    let tool_continuation = state
+        .insert_continuation(Continuation::tool(Arc::new(|_value| {
+            Box::pin(async move {
+                panic!("worker tool next panic");
+            })
+        })))
+        .expect("panicking tool continuation should insert");
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_continuation,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect("tool panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker tool next panic"))
+    );
+
+    let llm_continuation = state
+        .insert_continuation(Continuation::llm(Arc::new(|request| {
+            Box::pin(async move { Ok(request.content) })
+        })))
+        .expect("llm continuation should insert");
+    let invalid_llm_json = service
+        .llm_next(Request::new(LlmNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: llm_continuation,
+            request: Some(JsonEnvelope {
+                schema: LLM_REQUEST_SCHEMA.into(),
+                json: b"not-json".to_vec(),
+            }),
+            scope: None,
+        }))
+        .await
+        .expect_err("invalid LLM next request should fail");
+    assert_eq!(invalid_llm_json.code(), tonic::Code::InvalidArgument);
+
+    let llm_continuation = state
+        .insert_continuation(Continuation::llm(Arc::new(|_request| {
+            Box::pin(async move {
+                panic!("worker LLM next panic");
+            })
+        })))
+        .expect("panicking LLM continuation should insert");
+    let result = service
+        .llm_next(Request::new(LlmNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: llm_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+            scope: None,
+        }))
+        .await
+        .expect("LLM panic should become a structured result")
+        .into_inner();
+    assert!(
+        result
+            .error
+            .is_some_and(|error| error.message.contains("worker LLM next panic"))
+    );
+
+    let stream_continuation = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
+                    FlowError::Internal("stream item failed".into()),
+                )])))
+            })
+        })))
+        .expect("stream continuation should insert");
+    let stream_response = service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: stream_continuation,
+            request: Some(
+                json_envelope(
+                    LLM_REQUEST_SCHEMA,
+                    &LlmRequest {
+                        headers: serde_json::Map::new(),
+                        content: json!({ "prompt": "stream" }),
+                    },
+                )
+                .expect("llm request envelope"),
+            ),
+            scope: None,
+        }))
+        .await
+        .expect("stream next should return stream");
+    let mut stream = stream_response.into_inner();
+    let chunk = stream
+        .next()
+        .await
+        .expect("stream should yield one item")
+        .expect("transport should be ok");
+    match chunk.item {
+        Some(StreamItem::Error(error)) => {
+            assert!(error.message.contains("stream item failed"));
+        }
+        other => panic!("expected worker stream error, got {other:?}"),
+    }
+
+    let stream_continuation = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(futures_util::stream::once(async move {
+                    panic!("worker stream next panic");
+                    #[allow(unreachable_code)]
+                    Ok(json!({}))
+                })))
+            })
+        })))
+        .expect("panicking stream continuation should insert");
+    let stream_response = service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: stream_continuation,
+            request: Some(
+                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
+                    .expect("llm request envelope"),
+            ),
+            scope: None,
+        }))
+        .await
+        .expect("stream next should return a stream before polling");
+    let mut stream = stream_response.into_inner();
+    let chunk = stream
+        .next()
+        .await
+        .expect("panicking stream should yield one error")
+        .expect("panic should be translated into a stream item");
+    match chunk.item {
+        Some(StreamItem::Error(error)) => {
+            assert!(error.message.contains("worker stream next panic"));
+        }
+        other => panic!("expected worker panic error, got {other:?}"),
+    }
+
+    let stream_continuation = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(|_request| {
+            Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+        })))
+        .expect("stream continuation should insert");
+    let invalid_stream_request = match service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: stream_continuation,
+            request: Some(JsonEnvelope {
+                schema: LLM_REQUEST_SCHEMA.into(),
+                json: b"not-json".to_vec(),
+            }),
+            scope: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("invalid LLM stream request should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(invalid_stream_request.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
+    enable_operational_logs();
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let provider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (lease, guard) = MiddlewareContinuationLease::capture();
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new({
+            let provider_calls = provider_calls.clone();
+            move |value| {
+                let provider_calls = provider_calls.clone();
+                let invocation = lease.begin();
+                Box::pin(async move {
+                    invocation?
+                        .invoke(|| async move {
+                            provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(ToolExecutionResult::new(value))
+                        })
+                        .await
+                })
+            }
+        })))
+        .expect("tool continuation should insert");
+
+    drop(guard);
+    let result = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect("late worker next should return a structured callback error")
+        .into_inner();
+    assert!(
+        result.error.is_some_and(|error| {
+            error
+                .message
+                .contains("execution continuation is no longer active")
+        }),
+        "late worker next should expose the shared continuation error"
+    );
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    state.remove_continuation(&continuation_id);
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id,
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: None,
+        }))
+        .await
+        .expect_err("cleaned-up worker continuation should no longer be addressable");
+    assert_eq!(error.code(), tonic::Code::NotFound);
+    assert_eq!(provider_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let mut expected = Vec::new();
+    for stack_id in ["worker-next-first", "worker-next-second"] {
+        let stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+        let scope = nemo_relay_runtime::api::runtime::with_scope_stack(stack.clone(), || {
+            nemo_relay_runtime::api::scope::push_scope(
+                nemo_relay_runtime::api::scope::PushScopeParams::builder()
+                    .name(stack_id)
+                    .scope_type(nemo_relay_runtime::api::scope::ScopeType::Agent)
+                    .build(),
+            )
+        })
+        .unwrap();
+        expected.push(scope.uuid.to_string());
+        state.scope_stacks.lock().unwrap().insert(
+            stack_id.into(),
+            StoredScopeStack {
+                handle: stack,
+                publication_buffer: None,
+                continuation_context: None,
+                invocation_base_depth: None,
+            },
+        );
+    }
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async {
+                Ok(ToolExecutionResult::new(json!(
+                    nemo_relay_runtime::api::runtime::task_scope_top()
+                        .uuid
+                        .to_string()
+                )))
+            })
+        })))
+        .expect("tool continuation should insert");
+    let request = |stack_id: &str| {
+        Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: continuation_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+            scope: Some(ScopeContext {
+                scope_stack_id: stack_id.into(),
+                parent_scope_id: String::new(),
+            }),
+        })
+    };
+
+    let (first, second) = tokio::join!(
+        service.tool_next(request("worker-next-first")),
+        service.tool_next(request("worker-next-second"))
+    );
+    let decode = |response: tonic::Response<ToolExecutionResultResponse>| {
+        let value = response
+            .into_inner()
+            .value
+            .expect("tool next should return a value");
+        decode_json_value::<Json>(value.result.as_ref().expect("tool next result")).unwrap()
+    };
+
+    assert_eq!(decode(first.unwrap()), json!(expected[0]));
+    assert_eq!(decode(second.unwrap()), json!(expected[1]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_worker_invocations_isolate_scope_stack_mutations() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let source_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+    let first_stack_id = state
+        .insert_invocation_scope_stack(source_stack.clone(), None)
+        .expect("first invocation scope stack should insert");
+    let second_stack_id = state
+        .insert_invocation_scope_stack(source_stack, None)
+        .expect("second invocation scope stack should insert");
+    let first_stack = state
+        .stack(&first_stack_id)
+        .expect("first invocation scope stack lookup should succeed")
+        .expect("first invocation scope stack should exist");
+    let second_stack = state
+        .stack(&second_stack_id)
+        .expect("second invocation scope stack lookup should succeed")
+        .expect("second invocation scope stack should exist");
+    assert!(!Arc::ptr_eq(&first_stack, &second_stack));
+
+    let next_barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let continuation_id = state
+        .insert_continuation(Continuation::tool(Arc::new(move |_| {
+            let next_barrier = next_barrier.clone();
+            Box::pin(async move {
+                next_barrier.wait().await;
+                tokio::task::yield_now().await;
+                Ok(ToolExecutionResult::new(json!(
+                    nemo_relay_runtime::api::runtime::task_scope_top()
+                        .uuid
+                        .to_string()
+                )))
+            })
+        })))
+        .expect("tool continuation should insert");
+    let service = Arc::new(service);
+    let invoke = |scope_stack_id: String, name: &'static str| {
+        let service = service.clone();
+        let continuation_id = continuation_id.clone();
+        tokio::spawn(async move {
+            let response = service
+                .push_scope(Request::new(PushScopeRequest {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                    scope: Some(ScopeContext {
+                        scope_stack_id: scope_stack_id.clone(),
+                        parent_scope_id: String::new(),
+                    }),
+                    name: name.into(),
+                    scope_type: ProtoScopeType::Custom as i32,
+                    data: None,
+                    metadata: None,
+                    input: None,
+                    timestamp_unix_micros: None,
+                }))
+                .await
+                .expect("worker scope should push")
+                .into_inner();
+            assert!(response.error.is_none(), "{:?}", response.error);
+            let expected = response
+                .scope_handle_id
+                .strip_prefix("scope-")
+                .expect("worker scope handle should use the documented prefix")
+                .to_owned();
+            let response = service
+                .tool_next(Request::new(ToolNextRequest {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                    continuation_id,
+                    value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
+                    scope: Some(ScopeContext {
+                        scope_stack_id,
+                        parent_scope_id: String::new(),
+                    }),
+                }))
+                .await
+                .expect("worker continuation should run")
+                .into_inner();
+            let value = response.value.expect("tool next should return a value");
+            let observed =
+                decode_json_value::<Json>(value.result.as_ref().expect("tool next result"))
+                    .expect("tool next result should decode");
+            (expected, observed)
+        })
+    };
+
+    let (first, second) = tokio::join!(
+        invoke(first_stack_id.clone(), "worker-overlap-first"),
+        invoke(second_stack_id.clone(), "worker-overlap-second"),
+    );
+    let (first_expected, first_observed) = first.expect("first invocation task should finish");
+    let (second_expected, second_observed) = second.expect("second invocation task should finish");
+    assert_ne!(first_expected, second_expected);
+    assert_eq!(first_observed, json!(first_expected));
+    assert_eq!(second_observed, json!(second_expected));
+
+    state.remove_continuation(&continuation_id);
+    state.cleanup_invocation_scope_stack(&first_stack_id);
+    state.cleanup_invocation_scope_stack(&second_stack_id);
+}
+
+#[tokio::test]
+async fn worker_runtime_scope_calls_restore_managed_parent_and_trace_context() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let source_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+    let managed_event_uuid = uuid::Uuid::now_v7();
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let trace_context = nemo_relay_runtime::api::runtime::scope_stack::W3cTraceContext::new(
+        traceparent,
+        Some("vendor=value".into()),
+    )
+    .expect("trace context should be valid");
+    let scope_stack_id = nemo_relay_runtime::api::runtime::scope_stack::TASK_SCOPE_STACK
+        .scope(
+            source_stack.clone(),
+            nemo_relay_runtime::api::runtime::scope_stack::with_active_event_trace_context(
+                managed_event_uuid,
+                Some(trace_context),
+                async {
+                    state
+                        .insert_invocation_scope_stack(source_stack, None)
+                        .expect("invocation scope stack should insert")
+                },
+            ),
+        )
+        .await;
+    let context = state
+        .invocation_context(&scope_stack_id)
+        .expect("invocation context lookup should succeed")
+        .expect("invocation context should exist");
+    let observed_traceparent = context.run(|| {
+        nemo_relay_runtime::api::runtime::scope_stack::active_event_trace_context()
+            .map(|context| context.traceparent().to_owned())
+    });
+    assert_eq!(observed_traceparent.as_deref(), Some(traceparent));
+
+    let parent_response = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: Some(ScopeContext {
+                scope_stack_id: scope_stack_id.clone(),
+                parent_scope_id: String::new(),
+            }),
+            name: "worker-managed-parent".into(),
+            scope_type: ProtoScopeType::Custom as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .expect("managed-parent scope should push")
+        .into_inner();
+    assert!(
+        parent_response.error.is_none(),
+        "{:?}",
+        parent_response.error
+    );
+    let parent_handle = state
+        .scope_handles
+        .lock()
+        .expect("scope handle lock")
+        .get(&parent_response.scope_handle_id)
+        .expect("parent scope handle should be retained")
+        .handle
+        .clone();
+    assert_eq!(parent_handle.parent_uuid, Some(managed_event_uuid));
+
+    state.cleanup_invocation_scope_stack(&scope_stack_id);
+}
+
+fn valid_llm_request() -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({ "prompt": "unit" }),
+    }
+}
+
+type SharedWorkerHostState = Arc<Mutex<Option<Arc<WorkerHostRuntimeState>>>>;
+type ExecutionCodecCapabilities = (String, Option<String>, String);
+
+fn shared_worker_host_state() -> SharedWorkerHostState {
+    Arc::new(Mutex::new(None))
+}
+
+fn openai_execution_codec_context() -> LlmExecutionContext {
+    let codec = Arc::new(OpenAIChatCodec);
+    LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(codec))),
+    )
+}
+
+fn openai_stream_execution_codec_context() -> LlmExecutionContext {
+    LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIChatCodec))),
+        None,
+    )
+}
+
+fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabilities {
+    let surface = RegistrationSurface::try_from(request.surface).expect("registration surface");
+    let invocation_id = request.invocation_id;
+    let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
+        panic!("LLM execution must receive an LLM invocation");
+    };
+    assert!(invocation.sanitize_context.is_none());
+    let context = invocation
+        .execution_codec_context
+        .expect("execution must receive codec context");
+    let request_context = context.request.expect("request codec context");
+    let request_identity = request_context.codec.expect("request codec identity");
+    assert_eq!(request_identity.kind, LlmCodecKind::Builtin as i32);
+    assert_eq!(request_identity.id.as_deref(), Some("openai_chat"));
+    let response_capability_id = match surface {
+        RegistrationSurface::LlmExecutionIntercept => {
+            let response_context = context.response.expect("unary response codec context");
+            let response_identity = response_context.codec.expect("response codec identity");
+            assert_eq!(response_identity.kind, LlmCodecKind::Builtin as i32);
+            assert_eq!(response_identity.id.as_deref(), Some("openai_chat"));
+            response_context.codec_capability_id
+        }
+        RegistrationSurface::LlmStreamExecutionIntercept => {
+            assert!(
+                context.response.is_none(),
+                "stream execution must not receive response codec context"
+            );
+            None
+        }
+        other => panic!("unexpected execution surface: {other:?}"),
+    };
+    (
+        request_context
+            .codec_capability_id
+            .expect("request capability must be present"),
+        response_capability_id,
+        invocation_id,
+    )
+}
+
+fn assert_request_codec_expired(
+    state: &WorkerHostRuntimeState,
+    capability_id: &str,
+    invocation_id: &str,
+) {
+    assert_eq!(
+        state
+            .request_codec(capability_id, invocation_id)
+            .err()
+            .expect("request codec capability must be expired")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+fn assert_response_codec_expired(
+    state: &WorkerHostRuntimeState,
+    capability_id: &str,
+    invocation_id: &str,
+) {
+    assert_eq!(
+        state
+            .response_codec(capability_id, invocation_id)
+            .err()
+            .expect("response codec capability must be expired")
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+async fn fake_callback_service(
+    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+) -> (WorkerPluginCallback, oneshot::Sender<()>) {
+    let (client, shutdown_tx) = fake_worker_client(invoke).await;
+    callback_for_client(client, shutdown_tx)
+}
+
+async fn fake_callback_service_with_stream(
+    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (WorkerPluginCallback, oneshot::Sender<()>) {
+    let (client, shutdown_tx) = fake_worker_client_with_stream(invoke, invoke_stream).await;
+    callback_for_client(client, shutdown_tx)
+}
+
+async fn fake_callback_service_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    WorkerPluginCallback,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+) {
+    let (client, shutdown_tx, cancel_rx, _register_calls) =
+        fake_worker_client_with_handlers(invoke, invoke_stream).await;
+    let (callback, shutdown_tx) = callback_for_client(client, shutdown_tx);
+    (callback, shutdown_tx, cancel_rx)
+}
+
+/// Builds a callback adapter with default deadlines for a test worker client.
+fn callback_for_client(
+    client: PluginWorkerClient<Channel>,
+    shutdown_tx: oneshot::Sender<()>,
+) -> (WorkerPluginCallback, oneshot::Sender<()>) {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    (
+        WorkerPluginCallback {
+            callback_timeouts: Default::default(),
+            activation_id: ACTIVATION_ID.into(),
+            plugin_kind: "fixture_worker".into(),
+            runtime: tokio::runtime::Handle::current(),
+            client,
+            host_state: state,
+        },
+        shutdown_tx,
+    )
+}
+
+/// Builds a worker instance with the registrations needed by a test.
+async fn fake_worker_instance(
+    registrations: Vec<Registration>,
+) -> (WorkerPluginInstance, oneshot::Sender<()>) {
+    enable_operational_logs();
+    let (client, shutdown_tx) = fake_worker_client(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+    let activation_dir = std::env::temp_dir().join(format!("nmrw-unit-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&activation_dir).expect("unit activation dir should be created");
+    (
+        WorkerPluginInstance {
+            callback_timeouts: Default::default(),
+            plugin_kind: "fixture_worker".into(),
+            allows_multiple_components: false,
+            config: serde_json::Map::new(),
+            validation_diagnostics: Vec::new(),
+            relay_compat: ">=0.9,<1.0".into(),
+            registrations: tokio::sync::OnceCell::new_with(Some(registrations)),
+            runtime: OwnedWorkerRuntime::new(
+                RuntimeBuilder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("worker runtime should build"),
+            ),
+            client,
+            host_state: Arc::new(WorkerHostRuntimeState::new(
+                ACTIVATION_ID.into(),
+                AUTH_TOKEN.into(),
+            )),
+            shutdown: Mutex::new(None),
+            process: Mutex::new(None),
+            activation_dir,
+            teardown_started: AtomicBool::new(false),
+        },
+        shutdown_tx,
+    )
+}
+
+async fn fake_worker_client(
+    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
+    fake_worker_client_with_stream(invoke, |_| {
+        Box::pin(tokio_stream::iter(vec![Err(Status::unavailable(
+            "stream transport down",
+        ))])) as FakeInvokeStream
+    })
+    .await
+}
+
+async fn fake_worker_client_with_stream(
+    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
+    let invoke = Arc::new(invoke);
+    let (client, shutdown_tx, _cancel_rx, _register_calls) = fake_worker_client_with_handlers(
+        move |request| {
+            let invoke = invoke.clone();
+            Box::pin(async move { invoke(request) })
+        },
+        invoke_stream,
+    )
+    .await;
+    (client, shutdown_tx)
+}
+
+async fn fake_worker_client_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
+    let invoke_stream = Arc::new(invoke_stream);
+    fake_worker_client_with_async_handlers(invoke, move |request| {
+        let invoke_stream = Arc::clone(&invoke_stream);
+        Box::pin(async move { Ok(invoke_stream(request)) })
+    })
+    .await
+}
+
+async fn fake_worker_client_with_async_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
+    fake_worker_client_with_cancel_error(invoke, invoke_stream, None).await
+}
+
+async fn fake_worker_client_with_cancel_error(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+    cancel_error: Option<Status>,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake worker listener should bind");
+    let addr = listener
+        .local_addr()
+        .expect("fake worker listener address should be available");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
+    let register_calls = Arc::new(AtomicUsize::new(0));
+    tokio::spawn(
+        Server::builder()
+            .add_service(PluginWorkerServer::new(FakePluginWorker {
+                invoke: Arc::new(invoke),
+                invoke_stream: Arc::new(invoke_stream),
+                cancel_tx,
+                cancel_error,
+                register_calls: register_calls.clone(),
+            }))
+            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                let _ = shutdown_rx.await;
+            }),
+    );
+    let client = PluginWorkerClient::connect(format!("http://{addr}"))
+        .await
+        .expect("fake worker client should connect");
+    (client, shutdown_tx, cancel_rx, register_calls)
+}
+
+fn registration(surface: RegistrationSurface, local_name: &str) -> Registration {
+    Registration {
+        local_name: local_name.into(),
+        surface: surface as i32,
+        priority: 0,
+        break_chain: false,
+    }
+}
+
+#[test]
+fn worker_loader_empty_input_returns_an_empty_activation() {
+    let activation = load_worker_plugins(Vec::<WorkerPluginLoadSpec>::new()).unwrap();
+    assert!(activation.is_empty());
+    activation.clear();
+}
+
+fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {
+    let _ = std::panic::catch_unwind(f);
+}
+
+struct FakePluginWorker {
+    invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
+    invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync>,
+    cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
+    cancel_error: Option<Status>,
+    register_calls: Arc<AtomicUsize>,
+}
+
+type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
+type FakeInvokeStream =
+    Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
+type FakeInvokeStreamFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<FakeInvokeStream, Status>> + Send>>;
+
+struct WorkerStreamLifecycleFixture {
+    callback: WorkerPluginCallback,
+    stream: Option<LlmJsonStream>,
+    yield_tx: Option<oneshot::Sender<()>>,
+    cancel_rx: mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    worker_stream_dropped_rx: Option<oneshot::Receiver<()>>,
+    request_id: String,
+    invocation_id: String,
+    _shutdown: oneshot::Sender<()>,
+}
+
+async fn pending_worker_stream_with_codec_context(name: &str) -> WorkerStreamLifecycleFixture {
+    pending_worker_stream_with_first_chunk(
+        name,
+        Ok(StreamChunk {
+            item: Some(StreamItem::Value(
+                json_envelope(JSON_SCHEMA, &json!({ "after_receiver_drop": true }))
+                    .expect("test stream chunk should encode"),
+            )),
+        }),
+    )
+    .await
+}
+
+async fn pending_worker_stream_with_first_chunk(
+    name: &str,
+    first_chunk: std::result::Result<StreamChunk, Status>,
+) -> WorkerStreamLifecycleFixture {
+    let (context_tx, context_rx) = oneshot::channel();
+    let context_tx = Arc::new(Mutex::new(Some(context_tx)));
+    let (yield_tx, yield_rx) = oneshot::channel();
+    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
+    let (worker_stream_dropped_tx, worker_stream_dropped_rx) = oneshot::channel();
+    let worker_stream_dropped_tx = Arc::new(Mutex::new(Some(worker_stream_dropped_tx)));
+    let (callback, shutdown, cancel_rx) = fake_callback_service_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        {
+            let context_tx = Arc::clone(&context_tx);
+            let yield_rx = Arc::clone(&yield_rx);
+            let worker_stream_dropped_tx = Arc::clone(&worker_stream_dropped_tx);
+            move |request| {
+                let (request_id, response_id, invocation_id) =
+                    execution_codec_capabilities(request);
+                assert!(
+                    response_id.is_none(),
+                    "stream must not expose a response decoder"
+                );
+                context_tx
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("stream context sent once")
+                    .send((request_id, invocation_id))
+                    .expect("stream context receiver remains open");
+                Box::pin(SignalChunkThenPendingStream {
+                    yield_rx: yield_rx
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("stream created once"),
+                    dropped: worker_stream_dropped_tx.lock().unwrap().take(),
+                    first_chunk: Some(first_chunk.clone()),
+                }) as FakeInvokeStream
+            }
+        },
+    )
+    .await;
+    let stream = callback
+        .invoke_llm_stream_execution(
+            name,
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await
+        .expect("host stream should be returned");
+    let (request_id, invocation_id) = context_rx.await.expect("worker must publish codec context");
+    callback
+        .host_state
+        .request_codec(&request_id, &invocation_id)
+        .expect("request capability remains active while the stream is open");
+    WorkerStreamLifecycleFixture {
+        callback,
+        stream: Some(stream),
+        yield_tx: Some(yield_tx),
+        cancel_rx,
+        worker_stream_dropped_rx: Some(worker_stream_dropped_rx),
+        request_id,
+        invocation_id,
+        _shutdown: shutdown,
+    }
+}
+
+async fn assert_worker_stream_cancelled_and_cleaned(fixture: &mut WorkerStreamLifecycleFixture) {
+    let cancellation =
+        tokio::time::timeout(std::time::Duration::from_secs(1), fixture.cancel_rx.recv())
+            .await
+            .expect("host must cancel the stopped worker stream")
+            .expect("cancellation channel remains open");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
+    assert!(cancellation.reason.contains("stopped consuming"));
+    assert_worker_stream_dropped_and_cleaned(fixture).await;
+}
+
+async fn assert_worker_stream_dropped_and_cleaned(fixture: &mut WorkerStreamLifecycleFixture) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture
+            .worker_stream_dropped_rx
+            .take()
+            .expect("worker stream drop observed once"),
+    )
+    .await
+    .expect("worker stream must be dropped")
+    .expect("worker stream drop signal must be delivered");
+    // Remote stream teardown can finish before the host task drops its codec guard.
+    // Wait for local cleanup before checking all released host resources.
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while fixture
+            .callback
+            .host_state
+            .request_codec(&fixture.request_id, &fixture.invocation_id)
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("host stream must release its request codec");
+    assert_request_codec_expired(
+        &fixture.callback.host_state,
+        &fixture.request_id,
+        &fixture.invocation_id,
+    );
+    assert!(
+        fixture
+            .callback
+            .host_state
+            .continuations
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+struct SignalChunkThenPendingStream {
+    yield_rx: oneshot::Receiver<()>,
+    dropped: Option<oneshot::Sender<()>>,
+    first_chunk: Option<std::result::Result<StreamChunk, Status>>,
+}
+
+impl tokio_stream::Stream for SignalChunkThenPendingStream {
+    type Item = std::result::Result<StreamChunk, Status>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.first_chunk.is_none() {
+            return std::task::Poll::Pending;
+        }
+        match Pin::new(&mut self.yield_rx).poll(cx) {
+            std::task::Poll::Ready(_) => {
+                std::task::Poll::Ready(Some(self.first_chunk.take().expect("first chunk")))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl Drop for SignalChunkThenPendingStream {
+    fn drop(&mut self) {
+        if let Some(dropped) = self.dropped.take() {
+            let _ = dropped.send(());
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl PluginWorker for FakePluginWorker {
+    async fn handshake(
+        &self,
+        _request: Request<HandshakeRequest>,
+    ) -> std::result::Result<tonic::Response<HandshakeResponse>, tonic::Status> {
+        Ok(tonic::Response::new(HandshakeResponse {
+            plugin_id: "fixture_worker".into(),
+            plugin_kind: "fixture_worker".into(),
+            allows_multiple_components: false,
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            sdk_name: "unit".into(),
+            sdk_version: "0".into(),
+            runtime_name: "unit".into(),
+            runtime_version: "0".into(),
+            supported_surfaces: Vec::new(),
+        }))
+    }
+
+    async fn health(
+        &self,
+        _request: Request<HealthRequest>,
+    ) -> std::result::Result<tonic::Response<HealthResponse>, tonic::Status> {
+        Ok(tonic::Response::new(HealthResponse {
+            ok: true,
+            message: String::new(),
+            plugin_id: "fixture_worker".into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            sdk_name: "unit".into(),
+            sdk_version: "0".into(),
+            runtime_name: "unit".into(),
+            runtime_version: "0".into(),
+        }))
+    }
+
+    async fn validate(
+        &self,
+        _request: Request<ValidateRequest>,
+    ) -> std::result::Result<tonic::Response<ValidateResponse>, tonic::Status> {
+        Ok(tonic::Response::new(ValidateResponse {
+            diagnostics: None,
+            error: None,
+        }))
+    }
+
+    async fn register(
+        &self,
+        _request: Request<RegisterRequest>,
+    ) -> std::result::Result<tonic::Response<RegisterResponse>, tonic::Status> {
+        self.register_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(tonic::Response::new(RegisterResponse {
+            registrations: Vec::new(),
+            error: None,
+            conditional_middleware_guardrails: Vec::new(),
+        }))
+    }
+
+    async fn invoke(
+        &self,
+        request: Request<InvokeRequest>,
+    ) -> std::result::Result<tonic::Response<InvokeResponse>, tonic::Status> {
+        Ok(tonic::Response::new(
+            (self.invoke)(request.into_inner()).await,
+        ))
+    }
+
+    type InvokeStreamStream =
+        Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
+
+    async fn invoke_stream(
+        &self,
+        request: Request<InvokeRequest>,
+    ) -> std::result::Result<tonic::Response<Self::InvokeStreamStream>, tonic::Status> {
+        (self.invoke_stream)(request.into_inner())
+            .await
+            .map(tonic::Response::new)
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: Request<CancelInvocationRequest>,
+    ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
+        let _ = self.cancel_tx.send(request.into_inner());
+        if let Some(error) = &self.cancel_error {
+            return Err(error.clone());
+        }
+        Ok(tonic::Response::new(WorkerAck {
+            accepted: true,
+            message: "cancelled".into(),
+        }))
+    }
+
+    async fn shutdown(
+        &self,
+        _request: Request<ShutdownRequest>,
+    ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
+        Ok(tonic::Response::new(WorkerAck {
+            accepted: false,
+            message: "not implemented".into(),
+        }))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_shutdown_reports_closed_host_channel_and_failed_directory_cleanup_once() {
+    let (instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let (host_shutdown, receiver) = oneshot::channel();
+    drop(receiver);
+    *instance.shutdown.lock().unwrap() = Some(host_shutdown);
+    std::fs::remove_dir_all(&instance.activation_dir).unwrap();
+    std::fs::write(&instance.activation_dir, b"occupied").unwrap();
+
+    let outcome = instance.shutdown_checked();
+    assert!(outcome.safe_to_unload);
+    assert_eq!(outcome.errors.len(), 2, "{:?}", outcome.errors);
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|error| error.contains("shutdown channel was closed"))
+    );
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|error| error.contains("activation directory cleanup failed"))
+    );
+    assert!(
+        instance.shutdown_checked().errors.is_empty(),
+        "shutdown must remain idempotent after safe cleanup failures"
+    );
+    std::fs::remove_file(&instance.activation_dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
+    let (mut instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let diagnostics = enable_test_diagnostics(&mut instance.host_state);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    instance.client = PluginWorkerClient::new(
+        tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect_lazy(),
+    );
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    child.wait().unwrap();
+    *instance.process.lock().unwrap() = Some(child);
+    let directory = instance.activation_dir.clone();
+
+    let outcome = instance.shutdown_checked();
+    assert!(outcome.safe_to_unload);
+    assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+    assert!(outcome.errors[0].contains("shutdown RPC failed"));
+    assert!(instance.process.lock().unwrap().is_none());
+    assert!(
+        !directory.exists(),
+        "a disconnected worker must still release its activation directory"
+    );
+    let view = diagnostics
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.shutdown_failed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.process_cleaned")
+            .count(),
+        1
+    );
+    let recorded = view.lifetime.totals.recorded_events_total.value.get();
+    assert!(instance.shutdown_checked().errors.is_empty());
+    assert_eq!(
+        diagnostics
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap()
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        recorded
+    );
+}
+
+#[test]
+fn worker_http_error_prefix_preserves_status_through_continuations() {
+    for status in 400..=599 {
+        let original = FlowError::Upstream(nemo_relay_types::error::UpstreamFailure {
+            status: Some(status),
+            body: "provider failure".into(),
+            headers: Default::default(),
+            class: nemo_relay_types::error::UpstreamFailureClass::RetryableStatus,
+        });
+        let wire_error = flow_error_to_worker(original);
+        assert!(!wire_error.retryable);
+        let FlowError::Upstream(failure) = worker_error_to_flow(wire_error) else {
+            panic!("status was lost");
+        };
+        assert_eq!(failure.status, Some(status));
+        assert_eq!(failure.body, "provider failure");
+        assert!(!failure.is_retryable());
+    }
+    for message in ["plain failure", "HTTP 200: success", "http 403: denied"] {
+        assert!(matches!(
+            worker_error_to_flow(WorkerError {
+                code: "worker.error".into(),
+                message: message.into(),
+                retryable: true,
+                downstream_continuation_id: None,
+            }),
+            FlowError::Internal(_)
+        ));
+    }
+    assert!(matches!(
+        worker_error_to_flow(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+            downstream_continuation_id: None,
+        }),
+        FlowError::Internal(_)
+    ));
+}
+
+#[test]
+fn worker_http_errors_include_the_verified_reporting_plugin() {
+    let response = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.error".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+            downstream_continuation_id: None,
+        })),
+    };
+    let response = report_worker_response(response, "verified.worker");
+    let FlowError::Upstream(failure) = json_from_invoke_response(response).unwrap_err() else {
+        panic!("expected upstream failure");
+    };
+    assert_eq!(failure.status, Some(403));
+    assert_eq!(failure.body, "Reported by plugin 'verified.worker': denied");
+    let cancelled = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+            downstream_continuation_id: None,
+        })),
+    };
+    assert!(matches!(
+        json_from_invoke_response(report_worker_response(cancelled, "verified.worker")),
+        Err(FlowError::Internal(_))
+    ));
+}
+
+fn snapshot_request(
+    scope: Option<ScopeContext>,
+) -> Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest> {
+    Request::new(
+        nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope,
+        },
+    )
+}
+
+fn snapshot_context(scope_stack_id: &str) -> ScopeContext {
+    ScopeContext {
+        scope_stack_id: scope_stack_id.into(),
+        parent_scope_id: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_requires_explicit_context_and_authenticated_ownership() {
+    let service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK
+        .scope(
+            nemo_relay_runtime::api::runtime::create_scope_stack(),
+            async {
+                let response = service
+                    .get_current_scope_stack_snapshot(snapshot_request(None))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert!(response.snapshot.is_none());
+                assert!(response.error.is_none());
+                for identifier in ["", "   ", "expired-or-foreign"] {
+                    let error = service
+                        .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                            identifier,
+                        ))))
+                        .await
+                        .unwrap_err();
+                    assert_eq!(
+                        error.code(),
+                        if identifier.trim().is_empty() {
+                            tonic::Code::InvalidArgument
+                        } else {
+                            tonic::Code::NotFound
+                        }
+                    );
+                }
+                for (activation_id, auth_token) in [
+                    ("foreign-activation", AUTH_TOKEN),
+                    (ACTIVATION_ID, "foreign-token"),
+                ] {
+                    let mut request = snapshot_request(None).into_inner();
+                    request.activation_id = activation_id.into();
+                    request.auth_token = auth_token.into();
+                    assert_eq!(
+                        service
+                            .get_current_scope_stack_snapshot(Request::new(request))
+                            .await
+                            .unwrap_err()
+                            .code(),
+                        tonic::Code::PermissionDenied
+                    );
+                }
+            },
+        )
+        .await;
+    let foreign_state = WorkerHostRuntimeState::new("foreign-activation".into(), AUTH_TOKEN.into());
+    let foreign_identifier = foreign_state
+        .insert_invocation_scope_stack(nemo_relay_runtime::api::runtime::create_scope_stack(), None)
+        .unwrap();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                &foreign_identifier
+            ))))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    foreign_state.cleanup_invocation_scope_stack(&foreign_identifier);
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let source_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+    let agent = nemo_relay_runtime::api::runtime::with_scope_stack(source_stack.clone(), || {
+        push_scope(
+            PushScopeParams::builder()
+                .name("snapshot-agent")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+    })
+    .unwrap();
+    let expected = nemo_relay_runtime::api::runtime::scope_stack_snapshot(&source_stack).unwrap();
+    let scope_stack_id = state
+        .insert_invocation_scope_stack(source_stack, None)
+        .unwrap();
+    let context = snapshot_context(&scope_stack_id);
+    let first = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(first.scopes.len(), expected.scopes.len());
+    for (actual, expected) in first.scopes.iter().zip(&expected.scopes) {
+        assert_eq!(actual.scope_id, expected.scope_id.to_string());
+        assert_eq!(
+            actual.scope_type,
+            snapshot_scope_type_to_proto(expected.scope_type)
+        );
+    }
+    assert_eq!(
+        first.scopes.last().unwrap().scope_id,
+        agent.uuid.to_string()
+    );
+    let second_identifier = state
+        .insert_invocation_scope_stack(nemo_relay_runtime::api::runtime::create_scope_stack(), None)
+        .unwrap();
+    let pushed = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: Some(snapshot_context(&second_identifier)),
+            name: "foreign-parent".into(),
+            scope_type: ProtoScopeType::Function as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(pushed.error.is_none());
+    let mut foreign_parent = context.clone();
+    foreign_parent.parent_scope_id = pushed.scope_handle_id.clone();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(foreign_parent)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let owned_parent = ScopeContext {
+        scope_stack_id: second_identifier.clone(),
+        parent_scope_id: pushed.scope_handle_id,
+    };
+    let owned = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(owned_parent)))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(
+        owned.scopes.last().unwrap().scope_type,
+        ProtoScopeType::Function as i32
+    );
+    let repeated = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(context)))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(repeated, first);
+    state.cleanup_invocation_scope_stack(&scope_stack_id);
+    state.cleanup_invocation_scope_stack(&second_identifier);
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_revokes_before_cancellation_rpc_and_expires_after_cleanup() {
+    // The mock worker isolates the real host invocation guard and inspection service.
+    let (callback, _shutdown, _cancellations) = fake_callback_service_with_handlers(
+        |_| Box::pin(std::future::pending()),
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback
+        .base_request(
+            "snapshot-cancel",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            Some(invoke_request_payload_tool("tool", json!({}), None)),
+        )
+        .unwrap();
+    let context = request.scope.clone().unwrap();
+    let service = WorkerHostRuntimeService {
+        state: callback.host_state.clone(),
+    };
+    let mut guard = WorkerInvocationGuard::new(&callback, &request);
+    assert!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+            .await
+            .unwrap()
+            .into_inner()
+            .snapshot
+            .is_some()
+    );
+    assert!(guard.cancellation("snapshot cancellation test").is_some());
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Cancelled
+    );
+    let dropped = service
+        .drop_scope_stack(Request::new(DropScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_stack_id: context.scope_stack_id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(dropped.ok);
+    assert!(dropped.error.is_none());
+    guard.cleanup();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_stack_snapshot_cleanup_races_return_complete_values_or_explicit_errors() {
+    for _ in 0..32 {
+        let state = Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        ));
+        let source_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+        let scope_stack_id = state
+            .insert_invocation_scope_stack(source_stack, None)
+            .unwrap();
+        let stack = state.stack(&scope_stack_id).unwrap().unwrap();
+        nemo_relay_runtime::api::runtime::with_scope_stack(stack.clone(), || {
+            push_scope(
+                PushScopeParams::builder()
+                    .name("snapshot-before-cleanup")
+                    .scope_type(ScopeType::Function)
+                    .build(),
+            )
+        })
+        .unwrap();
+        let expected = nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack).unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let read_state = state.clone();
+        let read_identifier = scope_stack_id.clone();
+        let read_barrier = barrier.clone();
+        let read = tokio::spawn(async move {
+            read_barrier.wait().await;
+            WorkerHostRuntimeService { state: read_state }
+                .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                    &read_identifier,
+                ))))
+                .await
+        });
+        barrier.wait().await;
+        state.cleanup_invocation_scope_stack(&scope_stack_id);
+        match read.await.unwrap() {
+            Ok(response) => {
+                let snapshot = response.into_inner().snapshot.unwrap();
+                assert_eq!(snapshot.scopes.len(), expected.scopes.len());
+                for (actual, expected) in snapshot.scopes.iter().zip(&expected.scopes) {
+                    assert_eq!(actual.scope_id, expected.scope_id.to_string());
+                }
+            }
+            Err(error) => assert_eq!(error.code(), tonic::Code::NotFound),
+        }
+    }
+}
+
+/// The host stops provider work even if the worker keeps its request open.
+#[tokio::test]
+async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
+    for timed_out in [false, true] {
+        for surface in ["tool", "llm", "stream_open"] {
+            let (callback, _shutdown, _cancel_rx) = fake_callback_service_with_handlers(
+                |_| Box::pin(std::future::pending()),
+                |_| Box::pin(tokio_stream::empty()),
+            )
+            .await;
+            /// Wait for cancellation and report when the provider future is dropped.
+            async fn pending_provider<T>(
+                started: Arc<tokio::sync::Notify>,
+                dropped: mpsc::UnboundedSender<()>,
+            ) -> FlowResult<T> {
+                /// Report that the provider released its resources.
+                struct ProviderDrop(mpsc::UnboundedSender<()>);
+                impl Drop for ProviderDrop {
+                    /// Notify the test that provider work has stopped.
+                    fn drop(&mut self) {
+                        let _ = self.0.send(());
+                    }
+                }
+                let _dropped = ProviderDrop(dropped);
+                started.notify_one();
+                std::future::pending().await
+            }
+            let provider_started = Arc::new(tokio::sync::Notify::new());
+            let started = provider_started.clone();
+            let (dropped_tx, mut dropped_rx) = mpsc::unbounded_channel();
+            let continuation = match surface {
+                "tool" => Continuation::tool(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+                "llm" => Continuation::llm(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+                _ => Continuation::llm_stream(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+            };
+            let id = callback
+                .host_state
+                .insert_continuation(continuation)
+                .unwrap();
+            let request = callback
+                .base_request(
+                    "pending",
+                    RegistrationSurface::LlmExecutionIntercept,
+                    Some(id.clone()),
+                    None,
+                )
+                .unwrap();
+            let service = WorkerHostRuntimeService {
+                state: callback.host_state.clone(),
+            };
+            let provider_task = tokio::spawn(async move {
+                match surface {
+                    "tool" => service
+                        .tool_next(Request::new(ToolNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "llm" => service
+                        .llm_next(Request::new(LlmNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            request: Some(
+                                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
+                            ),
+                        }))
+                        .await
+                        .map(|_| ()),
+                    _ => service
+                        .llm_stream_next(Request::new(LlmStreamNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            request: Some(
+                                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
+                            ),
+                        }))
+                        .await
+                        .map(|_| ()),
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(2), provider_started.notified())
+                .await
+                .unwrap();
+            if timed_out {
+                let error = callback
+                    .invoke_async_with_timeout(request, Some(Duration::from_millis(10)))
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("timed out"));
+            } else {
+                let mut invocation = Box::pin(callback.invoke_async_with_timeout(request, None));
+                assert!(futures_util::poll!(&mut invocation).is_pending());
+                drop(invocation);
+            }
+            tokio::time::timeout(Duration::from_secs(2), dropped_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(2), provider_task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Cancelled, "{surface}");
+        }
+    }
+}
+
+/// End provider streams even when their consumer remains open or stops reading.
+#[tokio::test]
+async fn worker_invocation_cleanup_drops_provider_stream_even_with_a_live_consumer() {
+    for backpressure in [false, true] {
+        let state = Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        ));
+        let (dropped_tx, mut dropped_rx) = mpsc::unbounded_channel();
+        let polled = Arc::new(tokio::sync::Notify::new());
+        let signal = polled.clone();
+        let id = state
+            .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+                let dropped_tx = dropped_tx.clone();
+                let signal = signal.clone();
+                Box::pin(async move {
+                    /// Report that the provider released its resources.
+                    struct ProviderDrop(mpsc::UnboundedSender<()>);
+                    impl Drop for ProviderDrop {
+                        /// Notify the test that provider work has stopped.
+                        fn drop(&mut self) {
+                            let _ = self.0.send(());
+                        }
+                    }
+                    let drop_signal = ProviderDrop(dropped_tx);
+                    Ok(LlmJsonStream::new(futures_util::stream::poll_fn(
+                        move |_| {
+                            let _keep_alive = &drop_signal;
+                            signal.notify_one();
+                            if backpressure {
+                                std::task::Poll::Ready(Some(Ok(json!("chunk"))))
+                            } else {
+                                std::task::Poll::Pending
+                            }
+                        },
+                    )))
+                })
+            })))
+            .unwrap();
+        let service = WorkerHostRuntimeService {
+            state: state.clone(),
+        };
+        let mut stream = service
+            .llm_stream_next(Request::new(LlmStreamNextRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                continuation_id: id.clone(),
+                scope: None,
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        tokio::time::timeout(Duration::from_secs(2), polled.notified())
+            .await
+            .unwrap();
+        // With a slow consumer, the forwarding task fills the queue before it yields.
+        state.remove_continuation(&id);
+        tokio::time::timeout(Duration::from_secs(2), dropped_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        while stream.next().await.is_some() {}
+    }
+}
+
+/// Keep the default callback deadline and send cancellation when it expires.
+#[tokio::test]
+async fn short_callbacks_keep_their_rpc_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started = Arc::clone(&started);
+            move |_| {
+                let started = Arc::clone(&started);
+                Box::pin(async move {
+                    started.notify_one();
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback
+        .base_request(
+            "short_callback",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            None,
+        )
+        .unwrap();
+    let invocation_id = request.invocation_id.clone();
+    let task = tokio::spawn(async move { callback.invoke_async(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(WORKER_RPC_TIMEOUT + std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("worker invocation timed out")
+    );
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancellation.invocation_id, invocation_id);
+}
+
+fn enable_test_diagnostics(
+    state: &mut Arc<WorkerHostRuntimeState>,
+) -> nemo_relay_diagnostics::Diagnostics {
+    use nemo_relay_diagnostics::{
+        Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity,
+    };
+    let diagnostics = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    Arc::get_mut(state).unwrap().observer = super::super::diagnostics::PluginDiagnostics::new(
+        &diagnostics,
+        "fixture_worker",
+        PluginExecution::WorkerProtocol,
+        Uuid::now_v7(),
+    );
+    diagnostics
+}
+
+fn provenance_failure_total(diagnostics: &nemo_relay_diagnostics::Diagnostics) -> u64 {
+    diagnostics
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+        .lifetime
+        .totals
+        .failures_total
+        .value
+        .get()
+}
+
+#[tokio::test]
+async fn worker_callback_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service(|request| {
+        let mut error = flow_error_to_worker(FlowError::Internal("provider failed".into()));
+        match request.registration_name.as_str() {
+            "forwarded" => error.downstream_continuation_id = Some(request.continuation_id),
+            "foreign" => error.downstream_continuation_id = Some("next-other".into()),
+            "cancelled" => error.code = "worker.cancelled".into(),
+            _ => {}
+        }
+        let result = if request.invocation_id.ends_with('0') {
+            InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(error),
+            })
+        } else {
+            InvokeResult::Error(error)
+        };
+        InvokeResponse {
+            result: Some(result),
+        }
+    })
+    .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+    // Three forwarding boundaries add no plugin failure. A later, distinct local
+    // error and foreign/absent invocation provenance remain countable.
+    for (index, (name, continuation, expected)) in [
+        ("forwarded", "next-1", 0),
+        ("forwarded", "next-2", 0),
+        ("forwarded", "next-3", 0),
+        ("local", "next-4", 1),
+        ("foreign", "next-5", 2),
+        ("forwarded", "", 3),
+        ("cancelled", "next-6", 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = callback
+            .base_request(
+                name,
+                RegistrationSurface::LlmExecutionIntercept,
+                Some(continuation.into()),
+                None,
+            )
+            .unwrap();
+        request.invocation_id = format!("invoke-{}", index % 2);
+        let response = callback.invoke_async(request).await.unwrap();
+        assert!(json_from_invoke_response(response).is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse::default(),
+        |request| {
+            let mut error =
+                flow_error_to_worker(FlowError::Internal("provider stream failed".into()));
+            if request.registration_name != "local" {
+                error.downstream_continuation_id = Some(request.continuation_id.clone());
+            }
+            let item = if request.registration_name == "status" {
+                Err(downstream_status(
+                    Status::internal("provider stream failed"),
+                    &request.continuation_id,
+                ))
+            } else {
+                Ok(StreamChunk {
+                    item: Some(StreamItem::Error(error)),
+                })
+            };
+            Box::pin(tokio_stream::once(item))
+        },
+    )
+    .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+    for (name, expected) in [("forwarded", 0), ("status", 0), ("local", 1)] {
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                name,
+                "model",
+                valid_llm_request(),
+                LlmExecutionContext::default(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        assert!(stream.next().await.unwrap().is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_opening_failures_preserve_provenance_and_release_invocation_state() {
+    for origin in ["matching", "absent", "foreign"] {
+        let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_async_handlers(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            move |request| {
+                let mut error = Status::unavailable("stream opening failed");
+                match origin {
+                    "matching" => error = downstream_status(error, &request.continuation_id),
+                    "foreign" => error = downstream_status(error, "next-other"),
+                    _ => {}
+                }
+                observed_tx.send(request).unwrap();
+                Box::pin(async move { Err(error) })
+            },
+        )
+        .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                "stream_open_failure",
+                "model",
+                valid_llm_request(),
+                openai_stream_execution_codec_context(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        let error = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("stream opening failed"), "{origin}: {error}");
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        let request = observed_rx.recv().await.unwrap();
+        let cancellation = cancel_rx
+            .try_recv()
+            .expect("opening failure sends cancellation");
+        assert_eq!(cancellation.invocation_id, request.invocation_id);
+        assert!(
+            cancel_rx.try_recv().is_err(),
+            "cancellation must be sent once"
+        );
+        let (request_codec, _, invocation_id) = execution_codec_capabilities(request);
+        assert_request_codec_expired(&callback.host_state, &request_codec, &invocation_id);
+        assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+        assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+        assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+        let snapshot = diagnostics
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let expected = u64::from(origin != "matching");
+        assert_eq!(
+            snapshot.lifetime.totals.failures_total.value.get(),
+            expected,
+            "{origin}"
+        );
+        assert_eq!(snapshot.events.len() as u64, expected, "{origin}");
+        if let Some(event) = snapshot.events.first() {
+            assert_eq!(event.code(), "plugin.worker.transport_failed");
+            assert_eq!(event.classification.failure_class(), Some("unavailable"));
+            assert_eq!(event.count.get(), 1);
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_continuation_errors_carry_provenance_only_after_downstream_execution() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let llm_id = state
+        .insert_continuation(Continuation::llm(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("provider failed".into())) })
+        })))
+        .unwrap();
+    let request = LlmNextRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        continuation_id: llm_id.clone(),
+        request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+        scope: None,
+    };
+    let (a, b) = tokio::join!(
+        service.llm_next(Request::new(request.clone())),
+        service.llm_next(Request::new(request.clone()))
+    );
+    for response in [a, b] {
+        let error = response.unwrap().into_inner().error.unwrap();
+        assert_eq!(
+            error.downstream_continuation_id.as_deref(),
+            Some(llm_id.as_str())
+        );
+        assert_eq!(error.code, "host.runtime_error");
+        assert!(!is_worker_callback_failure(&error, &llm_id));
+    }
+    let invalid = service
+        .llm_next(Request::new(LlmNextRequest {
+            request: None,
+            ..request
+        }))
+        .await
+        .unwrap_err();
+    assert!(!is_downstream_status(&invalid, &llm_id));
+    let tool_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("tool failed".into())) })
+        })))
+        .unwrap();
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+            scope: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .error
+        .unwrap();
+    assert_eq!(
+        error.downstream_continuation_id.as_deref(),
+        Some(tool_id.as_str())
+    );
+    // Opening and polling a downstream stream preserve their existing wire/error shapes.
+    for opening in [true, false] {
+        let id = state
+            .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+                Box::pin(async move {
+                    if opening {
+                        Err(FlowError::Internal("stream open failed".into()))
+                    } else {
+                        Ok(LlmJsonStream::new(tokio_stream::once(Err(
+                            FlowError::Internal("stream item failed".into()),
+                        ))))
+                    }
+                })
+            })))
+            .unwrap();
+        let response = service
+            .llm_stream_next(Request::new(LlmStreamNextRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                continuation_id: id.clone(),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+                scope: None,
+            }))
+            .await;
+        if opening {
+            let error = response.err().unwrap();
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert!(is_downstream_status(&error, &id));
+        } else {
+            let chunk = response
+                .unwrap()
+                .into_inner()
+                .next()
+                .await
+                .unwrap()
+                .unwrap();
+            let Some(StreamItem::Error(error)) = chunk.item else {
+                panic!("expected stream error")
+            };
+            assert_eq!(
+                error.downstream_continuation_id.as_deref(),
+                Some(id.as_str())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
+    for wait in [false, true] {
+        // Return the failure from an established gRPC connection. Refusing a
+        // connection to a closed port can take longer than this test on Windows.
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_cancel_error(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            |_| Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream) }),
+            Some(Status::unavailable("fixture cancellation failure")),
+        )
+        .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let request = InvokeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            invocation_id: Uuid::now_v7().to_string(),
+            ..Default::default()
+        };
+        let mut guard = WorkerInvocationGuard::new(&callback, &request);
+        if wait {
+            assert!(guard.cancel_and_wait("test cancellation").await.is_err());
+        } else {
+            guard.cancel("test cancellation");
+        }
+        guard.finish();
+        assert!(guard.cleaned);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while provenance_failure_total(&diagnostics) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let view = diagnostics
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].code(), "plugin.worker.cancellation_failed");
+        assert_eq!(
+            view.events[0].classification.failure_class(),
+            Some("unavailable")
+        );
+        assert_eq!(
+            view.events[0].context.phase.as_ref().unwrap().as_str(),
+            "runtime"
+        );
+        assert_eq!(
+            cancel_rx.try_recv().unwrap().invocation_id,
+            request.invocation_id
+        );
+        assert!(cancel_rx.try_recv().is_err(), "cancellation is sent once");
+        assert!(guard.cancellation("already finished").is_none());
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_close_preserves_cleanup_failures_and_unread_stream_errors() {
+    for unread_error in [false, true] {
+        let (tx, rx) = mpsc::channel(16);
+        let chunk_count = if unread_error { 15 } else { 16 };
+        for index in 0..chunk_count {
+            tx.try_send(Ok(json!({"chunk": index}))).unwrap();
+        }
+        if unread_error {
+            tx.send(Err(FlowError::Internal("producer failed".into())))
+                .await
+                .unwrap();
+        }
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let mut stream = WorkerForwardedLlmStream {
+            receiver: Some(tokio_stream::wrappers::ReceiverStream::new(rx)),
+            completion: completion_rx,
+            close_result: None,
+        };
+        completion_tx.send_replace(Some(Err("cleanup failed".into())));
+        for _ in 0..2 {
+            let close = Pin::new(&mut stream).close();
+            assert!(
+                tx.is_closed(),
+                "close must stop new chunks before awaiting cleanup"
+            );
+            let error = close.await.unwrap_err();
+            assert!(error.to_string().contains(if unread_error {
+                "producer failed"
+            } else {
+                "cleanup failed"
+            }));
+        }
+        assert!(tx.is_closed());
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[test]
+fn worker_environment_forwarding_is_opt_in() {
+    const CHILD: &str = "RELAY_FORWARD_ENV_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "plugin::dynamic::worker::tests::worker_environment_forwarding_is_opt_in",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("RELAY_FORWARD_EXACT", "exact value")
+            .env("RELAY_FORWARD_PREFIX_ONE", "prefix value")
+            .env("RELAY_FORWARD_PREFIX_", "")
+            .env("PYTHONPATH", "/explicit/plugin/path")
+            .env("RELAY_FORWARD_PREFIX", "not a prefix match")
+            .env("RELAY_FORWARD_UNSELECTED", "not selected")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let mut command = Command::new("unused");
+    minimize_worker_environment(&mut command, &[]);
+    assert!(
+        !command
+            .get_envs()
+            .any(|(key, _)| key == "RELAY_FORWARD_EXACT")
+    );
+    for name in ["PATH", "TMPDIR", "TEMP", "SSL_CERT_FILE"] {
+        if let Some(value) = std::env::var_os(name) {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, v)| key == name && v == Some(value.as_os_str()))
+            );
+        }
+    }
+    let patterns = [
+        "RELAY_FORWARD_EXACT",
+        "RELAY_FORWARD_PREFIX_*",
+        "RELAY_FORWARD_MISSING",
+        "PYTHONPATH",
+    ]
+    .map(String::from);
+    minimize_worker_environment(&mut command, &patterns);
+    let selected = command
+        .get_envs()
+        .filter_map(|(key, value)| value.map(|v| (key.to_owned(), v.to_owned())))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_EXACT"))
+            .unwrap(),
+        "exact value"
+    );
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_PREFIX_ONE"))
+            .unwrap(),
+        "prefix value"
+    );
+    assert_eq!(
+        selected
+            .get(std::ffi::OsStr::new("RELAY_FORWARD_PREFIX_"))
+            .unwrap(),
+        ""
+    );
+    assert_eq!(
+        selected.get(std::ffi::OsStr::new("PYTHONPATH")).unwrap(),
+        "/explicit/plugin/path"
+    );
+    for name in [
+        "RELAY_FORWARD_UNSELECTED",
+        "RELAY_FORWARD_PREFIX",
+        "RELAY_FORWARD_MISSING",
+    ] {
+        assert!(!selected.contains_key(std::ffi::OsStr::new(name)));
+    }
+    minimize_worker_environment(&mut command, &["relay_forward_exact".into()]);
+    assert_eq!(
+        command
+            .get_envs()
+            .any(|(key, value)| key == "RELAY_FORWARD_EXACT" && value.is_some()),
+        cfg!(windows)
+    );
+}

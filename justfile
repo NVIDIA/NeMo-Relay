@@ -488,6 +488,7 @@ local_dependencies = (
     "nemo-relay-diagnostics",
     "nemo-relay-logging",
     "nemo-relay-runtime",
+    "nemo-relay-plugin-host",
     "nemo-relay",
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
@@ -859,6 +860,7 @@ published_cargo_packages() {
         nemo-relay-diagnostics \
         nemo-relay-logging \
         nemo-relay-runtime \
+        nemo-relay-plugin-host \
         nemo-relay \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
@@ -982,10 +984,10 @@ prepare_test_plugin_fixtures() {
 
     cd "$NEMO_RELAY_REPO_ROOT"
     cargo build --quiet --locked \
-        --manifest-path crates/runtime/tests/fixtures/native_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/native_plugin/Cargo.toml \
         --target-dir "$target_dir"
     cargo build --quiet --locked \
-        --manifest-path crates/runtime/tests/fixtures/worker_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/worker_plugin/Cargo.toml \
         --target-dir "$target_dir"
 
     export NEMO_RELAY_TEST_NATIVE_PLUGIN="$target_dir/debug/$native_library"
@@ -1901,10 +1903,25 @@ package-rust:
             cargo_package_args+=(--allow-dirty)
         fi
         case "$package" in
-            nemo-relay-logging)
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+            nemo-relay-plugin-host)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                ;;
+            nemo-relay-logging)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 ;;
             nemo-relay-diagnostics)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
@@ -1916,13 +1933,12 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 ;;
             nemo-relay|nemo-relay-runtime)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 if [[ "$package" != nemo-relay-runtime ]]; then
-                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 fi
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
@@ -1935,6 +1951,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
@@ -1959,6 +1976,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
@@ -1972,6 +1990,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')

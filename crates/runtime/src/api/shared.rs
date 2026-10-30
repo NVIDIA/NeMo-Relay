@@ -33,7 +33,8 @@ pub const TRACEPARENT_HEADER_KEY: &str = "traceparent";
 /// Header carrying W3C vendor trace state for an outbound provider request.
 pub const TRACESTATE_HEADER_KEY: &str = "tracestate";
 
-pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
+/// Resolve an explicit scope or the current active event as the parent.
+pub fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     Some(
         parent
             .map(|handle| handle.uuid)

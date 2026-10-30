@@ -59,3 +59,79 @@ pub fn parse_http_error_message(message: &str) -> Option<(u16, &str)> {
 #[cfg(test)]
 #[path = "../tests/unit/plugin_http_error_tests.rs"]
 mod http_error_tests;
+
+/// Encode one plugin registration namespace field.
+pub fn encode_plugin_component_field(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
+}
+
+/// Decode a canonical plugin registration name into its owner and local name.
+pub fn decode_plugin_component_effective_name(
+    effective_name: &str,
+) -> Option<(String, u32, String)> {
+    const PREFIX: &str = "nemo-relay-plugin.v1.";
+
+    let rest = effective_name.strip_prefix(PREFIX)?;
+    let (encoded_kind, rest) = rest.split_once(':')?;
+    let (ordinal_text, encoded_local_name) = rest.split_once(':')?;
+    let ordinal = ordinal_text
+        .parse::<u32>()
+        .ok()
+        .filter(|ordinal| *ordinal > 0)?;
+    if ordinal.to_string() != ordinal_text {
+        return None;
+    }
+    let plugin_kind = decode_plugin_component_field(encoded_kind)?;
+    let local_name = decode_plugin_component_field(encoded_local_name)?;
+    (!plugin_kind.is_empty() && !local_name.is_empty()).then_some((
+        plugin_kind,
+        ordinal,
+        local_name,
+    ))
+}
+
+fn decode_plugin_component_field(encoded: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let encoded = encoded.as_bytes();
+    let mut index = 0;
+
+    while index < encoded.len() {
+        let byte = encoded[index];
+        if byte == b'%' {
+            let high = *encoded.get(index + 1)?;
+            let low = *encoded.get(index + 2)?;
+            bytes.push((hex_value(high)? << 4) | hex_value(low)?);
+            index += 3;
+        } else if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            bytes.push(byte);
+            index += 1;
+        } else {
+            return None;
+        }
+    }
+
+    let decoded = String::from_utf8(bytes).ok()?;
+    (encode_plugin_component_field(&decoded) == std::str::from_utf8(encoded).ok()?)
+        .then_some(decoded)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}

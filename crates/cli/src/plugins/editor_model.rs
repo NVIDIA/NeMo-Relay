@@ -15,7 +15,7 @@ use nemo_relay_runtime::config_editor::{EditorConfig, EditorFieldKind, EditorFie
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
-use {nemo_relay_runtime::plugin::PluginComponentSpec, nemo_relay_runtime::plugin::PluginConfig};
+use {nemo_relay_plugin_host::PluginComponentSpec, nemo_relay_plugin_host::PluginConfig};
 
 use crate::error::CliError;
 

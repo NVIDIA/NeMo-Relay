@@ -26,7 +26,7 @@ use nemo_relay::api::registry::{
     register_tool_conditional_execution_guardrail, register_tool_request_intercept,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay_runtime::plugin::dynamic::DynamicPluginKind;
+use nemo_relay_plugin_host::dynamic::DynamicPluginKind;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -35,9 +35,9 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 use {
     nemo_relay::plugin::ensure_builtin_plugins_registered,
-    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::Plugin,
-    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginRegistration,
-    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginRegistration,
+    nemo_relay_plugin_host::deregister_plugin, nemo_relay_plugin_host::register_plugin,
 };
 
 use super::*;
@@ -130,7 +130,7 @@ static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 async fn assert_plugin_host_lease_available() {
     let mut probe =
-        nemo_relay::plugin::initialize_exact(nemo_relay_runtime::plugin::PluginConfig::default())
+        nemo_relay::plugin::initialize_exact(nemo_relay_plugin_host::PluginConfig::default())
             .await
             .expect("server should leave the plugin-host lease available");
     assert!(probe.is_active());
@@ -284,8 +284,8 @@ impl Plugin for PreclaimedBuiltinPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        _ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
-    ) -> Pin<Box<dyn Future<Output = nemo_relay_runtime::plugin::Result<()>> + Send + 'a>> {
+        _ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -302,8 +302,8 @@ impl Plugin for GenericTestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
-    ) -> Pin<Box<dyn Future<Output = nemo_relay_runtime::plugin::Result<()>> + Send + 'a>> {
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
             ctx.add_registration(PluginRegistration::new(

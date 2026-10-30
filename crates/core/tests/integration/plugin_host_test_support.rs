@@ -3,8 +3,8 @@
 
 use std::sync::{LazyLock, Mutex};
 
-use nemo_relay_runtime::plugin::dynamic::PluginHostActivation;
-use nemo_relay_runtime::plugin::{ConfigReport, PluginConfig, PluginError, Result};
+use nemo_relay_plugin_host::dynamic::PluginHostActivation;
+use nemo_relay_plugin_host::{ConfigReport, PluginConfig, PluginError, Result};
 
 static TEST_PLUGIN_HOST: LazyLock<Mutex<Option<PluginHostActivation>>> =
     LazyLock::new(|| Mutex::new(None));

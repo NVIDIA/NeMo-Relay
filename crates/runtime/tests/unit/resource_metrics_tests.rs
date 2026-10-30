@@ -22,9 +22,6 @@ use crate::api::subscriber::{
     deregister_subscriber, register_subscriber, scope_register_subscriber,
 };
 use crate::config_editor::{EditorConfig, EditorFieldKind};
-use crate::plugin::{
-    PluginComponentSpec, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
-};
 
 #[test]
 fn resource_metrics_defaults_match_the_plugin_contract() {
@@ -400,15 +397,6 @@ fn configured_filesystem_paths_produce_byte_capacity_measurements() {
 }
 
 #[test]
-fn resource_metrics_plugin_is_discovered_as_a_builtin() {
-    assert!(
-        crate::plugin::list_plugin_kinds()
-            .iter()
-            .any(|kind| kind == "resource_metrics")
-    );
-}
-
-#[test]
 fn registering_agent_scope_prunes_abandoned_stacks_without_polling() {
     let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
@@ -616,82 +604,10 @@ fn resource_metric_marks_fan_out_to_agent_scopes_and_fall_back_to_the_runtime_ro
 }
 
 #[test]
-fn plugin_activation_controls_on_demand_collection_polling_cadence_and_teardown() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    test_close_plugin_host().unwrap();
-    crate::shared_runtime::reset_runtime_owner_for_tests();
-    *global_context().write().unwrap() = NemoRelayContextState::new();
-    set_thread_scope_stack(create_scope_stack());
-
-    let (poll_tx, poll_rx) = mpsc::channel::<Instant>();
-    let plugin_scope_events = Arc::new(Mutex::new(0_usize));
-    let plugin_scope_events_for_subscriber = Arc::clone(&plugin_scope_events);
-    register_subscriber(
-        "resource-metrics-polling-test",
-        Arc::new(move |event| {
-            if event.name() == super::RESOURCE_METRICS_EVENT_NAME {
-                let mut count = plugin_scope_events_for_subscriber.lock().unwrap();
-                *count = count.saturating_add(1);
-                let _ = poll_tx.send(Instant::now());
-            }
-        }),
-    )
-    .unwrap();
-
-    futures::executor::block_on(test_initialize_plugin_host_exact(
-        resource_metrics_host_config(false, false, 250),
-    ))
-    .unwrap();
-    assert!(runtime.block_on(super::collect()).is_err());
-    test_close_plugin_host().unwrap();
-
-    futures::executor::block_on(test_initialize_plugin_host_exact(
-        resource_metrics_host_config(true, false, 250),
-    ))
-    .unwrap();
-    let snapshot = runtime.block_on(super::collect()).unwrap();
-    assert_ne!(
-        snapshot.operating_system,
-        crate::api::resource_metrics::ResourceOperatingSystem::Unsupported
-    );
-    assert_eq!(
-        snapshot.measurement_scope,
-        crate::api::resource_metrics::ResourceMeasurementScope::ProcessTree
-    );
-    assert!(poll_rx.recv_timeout(Duration::from_millis(100)).is_err());
-    test_close_plugin_host().unwrap();
-    assert!(runtime.block_on(super::collect()).is_err());
-
-    futures::executor::block_on(test_initialize_plugin_host_exact(
-        resource_metrics_host_config(true, true, 250),
-    ))
-    .unwrap();
-    let first = poll_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let second = poll_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(second.duration_since(first) >= Duration::from_millis(200));
-    test_close_plugin_host().unwrap();
-    flush_subscribers().unwrap();
-    while poll_rx.try_recv().is_ok() {}
-    assert!(poll_rx.recv_timeout(Duration::from_millis(100)).is_err());
-    assert!(runtime.block_on(super::collect()).is_err());
-    assert!(*plugin_scope_events.lock().unwrap() >= 2);
-
-    deregister_subscriber("resource-metrics-polling-test").unwrap();
-    flush_subscribers().unwrap();
-}
-
-#[test]
 fn polling_releases_an_abandoned_agent_stack_and_uses_its_root() {
     let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    test_close_plugin_host().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     *global_context().write().unwrap() = NemoRelayContextState::new();
     super::AGENT_SCOPES
@@ -759,29 +675,6 @@ fn polling_releases_an_abandoned_agent_stack_and_uses_its_root() {
     flush_subscribers().unwrap();
 }
 
-fn resource_metrics_host_config(
-    component_enabled: bool,
-    polling_enabled: bool,
-    interval_millis: u64,
-) -> PluginConfig {
-    PluginConfig {
-        version: 1,
-        components: vec![PluginComponentSpec {
-            kind: "resource_metrics".into(),
-            enabled: component_enabled,
-            config: json!({
-                "polling": {
-                    "enabled": polling_enabled,
-                    "interval_millis": interval_millis
-                }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        }],
-        policy: Default::default(),
-    }
-}
 use crate::resource_metrics::snapshot_fixture;
 
 #[test]
@@ -840,69 +733,6 @@ fn complete_snapshot_projects_filesystems_accelerators_and_limit_events_as_gauge
         |value| value.attributes.as_ref().unwrap()["nemo_relay.resource.measurement_scope"]
             == "global"
     ));
-}
-#[test]
-#[cfg(not(windows))]
-fn cli_launch_guards_select_the_owned_tree_and_restore_the_application_target() {
-    struct Child(std::process::Child);
-    impl Drop for Child {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-    let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    test_close_plugin_host().unwrap();
-    crate::shared_runtime::reset_runtime_owner_for_tests();
-    *global_context().write().unwrap() = NemoRelayContextState::new();
-    set_thread_scope_stack(create_scope_stack());
-    let launch = super::prepare_cli_resource_metrics_process_tree().unwrap();
-    assert!(super::prepare_cli_resource_metrics_process_tree().is_err());
-    let child = Child(
-        std::process::Command::new("/bin/sleep")
-            .arg("60")
-            .spawn()
-            .unwrap(),
-    );
-    assert!(
-        super::target_resource_metrics_to_owned_process_tree(child.0.id())
-            .unwrap()
-            .is_none()
-    );
-    assert!(super::target_resource_metrics_to_owned_process_tree(std::process::id()).is_err());
-    let mut config = resource_metrics_host_config(true, false, 250);
-    config.components[0]
-        .config
-        .insert("measurement_scope".into(), json!("process_tree"));
-    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
-    let target = super::target_resource_metrics_to_owned_process_tree(child.0.id())
-        .unwrap()
-        .unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let snapshot = runtime.block_on(super::collect()).unwrap();
-    assert_eq!(
-        snapshot.measurement_scope,
-        super::ResourceMeasurementScope::ProcessTree
-    );
-    assert!(snapshot.process.unwrap().active_count.unwrap().value >= 1_u64);
-    drop(target);
-    assert!(runtime.block_on(super::collect()).is_err());
-    let target = super::target_resource_metrics_to_owned_process_tree(child.0.id())
-        .unwrap()
-        .unwrap();
-    drop(launch);
-    drop(target);
-    let snapshot = runtime.block_on(super::collect()).unwrap();
-    assert_eq!(
-        snapshot.measurement_scope,
-        super::ResourceMeasurementScope::ProcessTree
-    );
-    test_close_plugin_host().unwrap();
 }
 
 #[test]

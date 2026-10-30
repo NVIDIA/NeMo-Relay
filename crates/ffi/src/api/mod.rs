@@ -166,6 +166,7 @@ use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_plugin_host::dynamic::PluginHostActivation;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
@@ -174,13 +175,12 @@ use nemo_relay_runtime::api::runtime::{
     current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
     scope_stack_active, set_thread_scope_stack,
 };
-use nemo_relay_runtime::plugin::dynamic::PluginHostActivation;
 use tokio::runtime::Runtime;
 use {
-    nemo_relay::plugin::list_plugin_kinds, nemo_relay_runtime::plugin::ConfigDiagnostic,
-    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::Plugin,
-    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginError,
-    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay::plugin::list_plugin_kinds, nemo_relay_plugin_host::ConfigDiagnostic,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginError,
+    nemo_relay_plugin_host::deregister_plugin, nemo_relay_plugin_host::register_plugin,
 };
 
 mod adaptive;

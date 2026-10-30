@@ -1,0 +1,4124 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Unit tests for plugin in the NeMo Relay core crate.
+
+use super::*;
+use std::collections::BTreeMap;
+#[cfg(feature = "__skip-implicit-config")]
+use std::ffi::{OsStr, OsString};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+use serde_json::json;
+use tokio::sync::Notify;
+
+use nemo_relay_runtime::api::event::{BaseEvent, Event, MarkEvent};
+use nemo_relay_runtime::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_runtime::api::llm::{llm_conditional_execution, llm_request_intercepts};
+use nemo_relay_runtime::api::registry::{
+    RuntimeRegistrationKind, RuntimeRegistrationOwnerKind, list_runtime_registrations,
+};
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, NemoRelayContextState};
+use nemo_relay_runtime::api::tool::tool_conditional_execution;
+use nemo_relay_types::error::FlowError;
+
+struct TestPlugin;
+struct PolicyAwarePlugin;
+
+struct SingletonPlugin;
+struct RecordingPlugin;
+struct DiscoverablePlugin;
+struct PartialFailPlugin;
+struct VanishingPlugin;
+struct BlockingPlugin {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+    registered: Arc<Notify>,
+}
+struct BackgroundTaskPlugin {
+    release: Arc<Notify>,
+    completed: Arc<Notify>,
+}
+struct EventMetadataPlugin;
+
+static RECORDED_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "__skip-implicit-config")]
+static TEST_CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(feature = "__skip-implicit-config")]
+struct TestConfigEnvironment {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+impl TestConfigEnvironment {
+    fn set(value: Option<&OsStr>) -> Self {
+        Self::set_variable("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value)
+    }
+
+    fn set_variable(key: &'static str, value: Option<&OsStr>) -> Self {
+        let guard = TEST_CONFIG_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os(key);
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        Self {
+            _guard: guard,
+            key,
+            previous,
+        }
+    }
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+impl Drop for TestConfigEnvironment {
+    fn drop(&mut self) {
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+fn recorded_names() -> &'static Mutex<Vec<String>> {
+    RECORDED_NAMES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn lock_runtime_owner() -> std::sync::MutexGuard<'static, ()> {
+    crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+fn expect_registration_failed(result: Result<()>, message_fragment: &str) {
+    match result {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains(message_fragment), "{message}");
+        }
+        Err(other) => panic!("unexpected registration failure: {other}"),
+        Ok(_) => panic!("expected registration to fail"),
+    }
+}
+
+fn set_conflicting_runtime_owner_for_tests() {
+    unsafe {
+        std::env::set_var(
+            "NEMO_RELAY_RUNTIME_OWNER",
+            format!(
+                "pid={};binding=python;version={}",
+                std::process::id(),
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+    };
+}
+
+fn observability_destination_document(destination: &str) -> Json {
+    json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {"enabled": true, "sinks": [destination]},
+                "opentelemetry": {"enabled": true, "endpoints": [destination]},
+                "atif": {"enabled": true, "storage": [destination]}
+            }
+        }]
+    })
+}
+
+#[test]
+fn plugin_configuration_helpers_preserve_defaults_and_error_detection() {
+    let component = PluginComponentSpec::new("coverage.plugin");
+    assert_eq!(component.kind, "coverage.plugin");
+    assert!(component.enabled);
+    assert!(component.config.is_empty());
+
+    let empty = ConfigReport::default();
+    assert!(!empty.has_errors());
+    let error = ConfigReport {
+        diagnostics: vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "coverage.error".into(),
+            component: None,
+            field: None,
+            message: "expected".into(),
+        }],
+        runtime_diagnostics: vec![],
+    };
+    assert!(error.has_errors());
+    assert!(matches!(
+        apply_global_config_policy(
+            ConfigPolicy::default(),
+            &ConfigPolicy {
+                unknown_component: UnsupportedBehavior::Error,
+                ..ConfigPolicy::default()
+            }
+        )
+        .unknown_component,
+        UnsupportedBehavior::Error
+    ));
+}
+
+fn programmatic_observability_config(config: Json) -> PluginConfig {
+    serde_json::from_value(json!({
+        "components": [{"kind": "observability", "config": config}]
+    }))
+    .unwrap()
+}
+
+impl Plugin for TestPlugin {
+    fn plugin_kind(&self) -> &str {
+        "test.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "test.warning".into(),
+            component: Some("test.plugin".into()),
+            field: None,
+            message: "validated".into(),
+        }]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            ctx.register_llm_request_intercept(
+                "intercept",
+                1,
+                false,
+                Arc::new(|_name, mut request, annotated| {
+                    Box::pin(async move {
+                        request.headers.insert("x-plugin".into(), json!(true));
+                        Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    })
+                }),
+            )
+        })
+    }
+}
+
+impl Plugin for EventMetadataPlugin {
+    fn plugin_kind(&self) -> &str {
+        "event-metadata.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let configured = plugin_config
+            .get("metadata")
+            .and_then(Json::as_object)
+            .expect("test plugin metadata must be an object")
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        Box::pin(async move {
+            ctx.register_event_metadata_injector(
+                "configured-metadata",
+                10,
+                Arc::new(move |_| {
+                    let additions = configured.clone();
+                    Box::pin(async move { Ok(additions) })
+                }),
+            )
+        })
+    }
+}
+
+impl Plugin for PolicyAwarePlugin {
+    fn plugin_kind(&self) -> &str {
+        "policy-aware.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn validate_with_policy(
+        &self,
+        _plugin_config: &Map<String, Json>,
+        policy: &ConfigPolicy,
+    ) -> Vec<ConfigDiagnostic> {
+        match policy.unsupported_value {
+            UnsupportedBehavior::Ignore => vec![],
+            UnsupportedBehavior::Warn => vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "policy-aware.unsupported_value".into(),
+                component: Some(self.plugin_kind().into()),
+                field: None,
+                message: "unsupported value".into(),
+            }],
+            UnsupportedBehavior::Error => vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "policy-aware.unsupported_value".into(),
+                component: Some(self.plugin_kind().into()),
+                field: None,
+                message: "unsupported value".into(),
+            }],
+        }
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl Plugin for SingletonPlugin {
+    fn plugin_kind(&self) -> &str {
+        "singleton.plugin"
+    }
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl Plugin for RecordingPlugin {
+    fn plugin_kind(&self) -> &str {
+        "recording.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let qualified = ctx.qualify_name("subscriber");
+        recorded_names().lock().unwrap().push(qualified.clone());
+        Box::pin(async move {
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                qualified,
+                Box::new(|| Ok(())),
+            ));
+            Ok(())
+        })
+    }
+}
+
+impl Plugin for DiscoverablePlugin {
+    fn plugin_kind(&self) -> &str {
+        "discoverable.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move { ctx.register_subscriber("subscriber", Arc::new(|_| {})) })
+    }
+}
+
+impl Plugin for PartialFailPlugin {
+    fn plugin_kind(&self) -> &str {
+        "partial.fail.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                ctx.qualify_name("partial-fail"),
+                Box::new(|| {
+                    PARTIAL_FAIL_ROLLBACKS.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }),
+            ));
+            Err(PluginError::RegistrationFailed(
+                "partial.fail.plugin refused to finish initialization".into(),
+            ))
+        })
+    }
+}
+
+impl Plugin for VanishingPlugin {
+    fn plugin_kind(&self) -> &str {
+        "vanishing.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let _ = deregister_plugin("vanishing.plugin");
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl Plugin for BlockingPlugin {
+    fn plugin_kind(&self) -> &str {
+        "blocking.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "blocking.warning".into(),
+            component: Some("blocking.plugin".into()),
+            field: None,
+            message: "blocking plugin validated".into(),
+        }]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        let registered = Arc::clone(&self.registered);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                ctx.qualify_name("blocking"),
+                Box::new(|| Ok(())),
+            ));
+            registered.notify_one();
+            Ok(())
+        })
+    }
+}
+
+impl Plugin for BackgroundTaskPlugin {
+    fn plugin_kind(&self) -> &str {
+        "background.task.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut dyn crate::PluginRegistrar,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let release = Arc::clone(&self.release);
+        let completed = Arc::clone(&self.completed);
+        Box::pin(async move {
+            tokio::spawn(async move {
+                release.notified().await;
+                completed.notify_one();
+            });
+            Ok(())
+        })
+    }
+}
+
+fn reset_global() {
+    log::set_max_level(log::LevelFilter::Info);
+    test_close_plugin_host().unwrap();
+    let ctx = global_context();
+    let mut state = ctx.write().unwrap();
+    *state = NemoRelayContextState::new();
+    recorded_names().lock().unwrap().clear();
+    PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
+    let _ = deregister_plugin("test.plugin");
+    let _ = deregister_plugin("singleton.plugin");
+    let _ = deregister_plugin("recording.plugin");
+    let _ = deregister_plugin("partial.fail.plugin");
+    let _ = deregister_plugin("vanishing.plugin");
+    let _ = deregister_plugin("blocking.plugin");
+    let _ = deregister_plugin("background.task.plugin");
+    let _ = deregister_plugin("failing.deregister.plugin");
+    let _ = deregister_plugin("event-metadata.plugin");
+}
+
+#[test]
+fn test_layer_config_overlay_wins() {
+    // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
+    // nested config objects, concatenates config lists, appends overlay-only kinds, preserves
+    // base-only kinds, replaces top-level scalars, and recursively merges top-level objects
+    // (policy).
+    let base = json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": true,
+                "config": { "keep": "base", "override": "base", "nested": {"a": 1, "b": 2}, "list": [1, 2, 3] }
+            },
+            { "kind": "base_only", "enabled": true, "config": {} }
+        ],
+        "policy": { "unknown_component": "warn", "unknown_field": "warn" }
+    });
+    let overlay = json!({
+        "version": 2,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": false,
+                "config": { "override": "overlay", "added": true, "nested": {"b": 20, "c": 30}, "list": [9] }
+            },
+            { "kind": "overlay_only", "enabled": true, "config": {} }
+        ],
+        "policy": { "unknown_component": "error" }
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let components = merged["components"].as_array().unwrap();
+
+    // Ordering: base components first (in base order), then overlay-only components appended.
+    let kinds: Vec<&str> = components
+        .iter()
+        .map(|component| component["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["alpha", "base_only", "overlay_only"]);
+
+    let alpha = &components[0];
+    assert_eq!(alpha["enabled"], json!(false), "overlay enabled wins");
+    assert_eq!(
+        alpha["config"]["keep"],
+        json!("base"),
+        "base-only key preserved"
+    );
+    assert_eq!(
+        alpha["config"]["override"],
+        json!("overlay"),
+        "overlay scalar wins"
+    );
+    assert_eq!(alpha["config"]["added"], json!(true), "overlay key added");
+    assert_eq!(
+        alpha["config"]["nested"],
+        json!({"a": 1, "b": 20, "c": 30}),
+        "nested objects merge recursively"
+    );
+    assert_eq!(
+        alpha["config"]["list"],
+        json!([9, 1, 2, 3]),
+        "config lists concatenate with higher-precedence entries first"
+    );
+
+    // Base-only component is preserved.
+    assert_eq!(components[1]["kind"], json!("base_only"));
+
+    // Top-level scalars are replaced by the overlay; objects (policy) merge recursively.
+    assert_eq!(merged["version"], json!(2));
+    assert_eq!(merged["policy"]["unknown_component"], json!("error"));
+    assert_eq!(
+        merged["policy"]["unknown_field"],
+        json!("warn"),
+        "base-only policy field preserved"
+    );
+}
+
+#[test]
+fn test_layer_config_concatenates_nested_observability_lists() {
+    let base = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/system"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://system/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [1, 2]
+                }
+            }
+        }]
+    });
+    let overlay = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {
+                    "sinks": [{"type": "file", "output_directory": "/user"}]
+                },
+                "opentelemetry": {
+                    "endpoints": [
+                        {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+                        {"type": "openinference", "endpoint": "http://user:4319/v1/traces"}
+                    ],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/metrics"}]
+                    }
+                },
+                "atif": {
+                    "storage": [{"type": "http", "endpoint": "http://user/trajectory"}]
+                },
+                "implementation": {
+                    "nested": [9]
+                }
+            }
+        }]
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let config = &merged["components"][0]["config"];
+
+    assert_eq!(
+        config["atof"]["sinks"],
+        json!([
+            {"type": "file", "output_directory": "/user"},
+            {"type": "file", "output_directory": "/system"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["endpoints"],
+        json!([
+            {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
+            {"type": "openinference", "endpoint": "http://user:4319/v1/traces"},
+            {"type": "full", "endpoint": "http://system:4318/v1/traces"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/logs"},
+            {"endpoint": "http://system:4318/v1/logs"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/metrics"},
+            {"endpoint": "http://system:4318/v1/metrics"}
+        ])
+    );
+    assert_eq!(
+        config["atif"]["storage"],
+        json!([
+            {"type": "http", "endpoint": "http://user/trajectory"},
+            {"type": "http", "endpoint": "http://system/trajectory"}
+        ])
+    );
+    assert_eq!(
+        config["implementation"]["nested"],
+        json!([9]),
+        "deeper implementation-specific lists retain replacement semantics"
+    );
+}
+
+#[test]
+fn test_layer_config_preserves_signal_endpoint_option_semantics() {
+    let lower = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
+                }
+            }
+        }]
+    });
+    let higher = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {"minimum_severity": "warn"},
+                    "metrics": {"endpoints": []}
+                }
+            }
+        }]
+    });
+
+    let mut merged = lower;
+    layer_config(&mut merged, higher);
+    let opentelemetry = &merged["components"][0]["config"]["opentelemetry"];
+
+    assert_eq!(
+        opentelemetry["logs"]["endpoints"],
+        json!([{"endpoint": "http://system:4318/v1/logs"}]),
+        "an omitted higher-precedence list preserves the explicit lower-precedence list"
+    );
+    assert_eq!(opentelemetry["logs"]["minimum_severity"], json!("warn"));
+    assert_eq!(
+        opentelemetry["metrics"]["endpoints"],
+        json!([]),
+        "an explicit empty higher-precedence list remains explicit and empty"
+    );
+}
+
+#[test]
+fn test_layer_config_lets_higher_precedence_replace_insecure_http_hosts() {
+    let layer = |hosts: Option<Json>| {
+        let mut config = json!({"version": 4});
+        if let Some(hosts) = hosts {
+            config["insecure_http_hosts"] = hosts;
+        }
+        json!({"components": [{"kind": "observability", "config": config}]})
+    };
+    for (higher, expected) in [
+        (
+            Some(json!(["managed-collector"])),
+            json!(["managed-collector"]),
+        ),
+        (Some(json!([])), json!([])),
+        (None, json!(["user-collector"])),
+    ] {
+        let mut merged = layer(Some(json!(["user-collector"])));
+        layer_config(&mut merged, layer(higher));
+        assert_eq!(
+            merged["components"][0]["config"]["insecure_http_hosts"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
+    let mut merged = json!({
+        "components": [{
+            "kind": "third.party",
+            "config": {
+                "atof": {"sinks": ["base"]},
+                "opentelemetry": {
+                    "endpoints": ["base"],
+                    "logs": {"endpoints": ["base"]},
+                    "metrics": {"endpoints": ["base"]}
+                },
+                "atif": {"storage": ["base"]}
+            }
+        }]
+    });
+    layer_config(
+        &mut merged,
+        json!({
+            "components": [{
+                "kind": "third.party",
+                "config": {
+                    "atof": {"sinks": ["overlay"]},
+                    "opentelemetry": {
+                        "endpoints": ["overlay"],
+                        "logs": {"endpoints": ["overlay"]},
+                        "metrics": {"endpoints": ["overlay"]}
+                    },
+                    "atif": {"storage": ["overlay"]}
+                }
+            }]
+        }),
+    );
+
+    let config = &merged["components"][0]["config"];
+    assert_eq!(config["atof"]["sinks"], json!(["overlay"]));
+    assert_eq!(config["opentelemetry"]["endpoints"], json!(["overlay"]));
+    assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!(["overlay"])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!(["overlay"])
+    );
+    assert_eq!(config["atif"]["storage"], json!(["overlay"]));
+}
+
+#[test]
+fn test_layer_config_preserves_multi_instance_kinds() {
+    // A kind used more than once (multi-instance plugins) must not collapse into the first slot.
+    let base = json!({ "components": [ { "kind": "multi", "config": { "n": 0 } } ] });
+    let overlay = json!({
+        "components": [
+            { "kind": "multi", "config": { "n": 1 } },
+            { "kind": "multi", "config": { "tag": "second" } }
+        ]
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let components = merged["components"].as_array().unwrap();
+
+    // First overlay instance pairs with the base instance; the second is appended, not dropped.
+    assert_eq!(components.len(), 2);
+    assert!(
+        components
+            .iter()
+            .all(|component| component["kind"] == json!("multi"))
+    );
+    assert_eq!(components[0]["config"]["n"], json!(1));
+    assert_eq!(components[1]["config"]["tag"], json!("second"));
+}
+
+#[test]
+fn config_layering_helpers_cover_malformed_and_scalar_shapes() {
+    let mut scalar = json!("lower");
+    layer_config(&mut scalar, json!("higher"));
+    assert_eq!(scalar, json!("higher"));
+
+    let mut malformed_left = json!({"not": "components"});
+    merge_plugin_components(&mut malformed_left, json!([]));
+    assert_eq!(malformed_left, json!([]));
+
+    let mut malformed_right = json!([]);
+    merge_plugin_components(&mut malformed_right, json!({"not": "components"}));
+    assert_eq!(malformed_right, json!({"not": "components"}));
+
+    let mut components = json!([]);
+    merge_plugin_components(&mut components, json!([{"enabled": true}]));
+    assert_eq!(components, json!([{"enabled": true}]));
+
+    let mut malformed_component = json!("lower");
+    merge_plugin_component(&mut malformed_component, json!({"kind": "higher"}));
+    assert_eq!(malformed_component, json!({"kind": "higher"}));
+
+    let mut object = json!({"existing": true});
+    merge_json_value(&mut object, json!({"added": true}));
+    assert_eq!(object, json!({"existing": true, "added": true}));
+}
+
+#[test]
+fn test_config_report_has_errors() {
+    let report = ConfigReport {
+        diagnostics: vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "x".into(),
+            component: None,
+            field: None,
+            message: "boom".into(),
+        }],
+        ..ConfigReport::default()
+    };
+    assert!(report.has_errors());
+}
+
+#[test]
+fn test_register_and_deregister_plugin() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    assert!(register_plugin(Arc::new(TestPlugin)).is_ok());
+    match register_plugin(Arc::new(TestPlugin)) {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains("already registered"));
+        }
+        Err(other) => panic!("unexpected duplicate-registration error: {other}"),
+        Ok(_) => panic!("expected duplicate registration to fail"),
+    }
+    assert!(list_plugin_kinds().contains(&"test.plugin".to_string()));
+    assert!(lookup_plugin("test.plugin").is_some());
+    assert!(deregister_plugin("test.plugin"));
+    assert!(!deregister_plugin("missing.plugin"));
+    assert!(test_close_plugin_host().is_ok());
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_registers_and_rolls_back() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(TestPlugin.register(&Map::new(), &mut ctx))
+        .unwrap();
+
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
+    assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
+
+    let mut registrations = ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
+    assert_eq!(request.request.headers.get("x-plugin"), None);
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_registers_and_clears_components() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(TestPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("test.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+    assert!(!report.has_errors());
+    assert!(test_plugin_host_report().is_some());
+
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
+    assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
+
+    test_close_plugin_host().unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
+    assert_eq!(request.request.headers.get("x-plugin"), None);
+    reset_global();
+}
+
+#[test]
+fn test_plugin_configuration_registers_event_metadata_injector() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(EventMetadataPlugin)).unwrap();
+
+    let mut component = PluginComponentSpec::new("event-metadata.plugin");
+    component.config = serde_json::from_value(json!({
+        "metadata": {"nv.test.plugin_config": "configured"}
+    }))
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![component],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let callback = {
+        let context = global_context();
+        let state = context.read().unwrap();
+        let injectors: Vec<_> = state.event_metadata_injectors.sorted_values().collect();
+        assert_eq!(injectors.len(), 1);
+        Arc::clone(&injectors[0].payload)
+    };
+    let event = Arc::new(Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("plugin-configured-mark").build(),
+        None,
+        None,
+    )));
+    let additions = runtime.block_on(callback(event)).unwrap();
+    assert_eq!(
+        additions.get("nv.test.plugin_config"),
+        Some(&json!("configured"))
+    );
+
+    test_close_plugin_host().unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_metadata_injectors
+            .sorted_values()
+            .next()
+            .is_none()
+    );
+    assert!(deregister_plugin("event-metadata.plugin"));
+    reset_global();
+}
+#[test]
+fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(SingletonPlugin)).unwrap();
+
+    let report = test_validate_static_plugin_config(&PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("singleton.plugin"),
+            PluginComponentSpec::new("singleton.plugin"),
+            PluginComponentSpec::new("missing.plugin"),
+        ],
+        policy: ConfigPolicy {
+            unknown_component: UnsupportedBehavior::Warn,
+            unknown_field: UnsupportedBehavior::Ignore,
+            unsupported_value: UnsupportedBehavior::Error,
+        },
+        ..PluginConfig::default()
+    });
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "plugin.duplicate_component")
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "plugin.unknown_component"
+                && diag.level == DiagnosticLevel::Warning)
+    );
+
+    let ignored = test_validate_static_plugin_config(&PluginConfig {
+        components: vec![PluginComponentSpec::new("still.missing")],
+        policy: ConfigPolicy {
+            unknown_component: UnsupportedBehavior::Ignore,
+            ..PluginConfig::default().policy
+        },
+        ..PluginConfig::default()
+    });
+    assert!(ignored.diagnostics.is_empty());
+
+    reset_global();
+}
+
+#[test]
+fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PolicyAwarePlugin)).unwrap();
+
+    let warning = test_validate_static_plugin_config(&PluginConfig {
+        components: vec![PluginComponentSpec::new("policy-aware.plugin")],
+        policy: ConfigPolicy {
+            unsupported_value: UnsupportedBehavior::Warn,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    });
+    assert!(warning.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "policy-aware.unsupported_value"
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+
+    let ignored = test_validate_static_plugin_config(&PluginConfig {
+        components: vec![PluginComponentSpec::new("policy-aware.plugin")],
+        policy: ConfigPolicy {
+            unsupported_value: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    });
+    assert!(ignored.diagnostics.is_empty());
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_config_defaults_debug_and_invalid_config_messages() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let config: PluginConfig = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(config.version, 1);
+    assert!(config.components.is_empty());
+    assert_eq!(config.policy.unknown_component, UnsupportedBehavior::Warn);
+    assert_eq!(config.policy.unknown_field, UnsupportedBehavior::Warn);
+    assert_eq!(config.policy.unsupported_value, UnsupportedBehavior::Error);
+
+    let component: PluginComponentSpec =
+        serde_json::from_value(json!({"kind": "demo.plugin"})).unwrap();
+    assert_eq!(component.kind, "demo.plugin");
+    assert!(component.enabled);
+    assert!(component.config.is_empty());
+
+    let registration = PluginRegistration::new("plugin", "demo::registration", Box::new(|| Ok(())));
+    let debug = format!("{registration:?}");
+    assert!(debug.contains("PluginRegistration"));
+    assert!(debug.contains("demo::registration"));
+    assert!(debug.contains("plugin"));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            version: 2,
+            components: vec![PluginComponentSpec::new("missing.plugin")],
+            policy: ConfigPolicy {
+                unknown_component: UnsupportedBehavior::Error,
+                ..PluginConfig::default().policy
+            },
+        }))
+        .unwrap_err();
+
+    match error {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("plugin config version 2 is unsupported"));
+            assert!(message.contains("plugin component kind 'missing.plugin' is unsupported"));
+            assert!(message.contains(";"));
+        }
+        other => panic!("unexpected invalid config error: {other}"),
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_helper_defaults_and_policy_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    assert_eq!(
+        ConfigPolicy::default().unknown_component,
+        UnsupportedBehavior::Warn
+    );
+    assert_eq!(
+        ConfigPolicy::default().unsupported_value,
+        UnsupportedBehavior::Error
+    );
+    assert_eq!(default_plugin_config_version(), 1);
+    assert!(PluginComponentSpec::new("test").enabled);
+    assert_eq!(UnsupportedBehavior::default(), UnsupportedBehavior::Warn);
+
+    let mut diagnostics = Vec::new();
+    push_policy_diag(
+        &mut diagnostics,
+        UnsupportedBehavior::Ignore,
+        "ignored.code",
+        None,
+        None,
+        "ignored".into(),
+    );
+    assert!(diagnostics.is_empty());
+
+    push_policy_diag(
+        &mut diagnostics,
+        UnsupportedBehavior::Warn,
+        "warn.code",
+        Some("warn.plugin".into()),
+        Some("field".into()),
+        "warn".into(),
+    );
+    push_policy_diag(
+        &mut diagnostics,
+        UnsupportedBehavior::Error,
+        "error.code",
+        Some("error.plugin".into()),
+        None,
+        "error".into(),
+    );
+
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0].level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostics[0].component.as_deref(), Some("warn.plugin"));
+    assert_eq!(diagnostics[0].field.as_deref(), Some("field"));
+    assert_eq!(diagnostics[1].level, DiagnosticLevel::Error);
+    assert_eq!(
+        join_error_messages(&ConfigReport {
+            diagnostics,
+            ..ConfigReport::default()
+        }),
+        "error"
+    );
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_component_helpers_and_serialization_error_variant() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let config = PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("alpha.plugin"),
+            PluginComponentSpec::new("beta.plugin"),
+            PluginComponentSpec::new("alpha.plugin"),
+        ],
+        ..PluginConfig::default()
+    };
+
+    let totals = plugin_component_totals(&config);
+    assert_eq!(totals.get("alpha.plugin"), Some(&2));
+    assert_eq!(totals.get("beta.plugin"), Some(&1));
+    assert_eq!(
+        component_namespace("alpha.plugin", 1),
+        "nemo-relay-plugin.v1.alpha.plugin:1:"
+    );
+    assert_eq!(
+        component_namespace("beta.plugin", 1),
+        "nemo-relay-plugin.v1.beta.plugin:1:"
+    );
+    assert_eq!(
+        component_namespace("alpha/plugin:π%", 2),
+        "nemo-relay-plugin.v1.alpha%2Fplugin%3A%CF%80%25:2:"
+    );
+
+    let parse_error = serde_json::from_str::<PluginConfig>("{").unwrap_err();
+    let wrapped: PluginError = parse_error.into();
+    match wrapped {
+        PluginError::Serialization(message) => {
+            assert!(!message.to_string().is_empty());
+        }
+        other => panic!("unexpected conversion result: {other}"),
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_component_effective_names_escape_and_discover_fields() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let namespace = component_namespace("analytics/plugin:π%", 1);
+    let mut plugin_context = PluginRegistrationContext::with_plugin_component_namespace(
+        namespace,
+        Diagnostics::process_default(),
+    );
+    let mut global_registration_context = PluginRegistrationContext::new();
+    plugin_context
+        .register_subscriber("cache/value:π%", Arc::new(|_| {}))
+        .unwrap();
+    global_registration_context
+        .register_subscriber("global:subscriber", Arc::new(|_| {}))
+        .unwrap();
+    global_registration_context
+        .register_subscriber(
+            "__nemo_relay_plugin__analytics__1__subscriber",
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+
+    let registrations =
+        list_runtime_registrations(Some(&BTreeSet::from([RuntimeRegistrationKind::Subscriber])))
+            .unwrap();
+    let plugin_registration = registrations
+        .iter()
+        .find(|registration| registration.local_name == "cache/value:π%")
+        .unwrap();
+    assert_eq!(
+        plugin_registration.effective_name,
+        "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:cache%2Fvalue%3A%CF%80%25"
+    );
+    assert_eq!(
+        plugin_registration.owner.plugin_kind.as_deref(),
+        Some("analytics/plugin:π%")
+    );
+    assert_eq!(plugin_registration.owner.component_ordinal, Some(1));
+
+    let global_registration = registrations
+        .iter()
+        .find(|registration| registration.effective_name == "global:subscriber")
+        .unwrap();
+    assert_eq!(global_registration.local_name, "global:subscriber");
+    assert_eq!(
+        global_registration.owner.kind,
+        RuntimeRegistrationOwnerKind::GlobalApi
+    );
+    assert_eq!(global_registration.owner.component_ordinal, None);
+
+    let legacy_style_global_registration = registrations
+        .iter()
+        .find(|registration| {
+            registration.effective_name == "__nemo_relay_plugin__analytics__1__subscriber"
+        })
+        .unwrap();
+    assert_eq!(
+        legacy_style_global_registration.owner.kind,
+        RuntimeRegistrationOwnerKind::GlobalApi
+    );
+    assert_eq!(
+        legacy_style_global_registration.owner.component_ordinal,
+        None
+    );
+
+    let child_context = plugin_context.with_child_namespace("profile/π:");
+    assert_eq!(
+        child_context.qualify_name("subscriber%"),
+        "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:profile%2F%CF%80%3Asubscriber%25"
+    );
+    assert!(
+        decode_plugin_component_effective_name(
+            "nemo-relay-plugin.v1.analytics%2Fplugin%3A%CF%80%25:1:cache%2Fvalue%3A%CF%80%25"
+        )
+        .is_some()
+    );
+    assert!(
+        decode_plugin_component_effective_name(
+            "nemo-relay-plugin.v1.analytics/plugin:1:subscriber"
+        )
+        .is_none()
+    );
+    assert!(
+        decode_plugin_component_effective_name("nemo-relay-plugin.v1.analytics:0:subscriber")
+            .is_none()
+    );
+    assert!(
+        decode_plugin_component_effective_name("__nemo_relay_plugin__analytics__1__subscriber")
+            .is_none()
+    );
+
+    let mut plugin_registrations = plugin_context.into_registrations();
+    rollback_registrations(&mut plugin_registrations);
+    let mut global_registrations = global_registration_context.into_registrations();
+    rollback_registrations(&mut global_registrations);
+    reset_global();
+}
+
+#[test]
+fn test_registration_context_namespace_and_manual_registration_helpers() {
+    let mut ctx = PluginRegistrationContext::with_namespace("demo::");
+    assert_eq!(ctx.qualify_name("subscriber"), "demo::subscriber");
+
+    ctx.add_registration(PluginRegistration::new(
+        "plugin",
+        "demo::manual".to_string(),
+        Box::new(|| Ok(())),
+    ));
+    ctx.extend_registrations(vec![PluginRegistration::new(
+        "plugin",
+        "demo::extra".to_string(),
+        Box::new(|| Ok(())),
+    )]);
+
+    let names = ctx
+        .into_registrations()
+        .into_iter()
+        .map(|registration| registration.name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["demo::manual", "demo::extra"]);
+}
+
+#[test]
+fn test_plugin_registration_context_covers_all_registration_helpers() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("demo::");
+    ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
+        .unwrap();
+    ctx.register_event_metadata_injector(
+        "event-metadata",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(BTreeMap::new()) })),
+    )
+    .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    ctx.register_tool_execution_intercept(
+        "tool-exec",
+        1,
+        Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
+    )
+    .unwrap();
+    ctx.register_llm_request_intercept(
+        "llm-request",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+        }),
+    )
+    .unwrap();
+    ctx.register_llm_execution_intercept(
+        "llm-exec",
+        1,
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
+    )
+    .unwrap();
+    ctx.register_llm_stream_execution_intercept(
+        "llm-stream",
+        1,
+        Arc::new(|_name, request, _context, _next| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
+            })
+        }),
+    )
+    .unwrap();
+
+    let mut registrations = ctx.into_registrations();
+    let names = registrations
+        .iter()
+        .map(|registration| registration.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            "demo::subscriber",
+            "demo::event-metadata",
+            "demo::tool-request",
+            "demo::tool-exec",
+            "demo::llm-request",
+            "demo::llm-exec",
+            "demo::llm-stream",
+        ]
+    );
+
+    rollback_registrations(&mut registrations);
+    assert!(registrations.is_empty());
+    reset_global();
+}
+
+#[test]
+fn test_rollback_registrations_runs_in_reverse_and_retains_failures_for_retry() {
+    let mut registrations = vec![];
+    let call_order = Arc::new(Mutex::new(Vec::new()));
+
+    let first_order = Arc::clone(&call_order);
+    registrations.push(PluginRegistration::new(
+        "plugin",
+        "first",
+        Box::new(move || {
+            first_order.lock().unwrap().push("first");
+            Ok(())
+        }),
+    ));
+
+    let panic_order = Arc::clone(&call_order);
+    let panic_attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_panic_attempts = Arc::clone(&panic_attempts);
+    registrations.push(PluginRegistration::new(
+        "plugin",
+        "panicking",
+        Box::new(move || {
+            panic_order.lock().unwrap().push("panicking");
+            if cleanup_panic_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("expected rollback panic");
+            }
+            Ok(())
+        }),
+    ));
+
+    let second_order = Arc::clone(&call_order);
+    let second_attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_second_attempts = Arc::clone(&second_attempts);
+    registrations.push(PluginRegistration::new(
+        "plugin",
+        "second",
+        Box::new(move || {
+            second_order.lock().unwrap().push("second");
+            if cleanup_second_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(PluginError::RegistrationFailed(
+                    "expected rollback failure".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }),
+    ));
+
+    let first = rollback_registrations(&mut registrations);
+
+    assert!(!first.callbacks_cleared());
+    assert_eq!(first.errors().len(), 2);
+    assert_eq!(
+        registrations
+            .iter()
+            .map(|registration| registration.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["panicking", "second"]
+    );
+    assert_eq!(
+        *call_order.lock().unwrap(),
+        vec!["second", "panicking", "first"]
+    );
+
+    let retry = rollback_registrations(&mut registrations);
+    assert!(retry.callbacks_cleared());
+    assert!(retry.errors().is_empty());
+    assert!(registrations.is_empty());
+    assert_eq!(
+        *call_order.lock().unwrap(),
+        vec!["second", "panicking", "first", "second", "panicking"]
+    );
+}
+
+#[test]
+fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let err = runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap_err();
+
+    match err {
+        PluginError::RegistrationFailed(message) => {
+            assert!(message.contains("partial.fail.plugin refused to finish initialization"));
+        }
+        other => panic!("unexpected partial registration failure: {other}"),
+    }
+
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let registered = Arc::new(Notify::new());
+    register_plugin(Arc::new(BlockingPlugin {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+        registered: Arc::clone(&registered),
+    }))
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let caller = tokio::spawn(crate::dynamic::PluginHostActivation::initialize_exact(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("blocking.plugin")],
+                ..PluginConfig::default()
+            },
+        ));
+        started.notified().await;
+        caller.abort();
+        match caller.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("cancelled host initializer unexpectedly returned"),
+        }
+        release.notify_one();
+        registered.notified().await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if !plugin_configuration_is_active().unwrap() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("orphaned activation did not close after caller cancellation");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if *PLUGIN_MUTATION_OWNER.lock().unwrap() == PluginMutationOwner::Idle {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned initialization transaction did not release its mutation lease");
+    });
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_runtime_continues_driving_background_tasks_after_initialization() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let release = Arc::new(Notify::new());
+    let completed = Arc::new(Notify::new());
+    register_plugin(Arc::new(BackgroundTaskPlugin {
+        release: Arc::clone(&release),
+        completed: Arc::clone(&completed),
+    }))
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("background.task.plugin")],
+            ..PluginConfig::default()
+        })
+        .await
+        .unwrap();
+
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), completed.notified())
+            .await
+            .expect("plugin runtime should keep driving spawned background tasks");
+    });
+
+    reset_global();
+}
+
+#[test]
+fn test_pending_registration_records_rollback_failures() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new(
+            "fixture",
+            "failed-rollback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(
+                    "rollback remained registered".into(),
+                ))
+            }),
+        )]);
+    }
+
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("failed-rollback"));
+    assert!(failures[0].contains("rollback remained registered"));
+}
+
+#[test]
+fn test_pending_rollbacks_ignore_delivery_only_errors() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let delivery_error = || {
+        PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+            "delivery failed".into(),
+        ))
+    };
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "delivery-only-registration",
+            Box::new(delivery_error),
+        )]);
+    }
+    {
+        let mut pending = PendingPluginRegistrationContext::new(
+            "fixture.".into(),
+            Some(Arc::clone(&failures)),
+            Diagnostics::process_default(),
+        );
+        pending
+            .context
+            .add_registration(PluginRegistration::new_with_outcome(
+                "fixture",
+                "delivery-only-context-registration",
+                Box::new(delivery_error),
+            ));
+    }
+
+    assert!(failures.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_checked_teardown_reports_unremoved_registrations() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-callback",
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(PluginError::RegistrationFailed(
+                        "deregistration refused".into(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-callback"), "{error}");
+    assert!(error.contains("deregistration refused"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+#[test]
+fn test_teardown_marker_text_does_not_imply_successful_removal() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-marker-callback",
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(PluginError::RegistrationFailed(format!(
+                        "unrelated failure mentioning {}",
+                        crate::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                    )))
+                } else {
+                    Ok(())
+                }
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-marker-callback"), "{error}");
+    assert!(error.contains("could not be removed"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    reset_global();
+}
+
+#[test]
+fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                let error = PluginError::RegistrationFailed(format!(
+                    "{}: atif.remote_delivery_failed (1)",
+                    crate::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                ));
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("atif.remote_delivery_failed"), "{error}");
+    assert!(!error.contains("could not be removed"), "{error}");
+    let report = outcome
+        .report
+        .expect("failed teardown should return its report to the owning handle");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    let diagnostic = &report.runtime_diagnostics[0];
+    assert_eq!(diagnostic.code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(diagnostic.message, "HTTP 500");
+    assert_eq!(diagnostic.session_id.as_deref(), Some("session-123"));
+
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_are_active_only_and_aggregated_by_code() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for diagnostic in [
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: None,
+            message: "first zeta".into(),
+            session_id: None,
+            count: 2,
+        },
+        RuntimeDiagnostic {
+            code: "alpha".into(),
+            component: "observability".into(),
+            field: Some("logs[0]".into()),
+            message: "alpha".into(),
+            session_id: None,
+            count: 1,
+        },
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: Some("metrics[0]".into()),
+            message: "latest zeta".into(),
+            session_id: None,
+            count: u64::MAX,
+        },
+    ] {
+        record_active_plugin_runtime_diagnostic(diagnostic);
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code.as_str(),
+                diagnostic.message.as_str(),
+                diagnostic.count
+            ))
+            .collect::<Vec<_>>(),
+        vec![("alpha", "alpha", 1), ("zeta", "latest zeta", u64::MAX)]
+    );
+
+    clear_plugin_configuration_inner();
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_snapshot_is_bounded() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for index in 0..=MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: format!("diagnostic.{index:02}"),
+            component: "observability".into(),
+            field: None,
+            message: "runtime diagnostic".into(),
+            session_id: None,
+            count: 1,
+        });
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS);
+    assert_eq!(
+        diagnostics
+            .first()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("diagnostic.00")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "diagnostic.32")
+    );
+
+    clear_plugin_configuration_inner();
+    reset_global();
+}
+
+#[test]
+fn legacy_runtime_diagnostic_before_activation_does_not_initialize_canonical_collection() {
+    const CHILD: &str = "NEMO_RELAY_TEST_LEGACY_PLUGIN_DIAGNOSTICS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let current = std::thread::current();
+        let name = current.name().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    // The child has no competing tests and has never looked up the process context.
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "plugin.bootstrap_failed".into(),
+        component: "bootstrap".into(),
+        field: None,
+        message: "Plugin bootstrap failed".into(),
+        session_id: None,
+        count: 2,
+    });
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::install_process_default(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .expect("legacy reporting must not implicitly consume the process default");
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(page.components.is_empty());
+    assert!(page.events.is_empty());
+}
+
+#[test]
+fn legacy_plugin_diagnostic_fields_preserve_separate_report_entries() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let component = format!("field-test-{}", uuid::Uuid::now_v7());
+    for (field, count) in [("storage[0]", 2), ("storage[1]", 3)] {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: "plugin.export_failed".into(),
+            component: component.clone(),
+            field: Some(field.into()),
+            message: "Storage export failed".into(),
+            session_id: None,
+            count,
+        });
+    }
+    let state = ACTIVE_PLUGIN_CONFIGURATION.lock().unwrap();
+    let report = &state.as_ref().unwrap().report.runtime_diagnostics;
+    assert_eq!(report.len(), 2);
+    for (field, count) in [("storage[0]", 2), ("storage[1]", 3)] {
+        let entry = report
+            .iter()
+            .find(|entry| entry.field.as_deref() == Some(field))
+            .unwrap();
+        assert_eq!(entry.component, component);
+        assert_eq!(entry.count, count);
+    }
+    drop(state);
+    assert_eq!(
+        active_runtime_diagnostics_snapshot()
+            .iter()
+            .find(|entry| entry.code == "plugin.export_failed")
+            .unwrap()
+            .count,
+        5
+    );
+    clear_plugin_configuration_inner();
+    reset_global();
+}
+
+#[test]
+fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    format!(
+                        "{}: otel.spans_dropped (2)",
+                        crate::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    assert!(outcome.result.is_err());
+    reset_global();
+}
+
+#[test]
+fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup_attempts = Arc::clone(&attempts);
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(move || {
+                if cleanup_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    PluginRegistrationCleanupOutcome::NotRemoved(
+                        PluginError::RegistrationFailed(format!(
+                            "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                            crate::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                        )),
+                    )
+                } else {
+                    PluginRegistrationCleanupOutcome::Removed
+                }
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    assert!(plugin_configuration_is_active().unwrap());
+    let retry = clear_plugin_configuration_inner();
+    assert!(retry.callbacks_cleared);
+    retry.result.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_instances() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![
+                PluginComponentSpec::new("recording.plugin"),
+                PluginComponentSpec {
+                    enabled: false,
+                    ..PluginComponentSpec::new("recording.plugin")
+                },
+                PluginComponentSpec::new("recording.plugin"),
+            ],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let names = recorded_names().lock().unwrap().clone();
+    assert_eq!(
+        names,
+        vec![
+            "nemo-relay-plugin.v1.recording.plugin:1:subscriber",
+            "nemo-relay-plugin.v1.recording.plugin:2:subscriber",
+        ]
+    );
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_assigns_ordinal_to_lone_enabled_component() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![
+                PluginComponentSpec::new("recording.plugin"),
+                PluginComponentSpec {
+                    enabled: false,
+                    ..PluginComponentSpec::new("recording.plugin")
+                },
+            ],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    assert_eq!(
+        recorded_names().lock().unwrap().as_slice(),
+        ["nemo-relay-plugin.v1.recording.plugin:1:subscriber"]
+    );
+    reset_global();
+}
+
+#[test]
+fn test_singleton_plugin_registration_discovers_ordinal() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(DiscoverablePlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("discoverable.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let registrations =
+        list_runtime_registrations(Some(&BTreeSet::from([RuntimeRegistrationKind::Subscriber])))
+            .unwrap();
+    let registration = registrations
+        .iter()
+        .find(|registration| registration.local_name == "subscriber")
+        .unwrap();
+    assert_eq!(
+        registration.effective_name,
+        "nemo-relay-plugin.v1.discoverable.plugin:1:subscriber"
+    );
+    assert_eq!(
+        registration.owner.plugin_kind.as_deref(),
+        Some("discoverable.plugin")
+    );
+    assert_eq!(registration.owner.component_ordinal, Some(1));
+
+    test_close_plugin_host().unwrap();
+    reset_global();
+}
+
+#[test]
+fn test_removed_nemo_guardrails_is_not_a_builtin() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("nemo_guardrails")],
+        ..PluginConfig::default()
+    };
+    let report = test_validate_static_plugin_config(&config);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "plugin.unknown_component"
+            && diagnostic.component.as_deref() == Some("nemo_guardrails")
+    }));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(test_initialize_plugin_host_exact(config))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::NotFound(message) if message.contains("nemo_guardrails")));
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_reports_missing_component_during_activation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(VanishingPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(test_initialize_plugin_host_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("vanishing.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap_err();
+
+    match error {
+        PluginError::NotFound(message) => {
+            assert!(message.contains("vanishing.plugin"));
+            assert!(test_plugin_host_report().is_none());
+        }
+        other => panic!("unexpected activation failure: {other}"),
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_supports_guardrail_helpers() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
+    ctx.register_mark_sanitize_guardrail(
+        "mark_sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope_sanitize_start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope_sanitize_end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_request_guardrail(
+        "tool_sanitize_request",
+        1,
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_response_guardrail(
+        "tool_sanitize_response",
+        1,
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
+    )
+    .unwrap();
+    ctx.register_tool_conditional_execution_guardrail(
+        "tool_conditional",
+        1,
+        Arc::new(|name, _args| {
+            Box::pin(
+                async move { Ok((name == "blocked-tool").then(|| "blocked tool".to_string())) },
+            )
+        }),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm_sanitize_request",
+        1,
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm_sanitize_response",
+        1,
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
+    )
+    .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm_conditional",
+        1,
+        Arc::new(|request| {
+            let blocked = request.headers.get("blocked") == Some(&json!(true));
+            Box::pin(async move { Ok(blocked.then(|| "blocked llm".to_string())) })
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    match runtime.block_on(tool_conditional_execution("blocked-tool", &json!({}))) {
+        Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked tool"),
+        other => panic!("expected tool guardrail rejection, got {other:?}"),
+    }
+
+    match runtime.block_on(llm_conditional_execution(&LlmRequest {
+        headers: Map::from_iter([(String::from("blocked"), json!(true))]),
+        content: json!({"messages": []}),
+    })) {
+        Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked llm"),
+        other => panic!("expected llm guardrail rejection, got {other:?}"),
+    }
+
+    let mut registrations = ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+
+    assert!(
+        runtime
+            .block_on(tool_conditional_execution("blocked-tool", &json!({})))
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .block_on(llm_conditional_execution(&LlmRequest {
+                headers: Map::from_iter([(String::from("blocked"), json!(true))]),
+                content: json!({"messages": []}),
+            }))
+            .is_ok()
+    );
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_maps_duplicate_registration_errors() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
+    ctx.register_mark_sanitize_guardrail(
+        "mark",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_mark_sanitize_guardrail(
+            "mark",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
+        "mark sanitizer:",
+    );
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_scope_sanitize_start_guardrail(
+            "scope-start",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
+        "scope-start sanitizer:",
+    );
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_scope_sanitize_end_guardrail(
+            "scope-end",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
+        "scope-end sanitizer:",
+    );
+    ctx.register_llm_request_intercept(
+        "llm-request",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+        }),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_request_intercept(
+            "llm-request",
+            1,
+            false,
+            Arc::new(|_name, request, annotated| {
+                Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+            }),
+        ),
+        "llm request intercept:",
+    );
+
+    ctx.register_tool_sanitize_request_guardrail(
+        "tool-sanitize-request",
+        1,
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_sanitize_request_guardrail(
+            "tool-sanitize-request",
+            1,
+            Arc::new(|_, args| Box::pin(async move { Ok(args) })),
+        ),
+        "tool sanitize request guardrail:",
+    );
+
+    ctx.register_tool_sanitize_response_guardrail(
+        "tool-sanitize-response",
+        1,
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_sanitize_response_guardrail(
+            "tool-sanitize-response",
+            1,
+            Arc::new(|_, response| Box::pin(async move { Ok(response) })),
+        ),
+        "tool sanitize response guardrail:",
+    );
+
+    ctx.register_tool_conditional_execution_guardrail(
+        "tool-conditional",
+        1,
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_conditional_execution_guardrail(
+            "tool-conditional",
+            1,
+            Arc::new(|_, _| Box::pin(async { Ok(None) })),
+        ),
+        "tool conditional execution guardrail:",
+    );
+
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        1,
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-sanitize-request",
+            1,
+            Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
+        ),
+        "llm sanitize request guardrail:",
+    );
+
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm-sanitize-response",
+        1,
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_sanitize_response_guardrail(
+            "llm-sanitize-response",
+            1,
+            Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
+        ),
+        "llm sanitize response guardrail:",
+    );
+
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_conditional_execution_guardrail(
+            "llm-conditional",
+            1,
+            Arc::new(|_| Box::pin(async { Ok(None) })),
+        ),
+        "llm conditional execution guardrail:",
+    );
+
+    ctx.register_llm_execution_intercept(
+        "llm-exec",
+        1,
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_execution_intercept(
+            "llm-exec",
+            1,
+            Arc::new(|_name, request, _context, _next| {
+                Box::pin(async move { Ok(request.content) })
+            }),
+        ),
+        "llm execution intercept:",
+    );
+
+    ctx.register_llm_stream_execution_intercept(
+        "llm-stream",
+        1,
+        Arc::new(|_name, request, _context, _next| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
+            })
+        }),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_llm_stream_execution_intercept(
+            "llm-stream",
+            1,
+            Arc::new(|_name, request, _context, _next| {
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                        request.content
+                    )])))
+                })
+            }),
+        ),
+        "llm stream execution intercept:",
+    );
+
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_request_intercept(
+            "tool-request",
+            1,
+            false,
+            Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+        ),
+        "tool request intercept:",
+    );
+
+    ctx.register_tool_execution_intercept(
+        "tool-exec",
+        1,
+        Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
+    )
+    .unwrap();
+    expect_registration_failed(
+        ctx.register_tool_execution_intercept(
+            "tool-exec",
+            1,
+            Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
+        ),
+        "tool execution intercept:",
+    );
+
+    let mut registrations = ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+    reset_global();
+}
+
+#[test]
+fn test_plugin_registration_context_maps_deregistration_errors() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
+    ctx.register_mark_sanitize_guardrail(
+        "mark-sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-sanitize-start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-sanitize-end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
+    ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
+        .unwrap();
+    ctx.register_llm_request_intercept(
+        "llm-request",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+        }),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_request_guardrail(
+        "tool-sanitize-request",
+        1,
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    ctx.register_tool_sanitize_response_guardrail(
+        "tool-sanitize-response",
+        1,
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
+    )
+    .unwrap();
+    ctx.register_tool_conditional_execution_guardrail(
+        "tool-conditional",
+        1,
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-sanitize-request",
+        1,
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
+    )
+    .unwrap();
+    ctx.register_llm_sanitize_response_guardrail(
+        "llm-sanitize-response",
+        1,
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
+    )
+    .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
+    ctx.register_llm_execution_intercept(
+        "llm-exec",
+        1,
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
+    )
+    .unwrap();
+    ctx.register_llm_stream_execution_intercept(
+        "llm-stream",
+        1,
+        Arc::new(|_name, request, _context, _next| {
+            Box::pin(async move {
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
+            })
+        }),
+    )
+    .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
+    ctx.register_tool_execution_intercept(
+        "tool-exec",
+        1,
+        Arc::new(|context, _next| Box::pin(async move { Ok(context.into_args().into()) })),
+    )
+    .unwrap();
+
+    let mut registrations = ctx.into_registrations();
+    let expected_messages = [
+        "mark sanitizer deregistration failed:",
+        "scope-start sanitizer deregistration failed:",
+        "scope-end sanitizer deregistration failed:",
+        "subscriber deregistration failed:",
+        "llm request intercept deregistration failed:",
+        "tool sanitize request guardrail deregistration failed:",
+        "tool sanitize response guardrail deregistration failed:",
+        "tool conditional execution guardrail deregistration failed:",
+        "llm sanitize request guardrail deregistration failed:",
+        "llm sanitize response guardrail deregistration failed:",
+        "llm conditional execution guardrail deregistration failed:",
+        "llm execution intercept deregistration failed:",
+        "llm stream execution intercept deregistration failed:",
+        "tool request intercept deregistration failed:",
+        "tool execution intercept deregistration failed:",
+    ];
+
+    set_conflicting_runtime_owner_for_tests();
+    for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
+        match registration.cleanup() {
+            PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                message,
+            )) => {
+                assert!(message.contains(expected), "{message}");
+            }
+            PluginRegistrationCleanupOutcome::NotRemoved(other) => {
+                panic!("unexpected deregistration failure: {other}")
+            }
+            PluginRegistrationCleanupOutcome::Removed
+            | PluginRegistrationCleanupOutcome::RemovedWithError(_) => {
+                panic!("expected deregistration to fail")
+            }
+        }
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_load_plugin_config_files_merges_files_by_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let project = dir.path().join("project.toml");
+    let system = dir.path().join("system.toml");
+    std::fs::write(
+        &lower,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"observability\"\n\
+         enabled = true\n\
+         [components.config]\n\
+         output_directory = \"/var/log\"\n\
+         mode = \"append\"\n\
+         values = [\"lower\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &project,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         [components.config]\n\
+         mode = \"project\"\n\
+         values = [\"project\"]\n\
+         [[components]]\n\
+         kind = \"adaptive\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &system,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         mode = \"system\"\n\
+         values = [\"system\"]\n\
+         [[components]]\n\
+         kind = \"system_only\"\n",
+    )
+    .unwrap();
+
+    let (merged, sources) =
+        load_plugin_config_files([lower.clone(), project.clone(), system.clone()])
+            .unwrap()
+            .expect("a file exists");
+    assert_eq!(sources, vec![lower, project, system]);
+
+    let components = merged["components"].as_array().unwrap();
+    let observability = &components[0];
+    assert_eq!(observability["kind"], json!("observability"));
+    assert_eq!(
+        observability["enabled"],
+        json!(true),
+        "a disabled system component does not override lower layers"
+    );
+    assert_eq!(
+        observability["config"]["output_directory"],
+        json!("/var/log"),
+        "lower-only config key is inherited"
+    );
+    assert_eq!(
+        observability["config"]["mode"],
+        json!("project"),
+        "a disabled system component does not contribute configuration"
+    );
+    assert_eq!(
+        observability["config"]["values"],
+        json!(["project", "lower"]),
+        "a disabled system component does not contribute list entries"
+    );
+    assert_eq!(
+        components[1]["kind"],
+        json!("adaptive"),
+        "a project-only component kind is preserved"
+    );
+    assert_eq!(
+        components[2]["kind"],
+        json!("system_only"),
+        "a system-only component kind is appended"
+    );
+}
+
+#[test]
+fn test_load_plugin_config_files_omits_components_disabled_in_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("the files exist");
+
+    assert_eq!(sources, vec![lower, higher]);
+    assert_eq!(merged["components"], json!([]));
+}
+
+#[test]
+fn test_load_plugin_config_files_rejects_version_before_layering() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid = dir.path().join("invalid.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &invalid,
+        "version = 2\n\
+         [[components]]\n\
+         kind = \"observability\"\n",
+    )
+    .unwrap();
+    std::fs::write(&higher, "version = 1\n").unwrap();
+
+    let error = load_plugin_config_files([invalid.clone(), higher])
+        .expect_err("a higher-precedence version must not mask an invalid source version");
+
+    match error {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("plugin config version 2"), "{message}");
+            assert!(
+                message.contains(&invalid.display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains("expected 1"), "{message}");
+        }
+        other => panic!("unexpected plugin config version error: {other}"),
+    }
+}
+
+#[test]
+fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let unreadable = dir.path().join("directory.toml");
+    std::fs::create_dir(&unreadable).unwrap();
+    assert!(
+        load_plugin_config_files([unreadable])
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read")
+    );
+
+    let malformed = dir.path().join("malformed.toml");
+    std::fs::write(&malformed, "version = [").unwrap();
+    assert!(
+        load_plugin_config_files([malformed])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid plugin TOML")
+    );
+
+    assert!(
+        merge_plugin_config_documents([
+            (dir.path().join("typed.toml"), json!({"version": "one"}),)
+        ])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid plugin config version")
+    );
+}
+
+#[test]
+fn test_default_plugin_config_paths_order_user_system() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment = TestConfigEnvironment::set(None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("user");
+
+    assert_eq!(
+        default_plugin_config_paths(Some(user.clone())),
+        vec![
+            user.join("plugins.toml"),
+            system_config_dir().join("plugins.toml"),
+        ]
+    );
+}
+
+#[test]
+fn test_explicit_plugin_config_replaces_user_below_system() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment = TestConfigEnvironment::set(None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let explicit = dir.path().join("explicit.toml");
+    let user = dir.path().join("user");
+
+    assert_eq!(
+        plugin_config_paths(Some(&explicit), Some(user)),
+        vec![explicit, system_config_dir().join("plugins.toml")],
+    );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn test_hook_skips_implicit_plugin_config_paths() {
+    let _environment = TestConfigEnvironment::set(Some(OsStr::new("1")));
+
+    assert!(default_plugin_config_paths(Some(PathBuf::from("/test/user"))).is_empty());
+}
+
+#[test]
+fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment =
+        TestConfigEnvironment::set_variable("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR", None);
+
+    #[cfg(windows)]
+    {
+        let expected_base = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        assert_eq!(system_config_dir(), expected_base.join("nemo-relay"));
+    }
+    #[cfg(not(windows))]
+    assert_eq!(system_config_dir(), PathBuf::from("/etc/nemo-relay"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let physical = dir.path().join("system.toml");
+    let alias = dir.path().join("explicit.toml");
+    std::fs::write(
+        &physical,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"pricing\"\n\
+         [[components.config.sources]]\n\
+         type = \"file\"\n\
+         path = \"/etc/nemo-relay/pricing.json\"\n",
+    )
+    .unwrap();
+    symlink(&physical, &alias).unwrap();
+
+    let (merged, sources) = load_plugin_config_files([alias, physical.clone()])
+        .unwrap()
+        .expect("the physical file exists");
+
+    assert_eq!(sources, vec![physical]);
+    assert_eq!(
+        merged["components"][0]["config"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the aliased file must not duplicate list entries"
+    );
+}
+
+#[test]
+fn test_plugin_config_overlay_enables_programmatically_declared_components() {
+    // After each file's schema version is validated, a typed `PluginConfig` is layered over
+    // the discovered file base. Default-valued policy fields inherit the file, a declared
+    // component applies its enabled value, and the free-form `config` body merges.
+    let file_base = json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": false,
+                "config": { "output_directory": "/var/log", "mode": "append" }
+            },
+            { "kind": "adaptive", "enabled": false, "config": { "ttl": 60 } }
+        ],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            config: Map::from_iter([(String::from("mode"), json!("overwrite"))]),
+            ..PluginComponentSpec::new("observability")
+        }],
+        ..PluginConfig::default()
+    };
+
+    let mut merged = file_base;
+    layer_config(&mut merged, plugin_config_overlay_value(&code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(merged).unwrap();
+
+    // Typed policy defaults do not mask the file base.
+    assert_eq!(typed.version, 1);
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Error,
+        "typed default policy inherits the file value"
+    );
+    let observability = &typed.components[0];
+    assert_eq!(observability.kind, "observability");
+    assert!(
+        observability.enabled,
+        "a declared component is enabled by code"
+    );
+    // The component config body merges: code's `mode` wins, the file's `output_directory`
+    // is inherited.
+    assert_eq!(observability.config["mode"], json!("overwrite"));
+    assert_eq!(observability.config["output_directory"], json!("/var/log"));
+    // A kind the code config does not declare is inherited from the file.
+    assert_eq!(typed.components[1].kind, "adaptive");
+    assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_programmatic_observability_destinations_concatenate_with_discovered_files_and_warn() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![
+        (
+            lower.clone(),
+            observability_destination_document("lower-secret-destination"),
+        ),
+        (
+            higher.clone(),
+            observability_destination_document("higher-secret-destination"),
+        ),
+    ])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": ["programmatic"]},
+        "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+        "atif": {"enabled": true, "storage": ["programmatic"]}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field) in [
+        ("atof", "sinks"),
+        ("opentelemetry", "endpoints"),
+        ("atif", "storage"),
+    ] {
+        assert_eq!(
+            config[section][field],
+            json!([
+                "programmatic",
+                "higher-secret-destination",
+                "lower-secret-destination"
+            ])
+        );
+    }
+    assert_eq!(resolved.diagnostics.len(), 2);
+    for (diagnostic, source) in resolved.diagnostics.iter().zip([lower, higher]) {
+        assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+        assert_eq!(diagnostic.code, "plugin.configuration_inherited");
+        assert!(diagnostic.component.is_none());
+        assert!(diagnostic.field.is_none());
+        assert!(diagnostic.message.contains(&source.display().to_string()));
+        assert!(!diagnostic.message.contains("secret-destination"));
+    }
+}
+
+#[test]
+fn test_resolved_plugin_config_reports_every_contributing_file() {
+    let user = PathBuf::from("user/plugins.toml");
+    let system = PathBuf::from("system/plugins.toml");
+    let resolved = resolve_plugin_config_documents(
+        PluginConfig::default(),
+        None,
+        vec![
+            (user.clone(), json!({"version": 1})),
+            (system.clone(), json!({"version": 1})),
+        ],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.config_paths,
+        vec![user.display().to_string(), system.display().to_string(),]
+    );
+}
+
+#[test]
+fn configuration_inheritance_records_once_per_ambient_source_in_selected_context() {
+    use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticSeverity, DiagnosticsSettings};
+
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let deliveries = Arc::clone(&projected);
+    let _projection = service
+        .subscribe_projection(move |_| {
+            deliveries.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let explicit = PathBuf::from("explicit/plugins.toml");
+    let resolved = resolve_plugin_config_documents(
+        PluginConfig::default(),
+        Some(&explicit),
+        vec![
+            (
+                PathBuf::from("first/private-path.toml"),
+                json!({"version": 1}),
+            ),
+            (explicit.clone(), json!({"version": 1})),
+            (
+                PathBuf::from("second/private-path.toml"),
+                json!({"version": 1}),
+            ),
+        ],
+        Some(&service),
+    )
+    .unwrap();
+    assert_eq!(resolved.config_paths.len(), 3);
+    assert_eq!(resolved.diagnostics.len(), 2);
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.source, *service.source());
+    assert_eq!(view.components.len(), 1);
+    assert_eq!(view.components[0].identity.key, "plugin.configuration");
+    assert!(view.components[0].closed_at.is_some());
+    assert_eq!(view.components[0].counters[0].occurrences.value.get(), 2);
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(view.lifetime.totals.unspecified_total.value.get(), 2);
+    assert_eq!(view.events.len(), 2);
+    assert!(view.events.iter().all(|event| {
+        event.code() == "plugin.configuration_inherited"
+            && event.severity == DiagnosticSeverity::Warning
+            && event.classification.failure_class().is_none()
+    }));
+    assert!(
+        !serde_json::to_string(&view)
+            .unwrap()
+            .contains("private-path")
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|notice| notice.message.contains("private-path"))
+    );
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    let _report_copy = resolved.diagnostics.clone();
+    let reread = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(reread.sequence, view.sequence);
+    assert_eq!(reread.lifetime.totals, view.lifetime.totals);
+}
+
+#[test]
+fn configuration_inheritance_recording_is_best_effort_and_preserves_legacy_results() {
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+
+    let blocked = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let _occupied = blocked
+        .register_component(ComponentRegistration::new("occupied", &[]))
+        .unwrap();
+    let documents = vec![(PathBuf::from("ambient/plugins.toml"), json!({"version": 1}))];
+    let baseline =
+        resolve_plugin_config_documents(PluginConfig::default(), None, documents.clone(), None)
+            .unwrap();
+    for service in [Diagnostics::default(), blocked.clone()] {
+        let resolved = resolve_plugin_config_documents(
+            PluginConfig::default(),
+            None,
+            documents.clone(),
+            Some(&service),
+        )
+        .unwrap();
+        assert_eq!(resolved.resolved_config, baseline.resolved_config);
+        assert_eq!(resolved.config_paths, baseline.config_paths);
+        assert_eq!(
+            serde_json::to_value(resolved.diagnostics).unwrap(),
+            serde_json::to_value(&baseline.diagnostics).unwrap(),
+        );
+        assert_eq!(service.memory_usage().events, 0);
+    }
+    let view = blocked
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.coverage.loss.components_rejected.value.get(), 1);
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 0);
+}
+
+#[test]
+fn configuration_inheritance_and_activation_use_the_same_selected_context() {
+    use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticsSettings};
+
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let resolved = resolve_plugin_config_documents(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..Default::default()
+        },
+        None,
+        vec![(PathBuf::from("ambient/plugins.toml"), json!({"version": 1}))],
+        Some(&service),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            resolved.config,
+            None,
+            resolved.diagnostics,
+            &service,
+        ))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::RegistrationFailed(_)));
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.source, *service.source());
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(
+        view.events
+            .iter()
+            .map(|event| event.code())
+            .collect::<Vec<_>>(),
+        vec![
+            "plugin.configuration_inherited",
+            "plugin.registration_failed"
+        ],
+    );
+    assert!(
+        view.components
+            .iter()
+            .all(|component| component.closed_at.is_some())
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    reset_global();
+}
+
+#[test]
+fn test_no_inherited_configuration_warning_without_discovered_files() {
+    let discovered = resolve_discovered_plugin_config(Vec::new()).unwrap();
+    let resolved = resolve_programmatic_plugin_config(discovered, PluginConfig::default()).unwrap();
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_source() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let discovered = json!({
+        "components": [
+            { "kind": "observability", "enabled": true },
+            { "kind": "observability", "enabled": false }
+        ]
+    });
+    let enabled_sources = HashMap::from([(
+        "observability".to_string(),
+        ComponentEnabledSource {
+            enabled: false,
+            path: source.clone(),
+        },
+    )]);
+    let programmatic = PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("observability"),
+            PluginComponentSpec::new("observability"),
+        ],
+        ..PluginConfig::default()
+    };
+
+    let diagnostics =
+        programmatic_enable_override_diagnostics(&discovered, &enabled_sources, &programmatic);
+
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.code, "plugin.component_reenabled");
+    assert_eq!(diagnostic.component.as_deref(), Some("observability"));
+    assert_eq!(diagnostic.field.as_deref(), Some("enabled"));
+    assert!(
+        diagnostic.message.contains(&source.display().to_string()),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn test_programmatic_reenable_diagnostic_survives_disabled_component_normalization() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let documents = vec![(
+        source.clone(),
+        json!({
+            "components": [{ "kind": "observability", "enabled": false }]
+        }),
+    )];
+    let enabled_sources = component_enabled_sources(&documents);
+    let (discovered, _) = merge_plugin_config_documents(documents)
+        .unwrap()
+        .expect("the file-backed configuration exists");
+    assert_eq!(discovered["components"], json!([]));
+
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered,
+        &enabled_sources,
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("observability")],
+            ..PluginConfig::default()
+        },
+    );
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "plugin.component_reenabled");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains(&source.display().to_string())
+    );
+}
+
+#[test]
+fn test_plugin_config_overlay_applies_non_default_values() {
+    let mut file_base = json!({
+        "version": 1,
+        "components": [{ "kind": "observability", "enabled": true }],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            enabled: false,
+            ..PluginComponentSpec::new("observability")
+        }],
+        policy: ConfigPolicy {
+            unknown_field: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    };
+
+    layer_config(&mut file_base, plugin_config_overlay_value(&code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(file_base).unwrap();
+
+    assert!(!typed.components[0].enabled);
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Error,
+        "a default-valued field inherits the file"
+    );
+    assert_eq!(
+        typed.policy.unknown_field,
+        UnsupportedBehavior::Ignore,
+        "a non-default field overrides the file"
+    );
+}
+
+#[test]
+fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(TestPlugin)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let original = PluginConfig {
+        components: vec![PluginComponentSpec::new("test.plugin")],
+        ..PluginConfig::default()
+    };
+    runtime
+        .block_on(initialize_plugins_exact_inner(
+            original.clone(),
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap();
+    let before = list_runtime_registrations(None).unwrap();
+    assert!(
+        before
+            .iter()
+            .any(|entry| entry.owner.plugin_kind.as_deref() == Some("test.plugin"))
+    );
+
+    runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig::default(),
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap();
+    assert!(plugin_configuration_is_active().unwrap());
+    assert!(
+        list_runtime_registrations(None)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.owner.plugin_kind.as_deref() != Some("test.plugin"))
+    );
+
+    runtime
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap();
+    assert_eq!(list_runtime_registrations(None).unwrap(), before);
+    clear_plugin_configuration_inner().result.unwrap();
+    reset_global();
+}
+
+#[test]
+fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(TestPlugin)).unwrap();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_output_directory = directory.path().join("not-a-directory");
+    std::fs::write(&invalid_output_directory, b"file").unwrap();
+    let mut original = programmatic_observability_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4318/v1/traces"
+            }],
+            "file_sinks": [{
+                "output_directory": invalid_output_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+    original
+        .components
+        .push(PluginComponentSpec::new("test.plugin"));
+    let initial_report = runtime
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap();
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
+
+    std::fs::remove_file(&invalid_output_directory).unwrap();
+    std::fs::create_dir(&invalid_output_directory).unwrap();
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "fixture.preserved".into(),
+        component: "test.plugin".into(),
+        field: None,
+        message: "retain across rollback".into(),
+        session_id: None,
+        count: 2,
+    });
+    let registrations = list_runtime_registrations(None).unwrap();
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    let failures = Arc::new(Mutex::new(vec![]));
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+                ..PluginConfig::default()
+            },
+            Some(failures.clone()),
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refused to finish initialization")
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(failures.lock().unwrap().is_empty());
+    assert_eq!(list_runtime_registrations(None).unwrap(), registrations);
+    let restored = active_runtime_diagnostics_snapshot();
+    assert_eq!(restored.len(), diagnostics.len());
+    assert_eq!(restored[0].code, diagnostics[0].code);
+    assert_eq!(restored[0].message, diagnostics[0].message);
+    assert_eq!(restored[0].count, diagnostics[0].count);
+    let restored_report = ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .report
+        .clone();
+    assert!(
+        !restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
+    clear_plugin_configuration_inner().result.unwrap();
+    reset_global();
+}
+
+#[test]
+fn failed_plugin_replacement_reports_failure_to_restore_the_previous_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+        ..PluginConfig::default()
+    };
+    // A previously active plugin can start refusing registration during recovery.
+    store_active_plugin_configuration(config.clone(), ConfigReport::default(), vec![]).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            config,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::RegistrationFailed(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("previous plugin configuration could not be restored")
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 2);
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+#[test]
+fn replacement_teardown_failure_preserves_diagnostics_and_records_unremoved_callbacks() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let failures = Arc::new(Mutex::new(vec![]));
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "refused-cleanup",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "fixture.cleanup_failed".into(),
+                    component: "fixture".into(),
+                    field: None,
+                    message: "cleanup refused".into(),
+                    session_id: None,
+                    count: 1,
+                });
+                Err(PluginError::RegistrationFailed("cleanup refused".into()))
+            }),
+        )],
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig::default(),
+            Some(failures.clone()),
+            vec![],
+            Diagnostics::process_default(),
+        ))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("previous plugin configuration could not be cleared")
+    );
+    assert!(failures.lock().unwrap()[0].contains("refused-cleanup"));
+    let report = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap();
+    assert_eq!(report.runtime_diagnostics[0].code, "fixture.cleanup_failed");
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+/// Holds the runtime-owner lock because the spawned mutation updates process-global ownership.
+#[test]
+fn owned_plugin_mutation_contains_panics_and_accepts_the_next_operation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(run_owned_plugin_mutation::<(), _, _>(
+            "fixture panic",
+            || async {
+                panic!("injected mutation panic");
+            },
+        ))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::Internal(_)));
+    assert!(error.to_string().contains("fixture panic task failed"));
+    assert_eq!(
+        runtime
+            .block_on(run_owned_plugin_mutation("fixture recovery", || async {
+                Ok(42)
+            }))
+            .unwrap(),
+        42
+    );
+    reset_global();
+}
+
+#[test]
+fn stale_host_lease_cannot_read_or_clear_a_new_owners_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let first = acquire_plugin_host_lease().unwrap();
+    let stale_owner = first.owner_id();
+    drop(first);
+    let current = acquire_plugin_host_lease().unwrap();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let outcome = clear_plugin_configuration_for_host(stale_owner);
+    assert!(!outcome.callbacks_cleared);
+    assert!(matches!(outcome.result, Err(PluginError::Conflict(_))));
+    assert!(matches!(
+        plugin_configuration_report_for_host(stale_owner),
+        Err(PluginError::Conflict(_))
+    ));
+    assert!(
+        plugin_configuration_report_for_host(current.owner_id())
+            .unwrap()
+            .is_some()
+    );
+    clear_plugin_configuration_for_host(current.owner_id())
+        .result
+        .unwrap();
+    drop(current);
+    reset_global();
+}
+
+#[test]
+fn plugin_host_lease_rejects_an_active_static_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let error = acquire_plugin_host_lease()
+        .err()
+        .expect("static configuration owns registrations");
+    assert!(matches!(error, PluginError::Conflict(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("static plugin configuration is already active")
+    );
+    clear_plugin_configuration_inner().result.unwrap();
+    let lease = acquire_plugin_host_lease().unwrap();
+    drop(lease);
+    reset_global();
+}
+
+#[test]
+fn typed_activation_failure_records_once_through_its_scoped_context() {
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let identity = context
+        .diagnostic_recorder
+        .as_ref()
+        .unwrap()
+        .identity()
+        .unwrap()
+        .clone();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&projected);
+    let _guard = service
+        .subscribe_projection(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let error = PluginError::RegistrationFailed("private operation detail".into());
+    context.record_activation_failure(&error);
+    expect_registration_failed(Err(error), "private operation detail");
+    drop(context);
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].component, identity);
+    assert_eq!(page.events[0].code(), "plugin.registration_failed");
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
+    assert!(page.events[0].context.execution.is_none());
+    assert_eq!(
+        page.events[0].classification.failure_class(),
+        Some("unknown")
+    );
+    let row = page
+        .components
+        .iter()
+        .find(|row| row.identity == identity)
+        .unwrap();
+    assert!(row.closed_at.is_some());
+    assert_eq!(row.lifetime.totals.recorded_events_total.value.get(), 1);
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private operation detail")
+    );
+}
+
+#[test]
+fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let identity = context
+        .diagnostic_recorder
+        .as_ref()
+        .unwrap()
+        .identity()
+        .unwrap()
+        .clone();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pending = PendingPluginRegistrationContext {
+            context,
+            rollback_failures: None,
+        };
+        panic!("private panic payload");
+    }));
+    assert!(unwind.is_err());
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].component, identity);
+    assert_eq!(page.events[0].code(), "plugin.internal");
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
+    assert!(page.events[0].context.execution.is_none());
+    assert_eq!(
+        page.events[0].classification.failure_class(),
+        Some("internal")
+    );
+    assert!(page.components[0].closed_at.is_some());
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        1
+    );
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private panic payload")
+    );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn plugin_attribution_uses_selected_context_limit_through_public_initialization() {
+    use nemo_relay_diagnostics::{
+        DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+    };
+    let _guard = lock_runtime_owner();
+    let _config = TestConfigEnvironment::set(Some(OsStr::new("1")));
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 32,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(dynamic::initialize_with_diagnostics(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..Default::default()
+        },
+        None,
+        &service,
+    ));
+    match result {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains("partial.fail.plugin refused to finish initialization"));
+        }
+        _ => panic!("expected the original registration failure"),
+    }
+    let snapshot = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.registration_failed")
+        .unwrap();
+    assert_eq!(
+        event.origin.ownership.responsibility.as_deref(),
+        Some(&component_namespace("partial.fail.plugin", 1)[..32])
+    );
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn plugin_attribution_truncation_preserves_utf8_boundaries() {
+    use nemo_relay_diagnostics::{
+        DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+    };
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 31,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::in_diagnostic_context(
+        &service,
+        Some(PluginRegistrationNamespace::Plain("é".repeat(20))),
+    );
+    context.record_activation_failure(&PluginError::RegistrationFailed("original".into()));
+    let snapshot = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].origin.ownership.responsibility,
+        Some("é".repeat(15))
+    );
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
+}
+
+#[test]
+fn nonfatal_exporter_signal_counters_keep_child_owner_without_event_history() {
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_events: 0,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let responsibility = "test.observability:1";
+    let parent = PluginRegistrationContext::with_plugin_component_namespace(
+        responsibility.to_string(),
+        &service,
+    );
+    let mut child = parent.with_child_namespace("inner");
+    let keys = [
+        "opentelemetry.automatic.traces",
+        "opentelemetry.automatic.logs",
+        "opentelemetry.automatic.metrics",
+    ];
+    for key in keys {
+        child.record_nonfatal_activation_failure(
+            key,
+            Classification::failure(
+                FailureCode::Plugin(PluginFailureCode::Common(
+                    CommonPluginFailureCode::ExporterInitializationFailed,
+                )),
+                FailureClass::PolicyRejected,
+            )
+            .unwrap(),
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some("observability".to_string()),
+                field: None,
+                message: "Plaintext destination rejected".to_string(),
+            },
+        );
+    }
+    assert_eq!(child.activation_diagnostics().len(), 3);
+    drop(child);
+    drop(parent);
+    for key in keys {
+        let snapshot = service
+            .snapshot(&DiagnosticQuery {
+                component_key: Some(key.to_string()),
+                code: Some("plugin.exporter_initialization_failed".to_string()),
+                ownership: ComponentOwnership {
+                    responsibility: Some(responsibility.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert!(snapshot.events.is_empty());
+        assert_eq!(snapshot.components.len(), 1);
+        let row = &snapshot.components[0];
+        assert_eq!(row.identity.key, key);
+        assert!(row.closed_at.is_some());
+        assert_eq!(row.counters.len(), 1);
+        assert_eq!(row.counters[0].occurrences.value.get(), 1);
+        assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    }
+    let parent_snapshot = service
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("plugin.activation".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(parent_snapshot.components.len(), 1);
+    assert_eq!(
+        parent_snapshot.components[0]
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        0
+    );
+    assert!(
+        parent_snapshot.components[0]
+            .counters
+            .iter()
+            .all(|counter| { counter.code != "plugin.exporter_initialization_failed" })
+    );
+}
+
+#[test]
+fn nonfatal_exporter_admission_is_best_effort_and_preserves_legacy_warning() {
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    let blocked = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    for service in [Diagnostics::default(), blocked.clone()] {
+        // The parent retains the only slot in the enabled context.
+        let parent = PluginRegistrationContext::with_diagnostics(&service);
+        let mut child = parent.with_child_namespace("exporters");
+        child.record_nonfatal_activation_failure(
+            "opentelemetry.automatic.traces",
+            Classification::failure(
+                FailureCode::Plugin(PluginFailureCode::Common(
+                    CommonPluginFailureCode::ExporterInitializationFailed,
+                )),
+                FailureClass::Unknown,
+            )
+            .unwrap(),
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "observability.automatic_otel_signal_skipped".to_string(),
+                component: Some("observability".to_string()),
+                field: None,
+                message: "Exporter initialization failed".to_string(),
+            },
+        );
+        assert_eq!(child.activation_diagnostics().len(), 1);
+        assert_eq!(
+            child.activation_diagnostics()[0].message,
+            "Exporter initialization failed"
+        );
+        assert_eq!(service.memory_usage().events, 0);
+    }
+    let snapshot = blocked
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.coverage.loss.components_rejected.value.get(), 1);
+    assert_eq!(
+        snapshot.lifetime.totals.recorded_events_total.value.get(),
+        0
+    );
+}

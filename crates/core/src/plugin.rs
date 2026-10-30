@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! SDK composition and configuration for the runtime-owned plugin host.
+//! SDK composition and configuration for the independent plugin host.
 
 pub use host::{
     ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
     PluginHostReport, Result,
 };
-use nemo_relay_runtime::plugin as host;
+use nemo_relay_plugin_host as host;
 use std::path::PathBuf;
 
 /// Make the default SDK component implementations available to the runtime host.

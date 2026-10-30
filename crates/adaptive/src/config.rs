@@ -3,7 +3,7 @@
 
 //! Canonical adaptive config and diagnostics types.
 
-use nemo_relay_runtime::plugin::ConfigPolicy;
+use nemo_relay_plugin_host::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 

@@ -28,14 +28,13 @@ use ring::{digest, hmac};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use {
-    nemo_relay_runtime::plugin::PluginError,
-    nemo_relay_runtime::plugin::deduplicate_plugin_config_paths,
-    nemo_relay_runtime::plugin::merge_plugin_config_documents,
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::deduplicate_plugin_config_paths,
+    nemo_relay_plugin_host::merge_plugin_config_documents,
 };
 use {
-    nemo_relay_runtime::plugin::dynamic::DYNAMIC_PLUGIN_MANIFEST_FILENAME,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest,
-    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifestLoad,
+    nemo_relay_plugin_host::dynamic::DYNAMIC_PLUGIN_MANIFEST_FILENAME,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifestLoad,
 };
 
 use crate::error::CliError;
@@ -1849,7 +1848,7 @@ pub(crate) fn explicit_plugin_config_path(
 
 fn implicit_plugin_config_paths(user_config_dir: Option<PathBuf>) -> Vec<PathBuf> {
     // The search-path logic lives in core; the gateway shares it so discovery stays identical.
-    nemo_relay_runtime::plugin::default_plugin_config_paths(user_config_dir)
+    nemo_relay_plugin_host::default_plugin_config_paths(user_config_dir)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -1886,7 +1885,7 @@ fn user_config_path() -> Option<PathBuf> {
 /// Resolves the nemo-relay user config DIRECTORY (without trailing filename). Delegates to core's
 /// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
-    nemo_relay_runtime::plugin::user_config_dir()
+    nemo_relay_plugin_host::user_config_dir()
 }
 
 /// Resolves the platform system config directory shared with the core plugin runtime.
@@ -1895,7 +1894,7 @@ pub(crate) fn system_config_dir() -> PathBuf {
     if let Some(path) = TEST_SYSTEM_CONFIG_DIR.with(|value| value.borrow().clone()) {
         return path;
     }
-    nemo_relay_runtime::plugin::system_config_dir()
+    nemo_relay_plugin_host::system_config_dir()
 }
 
 #[cfg(test)]

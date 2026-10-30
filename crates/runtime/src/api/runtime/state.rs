@@ -225,13 +225,13 @@ impl Drop for GuardrailScopeCompletion<'_> {
 /// and arbitrary extension slots used by bindings or integrations.
 pub struct NemoRelayContextState {
     /// Global Event metadata injectors applied before Event sanitizers.
-    pub(crate) event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
+    pub event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
     /// Global mark event field sanitizers.
-    pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    pub mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global scope-start event field sanitizers.
-    pub(crate) scope_sanitize_start_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    pub scope_sanitize_start_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global scope-end event field sanitizers.
-    pub(crate) scope_sanitize_end_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    pub scope_sanitize_end_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global tool request sanitizers applied to emitted tool-start payloads.
     pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Global tool response sanitizers applied to emitted tool-end payloads.
@@ -256,9 +256,9 @@ pub struct NemoRelayContextState {
     pub(crate) llm_stream_execution_intercepts:
         SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Global lifecycle subscribers notified after runtime events are emitted.
-    pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
+    pub event_subscribers: HashMap<String, EventSubscriberFn>,
     /// Whether LLM start events retain complete sanitized request payloads.
-    pub(crate) observability_full_payloads_enabled: bool,
+    pub observability_full_payloads_enabled: bool,
     /// Arbitrary binding- or integration-specific runtime extensions.
     pub(crate) extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
@@ -432,7 +432,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// A vector containing all global subscribers followed by the provided
     /// scope-local subscribers.
-    pub(crate) fn collect_event_subscribers(
+    pub fn collect_event_subscribers(
         &self,
         scope_local_subscribers: &[EventSubscriberFn],
     ) -> Vec<EventSubscriberFn> {
@@ -901,7 +901,7 @@ impl NemoRelayContextState {
     }
 
     /// Snapshot event sanitizer entries in priority order.
-    pub(crate) fn event_sanitize_entries(
+    pub fn event_sanitize_entries(
         global: &SortedRegistry<Guardrail<EventSanitizeFn>>,
         scope_locals: &[&SortedRegistry<Guardrail<EventSanitizeFn>>],
         kind: RuntimeRegistrationKind,
@@ -999,7 +999,7 @@ impl NemoRelayContextState {
         event
     }
     /// Apply an event sanitizer snapshot to the mutable observability fields.
-    pub(crate) async fn event_sanitize_snapshot_chain(
+    pub async fn event_sanitize_snapshot_chain(
         mut event: Event,
         entries: &[Guardrail<EventSanitizeFn>],
     ) -> Event {
@@ -1050,7 +1050,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// Named sanitizer snapshots that can be evaluated after registry locks
     /// are released.
-    pub(crate) fn tool_sanitize_request_entries(
+    pub fn tool_sanitize_request_entries(
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
@@ -1074,7 +1074,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run, or
     /// `None` when a sanitizer failure omits the payload.
-    pub(crate) async fn tool_sanitize_request_snapshot_chain(
+    pub async fn tool_sanitize_request_snapshot_chain(
         name: &str,
         args: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
@@ -1118,7 +1118,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// Named sanitizer snapshots that can be evaluated after registry locks
     /// are released.
-    pub(crate) fn tool_sanitize_response_entries(
+    pub fn tool_sanitize_response_entries(
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
@@ -1143,7 +1143,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// The sanitized JSON payload after every provided guardrail has run, or
     /// `None` when a sanitizer failure omits the payload.
-    pub(crate) async fn tool_sanitize_response_snapshot_chain(
+    pub async fn tool_sanitize_response_snapshot_chain(
         name: &str,
         result: Json,
         entries: &[Guardrail<ToolSanitizeFn>],
@@ -1449,7 +1449,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// Named sanitizer snapshots that can be evaluated after registry locks
     /// are released.
-    pub(crate) fn llm_sanitize_request_entries(
+    pub fn llm_sanitize_request_entries(
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
     ) -> Vec<Guardrail<LlmSanitizeRequestFn>> {
@@ -1472,7 +1472,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// The sanitized [`LlmRequest`] after every provided guardrail has run, or
     /// `None` when a sanitizer errors or panics.
-    pub(crate) async fn llm_sanitize_request_snapshot_chain(
+    pub async fn llm_sanitize_request_snapshot_chain(
         request: LlmRequest,
         context: LlmSanitizeRequestContext,
         entries: &[Guardrail<LlmSanitizeRequestFn>],
@@ -1518,7 +1518,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// Named sanitizer snapshots that can be evaluated after registry locks
     /// are released.
-    pub(crate) fn llm_sanitize_response_entries(
+    pub fn llm_sanitize_response_entries(
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
     ) -> Vec<Guardrail<LlmSanitizeResponseFn>> {
@@ -1541,7 +1541,7 @@ impl NemoRelayContextState {
     /// # Returns
     /// The sanitized response payload after every provided guardrail has run,
     /// or `None` when a sanitizer errors or panics.
-    pub(crate) async fn llm_sanitize_response_snapshot_chain(
+    pub async fn llm_sanitize_response_snapshot_chain(
         response: Json,
         context: LlmSanitizeResponseContext,
         entries: &[Guardrail<LlmSanitizeResponseFn>],

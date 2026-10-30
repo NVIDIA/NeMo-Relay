@@ -210,10 +210,3 @@ pub fn scope_deregister_subscriber(scope_uuid: &uuid::Uuid, name: &str) -> Resul
         .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
     Ok(registries.event_subscribers.remove(name).is_some())
 }
-
-#[cfg(test)]
-/// Bind test exporters to this runtime instance.
-pub fn observability_host() -> std::sync::Arc<dyn nemo_relay_observability::host::ObservabilityHost>
-{
-    crate::observability_runtime::core_host()
-}

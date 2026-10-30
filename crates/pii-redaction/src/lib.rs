@@ -32,10 +32,10 @@ pub mod api {
 #[allow(missing_docs)]
 pub mod plugin {
     pub(crate) use crate::test_support::plugin_host::*;
-    pub use nemo_relay_runtime::plugin::*;
+    pub use nemo_relay_plugin_host::*;
 
     pub fn ensure_builtin_plugins_registered() -> Result<()> {
-        nemo_relay_runtime::plugin::ensure_builtin_plugins_registered()?;
+        nemo_relay_plugin_host::ensure_builtin_plugins_registered()?;
         crate::component::register_pii_redaction_component()
     }
 }

@@ -1,0 +1,3148 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Generic plugin infrastructure for NeMo Relay runtimes.
+//!
+//! This module owns:
+//! - config diagnostics and policy enums used by plugin systems
+//! - a global plugin registry
+//! - plugin registration contexts for middleware/subscriber installation
+//! - rollback bookkeeping for registrations created during plugin setup
+
+#[cfg(test)]
+extern crate self as nemo_relay_plugin_host;
+
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
+use std::num::NonZeroU64;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value as Json};
+
+use nemo_relay_diagnostics::{
+    ComponentRecorder, ComponentRegistration, DiagnosticDetailRef, DiagnosticObservation,
+    Diagnostics, PluginErrorClassifier,
+};
+use nemo_relay_runtime::api::registry::{
+    RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
+    deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_conditional_middleware_guardrail,
+    register_event_metadata_injector, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
+    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail,
+};
+use nemo_relay_runtime::api::runtime::{
+    ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
+    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
+    ToolInterceptFn, ToolSanitizeFn,
+};
+use nemo_relay_runtime::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay_types::diagnostics::{
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentOwnership,
+    DiagnosticClassifier, DiagnosticSeverity, FailureClass, FailureCode, NoticeCode,
+    PluginFailureCode, PluginObservationContext, PluginPhase,
+};
+pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+
+pub use nemo_relay_plugin::component::PluginRegistrar;
+pub use nemo_relay_plugin::component::{
+    ConfigPolicy, Plugin, PluginComponentSpec, PluginError, PluginRegistration,
+    PluginRegistrationCleanupOutcome, RuntimeDiagnostic, UnsupportedBehavior,
+    apply_global_config_policy,
+};
+
+pub mod composition;
+pub mod dynamic;
+pub use dynamic::*;
+
+type PluginMap = HashMap<String, RegisteredPlugin>;
+
+struct RegisteredPlugin {
+    registration_id: u64,
+    owner: PluginRegistrationOwner,
+    plugin: Arc<dyn Plugin>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PluginRegistrationOwner {
+    Builtin,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginDeregistrationOutcome {
+    Removed,
+    Missing,
+    Replaced,
+}
+
+static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
+    LazyLock::new(|| Mutex::new(None));
+static LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT: LazyLock<Mutex<Option<ConfigReport>>> =
+    LazyLock::new(|| Mutex::new(None));
+static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
+    LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
+static NEXT_PLUGIN_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_PLUGIN_HOST_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+static PLUGIN_MUTATION_EXECUTOR: OnceLock<PluginMutationSender> = OnceLock::new();
+
+type PluginMutationJob = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type PluginMutationSender = tokio::sync::mpsc::UnboundedSender<PluginMutationJob>;
+
+thread_local! {
+    static IN_PLUGIN_MUTATION_EXECUTOR: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginMutationOwner {
+    Idle,
+    Host(u64),
+}
+
+/// Specialized [`Result`](std::result::Result) type for plugin operations.
+pub type Result<T> = std::result::Result<T, PluginError>;
+
+/// Identifies teardown errors caused by recoverable ATIF delivery failures.
+#[cfg(test)]
+pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
+/// Identifies teardown errors caused by recoverable OpenTelemetry delivery failures.
+#[cfg(test)]
+pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
+    "OpenTelemetry runtime delivery failures";
+
+/// Canonical plugin configuration document.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PluginConfig {
+    /// Plugin config schema version.
+    #[serde(default = "default_plugin_config_version")]
+    pub version: u32,
+    /// Ordered list of top-level plugin components to validate and activate.
+    #[serde(default)]
+    pub components: Vec<PluginComponentSpec>,
+    /// Plugin-level policy for unsupported plugin kinds, fields, and values.
+    ///
+    /// Non-default field values override the corresponding component policy.
+    #[serde(default)]
+    pub policy: ConfigPolicy,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            version: default_plugin_config_version(),
+            components: vec![],
+            policy: ConfigPolicy::default(),
+        }
+    }
+}
+
+/// Structured configuration and activation report.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigReport {
+    /// Configuration and activation diagnostics in evaluation order.
+    #[serde(default)]
+    pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Runtime delivery diagnostics recorded after activation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_diagnostics: Vec<RuntimeDiagnostic>,
+}
+
+/// Read-only projection of runtime diagnostics exposed to dynamic plugins.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RuntimeDiagnosticsSnapshotEntry {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) count: u64,
+}
+
+const MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS: usize = 32;
+
+impl ConfigReport {
+    /// Returns `true` when the report contains at least one error diagnostic.
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|diag| diag.level == DiagnosticLevel::Error)
+    }
+}
+
+fn default_plugin_config_version() -> u32 {
+    1
+}
+
+/// Context provided to plugin handlers during runtime registration.
+///
+/// Each `register_*` call both installs the middleware/subscriber into the
+/// NeMo Relay runtime and records the inverse deregistration closure so the host
+/// can roll back partial setup on failure.
+pub struct PluginRegistrationContext {
+    registrations: Vec<PluginRegistration>,
+    activation_diagnostics: Vec<ConfigDiagnostic>,
+    namespace: Option<PluginRegistrationNamespace>,
+    diagnostics: Diagnostics,
+    diagnostic_ownership: ComponentOwnership,
+    // Best-effort admission is separate from the enabled/disabled recorder facade.
+    diagnostic_recorder: Option<ComponentRecorder>,
+}
+
+// This adapter observes component registration failures and activation unwinds.
+// It supplies Activation with no execution mechanism. Configuration resolution,
+// native/worker operations, and runtime/policy producers have separate boundaries.
+const PLUGIN_ACTIVATION_CODES: &[BuiltinDiagnosticCode] = &[
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ConfigurationInvalid,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::StateConflict,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ResourceNotFound,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::SerializationFailed,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::Internal,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::RegistrationFailed,
+    ))),
+];
+
+const PLUGIN_EXPORTER_INITIALIZATION_CODES: &[BuiltinDiagnosticCode] =
+    &[BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
+        PluginFailureCode::Common(CommonPluginFailureCode::ExporterInitializationFailed),
+    ))];
+
+impl Default for PluginRegistrationContext {
+    fn default() -> Self {
+        Self::with_diagnostics(Diagnostics::process_default())
+    }
+}
+
+enum PluginRegistrationNamespace {
+    Plain(String),
+    PluginComponent(String),
+}
+
+impl PluginRegistrationContext {
+    /// Return the diagnostics context selected for this plugin activation.
+    pub fn diagnostics(&self) -> &Diagnostics {
+        &self.diagnostics
+    }
+
+    /// Creates an empty plugin registration context.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates an activation context using the owner's selected diagnostics context.
+    ///
+    /// Diagnostic admission failure never prevents plugin registration. Disabled
+    /// collection supplies the same inert recorder interface without producer checks.
+    pub fn with_diagnostics(diagnostics: &Diagnostics) -> Self {
+        Self::in_diagnostic_context(diagnostics, None)
+    }
+
+    fn in_diagnostic_context(
+        diagnostics: &Diagnostics,
+        namespace: Option<PluginRegistrationNamespace>,
+    ) -> Self {
+        let responsibility = namespace.as_ref().map(|namespace| {
+            let (PluginRegistrationNamespace::Plain(name)
+            | PluginRegistrationNamespace::PluginComponent(name)) = namespace;
+            // This is descriptive metadata. Keep even the temporary adapter copy bounded.
+            let mut end = name
+                .len()
+                .min(diagnostics.limits().max_identity_bytes.min(128));
+            while !name.is_char_boundary(end) {
+                end -= 1;
+            }
+            name[..end].to_owned()
+        });
+        let diagnostic_ownership = ComponentOwnership {
+            responsibility,
+            ..ComponentOwnership::default()
+        };
+        let registration = ComponentRegistration {
+            ownership: diagnostic_ownership.clone(),
+            ..ComponentRegistration::new("plugin.activation", PLUGIN_ACTIVATION_CODES)
+        };
+        Self {
+            registrations: vec![],
+            activation_diagnostics: vec![],
+            namespace,
+            diagnostics: diagnostics.clone(),
+            diagnostic_ownership,
+            diagnostic_recorder: diagnostics.register_component(registration).ok(),
+        }
+    }
+
+    /// Creates a plugin registration context that namespaces all registration names.
+    pub fn with_namespace(namespace: impl Into<String>) -> Self {
+        Self::in_diagnostic_context(
+            Diagnostics::process_default(),
+            Some(PluginRegistrationNamespace::Plain(namespace.into())),
+        )
+    }
+
+    fn with_plugin_component_namespace(namespace: String, diagnostics: &Diagnostics) -> Self {
+        Self::in_diagnostic_context(
+            diagnostics,
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)),
+        )
+    }
+
+    fn record_activation_failure(&self, error: &PluginError) {
+        if let Some(recorder) = &self.diagnostic_recorder {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    PluginErrorClassifier.classify(error),
+                    DiagnosticDetailRef::Text("Plugin component activation failed"),
+                    NonZeroU64::MIN,
+                )
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation.into()),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+    }
+
+    fn record_activation_unwind(&self) {
+        if let Some(recorder) = &self.diagnostic_recorder {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    Classification::failure(
+                        FailureCode::Plugin(PluginFailureCode::Common(
+                            CommonPluginFailureCode::Internal,
+                        )),
+                        FailureClass::Internal,
+                    )
+                    .expect("catalogue permits internal plugin failure"),
+                    "Plugin component activation unwound",
+                    NonZeroU64::MIN,
+                )
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation.into()),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+    }
+
+    /// Creates a child context that extends this context's namespace.
+    ///
+    /// Child contexts preserve Relay-created plugin component qualification so
+    /// their local namespace segments and registration names remain encoded as
+    /// one effective component name.
+    pub fn with_child_namespace(&self, local_namespace: &str) -> Self {
+        let namespace = match &self.namespace {
+            Some(PluginRegistrationNamespace::Plain(namespace)) => {
+                PluginRegistrationNamespace::Plain(format!("{namespace}{local_namespace}"))
+            }
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)) => {
+                PluginRegistrationNamespace::PluginComponent(format!(
+                    "{namespace}{}",
+                    encode_plugin_component_field(local_namespace)
+                ))
+            }
+            None => PluginRegistrationNamespace::Plain(local_namespace.to_string()),
+        };
+        Self {
+            registrations: vec![],
+            activation_diagnostics: vec![],
+            namespace: Some(namespace),
+            diagnostics: self.diagnostics.clone(),
+            diagnostic_ownership: self.diagnostic_ownership.clone(),
+            diagnostic_recorder: self.diagnostic_recorder.clone(),
+        }
+    }
+
+    /// Returns the runtime-qualified name for a plugin-local registration.
+    ///
+    /// Plugin handlers should pass stable component-local names such as
+    /// `"tool"` or `"subscriber"`. The host applies the namespace so users do
+    /// not have to provide component instance ids.
+    pub fn qualify_name(&self, name: &str) -> String {
+        match &self.namespace {
+            Some(PluginRegistrationNamespace::Plain(namespace)) => format!("{namespace}{name}"),
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)) => {
+                format!("{namespace}{}", encode_plugin_component_field(name))
+            }
+            None => name.to_string(),
+        }
+    }
+
+    pub(crate) fn uses_plugin_component_namespace(&self) -> bool {
+        matches!(
+            &self.namespace,
+            Some(PluginRegistrationNamespace::PluginComponent(_))
+        )
+    }
+
+    /// Registers an event subscriber and records its rollback closure.
+    pub fn register_subscriber(&mut self, name: &str, callback: EventSubscriberFn) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_subscriber(&qualified_name, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("subscriber: {err}")))?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_subscriber(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "subscriber deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a global conditional middleware guardrail and records its
+    /// rollback closure.
+    pub fn register_conditional_middleware_guardrail(
+        &mut self,
+        name: &str,
+        kinds: BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        guardrail: ConditionalMiddlewareGuardrailFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_conditional_middleware_guardrail(
+            &qualified_name,
+            kinds,
+            registration_name,
+            guardrail,
+        )
+        .map_err(|err| {
+            PluginError::RegistrationFailed(format!("conditional middleware guardrail: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_conditional_middleware_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "conditional middleware guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an Event metadata injector and records its rollback closure.
+    pub fn register_event_metadata_injector(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventMetadataInjectorFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_event_metadata_injector(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("event metadata injector: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_event_metadata_injector(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "event metadata injector deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+    /// Registers a mark event sanitizer and records its rollback closure.
+    pub fn register_mark_sanitize_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_mark_sanitize_guardrail(&qualified_name, priority, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("mark sanitizer: {err}")))?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_mark_sanitize_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "mark sanitizer deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a scope-start event sanitizer and records its rollback closure.
+    pub fn register_scope_sanitize_start_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_scope_sanitize_start_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("scope-start sanitizer: {err}")),
+        )?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_scope_sanitize_start_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "scope-start sanitizer deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a scope-end event sanitizer and records its rollback closure.
+    pub fn register_scope_sanitize_end_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_scope_sanitize_end_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("scope-end sanitizer: {err}")),
+        )?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_scope_sanitize_end_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "scope-end sanitizer deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM request intercept and records its rollback closure.
+    pub fn register_llm_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: LlmRequestInterceptFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_request_intercept(&qualified_name, priority, break_chain, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("llm request intercept: {err}")),
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_request_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm request intercept deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool sanitize-request guardrail and records its rollback closure.
+    pub fn register_tool_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_sanitize_request_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("tool sanitize request guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_sanitize_request_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool sanitize request guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool sanitize-response guardrail and records its rollback closure.
+    pub fn register_tool_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_sanitize_response_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("tool sanitize response guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_sanitize_response_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool sanitize response guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool conditional-execution guardrail and records its rollback closure.
+    pub fn register_tool_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolConditionalFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_conditional_execution_guardrail(&qualified_name, priority, callback)
+            .map_err(|err| {
+                PluginError::RegistrationFailed(format!(
+                    "tool conditional execution guardrail: {err}"
+                ))
+            })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_conditional_execution_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool conditional execution guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM sanitize-request guardrail and records its rollback closure.
+    pub fn register_llm_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeRequestFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_sanitize_request_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("llm sanitize request guardrail: {err}")),
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_sanitize_request_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm sanitize request guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM sanitize-response guardrail and records its rollback closure.
+    pub fn register_llm_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeResponseFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_sanitize_response_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!("llm sanitize response guardrail: {err}"))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_sanitize_response_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm sanitize response guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM conditional-execution guardrail and records its rollback closure.
+    pub fn register_llm_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmConditionalFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_conditional_execution_guardrail(&qualified_name, priority, callback).map_err(
+            |err| {
+                PluginError::RegistrationFailed(format!(
+                    "llm conditional execution guardrail: {err}"
+                ))
+            },
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_conditional_execution_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm conditional execution guardrail deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM execution intercept and records its rollback closure.
+    pub fn register_llm_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmExecutionFn,
+    ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm execution intercept",
+            register_llm_execution_intercept,
+            deregister_llm_execution_intercept,
+        )
+    }
+
+    /// Registers an LLM stream execution intercept and records its rollback closure.
+    pub fn register_llm_stream_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmStreamExecutionFn,
+    ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm stream execution intercept",
+            register_llm_stream_execution_intercept,
+            deregister_llm_stream_execution_intercept,
+        )
+    }
+
+    fn register_execution_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+        kind: &'static str,
+        register: fn(&str, i32, F) -> nemo_relay_types::error::Result<()>,
+        deregister: fn(&str) -> nemo_relay_types::error::Result<bool>,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register(&qualified_name, priority, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("{kind}: {err}")))?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister(&name_owned).map(|_| ()).map_err(|err| {
+                    PluginError::RegistrationFailed(format!("{kind} deregistration failed: {err}"))
+                })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool request intercept and records its rollback closure.
+    pub fn register_tool_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: ToolInterceptFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_request_intercept(&qualified_name, priority, break_chain, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("tool request intercept: {err}")),
+        )?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_request_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool request intercept deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a tool execution intercept that receives the full
+    /// [`ToolExecutionContext`](nemo_relay_runtime::api::runtime::ToolExecutionContext) and
+    /// records its rollback closure.
+    pub fn register_tool_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolExecutionFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_tool_execution_intercept(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("tool execution intercept: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_tool_execution_intercept(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "tool execution intercept deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Adds a prebuilt registration to the context.
+    pub fn add_registration(&mut self, registration: PluginRegistration) {
+        self.registrations.push(registration);
+    }
+
+    /// Extends the context with prebuilt registrations.
+    pub fn extend_registrations(&mut self, registrations: Vec<PluginRegistration>) {
+        self.registrations.extend(registrations);
+    }
+
+    pub(crate) fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
+        self.activation_diagnostics.push(diagnostic);
+    }
+
+    /// Record a nonfatal exporter failure under its stable, bounded signal key.
+    /// Keep the plugin owner attribution; endpoint values never enter the identity.
+    /// This scoped recorder closes after the attempt, retaining bounded history.
+    /// Admission failure or disabled diagnostics never suppresses the legacy warning.
+    pub(crate) fn record_nonfatal_activation_failure(
+        &mut self,
+        component_key: &'static str,
+        classification: Classification,
+        diagnostic: ConfigDiagnostic,
+    ) {
+        let registration = ComponentRegistration {
+            ownership: self.diagnostic_ownership.clone(),
+            ..ComponentRegistration::new(component_key, PLUGIN_EXPORTER_INITIALIZATION_CODES)
+        };
+        if let Ok(recorder) = self.diagnostics.register_component(registration) {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    classification,
+                    DiagnosticDetailRef::Text(&diagnostic.message),
+                    NonZeroU64::MIN,
+                )
+                .with_severity(DiagnosticSeverity::Warning)
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation.into()),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+        self.record_activation_diagnostic(diagnostic);
+    }
+
+    /// Diagnostics accumulated while activating this component.
+    pub fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
+        &self.activation_diagnostics
+    }
+
+    /// Consumes the context and returns the recorded registrations.
+    pub fn into_registrations(self) -> Vec<PluginRegistration> {
+        self.registrations
+    }
+}
+
+/// Registers a plugin by kind.
+///
+/// Registering the same kind twice returns [`PluginError::RegistrationFailed`].
+/// Register a plugin kind with the global plugin registry.
+///
+/// Registered plugins can then participate in validation and initialization of
+/// [`PluginConfig`] documents.
+///
+/// # Parameters
+/// - `plugin`: Plugin implementation to register.
+///
+/// # Returns
+/// A plugin [`Result`] that is `Ok(())` when the plugin kind was added
+/// to the registry.
+///
+/// # Errors
+/// Returns an error when a plugin with the same kind is already registered or
+/// when the registry lock is poisoned.
+///
+/// # Notes
+/// Registration affects future validation and initialization only.
+pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::External).map(|_| ())
+}
+
+pub(crate) fn register_plugin_tracked(plugin: Arc<dyn Plugin>) -> Result<u64> {
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::External)
+}
+
+#[doc(hidden)]
+pub fn register_builtin_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
+    let plugin_kind = plugin.plugin_kind();
+    {
+        let guard = PLUGIN_HANDLERS.read().map_err(|err| {
+            PluginError::Internal(format!("plugin registry lock poisoned: {err}"))
+        })?;
+        if let Some(existing) = guard.get(plugin_kind) {
+            if existing.owner == PluginRegistrationOwner::Builtin {
+                return Ok(());
+            }
+            return Err(plugin_already_registered_error(
+                plugin_kind,
+                PluginRegistrationOwner::Builtin,
+            ));
+        }
+    }
+
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::Builtin).map(|_| ())
+}
+
+fn plugin_already_registered_error(
+    plugin_kind: &str,
+    owner: PluginRegistrationOwner,
+) -> PluginError {
+    let ownership = if owner == PluginRegistrationOwner::Builtin {
+        "reserved builtin "
+    } else {
+        ""
+    };
+    PluginError::RegistrationFailed(format!(
+        "{ownership}plugin '{plugin_kind}' is already registered"
+    ))
+}
+
+fn register_plugin_with_owner(
+    plugin: Arc<dyn Plugin>,
+    owner: PluginRegistrationOwner,
+) -> Result<u64> {
+    let mut guard = PLUGIN_HANDLERS
+        .write()
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
+    let plugin_kind = plugin.plugin_kind().to_string();
+    if let Some(existing) = guard.get(&plugin_kind) {
+        if owner == PluginRegistrationOwner::Builtin
+            && existing.owner == PluginRegistrationOwner::Builtin
+        {
+            return Ok(existing.registration_id);
+        }
+        return Err(plugin_already_registered_error(&plugin_kind, owner));
+    }
+    let registration_id = NEXT_PLUGIN_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
+    guard.insert(
+        plugin_kind.clone(),
+        RegisteredPlugin {
+            registration_id,
+            owner,
+            plugin,
+        },
+    );
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_registered",
+        plugin_kind = plugin_kind.as_str(),
+        registration_id = registration_id;
+        "Plugin kind registered"
+    );
+    Ok(registration_id)
+}
+
+/// Register built-in plugin kinds supplied by the embedding host.
+///
+/// An uncomposed runtime has no built-ins. The public SDK installs its default
+/// component services before validation and initialization.
+pub fn ensure_builtin_plugins_registered() -> Result<()> {
+    #[cfg(test)]
+    crate::test_composition::ensure_runtime_services();
+    (crate::composition::services().register_builtin_plugins)()
+}
+
+/// Removes a previously registered plugin.
+///
+/// This affects future validation and initialization only. Active runtime
+/// registrations remain until cleared or replaced.
+///
+/// # Parameters
+/// - `plugin_kind`: Plugin kind to remove from the registry.
+///
+/// # Returns
+/// `true` when a plugin was removed from the registry and `false` when the
+/// kind was not registered.
+///
+/// # Notes
+/// Active component registrations created by previous initialization calls are
+/// not removed by this function.
+pub fn deregister_plugin(plugin_kind: &str) -> bool {
+    deregister_plugin_checked(plugin_kind).unwrap_or(false)
+}
+
+pub(crate) fn deregister_plugin_checked(plugin_kind: &str) -> Result<bool> {
+    let removed = PLUGIN_HANDLERS
+        .write()
+        .map(|mut guard| guard.remove(plugin_kind).is_some())
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
+    if removed {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_deregistered",
+            plugin_kind = plugin_kind;
+            "Plugin kind deregistered"
+        );
+    }
+    Ok(removed)
+}
+
+pub(crate) fn deregister_plugin_registration_checked(
+    plugin_kind: &str,
+    expected_registration_id: u64,
+) -> Result<PluginDeregistrationOutcome> {
+    let mut guard = PLUGIN_HANDLERS
+        .write()
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
+    match guard.get(plugin_kind) {
+        Some(plugin) if plugin.registration_id == expected_registration_id => {
+            guard.remove(plugin_kind);
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_deregistered",
+                plugin_kind = plugin_kind,
+                registration_id = expected_registration_id;
+                "Plugin kind deregistered"
+            );
+            Ok(PluginDeregistrationOutcome::Removed)
+        }
+        Some(_) => Ok(PluginDeregistrationOutcome::Replaced),
+        None => Ok(PluginDeregistrationOutcome::Missing),
+    }
+}
+
+/// Lists registered plugin kinds in sorted order.
+///
+/// This returns the currently registered plugin kinds without inspecting the
+/// active runtime configuration.
+///
+/// # Returns
+/// A sorted [`Vec<String>`] of registered plugin kinds.
+///
+/// # Notes
+/// Disabled or inactive components still appear here when their plugin kind is
+/// registered. An empty list is returned when built-in registration fails.
+pub fn list_plugin_kinds() -> Vec<String> {
+    if ensure_builtin_plugins_registered().is_err() {
+        return Vec::new();
+    }
+    let mut kinds = PLUGIN_HANDLERS
+        .read()
+        .map(|guard| guard.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    kinds.sort();
+    kinds
+}
+
+/// Looks up a registered plugin by kind.
+///
+/// # Parameters
+/// - `plugin_kind`: Plugin kind to resolve.
+///
+/// # Returns
+/// The registered plugin implementation for `plugin_kind`, or `None` when the
+/// kind is unknown or built-in registration fails.
+///
+/// # Notes
+/// The returned plugin is shared by [`Arc`], so callers receive a cheap clone.
+pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
+    ensure_builtin_plugins_registered().ok()?;
+    lookup_registered_plugin(plugin_kind)
+}
+
+fn lookup_registered_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
+    PLUGIN_HANDLERS.read().ok().and_then(|guard| {
+        guard
+            .get(plugin_kind)
+            .map(|registered| Arc::clone(&registered.plugin))
+    })
+}
+
+/// Validates a plugin configuration document.
+///
+/// This is a pure validation pass. It does not mutate the active runtime
+/// configuration.
+///
+/// # Parameters
+/// - `config`: Plugin configuration to validate.
+///
+/// # Returns
+/// A [`ConfigReport`] describing warnings and errors discovered during
+/// validation.
+///
+/// # Notes
+/// Validation checks host policy, plugin multiplicity rules, unknown component
+/// kinds, and plugin-provided validation hooks.
+#[doc(hidden)]
+pub fn validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
+    let mut report = ConfigReport::default();
+    if let Err(error) = ensure_builtin_plugins_registered() {
+        report.diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "plugin.builtin_registration_failed".to_string(),
+            component: None,
+            field: None,
+            message: format!("built-in plugin registration failed: {error}"),
+        });
+        return report;
+    }
+
+    if config.version != 1 {
+        push_policy_diag(
+            &mut report.diagnostics,
+            config.policy.unsupported_value,
+            "plugin.unsupported_config_version",
+            None,
+            Some("version".to_string()),
+            format!("plugin config version {} is unsupported", config.version),
+        );
+    }
+
+    validate_plugin_multiplicity(&mut report, config);
+
+    for component in &config.components {
+        let Some(plugin) = lookup_registered_plugin(&component.kind) else {
+            push_policy_diag(
+                &mut report.diagnostics,
+                config.policy.unknown_component,
+                "plugin.unknown_component",
+                Some(component.kind.clone()),
+                None,
+                format!("plugin component kind '{}' is unsupported", component.kind),
+            );
+            continue;
+        };
+        report
+            .diagnostics
+            .extend(plugin.validate_with_policy(&component.config, &config.policy));
+    }
+
+    report
+}
+
+/// Layers `right` (higher precedence) onto `left` in place.
+///
+/// Objects merge recursively and arrays/scalars are replaced by `right`, except:
+///
+/// - the top-level `components` array pairs entries by `kind` in order of appearance so
+///   multi-instance kinds are not collapsed;
+/// - lists inside a component's `config` concatenate with higher-precedence entries first.
+///
+/// Internal helper shared by plugin initialization and `plugins.toml` discovery.
+fn layer_config(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match (key.as_str(), left.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_plugin_components(existing, value),
+                    (_, Some(existing)) => merge_json_value(existing, value),
+                    (_, _) => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+/// Merges `right` components into `left` by `kind`, pairing repeated kinds positionally.
+fn merge_plugin_components(left: &mut Json, right: Json) {
+    let Json::Array(left_components) = left else {
+        *left = right;
+        return;
+    };
+    let Json::Array(right_components) = right else {
+        *left = right;
+        return;
+    };
+    let base_component_count = left_components.len();
+    let mut consumed: HashMap<String, usize> = HashMap::new();
+    for component in right_components {
+        let Some(kind) = component_kind(&component).map(str::to_owned) else {
+            left_components.push(component);
+            continue;
+        };
+        let nth = consumed.entry(kind.clone()).or_insert(0);
+        let slot = nth_component_by_kind(&left_components[..base_component_count], &kind, *nth);
+        *nth += 1;
+        match slot {
+            Some(index) => merge_plugin_component(&mut left_components[index], component),
+            None => left_components.push(component),
+        }
+    }
+}
+
+/// Merges one higher-precedence component into its lower-precedence match.
+///
+/// Direct list fields in a component's `config` object concatenate with
+/// higher-precedence entries first. Declared observability collections do the
+/// same, except that an explicit empty log or metric endpoint list clears the
+/// lower-precedence list so it remains distinguishable from an omitted list.
+/// Observability `insecure_http_hosts` is replaced so a higher-precedence
+/// layer can narrow plaintext trust.
+/// Deeper implementation-specific lists retain replacement semantics.
+fn merge_plugin_component(existing: &mut Json, higher_priority: Json) {
+    let is_observability = component_kind(&higher_priority).or_else(|| component_kind(existing))
+        == Some("observability");
+    match (existing, higher_priority) {
+        (Json::Object(existing), Json::Object(higher_priority)) => {
+            for (key, value) in higher_priority {
+                match (key.as_str(), existing.get_mut(&key)) {
+                    ("config", Some(existing_config)) => {
+                        merge_plugin_config_value(
+                            existing_config,
+                            value,
+                            &mut Vec::new(),
+                            is_observability,
+                        );
+                    }
+                    (_, Some(existing_value)) => merge_json_value(existing_value, value),
+                    (_, None) => {
+                        existing.insert(key, value);
+                    }
+                }
+            }
+        }
+        (existing, higher_priority) => *existing = higher_priority,
+    }
+}
+
+/// Recursively merges plugin component config with scoped list concatenation.
+fn merge_plugin_config_value(
+    lower_priority: &mut Json,
+    higher_priority: Json,
+    path: &mut Vec<String>,
+    is_observability: bool,
+) {
+    match (lower_priority, higher_priority) {
+        (Json::Object(lower_priority), Json::Object(higher_priority)) => {
+            for (key, value) in higher_priority {
+                path.push(key.clone());
+                match lower_priority.get_mut(&key) {
+                    Some(existing) => {
+                        merge_plugin_config_value(existing, value, path, is_observability)
+                    }
+                    None => {
+                        lower_priority.insert(key, value);
+                    }
+                }
+                path.pop();
+            }
+        }
+        (Json::Array(lower_priority), Json::Array(mut higher_priority))
+            if plugin_config_list_concatenates(path, is_observability) =>
+        {
+            if higher_priority.is_empty()
+                && plugin_config_empty_list_replaces(path, is_observability)
+            {
+                lower_priority.clear();
+            } else {
+                higher_priority.append(lower_priority);
+                *lower_priority = higher_priority;
+            }
+        }
+        (lower_priority, higher_priority) => *lower_priority = higher_priority,
+    }
+}
+
+fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
+    if is_observability && matches!(path, [field] if field == "insecure_http_hosts") {
+        return false;
+    }
+    path.len() == 1
+        || (is_observability
+            && (matches!(
+                path,
+                [section, field]
+                    if (section == "atof" && field == "sinks")
+                        || (section == "opentelemetry" && matches!(field.as_str(), "traces" | "endpoints"))
+                        || (section == "atif" && field == "storage")
+            ) || matches!(
+                path,
+                [section, signal, field]
+                    if section == "opentelemetry"
+                        && matches!(signal.as_str(), "logs" | "metrics")
+                        && field == "endpoints"
+            )))
+}
+
+fn plugin_config_empty_list_replaces(path: &[String], is_observability: bool) -> bool {
+    is_observability
+        && matches!(
+            path,
+            [section, signal, field]
+                if section == "opentelemetry"
+                    && matches!(signal.as_str(), "logs" | "metrics")
+                    && field == "endpoints"
+        )
+}
+
+/// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
+fn merge_json_value(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match left.get_mut(&key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+fn component_kind(component: &Json) -> Option<&str> {
+    component.get("kind").and_then(Json::as_str)
+}
+
+fn nth_component_by_kind(components: &[Json], kind: &str, nth: usize) -> Option<usize> {
+    components
+        .iter()
+        .enumerate()
+        .filter(|(_index, component)| component_kind(component) == Some(kind))
+        .nth(nth)
+        .map(|(index, _component)| index)
+}
+
+/// Returns the JSON Schema for the canonical plugin configuration document.
+pub fn plugin_config_schema() -> Json {
+    serde_json::to_value(schemars::schema_for!(PluginConfig))
+        .expect("plugin config schema should serialize")
+}
+
+pub(crate) async fn run_owned_plugin_mutation<T, F, Fut>(
+    operation_name: &'static str,
+    operation: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T>> + Send + 'static,
+{
+    if IN_PLUGIN_MUTATION_EXECUTOR.get() {
+        return operation().await;
+    }
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    plugin_mutation_executor()?
+        .send(Box::pin(async move {
+            let result = tokio::spawn(operation())
+                .await
+                .map_err(|error| {
+                    PluginError::Internal(format!("{operation_name} task failed: {error}"))
+                })
+                .and_then(|result| result);
+            let _ = result_tx.send(result);
+        }))
+        .map_err(|_| {
+            PluginError::Internal(format!(
+                "failed to queue {operation_name}: executor stopped"
+            ))
+        })?;
+    result_rx.await.map_err(|_| {
+        PluginError::Internal(format!(
+            "{operation_name} task stopped before returning a result"
+        ))
+    })?
+}
+
+fn plugin_mutation_executor() -> Result<&'static PluginMutationSender> {
+    if let Some(sender) = PLUGIN_MUTATION_EXECUTOR.get() {
+        return Ok(sender);
+    }
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<PluginMutationJob>();
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("nemo-relay-plugin-host".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = startup_tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let _ = startup_tx.send(Ok(()));
+            IN_PLUGIN_MUTATION_EXECUTOR.set(true);
+            runtime.block_on(async move {
+                while let Some(job) = receiver.recv().await {
+                    job.await;
+                }
+            });
+        })
+        .map_err(|error| {
+            PluginError::Internal(format!("failed to start plugin host executor: {error}"))
+        })?;
+    startup_rx
+        .recv()
+        .map_err(|error| {
+            PluginError::Internal(format!(
+                "plugin host executor stopped during startup: {error}"
+            ))
+        })?
+        .map_err(|error| {
+            PluginError::Internal(format!("failed to start plugin host runtime: {error}"))
+        })?;
+
+    Ok(PLUGIN_MUTATION_EXECUTOR.get_or_init(|| sender))
+}
+
+pub(crate) async fn initialize_plugins_exact_for_host(
+    config: PluginConfig,
+    owner_id: u64,
+    rollback_failures: Arc<Mutex<Vec<String>>>,
+    diagnostics: Vec<ConfigDiagnostic>,
+    diagnostic_context: Diagnostics,
+) -> Result<ConfigReport> {
+    verify_plugin_host_owner(owner_id)?;
+    initialize_plugins_exact_inner(
+        config,
+        Some(rollback_failures),
+        diagnostics,
+        &diagnostic_context,
+    )
+    .await
+}
+
+async fn initialize_plugins_exact_inner(
+    config: PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostics: Vec<ConfigDiagnostic>,
+    diagnostic_context: &Diagnostics,
+) -> Result<ConfigReport> {
+    let enabled_component_count = config
+        .components
+        .iter()
+        .filter(|component| component.enabled)
+        .count();
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_configuration_activation_started",
+        component_count = enabled_component_count;
+        "Plugin configuration activation started"
+    );
+    let mut report = ConfigReport {
+        diagnostics,
+        ..ConfigReport::default()
+    };
+    report
+        .diagnostics
+        .extend(validate_static_plugin_config(&config).diagnostics);
+    if report.has_errors() {
+        return Err(PluginError::InvalidConfig(join_error_messages(&report)));
+    }
+
+    let previous = {
+        let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })?;
+        guard.take()
+    };
+
+    match previous {
+        Some(previous_state) => {
+            replace_plugin_configuration(
+                config,
+                report,
+                previous_state,
+                rollback_failures,
+                enabled_component_count,
+                diagnostic_context,
+            )
+            .await
+        }
+        None => {
+            activate_initial_plugin_configuration(
+                config,
+                report,
+                rollback_failures,
+                enabled_component_count,
+                diagnostic_context,
+            )
+            .await
+        }
+    }
+}
+
+async fn activate_initial_plugin_configuration(
+    config: PluginConfig,
+    report: ConfigReport,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
+) -> Result<ConfigReport> {
+    let initialized = initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures,
+        diagnostic_context,
+    )
+    .await?;
+    let configuration_diagnostics = report.diagnostics.clone();
+    let mut report = report;
+    extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+    store_active_plugin_configuration_with_configuration_diagnostics(
+        config,
+        report.clone(),
+        configuration_diagnostics,
+        initialized.registrations,
+    )?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_configuration_activated",
+        component_count = enabled_component_count;
+        "Plugin configuration activated"
+    );
+    Ok(report)
+}
+
+async fn replace_plugin_configuration(
+    config: PluginConfig,
+    report: ConfigReport,
+    mut previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
+) -> Result<ConfigReport> {
+    install_previous_configuration_for_teardown(&previous_state)?;
+    let teardown = rollback_registrations_checked(&mut previous_state.registrations);
+    let teardown_report = take_active_runtime_diagnostics_report()?;
+    if !teardown.errors.is_empty() {
+        record_failed_teardown(&teardown, teardown_report, rollback_failures.as_ref());
+        return Err(PluginError::RegistrationFailed(format!(
+            "previous plugin configuration could not be cleared: {}",
+            teardown.errors.join("; ")
+        )));
+    }
+    activate_replacement_or_restore(
+        config,
+        report,
+        previous_state,
+        rollback_failures,
+        enabled_component_count,
+        diagnostic_context,
+    )
+    .await
+}
+
+fn install_previous_configuration_for_teardown(
+    previous_state: &ActivePluginConfiguration,
+) -> Result<()> {
+    let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+        PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+    })?;
+    *guard = Some(ActivePluginConfiguration {
+        config: previous_state.config.clone(),
+        report: previous_state.report.clone(),
+        configuration_diagnostics: previous_state.configuration_diagnostics.clone(),
+        runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
+        registrations: Vec::new(),
+    });
+    Ok(())
+}
+
+fn take_active_runtime_diagnostics_report() -> Result<Option<ConfigReport>> {
+    Ok(ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })?
+        .take()
+        .map(|state| state.report))
+}
+
+fn record_failed_teardown(
+    teardown: &PluginRollbackOutcome,
+    teardown_report: Option<ConfigReport>,
+    rollback_failures: Option<&Arc<Mutex<Vec<String>>>>,
+) {
+    if let Some(report) = teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
+    if !teardown.callbacks_cleared {
+        record_rollback_failures(rollback_failures, teardown.errors.clone());
+    }
+}
+
+async fn activate_replacement_or_restore(
+    config: PluginConfig,
+    report: ConfigReport,
+    previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
+) -> Result<ConfigReport> {
+    match initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures.clone(),
+        diagnostic_context,
+    )
+    .await
+    {
+        Ok(initialized) => {
+            let configuration_diagnostics = report.diagnostics.clone();
+            let mut report = report;
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_configuration_diagnostics(
+                config,
+                report.clone(),
+                configuration_diagnostics,
+                initialized.registrations,
+            )?;
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_replaced",
+                component_count = enabled_component_count;
+                "Plugin configuration replaced"
+            );
+            Ok(report)
+        }
+        Err(err) => {
+            restore_previous_plugin_configuration(
+                previous_state,
+                rollback_failures,
+                err,
+                diagnostic_context,
+            )
+            .await
+        }
+    }
+}
+
+async fn restore_previous_plugin_configuration(
+    previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    err: PluginError,
+    diagnostic_context: &Diagnostics,
+) -> Result<ConfigReport> {
+    match initialize_plugin_components_catching_panics(
+        previous_state.config.clone(),
+        rollback_failures,
+        diagnostic_context,
+    )
+    .await
+    {
+        Ok(initialized) => {
+            let mut report = previous_state.report;
+            report.diagnostics = previous_state.configuration_diagnostics.clone();
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_diagnostics(
+                previous_state.config,
+                report,
+                previous_state.configuration_diagnostics,
+                previous_state.runtime_diagnostics,
+                initialized.registrations,
+            )?;
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_restored",
+                recovery = "previous_configuration";
+                "Plugin activation failed; previous configuration restored"
+            );
+            Err(err)
+        }
+        Err(restore_err) => {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "plugin_rollback_failed",
+                recovery = "previous_configuration";
+                "Plugin activation failed and the previous configuration could not be restored"
+            );
+            Err(PluginError::RegistrationFailed(format!(
+                "{err}; previous plugin configuration could not be restored: {restore_err}"
+            )))
+        }
+    }
+}
+
+async fn initialize_plugin_components_catching_panics(
+    config: PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostic_context: &Diagnostics,
+) -> Result<InitializedPluginComponents> {
+    let diagnostic_context = diagnostic_context.clone();
+    tokio::spawn(async move {
+        initialize_plugin_components(&config, rollback_failures, &diagnostic_context).await
+    })
+    .await
+    .map_err(|error| {
+        PluginError::Internal(format!(
+            "plugin component initialization task failed: {error}"
+        ))
+    })?
+}
+
+/// Resolves a plugin host configuration from already-read file documents, then
+/// applies programmatic values as the highest-precedence layer.
+pub(crate) fn resolve_plugin_config_documents(
+    config: PluginConfig,
+    explicit_path: Option<&Path>,
+    documents: Vec<(PathBuf, Json)>,
+    diagnostic_context: Option<&Diagnostics>,
+) -> Result<ResolvedPluginConfig> {
+    let explicit_path = explicit_path.map(Path::to_path_buf);
+    let (file_value, mut sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    let config_paths = sources
+        .iter()
+        .map(|source| source.display().to_string())
+        .collect();
+    let mut value = file_value;
+    layer_config(&mut value, plugin_config_overlay_value(&config)?);
+    if let Some(explicit_path) = explicit_path {
+        sources.retain(|source| source != &explicit_path);
+    }
+    Ok(ResolvedPluginConfig {
+        resolved_config: value.clone(),
+        config: serde_json::from_value(value)?,
+        diagnostics: inherited_plugin_config_diagnostics(&sources, diagnostic_context),
+        config_paths,
+    })
+}
+
+pub(crate) struct ResolvedPluginConfig {
+    pub(crate) config: PluginConfig,
+    pub(crate) resolved_config: Json,
+    pub(crate) diagnostics: Vec<ConfigDiagnostic>,
+    pub(crate) config_paths: Vec<String>,
+}
+
+/// Serializes a typed configuration as a discovery overlay.
+///
+/// A [`PluginConfig`] cannot record whether a default-valued field was supplied
+/// explicitly or filled by serde. Treating those defaults as overlay values
+/// would mask discovered file settings on every library initialization. A
+/// declared component is an activation intent, so its `enabled` value remains
+/// in the overlay. Internal exact-host callers bypass discovery.
+fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
+    let mut overlay = serde_json::to_value(config)?;
+    let Json::Object(root) = &mut overlay else {
+        return Ok(overlay);
+    };
+
+    if config.version == default_plugin_config_version() {
+        root.remove("version");
+    }
+
+    remove_default_policy_overlay(root, &config.policy);
+
+    Ok(overlay)
+}
+
+fn remove_default_policy_overlay(root: &mut Map<String, Json>, config: &ConfigPolicy) {
+    let Some(Json::Object(policy)) = root.get_mut("policy") else {
+        return;
+    };
+    let defaults = ConfigPolicy::default();
+    for (field, is_default) in [
+        (
+            "unknown_component",
+            config.unknown_component == defaults.unknown_component,
+        ),
+        (
+            "unknown_field",
+            config.unknown_field == defaults.unknown_field,
+        ),
+        (
+            "unsupported_value",
+            config.unsupported_value == defaults.unsupported_value,
+        ),
+    ] {
+        if is_default {
+            policy.remove(field);
+        }
+    }
+    if policy.is_empty() {
+        root.remove("policy");
+    }
+}
+
+use std::path::{Path, PathBuf};
+
+/// Reads, parses, and merges the `plugins.toml` files at `paths` (lowest
+/// precedence first) into one JSON document with its source paths, or `None`
+/// when none exist. Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    merge_plugin_config_documents(read_plugin_config_files(paths)?)
+}
+
+fn read_plugin_config_files<I>(paths: I) -> Result<Vec<(PathBuf, Json)>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut documents = Vec::new();
+    for path in deduplicate_plugin_config_paths(paths) {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path).map_err(|err| {
+            PluginError::InvalidConfig(format!("failed to read {}: {err}", path.display()))
+        })?;
+        let parsed = raw.parse::<toml::Table>().map_err(|err| {
+            PluginError::InvalidConfig(format!("invalid plugin TOML in {}: {err}", path.display()))
+        })?;
+        documents.push((path, serde_json::to_value(parsed)?));
+    }
+    Ok(documents)
+}
+
+fn inherited_plugin_config_diagnostics(
+    sources: &[PathBuf],
+    diagnostic_context: Option<&Diagnostics>,
+) -> Vec<ConfigDiagnostic> {
+    let codes = [BuiltinDiagnosticCode::Notice(
+        NoticeCode::ConfigurationInherited,
+    )];
+    let recorder = diagnostic_context
+        .filter(|_| !sources.is_empty())
+        .and_then(|context| {
+            context
+                .register_component(ComponentRegistration::new("plugin.configuration", &codes))
+                .ok()
+        });
+    sources
+        .iter()
+        .map(|source| {
+            if let Some(recorder) = &recorder {
+                let _ = recorder.record_without_projection_lazy(|| {
+                    DiagnosticObservation::new(
+                        Classification::notice(NoticeCode::ConfigurationInherited),
+                        "Inherited plugin configuration from a discovered file",
+                        NonZeroU64::MIN,
+                    )
+                    .with_severity(DiagnosticSeverity::Warning)
+                });
+            }
+            let source = source.display().to_string();
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_inherited",
+                config_path = source.as_str();
+                "Inherited plugin configuration from discovered file"
+            );
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "plugin.configuration_inherited".to_string(),
+                component: None,
+                field: None,
+                message: format!("inherited plugin configuration from discovered file: {source}"),
+            }
+        })
+        .collect()
+}
+
+// Legacy resolution helpers are retained only for focused unit coverage of
+// the former programmatic-over-file behavior. Production initialization uses
+// `resolve_plugin_config_with_explicit`, where file layers are authoritative.
+#[cfg(test)]
+fn resolve_discovered_plugin_config(
+    documents: Vec<(PathBuf, Json)>,
+) -> Result<TestDiscoveredPluginConfig> {
+    let enabled_sources = component_enabled_sources(&documents);
+    let (value, sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
+    Ok(TestDiscoveredPluginConfig {
+        value,
+        enabled_sources,
+        sources,
+    })
+}
+
+#[cfg(test)]
+struct TestDiscoveredPluginConfig {
+    value: Json,
+    enabled_sources: HashMap<String, TestComponentEnabledSource>,
+    sources: Vec<PathBuf>,
+}
+
+#[cfg(test)]
+struct TestComponentEnabledSource {
+    enabled: bool,
+    path: PathBuf,
+}
+
+#[cfg(test)]
+use TestComponentEnabledSource as ComponentEnabledSource;
+
+#[cfg(test)]
+fn resolve_programmatic_plugin_config(
+    discovered: TestDiscoveredPluginConfig,
+    config: PluginConfig,
+) -> Result<ResolvedPluginConfig> {
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources, None);
+    diagnostics.extend(programmatic_enable_override_diagnostics(
+        &discovered.value,
+        &discovered.enabled_sources,
+        &config,
+    ));
+    let mut base = discovered.value;
+    layer_config(&mut base, plugin_config_overlay_value(&config)?);
+    Ok(ResolvedPluginConfig {
+        resolved_config: base.clone(),
+        config: serde_json::from_value(base)?,
+        diagnostics,
+        config_paths: discovered
+            .sources
+            .iter()
+            .map(|source| source.display().to_string())
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+fn component_enabled_sources(
+    documents: &[(PathBuf, Json)],
+) -> HashMap<String, TestComponentEnabledSource> {
+    let mut sources = HashMap::new();
+    for (path, document) in documents {
+        let Some(components) = document.get("components").and_then(Json::as_array) else {
+            continue;
+        };
+        for component in components {
+            let Some(kind) = component_kind(component) else {
+                continue;
+            };
+            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
+                sources.insert(
+                    kind.to_string(),
+                    TestComponentEnabledSource {
+                        enabled,
+                        path: path.clone(),
+                    },
+                );
+            }
+        }
+    }
+    sources
+}
+
+#[cfg(test)]
+fn programmatic_enable_override_diagnostics(
+    discovered: &Json,
+    enabled_sources: &HashMap<String, TestComponentEnabledSource>,
+    programmatic: &PluginConfig,
+) -> Vec<ConfigDiagnostic> {
+    let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
+        return Vec::new();
+    };
+    let mut consumed = HashMap::new();
+    let mut diagnostics = Vec::new();
+    for component in &programmatic.components {
+        let nth = consumed.entry(component.kind.as_str()).or_insert(0usize);
+        let discovered_component =
+            nth_component_by_kind(discovered_components, &component.kind, *nth)
+                .and_then(|index| discovered_components.get(index));
+        *nth += 1;
+        let discovered_enabled = discovered_component
+            .and_then(|component| component.get("enabled"))
+            .and_then(Json::as_bool);
+        let file_disabled = discovered_enabled == Some(false)
+            || (discovered_enabled.is_none()
+                && enabled_sources
+                    .get(&component.kind)
+                    .is_some_and(|source| !source.enabled));
+        if !component.enabled || !file_disabled {
+            continue;
+        }
+        let source = enabled_sources
+            .get(&component.kind)
+            .map(|source| format!(" from {}", source.path.display()))
+            .unwrap_or_default();
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "plugin.component_reenabled".to_string(),
+            component: Some(component.kind.clone()),
+            field: Some("enabled".to_string()),
+            message: format!(
+                "programmatic configuration enabled plugin component '{}' and overrode enabled = false{source}",
+                component.kind
+            ),
+        });
+    }
+    diagnostics
+}
+
+/// Removes physical duplicates while preserving the highest-precedence path.
+/// Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn deduplicate_plugin_config_paths<I>(paths: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let paths = paths.into_iter().collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths.into_iter().rev() {
+        let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen.insert(identity) {
+            unique.push(path);
+        }
+    }
+    unique.reverse();
+    unique
+}
+
+/// Merges pre-parsed `plugins.toml` JSON documents (lowest precedence first) using the canonical
+/// plugin-config layering rules. Internal: `pub` only so the CLI can preprocess dynamic-plugin
+/// refs while still sharing one merge semantics implementation with core.
+#[doc(hidden)]
+pub fn merge_plugin_config_documents<I>(documents: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = (PathBuf, Json)>,
+{
+    let mut merged = Json::Object(Map::new());
+    let mut sources = Vec::new();
+    for (path, mut document) in documents {
+        validate_plugin_config_version(&path, &document)?;
+        validate_unique_component_kinds(&path, &document)?;
+
+        filter_disabled_plugin_components(&mut document);
+        layer_config(&mut merged, document);
+        sources.push(path);
+    }
+    Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Removes disabled components from one discovered plugin document before layering.
+fn filter_disabled_plugin_components(document: &mut Json) {
+    let Some(components) = document.get_mut("components").and_then(Json::as_array_mut) else {
+        return;
+    };
+    components.retain(|component| component.get("enabled").and_then(Json::as_bool) != Some(false));
+}
+
+/// Rejects a file with an unsupported top-level plugin config version before layering can
+/// overwrite it with a higher-precedence source or typed default.
+fn validate_plugin_config_version(path: &Path, document: &Json) -> Result<()> {
+    let Some(raw_version) = document.get("version") else {
+        return Ok(());
+    };
+    let version = serde_json::from_value::<u32>(raw_version.clone()).map_err(|error| {
+        PluginError::InvalidConfig(format!(
+            "invalid plugin config version in {}: {error}",
+            path.display()
+        ))
+    })?;
+    if version == default_plugin_config_version() {
+        return Ok(());
+    }
+    Err(PluginError::InvalidConfig(format!(
+        "plugin config version {version} in {} is unsupported; expected {}",
+        path.display(),
+        default_plugin_config_version()
+    )))
+}
+
+/// Rejects a single file that declares the same component `kind` more than once.
+fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
+    let Some(components) = document.get("components").and_then(Json::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        if let Some(kind) = component_kind(component)
+            && !seen.insert(kind)
+        {
+            duplicates.push(kind.to_string());
+        }
+    }
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    Err(PluginError::InvalidConfig(format!(
+        "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
+        path.display(),
+        duplicates.join(", ")
+    )))
+}
+
+/// Default `plugins.toml` search path (lowest precedence first): user, then
+/// system — mirroring the gateway's discovery. `pub` only for cross-crate reuse
+/// by the gateway.
+#[doc(hidden)]
+pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    if skip_implicit_plugin_config() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(dir) = user_dir {
+        paths.push(dir.join("plugins.toml"));
+    }
+    paths.push(system_config_dir().join("plugins.toml"));
+    paths
+}
+
+/// Effective `plugins.toml` paths (lowest precedence first).
+///
+/// An explicit path replaces the ambient user path but remains below the
+/// operator-managed system path.
+pub(crate) fn plugin_config_paths(
+    explicit_path: Option<&Path>,
+    user_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut paths = explicit_path
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let selected_user_dir = if explicit_path.is_some() {
+        None
+    } else {
+        user_dir
+    };
+    paths.extend(default_plugin_config_paths(selected_user_dir));
+    deduplicate_plugin_config_paths(paths)
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+fn skip_implicit_plugin_config() -> bool {
+    std::env::var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(not(feature = "__skip-implicit-config"))]
+fn skip_implicit_plugin_config() -> bool {
+    false
+}
+
+/// Resolves the platform system configuration directory.
+#[doc(hidden)]
+pub fn system_config_dir() -> PathBuf {
+    #[cfg(feature = "__skip-implicit-config")]
+    if let Some(path) = std::env::var_os("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    platform_system_config_dir()
+}
+
+fn platform_system_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("nemo-relay")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/etc/nemo-relay")
+    }
+}
+
+/// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
+/// `HOME`/`USERPROFILE`. `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn user_config_dir() -> Option<PathBuf> {
+    // The XDG Base Directory spec treats an empty value as unset and a relative path as invalid.
+    if let Some(base) =
+        std::env::var_os("XDG_CONFIG_HOME").filter(|base| Path::new(base).is_absolute())
+    {
+        return Some(PathBuf::from(base).join("nemo-relay"));
+    }
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".config/nemo-relay"))
+}
+
+pub(crate) fn clear_plugin_configuration_for_host(owner_id: u64) -> PluginHostClearOutcome {
+    if let Err(error) = verify_plugin_host_owner(owner_id) {
+        return PluginHostClearOutcome {
+            result: Err(error),
+            callbacks_cleared: false,
+            report: None,
+        };
+    }
+    clear_plugin_configuration_inner()
+}
+
+pub(crate) struct PluginHostClearOutcome {
+    pub(crate) result: Result<()>,
+    pub(crate) callbacks_cleared: bool,
+    pub(crate) report: Option<ConfigReport>,
+}
+
+fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
+    let flush_error =
+        nemo_relay_runtime::api::runtime::subscriber_dispatcher::flush_queued_subscribers()
+            .err()
+            .map(|error| error.to_string());
+    let mut registrations = {
+        let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                return PluginHostClearOutcome {
+                    result: Err(PluginError::Internal(format!(
+                        "active plugin configuration lock poisoned: {err}"
+                    ))),
+                    callbacks_cleared: false,
+                    report: None,
+                };
+            }
+        };
+        guard
+            .as_mut()
+            .map(|state| std::mem::take(&mut state.registrations))
+    };
+    // Keep the report installed while callbacks run so runtime diagnostics
+    // emitted by teardown work can be recorded against it.
+    let deregistration = registrations
+        .as_mut()
+        .map(rollback_registrations_checked)
+        .unwrap_or_default();
+    let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+        Ok(mut guard) if deregistration.callbacks_cleared => guard.take().map(|state| state.report),
+        Ok(mut guard) => guard.as_mut().map(|state| {
+            state.registrations = registrations.take().unwrap_or_default();
+            state.report.clone()
+        }),
+        Err(err) => {
+            return PluginHostClearOutcome {
+                result: Err(PluginError::Internal(format!(
+                    "active plugin configuration lock poisoned: {err}"
+                ))),
+                callbacks_cleared: false,
+                report: None,
+            };
+        }
+    };
+    let deregistration_error = (!deregistration.errors.is_empty()).then(|| {
+        PluginError::RegistrationFailed(format!(
+            "plugin teardown failed: {}",
+            deregistration.errors.join("; ")
+        ))
+    });
+    let result = match (flush_error, deregistration_error) {
+        (None, None) => Ok(()),
+        (Some(flush), None) => Err(PluginError::Internal(flush)),
+        (None, Some(deregister)) => Err(deregister),
+        (Some(flush), Some(deregister)) => Err(PluginError::RegistrationFailed(format!(
+            "{deregister}; subscriber flush also failed: {flush}"
+        ))),
+    };
+    if result.is_ok() {
+        if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+            *guard = None;
+        }
+    } else if let Some(report) = teardown_report
+        .as_ref()
+        .filter(|report| !report.runtime_diagnostics.is_empty())
+        .cloned()
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
+    PluginHostClearOutcome {
+        result,
+        callbacks_cleared: deregistration.callbacks_cleared,
+        report: teardown_report,
+    }
+}
+
+pub(crate) fn plugin_configuration_is_active() -> Result<bool> {
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map(|guard| guard.is_some())
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })
+}
+
+pub(crate) fn plugin_configuration_report_for_host(owner_id: u64) -> Result<Option<ConfigReport>> {
+    verify_plugin_host_owner(owner_id)?;
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map(|guard| guard.as_ref().map(|state| state.report.clone()))
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })
+}
+
+pub(crate) struct PluginHostLease {
+    owner_id: u64,
+}
+
+impl PluginHostLease {
+    pub(crate) fn owner_id(&self) -> u64 {
+        self.owner_id
+    }
+}
+
+impl Drop for PluginHostLease {
+    fn drop(&mut self) {
+        if let Ok(mut owner) = PLUGIN_MUTATION_OWNER.lock()
+            && *owner == PluginMutationOwner::Host(self.owner_id)
+        {
+            *owner = PluginMutationOwner::Idle;
+        }
+    }
+}
+
+pub(crate) fn acquire_plugin_host_lease() -> Result<PluginHostLease> {
+    let mut owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
+        PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
+    })?;
+    if *owner != PluginMutationOwner::Idle {
+        return Err(plugin_mutation_conflict(*owner));
+    }
+    if plugin_configuration_is_active()? {
+        return Err(PluginError::Conflict(
+            concat!(
+                "a static plugin configuration is already active; to combine static and ",
+                "dynamic plugins, provide the static components as the base configuration to ",
+                "dynamic plugin activation before calling plugin initialization"
+            )
+            .into(),
+        ));
+    }
+    let owner_id = NEXT_PLUGIN_HOST_OWNER_ID.fetch_add(1, Ordering::Relaxed);
+    *owner = PluginMutationOwner::Host(owner_id);
+    Ok(PluginHostLease { owner_id })
+}
+
+fn verify_plugin_host_owner(owner_id: u64) -> Result<()> {
+    let owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
+        PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
+    })?;
+    if *owner == PluginMutationOwner::Host(owner_id) {
+        Ok(())
+    } else {
+        Err(PluginError::Conflict(
+            "dynamic plugin host no longer owns plugin configuration".into(),
+        ))
+    }
+}
+
+fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
+    let message = match owner {
+        PluginMutationOwner::Idle => "plugin configuration is available",
+        PluginMutationOwner::Host(_) => {
+            "plugin configuration is owned by an active dynamic plugin host"
+        }
+    };
+    PluginError::Conflict(message.into())
+}
+
+#[cfg(test)]
+pub(crate) use crate::test_support::plugin_host::*;
+
+/// Updates the existing active-only runtime report.
+///
+/// This legacy view also serves OTel consumers whose canonical migration is deferred.
+/// It never registers components or records into the canonical diagnostics service.
+/// Typed operation owners record through their injected [`ComponentRecorder`] instead.
+pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
+    let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
+        return;
+    };
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    if let Some(existing) = state.runtime_diagnostics.get_mut(&diagnostic.code) {
+        existing.message = diagnostic.message.clone();
+        existing.count = existing.count.saturating_add(diagnostic.count);
+    } else if state.runtime_diagnostics.len() < MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        state.runtime_diagnostics.insert(
+            diagnostic.code.clone(),
+            RuntimeDiagnosticsSnapshotEntry {
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                count: diagnostic.count,
+            },
+        );
+    }
+    if let Some(existing) = state
+        .report
+        .runtime_diagnostics
+        .iter_mut()
+        .find(|existing| {
+            existing.code == diagnostic.code
+                && existing.component == diagnostic.component
+                && existing.field == diagnostic.field
+        })
+    {
+        existing.message = diagnostic.message;
+        existing.session_id = diagnostic.session_id;
+        existing.count = existing.count.saturating_add(diagnostic.count);
+    } else {
+        state.report.runtime_diagnostics.push(diagnostic);
+    }
+}
+
+/// Return a bounded, active-only runtime-diagnostics snapshot for dynamic plugins.
+pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSnapshotEntry> {
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|state| state.runtime_diagnostics.values().cloned().collect())
+        })
+        .unwrap_or_default()
+}
+
+/// Rolls back registrations in reverse order.
+///
+/// Registrations that cannot be removed remain in `registrations` so callers
+/// can retry. The returned outcome reports whether every callback was cleared
+/// and preserves any cleanup errors.
+pub fn rollback_registrations(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    rollback_registrations_checked(registrations)
+}
+
+/// Result of rolling back a set of plugin registrations.
+#[derive(Debug)]
+pub struct PluginRollbackOutcome {
+    errors: Vec<String>,
+    callbacks_cleared: bool,
+}
+
+impl PluginRollbackOutcome {
+    /// Return cleanup errors in rollback order.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Return whether every registered callback was removed.
+    pub fn callbacks_cleared(&self) -> bool {
+        self.callbacks_cleared
+    }
+}
+
+impl Default for PluginRollbackOutcome {
+    fn default() -> Self {
+        Self {
+            errors: Vec::new(),
+            callbacks_cleared: true,
+        }
+    }
+}
+
+fn rollback_registrations_checked(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    let mut outcome = PluginRollbackOutcome::default();
+    let mut retained = Vec::new();
+    while let Some(mut registration) = registrations.pop() {
+        match catch_unwind(AssertUnwindSafe(|| registration.cleanup())) {
+            Ok(PluginRegistrationCleanupOutcome::Removed) => {}
+            Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
+                outcome.errors.push(format!(
+                    "{} registration '{}' reported a delivery failure: {error}",
+                    registration.kind, registration.name
+                ));
+            }
+            Ok(PluginRegistrationCleanupOutcome::NotRemoved(error)) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
+                    "{} registration '{}' could not be removed: {error}",
+                    registration.kind, registration.name
+                ));
+                retained.push(registration);
+            }
+            Err(payload) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
+                    "{} registration '{}' could not be removed: deregistration panicked: {}",
+                    registration.kind,
+                    registration.name,
+                    panic_payload_message(payload)
+                ));
+                retained.push(registration);
+            }
+        }
+    }
+    retained.reverse();
+    *registrations = retained;
+    outcome
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".into())
+}
+
+struct ActivePluginConfiguration {
+    config: PluginConfig,
+    report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    registrations: Vec<PluginRegistration>,
+}
+
+struct InitializedPluginComponents {
+    registrations: Vec<PluginRegistration>,
+    diagnostics: Vec<ConfigDiagnostic>,
+}
+
+fn extend_activation_diagnostics(report: &mut ConfigReport, diagnostics: &[ConfigDiagnostic]) {
+    for diagnostic in diagnostics {
+        if !report.diagnostics.contains(diagnostic) {
+            report.diagnostics.push(diagnostic.clone());
+        }
+    }
+}
+
+async fn initialize_plugin_components(
+    config: &PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostic_context: &Diagnostics,
+) -> Result<InitializedPluginComponents> {
+    ensure_builtin_plugins_registered()?;
+    let mut ordinals: HashMap<&str, usize> = HashMap::new();
+    let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
+
+    for component in config
+        .components
+        .iter()
+        .filter(|component| component.enabled)
+    {
+        let Some(plugin) = lookup_registered_plugin(&component.kind) else {
+            return Err(PluginError::NotFound(format!(
+                "plugin component '{}' is not registered",
+                component.kind
+            )));
+        };
+
+        let ordinal = ordinals
+            .entry(component.kind.as_str())
+            .and_modify(|value| *value += 1)
+            .or_insert(1);
+        let namespace = component_namespace(&component.kind, *ordinal);
+
+        let mut pending = PendingPluginRegistrationContext::new(
+            namespace,
+            rollback_failures.clone(),
+            diagnostic_context,
+        );
+        if let Err(error) = plugin
+            .register(&component.config, &mut pending.context)
+            .await
+        {
+            // One owning activation boundary records the typed failure before rollback.
+            // Inner registration wrappers and legacy reports do not record it again.
+            pending.context.record_activation_failure(&error);
+            return Err(error);
+        }
+        let (component_registrations, diagnostics) = pending.take();
+        registrations.extend(component_registrations);
+        registrations.extend_diagnostics(diagnostics);
+    }
+
+    Ok(registrations.take())
+}
+
+struct PendingPluginRegistrations {
+    registrations: Vec<PluginRegistration>,
+    diagnostics: Vec<ConfigDiagnostic>,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+}
+
+impl PendingPluginRegistrations {
+    fn new(rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+        Self {
+            registrations: Vec::new(),
+            diagnostics: Vec::new(),
+            rollback_failures,
+        }
+    }
+
+    fn extend(&mut self, registrations: Vec<PluginRegistration>) {
+        self.registrations.extend(registrations);
+    }
+
+    fn extend_diagnostics(&mut self, diagnostics: Vec<ConfigDiagnostic>) {
+        self.diagnostics.extend(diagnostics);
+    }
+
+    fn take(&mut self) -> InitializedPluginComponents {
+        InitializedPluginComponents {
+            registrations: std::mem::take(&mut self.registrations),
+            diagnostics: std::mem::take(&mut self.diagnostics),
+        }
+    }
+}
+
+impl Drop for PendingPluginRegistrations {
+    fn drop(&mut self) {
+        let outcome = rollback_registrations_checked(&mut self.registrations);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
+    }
+}
+
+struct PendingPluginRegistrationContext {
+    context: PluginRegistrationContext,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+}
+
+impl PendingPluginRegistrationContext {
+    fn new(
+        namespace: String,
+        rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+        diagnostic_context: &Diagnostics,
+    ) -> Self {
+        Self {
+            context: PluginRegistrationContext::with_plugin_component_namespace(
+                namespace,
+                diagnostic_context,
+            ),
+            rollback_failures,
+        }
+    }
+
+    fn take(&mut self) -> (Vec<PluginRegistration>, Vec<ConfigDiagnostic>) {
+        (
+            std::mem::take(&mut self.context.registrations),
+            std::mem::take(&mut self.context.activation_diagnostics),
+        )
+    }
+}
+
+impl Drop for PendingPluginRegistrationContext {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.context.record_activation_unwind();
+        }
+
+        let outcome = rollback_registrations_checked(&mut self.context.registrations);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
+    }
+}
+
+fn record_rollback_failures(
+    rollback_failures: Option<&Arc<Mutex<Vec<String>>>>,
+    errors: Vec<String>,
+) {
+    if errors.is_empty() {
+        return;
+    }
+    if let Some(rollback_failures) = rollback_failures
+        && let Ok(mut recorded) = rollback_failures.lock()
+    {
+        recorded.extend(errors);
+    }
+}
+
+#[cfg(test)]
+fn store_active_plugin_configuration(
+    config: PluginConfig,
+    report: ConfigReport,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    let configuration_diagnostics = report.diagnostics.clone();
+    store_active_plugin_configuration_with_diagnostics(
+        config,
+        report,
+        configuration_diagnostics,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_configuration_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    store_active_plugin_configuration_with_diagnostics(
+        config,
+        report,
+        configuration_diagnostics,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+        PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+    })?;
+    *guard = Some(ActivePluginConfiguration {
+        config,
+        report,
+        configuration_diagnostics,
+        runtime_diagnostics,
+        registrations,
+    });
+    if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+        *guard = None;
+    }
+    Ok(())
+}
+
+fn plugin_component_totals(config: &PluginConfig) -> HashMap<&str, usize> {
+    let mut totals = HashMap::new();
+    for component in &config.components {
+        *totals.entry(component.kind.as_str()).or_insert(0) += 1;
+    }
+    totals
+}
+
+fn component_namespace(kind: &str, ordinal: usize) -> String {
+    assert!(ordinal > 0, "plugin component ordinals are one-based");
+    format!(
+        "nemo-relay-plugin.v1.{}:{ordinal}:",
+        encode_plugin_component_field(kind)
+    )
+}
+
+#[cfg(test)]
+use nemo_relay_types::plugin::decode_plugin_component_effective_name;
+use nemo_relay_types::plugin::encode_plugin_component_field;
+
+fn validate_plugin_multiplicity(report: &mut ConfigReport, config: &PluginConfig) {
+    let totals = plugin_component_totals(config);
+    let mut emitted = HashSet::new();
+
+    for component in &config.components {
+        let count = totals
+            .get(component.kind.as_str())
+            .copied()
+            .unwrap_or_default();
+        if count <= 1 || !emitted.insert(component.kind.clone()) {
+            continue;
+        }
+
+        let allows_multiple = lookup_registered_plugin(&component.kind)
+            .map(|plugin| plugin.allows_multiple_components())
+            .unwrap_or(true);
+        if !allows_multiple {
+            report.diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "plugin.duplicate_component".to_string(),
+                component: Some(component.kind.clone()),
+                field: None,
+                message: format!(
+                    "plugin component kind '{}' may only appear once",
+                    component.kind
+                ),
+            });
+        }
+    }
+}
+
+fn push_policy_diag(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    behavior: UnsupportedBehavior,
+    code: &str,
+    component: Option<String>,
+    field: Option<String>,
+    message: String,
+) {
+    let level = match behavior {
+        UnsupportedBehavior::Ignore => return,
+        UnsupportedBehavior::Warn => DiagnosticLevel::Warning,
+        UnsupportedBehavior::Error => DiagnosticLevel::Error,
+    };
+
+    diagnostics.push(ConfigDiagnostic {
+        level,
+        code: code.to_string(),
+        component,
+        field,
+        message,
+    });
+}
+
+fn join_error_messages(report: &ConfigReport) -> String {
+    report
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.level == DiagnosticLevel::Error)
+        .map(|diag| diag.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/plugin_tests.rs"]
+mod tests;
+
+impl PluginRegistrar for PluginRegistrationContext {
+    fn diagnostics_context(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self.diagnostics())
+    }
+
+    fn qualify_name(&self, name: &str) -> String {
+        PluginRegistrationContext::qualify_name(self, name)
+    }
+    fn register_subscriber(&mut self, name: &str, callback: EventSubscriberFn) -> Result<()> {
+        PluginRegistrationContext::register_subscriber(self, name, callback)
+    }
+    fn add_registration(&mut self, registration: PluginRegistration) {
+        PluginRegistrationContext::add_registration(self, registration);
+    }
+    fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
+        PluginRegistrationContext::record_activation_diagnostic(self, diagnostic);
+    }
+    fn record_nonfatal_activation_failure(
+        &mut self,
+        component_key: &'static str,
+        classification: Classification,
+        diagnostic: ConfigDiagnostic,
+    ) {
+        PluginRegistrationContext::record_nonfatal_activation_failure(
+            self,
+            component_key,
+            classification,
+            diagnostic,
+        );
+    }
+    fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
+        PluginRegistrationContext::activation_diagnostics(self)
+    }
+    fn register_conditional_middleware_guardrail(
+        &mut self,
+        name: &str,
+        kinds: BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        guardrail: ConditionalMiddlewareGuardrailFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_conditional_middleware_guardrail(
+            self,
+            name,
+            kinds,
+            registration_name,
+            guardrail,
+        )
+    }
+    fn register_event_metadata_injector(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventMetadataInjectorFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_event_metadata_injector(self, name, priority, callback)
+    }
+    fn register_mark_sanitize_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_mark_sanitize_guardrail(self, name, priority, callback)
+    }
+    fn register_scope_sanitize_start_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_scope_sanitize_start_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_scope_sanitize_end_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_scope_sanitize_end_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: LlmRequestInterceptFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_request_intercept(
+            self,
+            name,
+            priority,
+            break_chain,
+            callback,
+        )
+    }
+    fn register_tool_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_sanitize_request_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_sanitize_response_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolConditionalFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_conditional_execution_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeRequestFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_sanitize_request_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeResponseFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_sanitize_response_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmConditionalFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_conditional_execution_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_execution_intercept(self, name, priority, callback)
+    }
+    fn register_llm_stream_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmStreamExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_stream_execution_intercept(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: ToolInterceptFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_request_intercept(
+            self,
+            name,
+            priority,
+            break_chain,
+            callback,
+        )
+    }
+    fn register_tool_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_execution_intercept(self, name, priority, callback)
+    }
+
+    fn uses_plugin_component_namespace(&self) -> bool {
+        PluginRegistrationContext::uses_plugin_component_namespace(self)
+    }
+    fn with_child_namespace(&self, name: &str) -> Box<dyn crate::PluginRegistrar> {
+        Box::new(PluginRegistrationContext::with_child_namespace(self, name))
+    }
+    fn into_registrations(self: Box<Self>) -> Vec<PluginRegistration> {
+        PluginRegistrationContext::into_registrations(*self)
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
+#[cfg(test)]
+#[path = "../tests/support/exporter.rs"]
+mod exporter;
+#[cfg(test)]
+#[path = "../tests/support/observability_runtime.rs"]
+mod observability_runtime;
+#[cfg(test)]
+#[path = "../tests/support/observability/mod.rs"]
+mod observability_test_support;
+#[cfg(test)]
+#[path = "../tests/unit/pricing_tests.rs"]
+mod pricing_tests;
+#[cfg(test)]
+#[path = "../tests/unit/resource_plugin_tests.rs"]
+mod resource_plugin_tests;
+#[cfg(test)]
+#[path = "../tests/support/composition.rs"]
+mod test_composition;

@@ -88,7 +88,7 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         &self,
         diagnostic: nemo_relay_plugin::component::RuntimeDiagnostic,
     ) {
-        nemo_relay_runtime::plugin::record_active_plugin_runtime_diagnostic(diagnostic);
+        nemo_relay_plugin_host::record_active_plugin_runtime_diagnostic(diagnostic);
     }
 }
 pub(crate) fn core_host() -> std::sync::Arc<dyn nemo_relay_observability::host::ObservabilityHost> {
@@ -101,8 +101,8 @@ pub(crate) fn record_plugin_runtime_diagnostic(
     message: String,
     count: u64,
 ) {
-    nemo_relay_runtime::plugin::record_active_plugin_runtime_diagnostic(
-        nemo_relay_runtime::plugin::RuntimeDiagnostic {
+    nemo_relay_plugin_host::record_active_plugin_runtime_diagnostic(
+        nemo_relay_plugin_host::RuntimeDiagnostic {
             code: code.to_string(),
             component: "observability".to_string(),
             field,

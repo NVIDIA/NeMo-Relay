@@ -12,7 +12,7 @@ use nemo_relay_runtime::api::runtime::LlmExecutionNextFn;
 use serde_json::{Value as Json, json};
 use {
     crate::plugin_host_test_support::test_initialize_plugin_host_exact,
-    nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_plugin_host::PluginConfig,
 };
 
 pub fn chat_request(prompt: &str) -> LlmRequest {

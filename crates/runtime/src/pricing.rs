@@ -23,10 +23,6 @@ pub fn attach_estimated_cost_for_provider(
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/pricing_tests.rs"]
-mod tests;
-
-#[cfg(test)]
 #[path = "../tests/unit/gemini_generate_content_pricing_tests.rs"]
 mod gemini_generate_content_tests;
 

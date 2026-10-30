@@ -25,13 +25,13 @@ use nemo_relay::error::Result as FlowResult;
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_observability::otel_logs::OpenTelemetryLogConfig;
 use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
-use nemo_relay_runtime::api::runtime::LlmCodecIdentity;
-use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
-use nemo_relay_runtime::plugin::dynamic::{
+use nemo_relay_plugin_host::dynamic::{
     DynamicPluginKind, VerifiedDynamicPluginSpec, WorkerPluginActivation, WorkerPluginLoadSpec,
     load_worker_plugins, load_worker_plugins_with_diagnostics,
 };
-use nemo_relay_runtime::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
+use nemo_relay_plugin_host::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
+use nemo_relay_runtime::api::runtime::LlmCodecIdentity;
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -200,7 +200,7 @@ fn worker_activation_with_no_specs_is_empty() {
 #[tokio::test]
 async fn worker_sdk_records_into_selected_host_context_and_survives_plugin_cleanup() {
     use nemo_relay_diagnostics::*;
-    use nemo_relay_runtime::plugin::dynamic::load_worker_plugins_with_diagnostics;
+    use nemo_relay_plugin_host::dynamic::load_worker_plugins_with_diagnostics;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();

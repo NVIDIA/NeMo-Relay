@@ -24,17 +24,17 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
 };
-use nemo_relay_runtime::api::runtime::{
-    LlmJsonStream, TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_thread_scope_stack,
-    create_scope_stack, restore_thread_scope_stack, set_thread_scope_stack,
-};
-use nemo_relay_runtime::plugin::dynamic::{
+use nemo_relay_plugin_host::dynamic::{
     DynamicPluginKind, NativePluginLoadSpec, VerifiedDynamicPluginSpec, initialize,
     load_native_plugins,
 };
-use nemo_relay_runtime::plugin::{
+use nemo_relay_plugin_host::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, Result as PluginResult,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
+};
+use nemo_relay_runtime::api::runtime::{
+    LlmJsonStream, TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_thread_scope_stack,
+    create_scope_stack, restore_thread_scope_stack, set_thread_scope_stack,
 };
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};

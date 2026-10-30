@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use nemo_relay_runtime::plugin::dynamic::PluginHostReport;
+use nemo_relay_plugin_host::dynamic::PluginHostReport;
 use serde::Serialize;
 
 use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};

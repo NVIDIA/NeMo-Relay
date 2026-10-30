@@ -6,7 +6,7 @@
 use super::*;
 use std::ffi::{CStr, CString};
 
-use nemo_relay_runtime::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 
 #[test]
 fn test_last_error_round_trip_and_clear() {

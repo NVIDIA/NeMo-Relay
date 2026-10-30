@@ -13,7 +13,7 @@ use nemo_relay_model_pricing::plugin::{
     store_pricing_config,
 };
 use nemo_relay_model_pricing::{PricingCatalog, PricingSourceConfig};
-use nemo_relay_runtime::plugin::PluginConfig;
+use nemo_relay_plugin_host::PluginConfig;
 use nemo_relay_types::codec::response::Usage;
 
 use crate::configuration::resolve_server_config;
@@ -215,6 +215,6 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 #[path = "../../../tests/coverage/commands/model_pricing_tests.rs"]
 mod tests;
 
-fn pricing_config_error(error: nemo_relay_runtime::plugin::PluginError) -> CliError {
+fn pricing_config_error(error: nemo_relay_plugin_host::PluginError) -> CliError {
     CliError::Config(error.to_string())
 }

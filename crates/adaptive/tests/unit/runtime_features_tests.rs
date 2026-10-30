@@ -44,11 +44,11 @@ use serde_json::json;
 use tokio_stream::StreamExt;
 use {
     crate::test_support::plugin_host::test_close_plugin_host,
-    nemo_relay_runtime::plugin::rollback_registrations,
+    nemo_relay_plugin_host::rollback_registrations,
 };
 use {
-    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::DiagnosticLevel,
-    nemo_relay_runtime::plugin::UnsupportedBehavior,
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::UnsupportedBehavior,
 };
 
 fn reset_global() {

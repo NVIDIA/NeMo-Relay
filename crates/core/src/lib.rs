@@ -4,8 +4,10 @@
 //! Public Rust SDK composition for NeMo Relay.
 //!
 //! Use `nemo-relay-codecs` for provider implementations and
-//! `nemo-relay-runtime` for execution internals, diagnostics and
-//! plugin hosting. This crate assembles the default components and provides
+//! `nemo-relay-runtime` for execution internals, `nemo-relay-plugin-host` for
+//! plugin hosting, `nemo-relay-logging` for logging setup, and
+//! `nemo-relay-diagnostics` for bounded evidence and inspection.
+//! This crate assembles the default components and provides
 //! high-level lifecycle APIs and exporter constructors.
 
 pub mod api;

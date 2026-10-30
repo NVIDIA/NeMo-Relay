@@ -19,7 +19,7 @@ fn test_adaptive_config_defaults() {
     assert!(config.response_cache.is_none());
     assert_eq!(
         config.policy.unknown_component,
-        nemo_relay_runtime::plugin::UnsupportedBehavior::Warn
+        nemo_relay_plugin_host::UnsupportedBehavior::Warn
     );
 }
 

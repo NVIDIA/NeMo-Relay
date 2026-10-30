@@ -256,9 +256,7 @@ impl LlmOptimizationRecorder {
     /// The timestamp is captured only after the contribution wins its final
     /// sequence and size checks, so execution-time marks retain commit-time
     /// ordering even when they are emitted at the LLM close boundary.
-    pub(crate) fn unemitted_with_timestamps(
-        &self,
-    ) -> Vec<(LlmOptimizationContribution, DateTime<Utc>)> {
+    pub fn unemitted_with_timestamps(&self) -> Vec<(LlmOptimizationContribution, DateTime<Utc>)> {
         let Ok(state) = self.state.state.lock() else {
             return Vec::new();
         };
@@ -463,7 +461,8 @@ pub fn record_llm_optimization_contribution(contribution: LlmOptimizationContrib
     current_llm_optimization_recorder().is_some_and(|recorder| recorder.record(contribution))
 }
 
-pub(crate) async fn scope_llm_optimization_recorder<F: std::future::Future>(
+/// Install an optimization recorder for the duration of an asynchronous operation.
+pub async fn scope_llm_optimization_recorder<F: std::future::Future>(
     recorder: LlmOptimizationRecorder,
     future: F,
 ) -> F::Output {

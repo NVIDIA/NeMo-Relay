@@ -78,17 +78,17 @@ use {
     nemo_relay::plugin::initialize as initialize_impl,
     nemo_relay::plugin::validate as validate_impl,
     nemo_relay::plugin::validate_exact as validate_exact_impl,
-    nemo_relay_runtime::plugin::dynamic::PluginHostActivation as CorePluginHostActivation,
-    nemo_relay_runtime::plugin::dynamic::PluginHostReport,
+    nemo_relay_plugin_host::dynamic::PluginHostActivation as CorePluginHostActivation,
+    nemo_relay_plugin_host::dynamic::PluginHostReport,
 };
 use {
     nemo_relay::plugin::list_plugin_kinds as list_plugin_kinds_impl,
-    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::DiagnosticLevel,
-    nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginConfig,
-    nemo_relay_runtime::plugin::PluginError, nemo_relay_runtime::plugin::PluginRegistration,
-    nemo_relay_runtime::plugin::deregister_plugin as deregister_plugin_impl,
-    nemo_relay_runtime::plugin::register_plugin as register_plugin_impl,
-    nemo_relay_runtime::plugin::rollback_registrations,
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::PluginRegistration,
+    nemo_relay_plugin_host::deregister_plugin as deregister_plugin_impl,
+    nemo_relay_plugin_host::register_plugin as register_plugin_impl,
+    nemo_relay_plugin_host::rollback_registrations,
 };
 
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
@@ -2498,7 +2498,7 @@ impl Plugin for NodePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();
@@ -6132,7 +6132,7 @@ struct CacheRequestFactsOptions {
 enum NodeAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_relay_runtime::plugin::ConfigReport,
+        report: nemo_relay_plugin_host::ConfigReport,
     },
     Ready(CoreAdaptiveRuntime),
 }
@@ -6348,7 +6348,7 @@ impl AdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> napi::Result<nemo_relay_runtime::plugin::ConfigReport> {
+) -> napi::Result<nemo_relay_plugin_host::ConfigReport> {
     let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
@@ -6780,9 +6780,8 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: nemo_relay_runtime::plugin::dynamic::PluginHostConfig =
-        serde_json::from_value(config)
-            .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
@@ -6794,9 +6793,8 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: nemo_relay_runtime::plugin::dynamic::PluginHostConfig =
-        serde_json::from_value(config)
-            .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))

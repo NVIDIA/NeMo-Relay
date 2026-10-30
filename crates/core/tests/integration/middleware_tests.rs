@@ -70,6 +70,7 @@ use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::atif::AtifAgentInfo;
 
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_plugin_host::{PluginRegistrationContext, rollback_registrations};
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::{
@@ -80,7 +81,6 @@ use nemo_relay_runtime::api::runtime::{
     create_scope_stack, current_scope_stack, set_thread_scope_stack,
 };
 use nemo_relay_runtime::json::Json;
-use nemo_relay_runtime::plugin::{PluginRegistrationContext, rollback_registrations};
 use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
     LlmOptimizationTokens,
