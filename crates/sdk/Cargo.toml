@@ -28,4 +28,4 @@ nemo-relay-diagnostics.workspace = true
 
 # Third-party dependencies.
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

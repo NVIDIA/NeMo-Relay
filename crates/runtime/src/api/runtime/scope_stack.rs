@@ -1115,6 +1115,18 @@ tokio::task_local! {
     static ACTIVE_EVENT_TRACE_CONTEXT: Option<W3cTraceContext>;
 }
 
+/// Run a future with an explicit, task-local scope stack.
+///
+/// The binding follows the future across executor threads and is restored on
+/// completion, cancellation, or unwinding. Spawned tasks must receive their own
+/// binding explicitly; use a separate stack for each independent request.
+pub async fn with_task_scope_stack<T>(
+    stack: ScopeStackHandle,
+    future: impl Future<Output = T>,
+) -> T {
+    TASK_SCOPE_STACK.scope(stack, future).await
+}
+
 /// Run a future with `uuid` as the causally active managed event.
 pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = T>) -> T {
     with_active_event_trace_context(uuid, None, future).await

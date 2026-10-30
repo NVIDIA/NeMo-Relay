@@ -39,7 +39,7 @@ pub use scope_stack::{
     install_scope_stack_override, propagate_scope_to_thread, restore_scope_stack_override,
     restore_thread_scope_stack, scope_stack_active, scope_stack_snapshot, set_thread_scope_stack,
     sync_thread_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
-    with_active_event_uuid, with_scope_stack,
+    with_active_event_uuid, with_scope_stack, with_task_scope_stack,
 };
 pub use state::NemoRelayContextState;
 #[doc(hidden)]

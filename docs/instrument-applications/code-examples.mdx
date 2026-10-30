@@ -249,7 +249,7 @@ try {
 use nemo_relay::llm::{
     llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
 };
-use nemo_relay_runtime::api::runtime::LlmJsonStream;
+use nemo_relay::middleware::LlmJsonStream;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -551,16 +551,15 @@ await withScope('request', ScopeType.Agent, async (handle) => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK};
+use nemo_relay::context::{create_scope_stack, set_thread_scope_stack, with_task_scope_stack};
 use nemo_relay::scope::{event, EmitMarkEventParams};
 use serde_json::json;
 
 let stack = create_scope_stack();
-TASK_SCOPE_STACK
-    .scope(stack.clone(), async {
-        event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
-    })
-    .await?;
+with_task_scope_stack(stack.clone(), async {
+    event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
+})
+.await?;
 
 std::thread::spawn(move || {
     set_thread_scope_stack(stack);

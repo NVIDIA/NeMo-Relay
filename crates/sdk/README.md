@@ -58,7 +58,7 @@ Node.js bindings mirror the semantics exposed by this crate.
 ## Crate boundaries
 
 `nemo-relay` is a declarative Rust SDK over `nemo-relay-runtime`. Its flat
-modules include `scope`, `llm`, `tool`, `registry`, `subscriber`, and `exporter`.
+modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, and `exporter`.
 Shared request, response, error, and codec contracts are re-exported from
 `nemo-relay-types`; applications do not need an `api` module prefix.
 
@@ -232,3 +232,10 @@ NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
 JSON Schema support, gRPC workers, object storage, and ATOF streaming are built
 in to their owning crates. These capabilities require no Cargo feature flags,
 including when consuming crates with `default-features = false`.
+
+Use `context::with_task_scope_stack(context::create_scope_stack(), future)`
+for each independent async request. The task-local binding follows the future
+across executor threads. Use `context::propagate_scope_to_thread()` and
+`context::set_thread_scope_stack()` when handing work to an OS thread, or
+`context::capture_propagation_context()` and
+`context::create_scope_stack_from_propagation()` across process boundaries.

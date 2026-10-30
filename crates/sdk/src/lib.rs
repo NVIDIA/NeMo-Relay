@@ -36,6 +36,18 @@ pub mod event {
     pub use nemo_relay_runtime::api::event::EventNormalizationExt;
     pub use nemo_relay_types::api::event::*;
 }
+/// Task, thread, and distributed request context propagation.
+pub mod context {
+    pub use nemo_relay_runtime::api::runtime::scope_stack::snapshot_scope_stack;
+    pub use nemo_relay_runtime::api::runtime::{
+        PropagationContext, ScopeStackHandle, ThreadScopeStackBinding, capture_propagation_context,
+        capture_propagation_context_with_root, capture_rootless_propagation_context,
+        capture_thread_scope_stack, capture_traceparent, create_scope_stack,
+        create_scope_stack_from_propagation, fork_scope_stack, propagate_scope_to_thread,
+        restore_thread_scope_stack, set_thread_scope_stack, with_scope_stack,
+        with_task_scope_stack,
+    };
+}
 /// Scope lifecycle and event emission.
 pub mod scope {
     pub use nemo_relay_runtime::api::scope::{
