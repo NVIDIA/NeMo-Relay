@@ -25,10 +25,12 @@ use nemo_relay::api::llm::{
     llm_request_intercepts_with_source,
 };
 use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay::api::runtime::TASK_SCOPE_STACK;
-use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
-use nemo_relay::codec::streaming::SseEventDecoder;
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::codec::resolve::{
+    ProviderSurface, request_codec, response_codec, streaming_codec,
+};
+use nemo_relay_runtime::codec::streaming::SseEventDecoder;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -167,7 +169,8 @@ impl ManagedRuntime {
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
         let sessions = self.sessions.close_all("daemon_worker_shutdown").await;
-        let subscribers = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
+        let subscribers =
+            nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
         let activation = lock(&self.activation)
             .take()
             .map(ServerPluginActivation::clear);

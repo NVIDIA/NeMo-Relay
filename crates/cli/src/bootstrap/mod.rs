@@ -6,7 +6,7 @@
 pub(crate) mod state;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+use nemo_relay_runtime::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 
 use std::env;
 use std::ffi::OsString;

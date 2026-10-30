@@ -28,19 +28,19 @@ use nemo_relay::api::llm::gateway::{ResponseCompletionFn, execute as execute_gat
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_runtime::api::runtime::{
     LlmCodecIdentity, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
     TASK_SCOPE_STACK,
 };
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::resolve::{
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
     streaming_codec as build_streaming_codec,
 };
-use nemo_relay::codec::streaming::StreamingCodec;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
-use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_runtime::codec::streaming::StreamingCodec;
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_runtime::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
@@ -1146,7 +1146,7 @@ fn sse_json_stream_with_thresholds(
     first_event_threshold: std::time::Duration,
     stall_threshold: std::time::Duration,
 ) -> LlmJsonStream {
-    use nemo_relay::codec::streaming::SseEventDecoder;
+    use nemo_relay_runtime::codec::streaming::SseEventDecoder;
     let mut decoder = SseEventDecoder::new();
     let mut bytes = response.bytes_stream();
     let stream = stream! {

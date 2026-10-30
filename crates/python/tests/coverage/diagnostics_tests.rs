@@ -49,7 +49,7 @@ fn canonical_memory_fixture_converts_all_quantities_without_retyping_text_or_dec
     fn compare(original: &serde_json::Value, converted: &serde_json::Value, field: &str) {
         match original {
             serde_json::Value::String(text)
-                if nemo_relay::diagnostics::embedded::is_diagnostic_number_field(field) =>
+                if nemo_relay_runtime::diagnostics::embedded::is_diagnostic_number_field(field) =>
             {
                 assert_eq!(converted.as_u64(), text.parse::<u64>().ok(), "{field}");
                 assert!(converted.is_u64(), "{field}");

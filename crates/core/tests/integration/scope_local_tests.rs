@@ -23,10 +23,6 @@ use nemo_relay::api::registry::{
     scope_register_event_metadata_injector, scope_register_tool_conditional_execution_guardrail,
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::ToolExecutionNextFn;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, event, pop_scope, push_scope};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::subscriber::{
@@ -34,6 +30,10 @@ use nemo_relay::api::subscriber::{
 };
 use nemo_relay::api::tool::{tool_call, tool_call_end, tool_call_execute};
 use nemo_relay::error::FlowError;
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::ToolExecutionNextFn;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use serde_json::json;
 use test_support::ready;
 

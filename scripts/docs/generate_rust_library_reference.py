@@ -21,7 +21,8 @@ from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
-    ("nemo-relay", "nemo_relay", "Core Rust runtime APIs for NeMo Relay."),
+    ("nemo-relay", "nemo_relay", "Public Rust SDK and default component composition for NeMo Relay."),
+    ("nemo-relay-runtime", "nemo_relay_runtime", "Execution engine, registries, diagnostics, and plugin hosting."),
     ("nemo-relay-model-pricing", "nemo_relay_model_pricing", "Model pricing catalogs and cost estimation."),
     (
         "nemo-relay-resource-metrics",

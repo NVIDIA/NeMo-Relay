@@ -16,10 +16,10 @@ use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
 use nemo_relay::api::scope::{PushScopeParams, pop_scope, push_scope};
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
-use nemo_relay::codec::response::{
+use nemo_relay_runtime::codec::response::{
     AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, CostEstimate, CostSource,
     FinishReason, ResponseToolCall, Usage,
 };
@@ -73,7 +73,7 @@ fn py_mark_event(event: Event) -> PyMarkEvent {
 fn test_tool_execution_context_repr_excludes_arguments() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let context = nemo_relay::api::runtime::ToolExecutionContext::new(
+        let context = nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
             "lookup",
             json!({"secret": "private"}),
         )
@@ -710,7 +710,7 @@ fn test_request_and_handle_wrappers_cover_remaining_methods() {
     Python::attach(|py| {
         fn assert_remaining_handle_methods(py: Python<'_>) {
             let stack = PyScopeStack {
-                inner: nemo_relay::api::runtime::create_scope_stack(),
+                inner: nemo_relay_runtime::api::runtime::create_scope_stack(),
                 publication_buffer: None,
             };
             assert_eq!(stack.__repr__(), "<ScopeStack>");
@@ -2076,22 +2076,24 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     },
                 ],
                 model: Some("demo-model".into()),
-                params: Some(nemo_relay::codec::request::GenerationParams {
+                params: Some(nemo_relay_runtime::codec::request::GenerationParams {
                     temperature: Some(0.1),
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
-                tools: Some(vec![nemo_relay::codec::request::ToolDefinition::Function {
-                    function: nemo_relay::codec::request::FunctionDefinition {
-                        name: "lookup".into(),
-                        description: None,
-                        parameters: Some(json!({"type": "object"})),
-                        strict: None,
+                tools: Some(vec![
+                    nemo_relay_runtime::codec::request::ToolDefinition::Function {
+                        function: nemo_relay_runtime::codec::request::FunctionDefinition {
+                            name: "lookup".into(),
+                            description: None,
+                            parameters: Some(json!({"type": "object"})),
+                            strict: None,
+                            extra: serde_json::Map::new(),
+                        },
                         extra: serde_json::Map::new(),
                     },
-                    extra: serde_json::Map::new(),
-                }]),
-                tool_choice: Some(nemo_relay::codec::request::ToolChoice::Auto),
+                ]),
+                tool_choice: Some(nemo_relay_runtime::codec::request::ToolChoice::Auto),
                 store: None,
                 previous_response_id: None,
                 truncation: None,

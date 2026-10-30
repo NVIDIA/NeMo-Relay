@@ -7,10 +7,11 @@ use super::*;
 fn execution_next_context_restores_scope() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let scope_stack = nemo_relay::api::runtime::create_scope_stack();
-        let context = nemo_relay::api::runtime::with_scope_stack(scope_stack.clone(), || {
-            MiddlewareContinuationContext::capture()
-        });
+        let scope_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+        let context =
+            nemo_relay_runtime::api::runtime::with_scope_stack(scope_stack.clone(), || {
+                MiddlewareContinuationContext::capture()
+            });
 
         let observed =
             tokio::spawn(async move { context.run(async move { current_scope_stack() }).await })

@@ -416,7 +416,7 @@ For example:
 
 ```rust
 let _logging_runtime =
-    nemo_relay::logging::LoggingRuntime::configure_from_environment()?;
+    nemo_relay_runtime::logging::LoggingRuntime::configure_from_environment()?;
 ```
 
 Keep the returned runtime alive until application shutdown so pending file

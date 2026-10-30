@@ -274,7 +274,7 @@ fn user_config_dir_ignores_empty_or_relative_xdg_config_home() {
             "{value:?}"
         );
         assert_eq!(
-            nemo_relay::plugin::user_config_dir(),
+            nemo_relay_runtime::plugin::user_config_dir(),
             process_home,
             "{value:?}"
         );

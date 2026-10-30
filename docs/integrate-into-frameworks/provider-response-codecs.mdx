@@ -294,7 +294,7 @@ await activation.close();
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate_exact};
+use nemo_relay::plugin::{initialize, validate_exact};
 use serde_json::json;
 
 let config: PluginConfig = serde_json::from_value(json!({
@@ -547,8 +547,8 @@ const response = await typedLlmExecute(
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay_runtime::codec::traits::LlmResponseCodec;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -707,8 +707,8 @@ this callback through `StreamingCodec::borrowed_collector()`:
 
 ```rust
 use nemo_relay::api::llm::LlmStreamCallExecuteParams;
-use nemo_relay::codec::openai_chat::OpenAIChatStreamingCodec;
-use nemo_relay::codec::streaming::StreamingCodec;
+use nemo_relay_runtime::codec::openai_chat::OpenAIChatStreamingCodec;
+use nemo_relay_runtime::codec::streaming::StreamingCodec;
 
 let streaming_codec = OpenAIChatStreamingCodec::new();
 let params = LlmStreamCallExecuteParams::builder()

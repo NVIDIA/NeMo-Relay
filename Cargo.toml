@@ -4,6 +4,7 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/runtime",
     "crates/types",
     "crates/model-pricing",
     "crates/resource-metrics",
@@ -19,8 +20,8 @@ members = [
     "crates/ffi",
     "crates/node",
     # Unpublished examples, test fixtures, and benchmark tools share Cargo.lock.
-    "crates/core/tests/fixtures/native_plugin",
-    "crates/core/tests/fixtures/worker_plugin",
+    "crates/runtime/tests/fixtures/native_plugin",
+    "crates/runtime/tests/fixtures/worker_plugin",
     "examples/rust-native-plugin",
     "examples/rust-grpc-worker-plugin",
     "examples/language-binding-plugin/rust",
@@ -56,6 +57,7 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 # dependencies in each member to avoid enabling capabilities for unrelated crates.
 
 # First-party crates (versions are updated by `just set-version`).
+nemo-relay-runtime = { version = "1.0.0", path = "crates/runtime", default-features = false }
 nemo-relay = { version = "1.0.0", path = "crates/core", default-features = false }
 nemo-relay-adaptive = { version = "1.0.0", path = "crates/adaptive" }
 nemo-relay-cli = { version = "1.0.0", path = "crates/cli" }

@@ -54,7 +54,7 @@ pub(super) fn grant(
         o.enabled
             && o.query_available
             && o.whole_context_read
-            && o.schema_version == nemo_relay::diagnostics::DIAGNOSTIC_SCHEMA_VERSION
+            && o.schema_version == nemo_relay_runtime::diagnostics::DIAGNOSTIC_SCHEMA_VERSION
             && o.max_page_bytes > 0
     })?;
     diag::DiagnosticReadGrant::issue(
@@ -359,7 +359,7 @@ pub(super) async fn read(
         if !offer.query_available {
             return error(HttpReason::QueryDisabled);
         }
-        if offer.schema_version != nemo_relay::diagnostics::DIAGNOSTIC_SCHEMA_VERSION {
+        if offer.schema_version != nemo_relay_runtime::diagnostics::DIAGNOSTIC_SCHEMA_VERSION {
             return error(HttpReason::UnsupportedSchema);
         }
         let Some(key) = key(session) else {

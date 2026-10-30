@@ -545,7 +545,7 @@ use nemo_relay_observability::plugin::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::{initialize, validate};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atif: Some(AtifSectionConfig {

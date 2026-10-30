@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use libc::c_char;
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn,
     LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
     LlmFallibleFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
@@ -37,9 +37,9 @@ use tokio_stream::StreamExt;
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_runtime::codec::traits::LlmCodec;
 
 use crate::convert::json_to_c_string;
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
@@ -100,7 +100,7 @@ pub fn wrap_conditional_middleware_guardrail_fn(
     cb: FfiConditionalMiddlewareGuardrailFn,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> nemo_relay::api::runtime::ConditionalMiddlewareGuardrailFn {
+) -> nemo_relay_runtime::api::runtime::ConditionalMiddlewareGuardrailFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |kinds, registration_name| {
         clear_last_error();

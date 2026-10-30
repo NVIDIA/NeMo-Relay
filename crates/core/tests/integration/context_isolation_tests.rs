@@ -5,7 +5,11 @@
 
 use std::sync::Arc;
 
-use nemo_relay::api::runtime::{
+use nemo_relay::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
+};
+use nemo_relay::error::FlowError;
+use nemo_relay_runtime::api::runtime::{
     PropagationContext, ScopeStack, TASK_SCOPE_STACK, ThreadScopeStackBinding,
     capture_rootless_propagation_context, capture_thread_scope_stack, capture_traceparent,
     create_scope_stack, create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
@@ -13,10 +17,6 @@ use nemo_relay::api::runtime::{
     set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
     task_scope_top, with_scope_stack,
 };
-use nemo_relay::api::scope::{
-    PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
-};
-use nemo_relay::error::FlowError;
 use uuid::Uuid;
 
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
@@ -319,7 +319,7 @@ fn propagated_w3c_parent_is_not_rewritten_to_a_relay_span_id() {
     };
     set_thread_scope_stack(create_scope_stack_from_propagation(&propagation).unwrap());
 
-    let captured = nemo_relay::api::runtime::capture_propagation_context().unwrap();
+    let captured = nemo_relay_runtime::api::runtime::capture_propagation_context().unwrap();
 
     assert_eq!(captured.parent_uuid, parent_uuid);
     assert_eq!(captured.traceparent.as_deref(), Some(traceparent));
@@ -407,9 +407,10 @@ fn capture_with_root_preserves_imported_w3c_context() {
         .unwrap(),
     );
 
-    let captured =
-        nemo_relay::api::runtime::capture_propagation_context_with_root(Some(Uuid::now_v7()))
-            .unwrap();
+    let captured = nemo_relay_runtime::api::runtime::capture_propagation_context_with_root(Some(
+        Uuid::now_v7(),
+    ))
+    .unwrap();
     assert_eq!(captured.tracestate.as_deref(), Some("vendor=value"));
     assert_eq!(
         &captured.traceparent.unwrap()[3..35],

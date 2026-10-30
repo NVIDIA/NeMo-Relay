@@ -7,22 +7,25 @@ use nemo_relay::api::llm::{LlmCallExecuteParams, llm_call_execute};
 use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
-use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::codec::resolve::{
-    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
-};
 use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact};
 use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay_observability::otel::OpenTelemetrySubscriber;
+use nemo_relay_runtime::api::runtime::EventSubscriberFn;
+use nemo_relay_runtime::codec::resolve::{
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
+use {
+    nemo_relay::plugin::test_initialize_plugin_host_exact,
+    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::test_close_plugin_host,
+};
 
 use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
@@ -1270,13 +1273,12 @@ enabled = true
 
 fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExporter {
     std::fs::create_dir_all(output_directory).unwrap();
-    AtofExporter::new(
+    nemo_relay::api::exporter::atof(
         AtofExporterConfig::new()
             .with_output_directory(output_directory)
             .with_filename(filename)
             .with_mode(AtofExporterMode::Overwrite),
     )
-    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap()
 }
 
@@ -1309,12 +1311,11 @@ fn make_typed_test_subscriber(
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         provider,
         scope.to_string(),
         otel_type,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     (subscriber, exporter)
 }
 
@@ -2063,12 +2064,11 @@ fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         provider,
         "harness-tool-metadata",
         OpenTelemetryType::GenAi,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     for event in events {
         subscriber.subscriber()(event);
     }
@@ -9326,7 +9326,6 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
             ..Default::default()
         },
     )
-    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     for event in events.iter() {
         subscriber.subscriber()(event);
@@ -9361,12 +9360,11 @@ fn assert_mcp_failure_projections(events: &[Event]) {
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
             provider,
             "tool-failure",
             projection,
-        )
-        .with_host(nemo_relay::api::subscriber::observability_host());
+        );
         for event in events.iter() {
             subscriber.subscriber()(event);
         }
@@ -9436,12 +9434,11 @@ fn assert_completion_marks_omitted_from_genai(events: &[Event]) {
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         provider,
         "partial-hooks",
         OpenTelemetryType::GenAi,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     for event in events {
         subscriber.subscriber()(event);
     }
@@ -10224,12 +10221,11 @@ async fn codex_gateway_results_recover_missing_mcp_completions_by_id_and_owner()
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
             provider,
             "mcp-recovery",
             OpenTelemetryType::GenAi,
-        )
-        .with_host(nemo_relay::api::subscriber::observability_host());
+        );
         for event in events.iter() {
             subscriber.subscriber()(event);
         }
@@ -11684,7 +11680,7 @@ async fn hook_launcher_trace_context_parents_the_session_once() {
         let sessions = manager.inner.lock().await;
         let stack = sessions.get(session_id).unwrap().subagent_stacks["worker"].clone();
         let traceparent = TASK_SCOPE_STACK
-            .sync_scope(stack, nemo_relay::api::runtime::capture_traceparent)
+            .sync_scope(stack, nemo_relay_runtime::api::runtime::capture_traceparent)
             .unwrap();
         assert!(
             traceparent.starts_with(&format!("00-{LAUNCHER_TRACE_ID}-")),

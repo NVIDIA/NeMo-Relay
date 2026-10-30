@@ -3,7 +3,7 @@
 
 //! Unit tests for acg profile in the NeMo Relay adaptive crate.
 
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::codec::request::{
     AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent, OpenAiImageUrl,
     ToolDefinition,
 };

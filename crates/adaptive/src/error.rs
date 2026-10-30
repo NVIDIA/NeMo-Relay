@@ -3,7 +3,7 @@
 
 //! Error types for the nemo-relay-adaptive crate.
 
-use nemo_relay::plugin::PluginError;
+use nemo_relay_runtime::plugin::PluginError;
 use thiserror::Error;
 
 /// The error type for all nemo-relay-adaptive operations.

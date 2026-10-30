@@ -164,7 +164,7 @@ async fn inspector_continues_http_pages_beyond_the_old_query_limit() {
         http::{Request, StatusCode},
     };
     use http_body_util::BodyExt;
-    use nemo_relay::diagnostics::*;
+    use nemo_relay_runtime::diagnostics::*;
     use std::num::NonZeroU64;
     use tower::ServiceExt;
     let d = Diagnostics::from_settings(

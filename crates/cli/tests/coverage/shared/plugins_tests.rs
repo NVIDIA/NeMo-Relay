@@ -5,22 +5,25 @@ use super::*;
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::plugins::ConfigurationScope;
 use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
-use nemo_relay::config_editor::{
-    EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
-};
-use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_observability::plugin::{
     AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_runtime::config_editor::{
+    EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
+};
 use serde_json::Map;
 use std::path::PathBuf;
+use {
+    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::PluginComponentSpec,
+    nemo_relay_runtime::plugin::PluginConfig,
+};
 
 #[test]
 fn plugin_document_policy_edits_preserve_host_extensions_and_prune_default_fields() {
-    use nemo_relay::plugin::UnsupportedBehavior;
+    use nemo_relay_runtime::plugin::UnsupportedBehavior;
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("plugins.toml");

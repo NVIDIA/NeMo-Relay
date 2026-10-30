@@ -11,12 +11,14 @@ use nemo_relay_observability::{atif, atof, otel, otel_logs, otel_metrics};
 
 /// Create an ATIF exporter using core's provider codecs and scope context.
 pub fn atif(session_id: String, agent_info: atif::AtifAgentInfo) -> atif::AtifExporter {
+    crate::composition::ensure_runtime_services();
     atif::AtifExporter::new(session_id, agent_info)
         .with_host(crate::observability_runtime::core_host())
 }
 
 /// Create an ATOF exporter ready for core subscriber registration.
 pub fn atof(config: atof::AtofExporterConfig) -> atof::Result<atof::AtofExporter> {
+    crate::composition::ensure_runtime_services();
     atof::AtofExporter::new(config)
         .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
 }
@@ -25,6 +27,7 @@ pub fn atof(config: atof::AtofExporterConfig) -> atof::Result<atof::AtofExporter
 pub fn opentelemetry(
     config: otel::OpenTelemetryConfig,
 ) -> otel::Result<otel::OpenTelemetrySubscriber> {
+    crate::composition::ensure_runtime_services();
     otel::OpenTelemetrySubscriber::new(config)
         .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
 }
@@ -33,6 +36,7 @@ pub fn opentelemetry(
 pub fn opentelemetry_file(
     config: otel::OpenTelemetryFileSinkConfig,
 ) -> otel::Result<otel::OpenTelemetrySubscriber> {
+    crate::composition::ensure_runtime_services();
     otel::OpenTelemetrySubscriber::new_file_sink(config)
         .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
 }
@@ -41,6 +45,7 @@ pub fn opentelemetry_file(
 pub fn opentelemetry_logs(
     config: otel_logs::OpenTelemetryLogConfig,
 ) -> otel::Result<otel_logs::OpenTelemetryLogSubscriber> {
+    crate::composition::ensure_runtime_services();
     otel_logs::OpenTelemetryLogSubscriber::new(config)
         .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
 }
@@ -49,6 +54,34 @@ pub fn opentelemetry_logs(
 pub fn opentelemetry_metrics(
     config: otel_metrics::OpenTelemetryMetricConfig,
 ) -> otel::Result<otel_metrics::OpenTelemetryMetricSubscriber> {
+    crate::composition::ensure_runtime_services();
     otel_metrics::OpenTelemetryMetricSubscriber::new(config)
         .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+}
+
+/// Create a runtime-bound subscriber from a configured tracer provider.
+pub fn opentelemetry_from_provider(
+    provider: opentelemetry_sdk::trace::SdkTracerProvider,
+    instrumentation_scope: impl Into<String>,
+) -> otel::OpenTelemetrySubscriber {
+    opentelemetry_from_provider_with_type(
+        provider,
+        instrumentation_scope,
+        nemo_relay_observability::OpenTelemetryType::Full,
+    )
+}
+
+/// Create a runtime-bound subscriber with a selected trace projection.
+pub fn opentelemetry_from_provider_with_type(
+    provider: opentelemetry_sdk::trace::SdkTracerProvider,
+    instrumentation_scope: impl Into<String>,
+    projection: nemo_relay_observability::OpenTelemetryType,
+) -> otel::OpenTelemetrySubscriber {
+    crate::composition::ensure_runtime_services();
+    otel::OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        provider,
+        instrumentation_scope,
+        projection,
+    )
+    .with_host(crate::observability_runtime::core_host())
 }

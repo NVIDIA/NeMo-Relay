@@ -9,13 +9,15 @@
 
 use serde_json::{Map, Value as Json, json};
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, ContentPart, MessageContent};
-use nemo_relay::codec::resolve::{
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, ContentPart, MessageContent};
+use nemo_relay_runtime::codec::resolve::{
     ProviderSurface, detect_request_surface_with_hint, detect_response_surface, request_codec,
     response_codec,
 };
-use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use nemo_relay_runtime::codec::response::{
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage,
+};
 
 /// Render a sanitized request through a fresh, provider-specific empty template.
 ///
@@ -79,7 +81,7 @@ fn request_template(surface: ProviderSurface, request: &mut AnnotatedLlmRequest)
 }
 
 fn oci_request_template(request: &mut AnnotatedLlmRequest) -> Option<Json> {
-    use nemo_relay::codec::request::ApiSpecificRequest;
+    use nemo_relay_runtime::codec::request::ApiSpecificRequest;
 
     let (api_format, compartment_id, had_serving_mode) = match request.api_specific.as_ref() {
         Some(ApiSpecificRequest::OCIGenAI {
@@ -523,7 +525,7 @@ fn insert_u64(object: &mut Map<String, Json>, key: &str, value: Option<u64>) {
     }
 }
 
-fn cost_json(cost: &nemo_relay::codec::response::CostEstimate) -> Json {
+fn cost_json(cost: &nemo_relay_runtime::codec::response::CostEstimate) -> Json {
     let mut rendered = Map::new();
     insert_f64(&mut rendered, "total", cost.total);
     insert_f64(&mut rendered, "input", cost.input);

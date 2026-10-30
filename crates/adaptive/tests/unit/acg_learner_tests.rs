@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use chrono::Utc;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use uuid::Uuid;
 
 use super::*;

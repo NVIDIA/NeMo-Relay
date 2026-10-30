@@ -5,9 +5,12 @@ use std::collections::HashSet;
 
 use nemo_relay::api::registry::RuntimeRegistrationKind;
 
-use nemo_relay::plugin::{ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
+use {
+    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::ConfigPolicy,
+    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::UnsupportedBehavior,
+};
 
 #[derive(Clone, Deserialize)]
 #[serde(default)]

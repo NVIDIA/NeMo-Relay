@@ -11,10 +11,6 @@ use axum::http::HeaderMap;
 use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmRequest, llm_call_end};
 #[cfg(test)]
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
-use nemo_relay::api::runtime::{
-    PropagationContext, ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack,
-    create_scope_stack_from_propagation, task_scope_push,
-};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
     event as emit_mark_event, get_handle, pop_scope_with_subscriber_delivery, push_scope,
@@ -22,6 +18,10 @@ use nemo_relay::api::scope::{
 use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
     tool_conditional_execution, tool_request_intercepts,
+};
+use nemo_relay_runtime::api::runtime::{
+    PropagationContext, ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack,
+    create_scope_stack_from_propagation, task_scope_push,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
@@ -2391,7 +2391,7 @@ impl Session {
         } else if let Some(object) = turn_metadata.as_object_mut() {
             object.remove("gen_ai.agent.name");
         }
-        let scope = nemo_relay::api::runtime::with_scope_stack(stack, || {
+        let scope = nemo_relay_runtime::api::runtime::with_scope_stack(stack, || {
             push_scope(
                 PushScopeParams::builder()
                     .name("codex-turn")

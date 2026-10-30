@@ -200,7 +200,10 @@ class RaisingResponseCodec:
                 Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]}).into()) }));
             assert_eq!(
                 tool_intercept(
-                    nemo_relay::api::runtime::ToolExecutionContext::new("tool", json!({"x": 3}),),
+                    nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
+                        "tool",
+                        json!({"x": 3}),
+                    ),
                     tool_next,
                 )
                 .await
@@ -222,7 +225,7 @@ class RaisingResponseCodec:
                 llm_intercept(
                     "llm",
                     make_request(),
-                    nemo_relay::api::runtime::LlmExecutionContext::new(
+                    nemo_relay_runtime::api::runtime::LlmExecutionContext::new(
                         Default::default(),
                         Some(Default::default()),
                     ),
@@ -297,7 +300,7 @@ class RaisingResponseCodec:
             runtime
                 .block_on(llm_response(
                     json!({"ok": true}),
-                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+                    nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default()
                 ))
                 .is_err()
         );
@@ -749,7 +752,7 @@ async def collect_stream(awaitable):
                 let stream_next = PyLlmStreamNextFn {
                     inner: Arc::new(|_| {
                         Box::pin(async move {
-                            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                            Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                                 tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
                             ))
                         })
@@ -1032,10 +1035,11 @@ def llm_custom_awaitable(request):
 fn execution_next_context_restores_scope() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let scope_stack = nemo_relay::api::runtime::create_scope_stack();
-        let context = nemo_relay::api::runtime::with_scope_stack(scope_stack.clone(), || {
-            MiddlewareContinuationContext::capture()
-        });
+        let scope_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+        let context =
+            nemo_relay_runtime::api::runtime::with_scope_stack(scope_stack.clone(), || {
+                MiddlewareContinuationContext::capture()
+            });
 
         let observed =
             tokio::spawn(async move { context.run(async move { current_scope_stack() }).await })

@@ -11,7 +11,7 @@ use nemo_relay::api::event::{
     BaseEvent, CategoryProfile, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use nemo_relay::api::runtime::create_scope_stack;
+use nemo_relay_runtime::api::runtime::create_scope_stack;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -341,19 +341,16 @@ fn test_valid_free_functions_and_none_backed_accessors() {
     let stack_ptr = Box::into_raw(Box::new(FfiScopeStack(create_scope_stack())));
     unsafe { nemo_relay_scope_stack_free(stack_ptr) };
 
-    let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(
-        nemo_relay_observability::atif::AtifExporter::new(
-            "session".into(),
-            nemo_relay_observability::atif::AtifAgentInfo {
-                name: "ffi-agent".into(),
-                version: "1.0.0".into(),
-                model_name: None,
-                tool_definitions: None,
-                extra: None,
-            },
-        )
-        .with_host(nemo_relay::api::subscriber::observability_host()),
-    )));
+    let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(nemo_relay::api::exporter::atif(
+        "session".into(),
+        nemo_relay_observability::atif::AtifAgentInfo {
+            name: "ffi-agent".into(),
+            version: "1.0.0".into(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    ))));
     unsafe { nemo_relay_atif_exporter_free(exporter_ptr) };
 
     let adaptive_ptr = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(None))));
@@ -605,12 +602,12 @@ fn assert_mark_event_accessors(ffi_mark_event: &FfiEvent) {
 
 #[test]
 fn test_annotated_event_accessors_and_codec_handles() {
-    let annotated_request = nemo_relay::codec::request::AnnotatedLlmRequest {
-        instructions: Some(nemo_relay::codec::request::MessageContent::Text(
+    let annotated_request = nemo_relay_runtime::codec::request::AnnotatedLlmRequest {
+        instructions: Some(nemo_relay_runtime::codec::request::MessageContent::Text(
             "follow policy".into(),
         )),
         api_specific: Some(
-            nemo_relay::codec::request::ApiSpecificRequest::OpenAIResponses {
+            nemo_relay_runtime::codec::request::ApiSpecificRequest::OpenAIResponses {
                 background: Some(true),
                 context_management: None,
                 conversation: None,
@@ -624,8 +621,8 @@ fn test_annotated_event_accessors_and_codec_handles() {
                 text: None,
             },
         ),
-        messages: vec![nemo_relay::codec::request::Message::User {
-            content: nemo_relay::codec::request::MessageContent::Text("hello".into()),
+        messages: vec![nemo_relay_runtime::codec::request::Message::User {
+            content: nemo_relay_runtime::codec::request::MessageContent::Text("hello".into()),
             name: Some("tester".into()),
         }],
         model: Some("gpt-test".into()),
@@ -684,29 +681,29 @@ fn test_annotated_event_accessors_and_codec_handles() {
     assert_eq!(annotated_request_value["provider"], json!("ffi"));
     assert!(unsafe { nemo_relay_event_annotated_response(&ffi_start) }.is_null());
 
-    let annotated_response = nemo_relay::codec::response::AnnotatedLlmResponse {
+    let annotated_response = nemo_relay_runtime::codec::response::AnnotatedLlmResponse {
         id: Some("resp_123".into()),
         model: Some("gpt-test".into()),
-        message: Some(nemo_relay::codec::request::MessageContent::Text(
+        message: Some(nemo_relay_runtime::codec::request::MessageContent::Text(
             "done".into(),
         )),
         tool_calls: None,
-        finish_reason: Some(nemo_relay::codec::response::FinishReason::Complete),
-        usage: Some(nemo_relay::codec::response::Usage {
+        finish_reason: Some(nemo_relay_runtime::codec::response::FinishReason::Complete),
+        usage: Some(nemo_relay_runtime::codec::response::Usage {
             prompt_tokens: Some(10),
             completion_tokens: Some(5),
             total_tokens: Some(15),
             cache_read_tokens: None,
             cache_write_tokens: None,
             uncached_input_tokens: None,
-            cost: Some(nemo_relay::codec::response::CostEstimate {
+            cost: Some(nemo_relay_runtime::codec::response::CostEstimate {
                 total: Some(0.000_01),
                 currency: "USD".into(),
                 input: Some(0.000_004),
                 output: Some(0.000_006),
                 cache_read: None,
                 cache_write: None,
-                source: nemo_relay::codec::response::CostSource::ProviderReported,
+                source: nemo_relay_runtime::codec::response::CostSource::ProviderReported,
                 pricing_provider: Some("ffi-provider".into()),
                 pricing_model: Some("gpt-test".into()),
                 pricing_as_of: Some("2026-06-04".into()),

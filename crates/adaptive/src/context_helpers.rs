@@ -18,8 +18,8 @@
 //! Manual latency sensitivity is stored in scope metadata under the JSON path
 //! `/nemo_relay_adaptive/latency_sensitivity` as a positive integer.
 
-use nemo_relay::api::runtime::current_scope_stack;
-use nemo_relay::api::scope::ScopeType;
+use nemo_relay_runtime::api::runtime::current_scope_stack;
+use nemo_relay_runtime::api::scope::ScopeType;
 use uuid::Uuid;
 
 /// Metadata key path for manual latency sensitivity annotation.

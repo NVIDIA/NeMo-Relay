@@ -7,13 +7,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec,
-};
-use nemo_relay::plugin::{
+use nemo_relay::plugin::validate_static_plugin_config;
+use nemo_relay_runtime::plugin::dynamic::{DynamicPluginKind, VerifiedDynamicPluginSpec};
+use nemo_relay_runtime::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, Result,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
-    validate_static_plugin_config,
 };
 use serde_json::{Map, Value as Json};
 
@@ -31,7 +29,7 @@ impl Plugin for PreclaimedObservabilityPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        _ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -70,7 +68,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
         environment_ref: None,
         config: Map::new(),
     };
-    let error = match PluginHostActivation::initialize_with_verified_specs(
+    let error = match nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [missing_dynamic_plugin.clone()],
     )
@@ -101,7 +99,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
             .any(|kind| kind == "observability")
     );
 
-    let error = PluginHostActivation::initialize_with_verified_specs(
+    let error = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [missing_dynamic_plugin],
     )

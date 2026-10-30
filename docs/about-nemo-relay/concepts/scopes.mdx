@@ -250,7 +250,7 @@ async def main() -> None:
 <Tab title="Rust" language="rust">
 
 ```rust
-use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
+use nemo_relay_runtime::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
 
 let stack = fork_scope_stack()?;
 tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
@@ -349,7 +349,7 @@ async def run_agent(request, provider):
 
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::api::runtime::{capture_traceparent, LlmExecutionNextFn};
+use nemo_relay_runtime::api::runtime::{capture_traceparent, LlmExecutionNextFn};
 use nemo_relay::api::scope::{pop_scope, push_scope, PopScopeParams, PushScopeParams, ScopeType};
 use nemo_relay::{error::Result, json::Json};
 
@@ -456,7 +456,7 @@ agent_scope_uuid = next(
 </Tab>
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::runtime::current_scope_stack_snapshot;
+use nemo_relay_runtime::api::runtime::current_scope_stack_snapshot;
 use nemo_relay::api::scope::ScopeType;
 
 let snapshot = current_scope_stack_snapshot()?;

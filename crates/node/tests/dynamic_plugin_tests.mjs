@@ -211,8 +211,8 @@ before(() => {
   mkdirSync(isolatedConfigHome, { recursive: true });
   process.chdir(tempRoot);
   process.env.XDG_CONFIG_HOME = isolatedConfigHome;
-  const nativeFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
-  const workerFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
+  const nativeFixture = path.join(repoRoot, 'crates', 'runtime', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
+  const workerFixture = path.join(repoRoot, 'crates', 'runtime', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
   buildFixture(nativeFixture);
   buildFixture(workerFixture);
   nativeManifestRef = writeNativeManifest(path.join(fixtureTarget, 'debug', nativeLibraryName()));

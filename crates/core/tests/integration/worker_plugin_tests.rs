@@ -14,8 +14,6 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::LlmCodecIdentity;
-use nemo_relay::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
@@ -23,20 +21,20 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
 };
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::AnnotatedLlmResponse;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::Result as FlowResult;
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_diagnostics,
+use nemo_relay_observability::otel_logs::OpenTelemetryLogConfig;
+use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
+use nemo_relay_runtime::api::runtime::LlmCodecIdentity;
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
+use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_runtime::plugin::dynamic::{
+    DynamicPluginKind, VerifiedDynamicPluginSpec, WorkerPluginActivation, WorkerPluginLoadSpec,
+    load_worker_plugins, load_worker_plugins_with_diagnostics,
 };
-use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
-use nemo_relay_observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
-use nemo_relay_observability::otel_metrics::{
-    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
-};
+use nemo_relay_runtime::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use prost::Message;
@@ -50,8 +48,8 @@ const MESSAGE_LIMIT_CHILD_ENV: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
 const MESSAGE_LIMIT_DEFAULT_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_MESSAGE_BYTES";
 const MESSAGE_LIMIT_NAMED_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_NAMED_MESSAGE_BYTES";
 
-fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
-    use nemo_relay::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+fn enabled_worker_diagnostics() -> nemo_relay_runtime::diagnostics::Diagnostics {
+    use nemo_relay_runtime::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
     Diagnostics::from_settings(
         SourceIdentity {
             instance_id: Uuid::now_v7(),
@@ -68,17 +66,17 @@ fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
 }
 
 fn worker_diagnostic_snapshot(
-    context: &nemo_relay::diagnostics::Diagnostics,
-) -> nemo_relay::diagnostics::DiagnosticSnapshot {
+    context: &nemo_relay_runtime::diagnostics::Diagnostics,
+) -> nemo_relay_runtime::diagnostics::DiagnosticSnapshot {
     context
-        .snapshot(&nemo_relay::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_runtime::diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap()
 }
 
 fn assert_worker_stage_failure(
-    diagnostics: &nemo_relay::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_runtime::diagnostics::Diagnostics,
     plugin_id: &str,
     code: &str,
     class: &str,
@@ -202,8 +200,8 @@ fn worker_activation_with_no_specs_is_empty() {
 
 #[tokio::test]
 async fn worker_sdk_records_into_selected_host_context_and_survives_plugin_cleanup() {
-    use nemo_relay::diagnostics::*;
-    use nemo_relay::plugin::dynamic::load_worker_plugins_with_diagnostics;
+    use nemo_relay_runtime::diagnostics::*;
+    use nemo_relay_runtime::plugin::dynamic::load_worker_plugins_with_diagnostics;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
@@ -306,11 +304,10 @@ async fn worker_registration_discovers_static_observability() {
     failing_spec
         .config
         .insert("register_error".into(), json!(true));
-    let error =
-        PluginHostActivation::initialize_with_verified_specs(config.clone(), [failing_spec])
-            .await
-            .err()
-            .expect("registration failure must abort activation");
+    let error = nemo_relay::plugin::initialize_with_verified_specs(config.clone(), [failing_spec])
+        .await
+        .err()
+        .expect("registration failure must abort activation");
     assert!(
         error
             .to_string()
@@ -328,7 +325,7 @@ async fn worker_registration_discovers_static_observability() {
             .any(|kind| kind == "fixture_worker")
     );
 
-    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(config, [spec])
+    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(config, [spec])
         .await
         .expect("worker must discover static subscribers during Register after rollback");
     TASK_SCOPE_STACK
@@ -362,7 +359,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -404,7 +401,7 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -530,7 +527,7 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
 
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, report) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, report) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -577,7 +574,7 @@ async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -627,7 +624,7 @@ async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delive
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -679,7 +676,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -702,7 +699,7 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
     assert!(error.contains("fixture_worker"), "{error}");
     assert!(error.contains("shutdown"), "{error}");
 
-    let (mut activation, _) = PluginHostActivation::initialize_with_verified_specs(
+    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture_worker".into(),
@@ -747,7 +744,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                 .await
                 .expect("worker request intercept should run");
             let expected = serde_json::to_value(
-                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+                nemo_relay_runtime::api::runtime::current_scope_stack_snapshot().unwrap(),
             )
             .unwrap();
             assert_eq!(rewritten["scope_stack_snapshot"], expected);
@@ -1564,16 +1561,15 @@ async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", listener.local_addr().unwrap());
     let metric_request = capture_one_otlp_request(listener);
-    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+    let metric_subscriber = nemo_relay::api::exporter::opentelemetry_metrics(
         OpenTelemetryMetricConfig::new(metric_endpoint)
             .with_instrumentation_scope("worker-tokenomics-metric-test"),
     )
-    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .expect("metric subscriber should build");
-    let log_subscriber =
-        OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"))
-            .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
-            .expect("log subscriber should build without connecting");
+    let log_subscriber = nemo_relay::api::exporter::opentelemetry_logs(
+        OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"),
+    )
+    .expect("log subscriber should build without connecting");
     let metric_name = "worker_tokenomics_metric_metrics";
     let log_name = "worker_tokenomics_metric_logs";
     metric_subscriber.register(metric_name).unwrap();
@@ -2712,7 +2708,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
                 )
                 .unwrap();
                 let expected_snapshot = serde_json::to_value(
-                    nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+                    nemo_relay_runtime::api::runtime::current_scope_stack_snapshot().unwrap(),
                 )
                 .unwrap();
                 let provider_only = json!({"lane": case.name, "preserve": true});
@@ -3186,7 +3182,7 @@ async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_call
             )
             .unwrap();
             let expected = serde_json::to_value(
-                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+                nemo_relay_runtime::api::runtime::current_scope_stack_snapshot().unwrap(),
             )
             .unwrap();
             barrier.wait().await;

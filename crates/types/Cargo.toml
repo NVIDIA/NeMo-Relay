@@ -17,6 +17,7 @@ default = []
 schema = ["dep:schemars"]
 
 [dependencies]
+opentelemetry = { workspace = true, features = ["trace"] }
 tokio-stream.workspace = true
 bitflags = { workspace = true, features = ["serde"] }
 chrono = { workspace = true, features = ["std", "serde", "now"] }

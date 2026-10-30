@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 nemo-relay-model-pricing.workspace = true
 # First-party crates.
-nemo-relay.workspace = true
+nemo-relay-runtime.workspace = true
 
 # Third-party dependencies.
 chrono = { workspace = true, default-features = true, features = ["serde"] }
@@ -36,7 +36,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [features]
 redis-backend = ["redis"]
-__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
 
 [dev-dependencies]
 # First-party crates.

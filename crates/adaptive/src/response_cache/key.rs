@@ -16,9 +16,9 @@
 
 use std::collections::BTreeSet;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::resolve::{
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::codec::resolve::{
     ProviderSurface, detect_request_surface_with_hint, request_codec,
 };
 use serde_json::{Map, Value as Json, json};

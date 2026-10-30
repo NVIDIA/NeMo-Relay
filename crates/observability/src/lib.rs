@@ -189,33 +189,7 @@ pub fn default_mark_exclude_names() -> Vec<String> {
     vec!["llm.chunk".to_string()]
 }
 
-#[doc(hidden)]
-pub fn relay_trace_id(uuid: uuid::Uuid) -> opentelemetry::trace::TraceId {
-    opentelemetry::trace::TraceId::from_bytes(*uuid.as_bytes())
-}
-
-#[doc(hidden)]
-pub fn relay_span_id(uuid: uuid::Uuid) -> opentelemetry::trace::SpanId {
-    let mut bytes = [0; 8];
-    bytes.copy_from_slice(&uuid.as_bytes()[8..]);
-    opentelemetry::trace::SpanId::from_bytes(bytes)
-}
-
-/// Format a W3C traceparent from Relay's deterministic trace and span IDs.
-#[doc(hidden)]
-pub fn format_traceparent(trace_uuid: uuid::Uuid, span_uuid: uuid::Uuid) -> String {
-    let trace_id = trace_uuid
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let span_id = &span_uuid.as_bytes()[8..];
-    let span_id = span_id
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("00-{trace_id}-{span_id}-01")
-}
+pub use nemo_relay_types::trace::{format_traceparent, relay_span_id, relay_trace_id};
 
 #[doc(hidden)]
 pub fn push_common_optimization_attributes(

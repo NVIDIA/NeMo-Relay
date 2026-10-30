@@ -6,8 +6,8 @@
 #[cfg(test)]
 use nemo_relay::api::llm::LlmHandle;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
-use nemo_relay::api::runtime::ScopeStackHandle;
 use nemo_relay::api::scope::ScopeHandle;
+use nemo_relay_runtime::api::runtime::ScopeStackHandle;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]

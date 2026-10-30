@@ -9,21 +9,21 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for CoreObservability
         &self,
         request: &crate::api::llm::LlmRequest,
         provider_hint: Option<&str>,
-    ) -> Option<crate::codec::request::AnnotatedLlmRequest> {
-        crate::codec::resolve::normalize_request_with_hint(request, provider_hint)
+    ) -> Option<nemo_relay_runtime::codec::request::AnnotatedLlmRequest> {
+        nemo_relay_runtime::codec::resolve::normalize_request_with_hint(request, provider_hint)
     }
     fn normalize_response(
         &self,
-        response: &crate::json::Json,
-    ) -> Option<crate::codec::response::AnnotatedLlmResponse> {
-        crate::codec::resolve::normalize_response(response)
+        response: &nemo_relay_types::Json,
+    ) -> Option<nemo_relay_runtime::codec::response::AnnotatedLlmResponse> {
+        nemo_relay_runtime::codec::resolve::normalize_response(response)
     }
 }
 impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost {
     fn register_subscriber(
         &self,
         name: &str,
-        callback: crate::api::runtime::EventSubscriberFn,
+        callback: nemo_relay_runtime::api::runtime::EventSubscriberFn,
     ) -> crate::error::Result<()> {
         crate::api::subscriber::register_subscriber(name, callback)
     }
@@ -38,7 +38,7 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         traceparent: Option<&str>,
         tracestate: Option<&str>,
     ) -> Option<opentelemetry::trace::SpanContext> {
-        crate::api::runtime::scope_stack::w3c_span_context(traceparent, tracestate)
+        nemo_relay_runtime::api::runtime::scope_stack::w3c_span_context(traceparent, tracestate)
     }
     fn record_runtime_diagnostic(
         &self,
@@ -50,17 +50,17 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         record_plugin_runtime_diagnostic(code, field, message, count);
     }
     fn set_full_payloads_enabled(&self, enabled: bool) -> crate::error::Result<()> {
-        crate::api::runtime::global_context()
+        nemo_relay_runtime::api::runtime::global_context()
             .write()
             .map_err(|error| crate::error::FlowError::Internal(error.to_string()))?
-            .observability_full_payloads_enabled = enabled;
+            .set_observability_full_payloads_enabled(enabled);
         Ok(())
     }
     fn try_scope_register_subscriber(
         &self,
         scope: &uuid::Uuid,
         name: &str,
-        callback: crate::api::runtime::EventSubscriberFn,
+        callback: nemo_relay_runtime::api::runtime::EventSubscriberFn,
     ) -> crate::error::Result<()> {
         crate::api::subscriber::try_scope_register_subscriber(scope, name, callback)
     }
@@ -79,7 +79,7 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         crate::api::subscriber::scope_deregister_subscriber(scope, name)
     }
     fn is_trajectory_parent(&self, parent: uuid::Uuid) -> bool {
-        crate::api::runtime::current_scope_stack()
+        nemo_relay_runtime::api::runtime::current_scope_stack()
             .read()
             .map(|stack| stack.root_uuid() == parent || stack.is_propagated_parent(parent))
             .unwrap_or(false)
@@ -88,16 +88,11 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         &self,
         diagnostic: nemo_relay_plugin::component::RuntimeDiagnostic,
     ) {
-        crate::plugin::record_active_plugin_runtime_diagnostic(diagnostic);
+        nemo_relay_runtime::plugin::record_active_plugin_runtime_diagnostic(diagnostic);
     }
 }
 pub(crate) fn core_host() -> std::sync::Arc<dyn nemo_relay_observability::host::ObservabilityHost> {
     std::sync::Arc::new(CoreObservabilityHost)
-}
-pub(crate) fn event_view(
-    event: &crate::api::event::Event,
-) -> nemo_relay_observability::normalization::EventView<'_> {
-    nemo_relay_observability::normalization::EventView::new(event, &CoreObservabilityHost)
 }
 
 pub(crate) fn record_plugin_runtime_diagnostic(
@@ -106,12 +101,14 @@ pub(crate) fn record_plugin_runtime_diagnostic(
     message: String,
     count: u64,
 ) {
-    crate::plugin::record_active_plugin_runtime_diagnostic(crate::plugin::RuntimeDiagnostic {
-        code: code.to_string(),
-        component: "observability".to_string(),
-        field,
-        message,
-        session_id: None,
-        count,
-    });
+    nemo_relay_runtime::plugin::record_active_plugin_runtime_diagnostic(
+        nemo_relay_runtime::plugin::RuntimeDiagnostic {
+            code: code.to_string(),
+            component: "observability".to_string(),
+            field,
+            message,
+            session_id: None,
+            count,
+        },
+    );
 }

@@ -147,7 +147,7 @@ fn global_registry_saves_are_readable_even_if_prior_state_was_private() {
         scope: RegistryScope::Global,
         plugins_toml_path: temp.path().join("plugins.toml"),
         state_path: temp.path().join(".dynamic-plugins.json"),
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_runtime::plugin::dynamic::DynamicPluginRegistry::new(),
     };
     scope.save().unwrap();
     assert_eq!(
@@ -435,7 +435,7 @@ fn uninstall_preserves_bundle_when_other_scope_registry_is_unreadable() {
         scope: RegistryScope::Global,
         plugins_toml_path: global_config,
         state_path: global_state.clone(),
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_runtime::plugin::dynamic::DynamicPluginRegistry::new(),
     }
     .save()
     .unwrap();
@@ -754,7 +754,7 @@ entrypoint = "worker.sh"
         scope: RegistryScope::Global,
         plugins_toml_path: other_config.clone(),
         state_path: temp.path().join("other").join(".dynamic-plugins.json"),
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::from_records(vec![
+        registry: nemo_relay_runtime::plugin::dynamic::DynamicPluginRegistry::from_records(vec![
             record.record.clone(),
         ])
         .unwrap(),

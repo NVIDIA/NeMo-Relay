@@ -15,12 +15,12 @@ workspace = true
 
 [features]
 default = []
-schema = ["dep:schemars", "nemo-relay/schema"]
+schema = ["dep:schemars", "nemo-relay-runtime/schema"]
 
 [dependencies]
 nemo-relay-observability.workspace = true
 # First-party crates.
-nemo-relay.workspace = true
+nemo-relay-runtime.workspace = true
 
 # Third-party dependencies.
 log = { workspace = true, features = ["kv"] }

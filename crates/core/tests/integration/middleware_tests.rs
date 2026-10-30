@@ -58,13 +58,6 @@ use nemo_relay::api::registry::{
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner, TASK_SCOPE_STACK,
-    ToolExecutionContext, ToolExecutionNextFn, capture_propagation_context, task_scope_top,
-};
-use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -72,18 +65,27 @@ use nemo_relay::api::tool::{
     ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call, tool_call_end,
     tool_call_execute, tool_conditional_execution, tool_request_intercepts,
 };
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::optimization::{
+use nemo_relay::error::FlowError;
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atif::AtifAgentInfo;
+
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner, TASK_SCOPE_STACK,
+    ToolExecutionContext, ToolExecutionNextFn, capture_propagation_context, task_scope_top,
+};
+use nemo_relay_runtime::api::runtime::{
+    create_scope_stack, current_scope_stack, set_thread_scope_stack,
+};
+use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay_runtime::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
     LlmOptimizationTokens,
 };
-use nemo_relay::codec::traits::LlmCodec;
-use nemo_relay::error::FlowError;
-use nemo_relay::json::Json;
-use nemo_relay::plugin::{PluginRegistrationContext, rollback_registrations};
-use nemo_relay_observability::OpenTelemetryType;
-use nemo_relay_observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_relay_observability::otel::OpenTelemetrySubscriber;
+use nemo_relay_runtime::codec::traits::LlmCodec;
+use nemo_relay_runtime::json::Json;
+use nemo_relay_runtime::plugin::{PluginRegistrationContext, rollback_registrations};
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
 
@@ -1486,7 +1488,7 @@ async fn managed_tool_call_id_projects_to_atif_and_otel() {
     reset_global();
     let agent = setup_isolated_scope("managed-tool-exporter-correlation");
 
-    let atif = AtifExporter::new(
+    let atif = nemo_relay::api::exporter::atif(
         "managed-tool-exporter-correlation".to_string(),
         AtifAgentInfo {
             name: "test-agent".to_string(),
@@ -1495,17 +1497,17 @@ async fn managed_tool_call_id_projects_to_atif_and_otel() {
             tool_definitions: None,
             extra: None,
         },
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     register_subscriber("managed_tool_exporter_atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel =
-        OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "managed-tool-exporter-otel")
-            .with_host(nemo_relay::api::subscriber::observability_host());
+    let otel = nemo_relay::api::exporter::opentelemetry_from_provider(
+        otel_provider,
+        "managed-tool-exporter-otel",
+    );
     register_subscriber("managed_tool_exporter_otel", otel.subscriber()).unwrap();
 
     let tool_call_id = "call-managed-exporter-42";
@@ -1613,7 +1615,7 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     )
     .unwrap();
 
-    let atif = AtifExporter::new(
+    let atif = nemo_relay::api::exporter::atif(
         "managed-tool-projection".to_string(),
         AtifAgentInfo {
             name: "test-agent".to_string(),
@@ -1622,31 +1624,28 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
             tool_definitions: None,
             extra: None,
         },
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     register_subscriber("managed_tool_projection_atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel = OpenTelemetrySubscriber::from_tracer_provider(
+    let otel = nemo_relay::api::exporter::opentelemetry_from_provider(
         otel_provider,
         "managed-tool-projection-otel",
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     register_subscriber("managed_tool_projection_otel", otel.subscriber()).unwrap();
 
     let openinference_exporter = InMemorySpanExporterBuilder::new().build();
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let openinference = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         openinference_provider,
         "managed-tool-projection-openinference",
         OpenTelemetryType::OpenInference,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     register_subscriber(
         "managed_tool_projection_openinference",
         openinference.subscriber(),

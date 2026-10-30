@@ -20,9 +20,9 @@
 //! - `py_adaptive` — Python-facing adaptive helpers (`set_latency_sensitivity`)
 //! - `py_plugin` — Python-facing generic plugin config/registration helpers
 //! - `convert` — JSON ↔ Python conversion utilities
-use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
@@ -47,12 +47,13 @@ mod test_support;
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    nemo_relay::initialize_runtime();
     initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Relay runtime ownership: {e}"
         ))
     })?;
-    nemo_relay::logging::initialize_default_logging().map_err(|e| {
+    nemo_relay_runtime::logging::initialize_default_logging().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Relay operational logging: {e}"
         ))

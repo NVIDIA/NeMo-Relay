@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Read-only embedded diagnostics bridge. Copies never retain a core lease.
-use nemo_relay::diagnostics::embedded::{self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader};
+use nemo_relay_runtime::diagnostics::embedded::{
+    self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use serde_json::Value as Json;

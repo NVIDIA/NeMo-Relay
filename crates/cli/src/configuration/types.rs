@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::http::HeaderMap;
-use nemo_relay::logging::LoggingConfig;
+use nemo_relay_runtime::logging::LoggingConfig;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};

@@ -73,7 +73,7 @@ pub(crate) fn runtime_builder(cli: &Cli) -> tokio::runtime::Builder {
 // Dispatches CLI subcommands while keeping the no-subcommand path as server mode. `run` inherits
 // top-level server flags so transparent launch can share config parsing with daemon startup.
 struct LoggingSetup {
-    _runtime: Option<nemo_relay::logging::LoggingRuntime>,
+    _runtime: Option<nemo_relay_runtime::logging::LoggingRuntime>,
     fallback_error: Option<error::CliError>,
 }
 
@@ -99,11 +99,11 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
 
     let (config, fallback_error) = resolve_command_logging_config(cli)?;
     let runtime = match crate::runtime_diagnostics::runtime() {
-        Some(runtime) => nemo_relay::logging::LoggingRuntime::configure_with_diagnostics(
+        Some(runtime) => nemo_relay_runtime::logging::LoggingRuntime::configure_with_diagnostics(
             config,
             &runtime.context,
         )?,
-        None => nemo_relay::logging::LoggingRuntime::configure(config)?,
+        None => nemo_relay_runtime::logging::LoggingRuntime::configure(config)?,
     };
     if let Some(error) = fallback_error.as_ref() {
         log::warn!(
@@ -122,7 +122,13 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
 /// Resolves command-specific logging before the process-wide logger is installed.
 fn resolve_command_logging_config(
     cli: &Cli,
-) -> Result<(nemo_relay::logging::LoggingConfig, Option<error::CliError>), error::CliError> {
+) -> Result<
+    (
+        nemo_relay_runtime::logging::LoggingConfig,
+        Option<error::CliError>,
+    ),
+    error::CliError,
+> {
     let mut fallback_error = None;
     let config = if let Some(prepared) = &cli.server.prepared {
         cli.logging.resolve_with_base(|| prepared.logging())
@@ -159,7 +165,7 @@ fn resolve_command_logging_config(
         Ok(config) => config,
         Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
             fallback_error = Some(error);
-            nemo_relay::logging::LoggingConfig::default()
+            nemo_relay_runtime::logging::LoggingConfig::default()
         }
         Err(error) => return Err(error),
     };
@@ -247,7 +253,7 @@ async fn dispatch(
     }
     if diagnostic_setup {
         use crate::runtime_diagnostics::{self as diag, CliErrorClassifier, Operation};
-        use nemo_relay::diagnostics::*;
+        use nemo_relay_runtime::diagnostics::*;
         let classification = match &result {
             Ok(code) if *code == ExitCode::SUCCESS => {
                 Classification::success(SuccessCode::CliCommandCompleted)

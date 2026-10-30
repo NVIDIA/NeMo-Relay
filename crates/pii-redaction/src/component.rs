@@ -8,9 +8,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
-use nemo_relay::diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
-use nemo_relay::plugin::{
+use nemo_relay_runtime::codec::resolve::{ProviderSurface, supported_codec_names};
+use nemo_relay_runtime::diagnostics::{
+    ComponentRegistration, DiagnosticOutcome, ExtensionRegistration,
+};
+use nemo_relay_runtime::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
     register_plugin,
@@ -273,7 +275,7 @@ pub struct LocalBackendConfig {
     pub max_latency_ms: Option<u64>,
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl PiiRedactionConfig {
         mode => {
             label: "mode",
@@ -316,7 +318,7 @@ nemo_relay::editor_config! {
     }
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl PiiRedactionProfile {
         enabled => { label: "enabled", kind: Boolean },
         mode => {
@@ -342,8 +344,9 @@ nemo_relay::editor_config! {
     }
 }
 
-fn pii_redaction_profile_editor_schema() -> &'static nemo_relay::config_editor::EditorSchema {
-    <PiiRedactionProfile as nemo_relay::config_editor::EditorConfig>::editor_schema()
+fn pii_redaction_profile_editor_schema() -> &'static nemo_relay_runtime::config_editor::EditorSchema
+{
+    <PiiRedactionProfile as nemo_relay_runtime::config_editor::EditorConfig>::editor_schema()
 }
 
 fn default_pii_redaction_profile_editor_value() -> Json {
@@ -351,16 +354,16 @@ fn default_pii_redaction_profile_editor_value() -> Json {
         .expect("PII redaction profile should serialize")
 }
 
-static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay::config_editor::EditorListItemSpec =
-    nemo_relay::config_editor::EditorListItemSpec {
-        kind: nemo_relay::config_editor::EditorFieldKind::Section,
+static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay_runtime::config_editor::EditorListItemSpec =
+    nemo_relay_runtime::config_editor::EditorListItemSpec {
+        kind: nemo_relay_runtime::config_editor::EditorFieldKind::Section,
         schema: Some(pii_redaction_profile_editor_schema),
         default: Some(default_pii_redaction_profile_editor_value),
         tagged_union: None,
         list_item: None,
     };
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl BuiltinBackendConfig {
         preset => {
             label: "preset",
@@ -373,8 +376,8 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
-        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay_runtime::config_editor::STRING_LIST_ITEM },
+        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay_runtime::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -413,7 +416,7 @@ nemo_relay::editor_config! {
     }
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl LocalBackendConfig {
         backend => { label: "backend", kind: String, optional: true },
         model_id => { label: "model_id", kind: String, optional: true },
@@ -449,7 +452,7 @@ impl Plugin for PiiRedactionPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let parsed = parse_pii_redaction_config(plugin_config);
         Box::pin(async move {
@@ -544,7 +547,7 @@ fn string_enum_schema(
 
 fn register_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     if !config.profiles.is_empty() {
         let profiles = config.profiles.clone();
@@ -564,7 +567,7 @@ fn register_pii_redaction_backend(
 
 fn register_single_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     match config.mode.as_str() {
@@ -1255,7 +1258,7 @@ fn validate_codec_requirements(
 
 fn register_builtin_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let builtin = config.builtin.clone().ok_or_else(|| {
@@ -1365,7 +1368,7 @@ fn register_builtin_backend(
 
 fn with_selector_diagnostics(
     mut compiled: CompiledBuiltinBackend,
-    ctx: &dyn nemo_relay::plugin::PluginRegistrar,
+    ctx: &dyn nemo_relay_runtime::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> CompiledBuiltinBackend {
     let component_key = profile_name.map_or_else(
@@ -1373,9 +1376,9 @@ fn with_selector_diagnostics(
         |name| format!("pii_redaction.selector.{name}"),
     );
     if !compiled.is_trajectory()
-        && let Some(diagnostics) = ctx
-            .diagnostics_context()
-            .and_then(|context| context.downcast_ref::<nemo_relay::diagnostics::Diagnostics>())
+        && let Some(diagnostics) = ctx.diagnostics_context().and_then(|context| {
+            context.downcast_ref::<nemo_relay_runtime::diagnostics::Diagnostics>()
+        })
         && let Ok(recorder) =
             diagnostics.register_component(ComponentRegistration::new(&component_key, &[]))
         && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {

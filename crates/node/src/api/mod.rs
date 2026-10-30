@@ -40,14 +40,27 @@ use nemo_relay::api::resource_metrics::{
     ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
     UtilizationUnit,
 };
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay::api::scope as core_scope_api;
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::subscriber as core_subscriber_api;
+use nemo_relay::api::tool as core_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
     LlmJsonStream, ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
@@ -58,32 +71,25 @@ use nemo_relay::api::runtime::{
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
     with_scope_stack as with_scope_stack_handle,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::Usage;
-use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::{
-    PluginHostActivation as CorePluginHostActivation, PluginHostReport,
-    initialize as initialize_impl, validate as validate_impl,
-    validate_exact as validate_exact_impl,
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::codec::response::Usage;
+use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
+use {
+    nemo_relay::plugin::initialize as initialize_impl,
+    nemo_relay::plugin::validate as validate_impl,
+    nemo_relay::plugin::validate_exact as validate_exact_impl,
+    nemo_relay_runtime::plugin::dynamic::PluginHostActivation as CorePluginHostActivation,
+    nemo_relay_runtime::plugin::dynamic::PluginHostReport,
 };
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    deregister_plugin as deregister_plugin_impl, list_plugin_kinds as list_plugin_kinds_impl,
-    register_plugin as register_plugin_impl, rollback_registrations,
+use {
+    nemo_relay::plugin::list_plugin_kinds as list_plugin_kinds_impl,
+    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::DiagnosticLevel,
+    nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_runtime::plugin::PluginError, nemo_relay_runtime::plugin::PluginRegistration,
+    nemo_relay_runtime::plugin::deregister_plugin as deregister_plugin_impl,
+    nemo_relay_runtime::plugin::register_plugin as register_plugin_impl,
+    nemo_relay_runtime::plugin::rollback_registrations,
 };
-use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
-use nemo_relay_adaptive::acg::{
-    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
-};
-use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
 
@@ -112,7 +118,7 @@ fn register_node_environment() -> FlowResult<()> {
     let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    nemo_relay::logging::initialize_default_logging()?;
+    nemo_relay_runtime::logging::initialize_default_logging()?;
     NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
     Ok(())
 }
@@ -122,7 +128,7 @@ fn cleanup_node_environment() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
-        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+        && let Err(error) = nemo_relay_runtime::logging::shutdown_default_logging()
     {
         eprintln!("nemo-relay: operational logging shutdown failed: {error}");
     }
@@ -147,7 +153,7 @@ pub fn log(
     } else {
         format!("nemo_relay.node.{target}")
     };
-    nemo_relay::logging::emit_str(&level, &target, &message, fields)
+    nemo_relay_runtime::logging::emit_str(&level, &target, &message, fields)
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
@@ -580,14 +586,16 @@ pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> n
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
-    nemo_relay::api::runtime::ScopeStackHandle,
+    nemo_relay_runtime::api::runtime::ScopeStackHandle,
     Option<PublicationBuffer>,
 )> {
     Ok(callback_factory::callback_scope_stack(env)?
         .unwrap_or_else(|| (current_scope_stack_handle(), None)))
 }
 
-fn effective_scope_stack(env: &Env) -> napi::Result<nemo_relay::api::runtime::ScopeStackHandle> {
+fn effective_scope_stack(
+    env: &Env,
+) -> napi::Result<nemo_relay_runtime::api::runtime::ScopeStackHandle> {
     effective_scope_context(env).map(|(scope_stack, _)| scope_stack)
 }
 
@@ -599,13 +607,14 @@ fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> nap
 }
 
 fn effective_scope_top(
-    scope_stack: &nemo_relay::api::runtime::ScopeStackHandle,
+    scope_stack: &nemo_relay_runtime::api::runtime::ScopeStackHandle,
 ) -> nemo_relay::api::scope::ScopeHandle {
     with_scope_stack_handle(scope_stack.clone(), task_scope_top)
 }
 
 #[napi::module_init]
 fn init() {
+    nemo_relay::initialize_runtime();
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
     register_adaptive_component()
@@ -1096,7 +1105,7 @@ struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
     propagation_parent_uuid: Option<String>,
-    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
+    propagation_context: Option<nemo_relay_runtime::api::runtime::PropagationContext>,
 }
 
 impl ScopedCallbackContext {
@@ -2370,11 +2379,11 @@ fn node_event_metadata_injector_fn(
 }
 
 type NodeLlmCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmCodec>,
+    Arc<dyn nemo_relay_runtime::codec::traits::LlmCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 type NodeLlmResponseCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmResponseCodec>,
+    Arc<dyn nemo_relay_runtime::codec::traits::LlmResponseCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 
@@ -2489,7 +2498,7 @@ impl Plugin for NodePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();
@@ -2561,7 +2570,7 @@ pub struct PropagationContext {
 
 fn propagation_context_from_napi(
     context: PropagationContext,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let root_uuid = context
         .root_uuid
         .as_deref()
@@ -2572,7 +2581,7 @@ fn propagation_context_from_napi(
         .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
     let version = u16::try_from(context.version)
         .map_err(|_| napi::Error::from_reason("propagation context version is out of range"))?;
-    let context = nemo_relay::api::runtime::PropagationContext {
+    let context = nemo_relay_runtime::api::runtime::PropagationContext {
         version,
         root_uuid,
         parent_uuid,
@@ -2586,7 +2595,7 @@ fn propagation_context_from_napi(
 }
 
 pub(crate) fn propagation_context_to_napi(
-    context: nemo_relay::api::runtime::PropagationContext,
+    context: nemo_relay_runtime::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
         version: u32::from(context.version),
@@ -2600,7 +2609,7 @@ pub(crate) fn propagation_context_to_napi(
 fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let context = callback_factory::callback_propagation_context(env)?
         .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
     let mut context = propagation_context_from_napi(context)?;
@@ -2637,7 +2646,7 @@ fn callback_propagation_context(
 fn rootless_callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let mut context = callback_propagation_context(env, parent_uuid)?;
     context.root_uuid = None;
     let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
@@ -2748,7 +2757,7 @@ pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::
 /// Deserialize and validate a Relay causal context from the JSON wire format.
 #[napi]
 pub fn propagation_context_from_json(value: String) -> napi::Result<PropagationContext> {
-    nemo_relay::api::runtime::PropagationContext::from_json(&value)
+    nemo_relay_runtime::api::runtime::PropagationContext::from_json(&value)
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -2792,8 +2801,10 @@ pub fn current_scope_stack_snapshot(
     env: Env,
 ) -> napi::Result<Option<crate::types::ScopeStackSnapshot>> {
     let snapshot = match callback_factory::callback_scope_stack(&env)? {
-        Some((stack, _)) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
-        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+        Some((stack, _)) => {
+            nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack).map(Some)
+        }
+        None => nemo_relay_runtime::api::runtime::current_scope_stack_snapshot(),
     };
     snapshot
         .map(|snapshot| snapshot.map(Into::into))
@@ -6121,7 +6132,7 @@ struct CacheRequestFactsOptions {
 enum NodeAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_relay::plugin::ConfigReport,
+        report: nemo_relay_runtime::plugin::ConfigReport,
     },
     Ready(CoreAdaptiveRuntime),
 }
@@ -6337,7 +6348,7 @@ impl AdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> napi::Result<nemo_relay::plugin::ConfigReport> {
+) -> napi::Result<nemo_relay_runtime::plugin::ConfigReport> {
     let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
@@ -6769,8 +6780,9 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
-        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let config: nemo_relay_runtime::plugin::dynamic::PluginHostConfig =
+        serde_json::from_value(config)
+            .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
@@ -6782,8 +6794,9 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
-        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let config: nemo_relay_runtime::plugin::dynamic::PluginHostConfig =
+        serde_json::from_value(config)
+            .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))

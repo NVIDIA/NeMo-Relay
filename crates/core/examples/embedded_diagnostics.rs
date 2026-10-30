@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Run with `cargo run -p nemo-relay --example embedded_diagnostics`.
-use nemo_relay::{
+use nemo_relay_runtime::{
     diagnostics::{DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings, embedded},
-    plugin::dynamic::{PluginHostConfig, initialize, validate},
+    plugin::dynamic::PluginHostConfig,
 };
+
+use nemo_relay::plugin::{initialize, validate};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -13,23 +13,9 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
     llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
-};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_relay::codec::response::AnnotatedLlmResponse;
-use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
-    deregister_plugin, register_plugin, test_close_plugin_host, test_initialize_plugin_host_exact,
-    test_validate_static_plugin_config,
-};
-use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
 use nemo_relay_adaptive::acg_learner::AcgLearner;
 use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
@@ -44,19 +30,38 @@ use nemo_relay_adaptive::plugin_component::{
 use nemo_relay_adaptive::types::cache::HotCache;
 use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 use nemo_relay_adaptive::{InMemoryBackend, StorageBackendDyn};
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
+use nemo_relay_runtime::codec::traits::LlmResponseCodec;
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
+use {
+    nemo_relay::plugin::test_initialize_plugin_host_exact,
+    nemo_relay::plugin::test_validate_static_plugin_config,
+    nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::DiagnosticLevel,
+    nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginComponentSpec,
+    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginError,
+    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+    nemo_relay_runtime::plugin::test_close_plugin_host,
+};
+use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 static TEST_LOGGING: Once = Once::new();
 
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
-                .expect("test logging should initialize");
+        let runtime = nemo_relay_runtime::logging::init_logging(
+            &nemo_relay_runtime::logging::LoggingConfig::default(),
+        )
+        .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }
@@ -361,7 +366,7 @@ struct FailingResponseCodec;
 impl LlmResponseCodec for FailingResponseCodec {
     fn decode_response(
         &self,
-        _response: &nemo_relay::json::Json,
+        _response: &nemo_relay_runtime::json::Json,
     ) -> FlowResult<AnnotatedLlmResponse> {
         Err(FlowError::Internal(
             "response annotation intentionally failed for test".to_string(),
@@ -717,7 +722,7 @@ impl Plugin for HeaderPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         let plugin_config = plugin_config.clone();
@@ -973,7 +978,7 @@ impl Plugin for FailingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         Box::pin(async move {

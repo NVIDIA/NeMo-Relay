@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nemo_relay::plugin::{
+use nemo_relay_runtime::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, Result, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
     lookup_plugin, register_plugin,
@@ -82,7 +82,7 @@ impl Plugin for AdaptivePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {

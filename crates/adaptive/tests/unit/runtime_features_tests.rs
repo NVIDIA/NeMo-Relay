@@ -30,20 +30,26 @@ use nemo_relay::api::registry::{
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
     scope_deregister_llm_request_intercept, scope_register_llm_request_intercept,
 };
-use nemo_relay::api::runtime::ToolExecutionNextFn;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState,
-};
-use nemo_relay::api::runtime::{LlmJsonStream, create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
-use nemo_relay::plugin::{rollback_registrations, test_close_plugin_host};
+use nemo_relay_runtime::api::runtime::ToolExecutionNextFn;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState,
+};
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, create_scope_stack, set_thread_scope_stack};
 use serde_json::json;
 use tokio_stream::StreamExt;
+use {
+    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::DiagnosticLevel,
+    nemo_relay_runtime::plugin::UnsupportedBehavior,
+};
+use {
+    nemo_relay_runtime::plugin::rollback_registrations,
+    nemo_relay_runtime::plugin::test_close_plugin_host,
+};
 
 fn reset_global() {
     test_close_plugin_host().expect("test plugin host must close");
@@ -114,8 +120,8 @@ fn layered_acg_request() -> LlmRequest {
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
     let request = layered_acg_request();
-    let annotated_request = nemo_relay::codec::resolve::request_codec(
-        nemo_relay::codec::resolve::ProviderSurface::AnthropicMessages,
+    let annotated_request = nemo_relay_runtime::codec::resolve::request_codec(
+        nemo_relay_runtime::codec::resolve::ProviderSurface::AnthropicMessages,
     )
     .decode(&request)
     .expect("fixture request should decode");

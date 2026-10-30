@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Execution engine, registries, diagnostics, and host lifecycle for NeMo Relay."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "object-store",
+]
+atof-streaming = []
+schema = ["dep:schemars", "nemo-relay-types/schema", "nemo-relay-plugin/schema"]
+# Internal CLI gateway support; no compatibility guarantee.
+__internal-gateway = []
+# Private test hook for suppressing implicit user/system plugin discovery.
+__skip-implicit-config = []
+# Private compatibility-free test harness for migrating legacy lifecycle tests.
+__test-plugin-host = []
+object-store = []
+worker-grpc = [
+    "dep:nemo-relay-worker-proto",
+    "dep:hyper-util",
+    "dep:tower",
+    "tokio-stream/net",
+    "tonic/codegen",
+    "tonic/router",
+    "tonic/transport",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/process",
+    "tokio/rt-multi-thread",
+]
+
+[dependencies]
+# First-party crates.
+nemo-relay-plugin.workspace = true
+nemo-relay-types.workspace = true
+nemo-relay-worker-proto = { workspace = true, optional = true }
+
+# Third-party dependencies.
+arrayvec.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bitflags = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+circular-buffer.workspace = true
+enumset.workspace = true
+futures-util.workspace = true
+http.workspace = true
+http-body.workspace = true
+hyper-util = { workspace = true, features = ["tokio"], optional = true }
+jsonschema.workspace = true
+libloading.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+percent-encoding.workspace = true
+prost.workspace = true
+reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
+ring.workspace = true
+schemars = { workspace = true, optional = true }
+semver.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+sha2.workspace = true
+shell-words.workspace = true
+spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
+strum = { workspace = true, features = ["derive"] }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+toml.workspace = true
+tonic.workspace = true
+tower = { workspace = true, features = ["util"], optional = true }
+tracing = { workspace = true, features = ["std", "log"] }
+typed-builder.workspace = true
+uuid = { workspace = true, features = ["v7", "serde"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs", "param"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[dev-dependencies]
+nemo-relay-resource-metrics.workspace = true
+nemo-relay-observability = { workspace = true, features = ["__test-support", "object-store", "atof-streaming"] }
+opentelemetry-http.workspace = true
+opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
+nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
+sysinfo = { workspace = true, features = ["system", "network"] }
+futures.workspace = true
+object_store = { workspace = true, features = ["aws"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
+rcgen.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
+tokio-stream = { workspace = true, default-features = true, features = ["net"] }
+tonic = { workspace = true, default-features = true, features = ["transport"] }

@@ -5,8 +5,6 @@
 
 use std::path::Path;
 
-use nemo_relay::codec::response::Usage;
-use nemo_relay::plugin::PluginConfig;
 use nemo_relay_model_pricing::catalog::{
     PricingCatalogSource, pricing_catalog_sources_from_config, resolve_pricing,
 };
@@ -15,6 +13,8 @@ use nemo_relay_model_pricing::plugin::{
     store_pricing_config,
 };
 use nemo_relay_model_pricing::{PricingCatalog, PricingSourceConfig};
+use nemo_relay_runtime::codec::response::Usage;
+use nemo_relay_runtime::plugin::PluginConfig;
 
 use crate::configuration::resolve_server_config;
 use crate::server::GatewayOverrides;
@@ -215,6 +215,6 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 #[path = "../../../tests/coverage/commands/model_pricing_tests.rs"]
 mod tests;
 
-fn pricing_config_error(error: nemo_relay::plugin::PluginError) -> CliError {
+fn pricing_config_error(error: nemo_relay_runtime::plugin::PluginError) -> CliError {
     CliError::Config(error.to_string())
 }

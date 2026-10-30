@@ -435,6 +435,7 @@ jobs:
             nemo-relay-observability
             nemo-relay-worker-proto
             nemo-relay-worker
+            nemo-relay-runtime
             nemo-relay
             nemo-relay-adaptive
             nemo-relay-pii-redaction

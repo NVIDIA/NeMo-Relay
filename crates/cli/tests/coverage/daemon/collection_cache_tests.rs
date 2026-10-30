@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nemo_relay::diagnostics::*;
+use nemo_relay_runtime::diagnostics::*;
 fn source() -> Diagnostics {
     Diagnostics::from_settings(
         Diagnostics::default().source().clone(),

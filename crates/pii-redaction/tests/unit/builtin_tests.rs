@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn selector_diagnostics_report_effectiveness_without_values() {
-    use nemo_relay::diagnostics::{
+    use nemo_relay_runtime::diagnostics::{
         ComponentRegistration, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
         ExtensionRegistration,
     };

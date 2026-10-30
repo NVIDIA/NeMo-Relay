@@ -1920,8 +1920,8 @@ async fn managed_runtime_executes_unary_and_stream_middleware_before_delivery() 
         register_llm_conditional_execution_guardrail, register_llm_sanitize_request_guardrail,
         register_llm_sanitize_response_guardrail,
     };
-    use nemo_relay::api::runtime::LlmJsonStream;
     use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+    use nemo_relay_runtime::api::runtime::LlmJsonStream;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-execution-transform";
@@ -2181,7 +2181,7 @@ async fn managed_runtime_conditional_execution_blocks_before_intercepts_or_provi
 
 #[tokio::test]
 async fn managed_runtime_execution_cancellation_releases_session() {
-    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay_runtime::api::runtime::LlmJsonStream;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-execution-cancellation";
@@ -2421,8 +2421,8 @@ async fn managed_runtime_applies_request_middleware_before_provider_delivery() {
                 .headers
                 .insert("x-worker-intercept".into(), json!("applied"));
             annotated.as_mut().unwrap().messages =
-                vec![nemo_relay::codec::request::Message::User {
-                    content: nemo_relay::codec::request::MessageContent::Text(
+                vec![nemo_relay_runtime::codec::request::Message::User {
+                    content: nemo_relay_runtime::codec::request::MessageContent::Text(
                         "rewritten by middleware".into(),
                     ),
                     name: None,
@@ -3283,7 +3283,7 @@ async fn http_model_hosts_managed_middleware_cannot_escape_the_configured_origin
 
 #[tokio::test]
 async fn managed_runtime_stream_errors_preserve_status_and_incomplete_streams() {
-    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay_runtime::api::runtime::LlmJsonStream;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-stream-denial";
@@ -3390,7 +3390,7 @@ async fn managed_runtime_stream_errors_preserve_status_and_incomplete_streams() 
 
 #[tokio::test]
 async fn managed_runtime_cancelled_first_read_preserves_another_active_call() {
-    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay_runtime::api::runtime::LlmJsonStream;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-cancel-first-stream-read";

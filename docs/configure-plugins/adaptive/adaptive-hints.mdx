@@ -133,7 +133,7 @@ void (async () => {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::{initialize, validate};
 use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
 use nemo_relay_adaptive::{
     AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig, TelemetryComponentConfig,

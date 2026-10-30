@@ -18,8 +18,11 @@ use super::{
     wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
-use nemo_relay::plugin::dynamic::{initialize, validate, validate_exact};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use {
+    nemo_relay::plugin::initialize, nemo_relay::plugin::validate,
+    nemo_relay::plugin::validate_exact,
+};
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
@@ -101,7 +104,7 @@ impl Plugin for FfiHostedPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -197,11 +200,12 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config =
-        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
-            Ok(config) => config,
-            Err(status) => return status,
-        };
+    let config = match parse_plugin_config::<nemo_relay_runtime::plugin::dynamic::PluginHostConfig>(
+        config_json,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {
@@ -338,11 +342,12 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config =
-        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
-            Ok(config) => config,
-            Err(status) => return status,
-        };
+    let config = match parse_plugin_config::<nemo_relay_runtime::plugin::dynamic::PluginHostConfig>(
+        config_json,
+    ) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {

@@ -517,8 +517,10 @@ fn detached_windows_worker_process_fixture() {
 }
 
 #[cfg(windows)]
-fn windows_worker_fixture_logging(path: &std::path::Path) -> nemo_relay::logging::LoggingRuntime {
-    use nemo_relay::logging::{
+fn windows_worker_fixture_logging(
+    path: &std::path::Path,
+) -> nemo_relay_runtime::logging::LoggingRuntime {
+    use nemo_relay_runtime::logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     init_logging(&LoggingConfig {

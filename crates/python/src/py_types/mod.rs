@@ -15,16 +15,16 @@ use std::time::Duration;
 
 use nemo_relay::api::event::{MarkEvent, ScopeEvent};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::runtime::{LlmCodecIdentity, ScopeStackHandle};
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay::codec::request::{
+use nemo_relay::error::Result as FlowResult;
+use nemo_relay_runtime::api::runtime::{LlmCodecIdentity, ScopeStackHandle};
+use nemo_relay_runtime::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, ApiSpecificRequest, GenerationParams, Message,
     MessageContent, ToolChoice, ToolDefinition,
 };
-use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::error::Result as FlowResult;
+use nemo_relay_runtime::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
 use pyo3::prelude::*;
 use serde::Serialize;
 

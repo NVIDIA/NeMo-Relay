@@ -25,7 +25,7 @@ from nemo_relay.diagnostics import DiagnosticsError, DiagnosticsReader
 
 
 def test_python_query_adapter_matches_shared_contract_fixture():
-    fixture_path = Path(__file__).resolve().parents[2] / "crates/core/tests/fixtures/diagnostics_query_contract.json"
+    fixture_path = Path(__file__).resolve().parents[2] / "crates/runtime/tests/fixtures/diagnostics_query_contract.json"
     fixture = json.loads(fixture_path.read_text())
     assert MAX_QUERY_BYTES == fixture["max_query_bytes"]
     assert MAX_QUERY_NODES == fixture["adapter_limits"]["max_query_nodes"]

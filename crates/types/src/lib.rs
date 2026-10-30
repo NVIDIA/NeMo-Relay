@@ -27,3 +27,6 @@ pub mod error;
 
 /// Typed configuration editor metadata.
 pub mod config_editor;
+
+/// Deterministic W3C trace and span identity.
+pub mod trace;

@@ -397,7 +397,7 @@ use nemo_relay_observability::plugin::{
     AtofStreamSinkSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::{initialize, validate};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

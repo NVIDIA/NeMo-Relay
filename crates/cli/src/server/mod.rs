@@ -6,7 +6,7 @@ mod types;
 pub(crate) use types::GatewayOverrides;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+use nemo_relay_runtime::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -24,17 +24,20 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-#[cfg(test)]
-use nemo_relay::plugin::PluginComponentSpec;
-use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{PluginHostActivation, VerifiedDynamicPluginSpec};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(test)]
+use nemo_relay_runtime::plugin::PluginComponentSpec;
+use nemo_relay_runtime::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
+use {
+    nemo_relay_runtime::plugin::dynamic::PluginHostActivation,
+    nemo_relay_runtime::plugin::dynamic::VerifiedDynamicPluginSpec,
+};
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
@@ -461,7 +464,8 @@ async fn finish_server_shutdown(
     instance_id: &str,
 ) -> Result<(), CliError> {
     let close_result = sessions.close_all("gateway_shutdown").await;
-    let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
+    let flush_result =
+        nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
     let clear_result = plugin_activation
         .map(ServerPluginActivation::clear)
         .unwrap_or(Ok(()));
@@ -1420,7 +1424,7 @@ async fn activate_server_plugins(
         return Err(CliError::Config(error.to_string()));
     }
     if dynamic_plugins.is_empty() {
-        let host = PluginHostActivation::initialize_exact(plugin_config)
+        let host = nemo_relay::plugin::initialize_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         return Ok(Some(ServerPluginActivation {
@@ -1464,7 +1468,7 @@ async fn activate_server_plugins(
             })
         })
         .collect::<Result<Vec<_>, CliError>>()?;
-    let (host, _) = PluginHostActivation::initialize_with_verified_specs(plugin_config, specs)
+    let (host, _) = nemo_relay::plugin::initialize_with_verified_specs(plugin_config, specs)
         .await
         .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
     Ok(Some(ServerPluginActivation {

@@ -24,7 +24,7 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
             }); profile_count]}))
         };
         test_initialize_plugin_host_exact(config).await.unwrap();
-        let atif = AtifExporter::new(
+        let atif = nemo_relay::api::exporter::atif(
             "tool-correlation".into(),
             AtifAgentInfo {
                 name: "test-agent".into(),
@@ -33,8 +33,7 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
                 tool_definitions: None,
                 extra: None,
             },
-        )
-        .with_host(nemo_relay::api::subscriber::observability_host());
+        );
         register_subscriber("tool-correlation-atif", atif.subscriber()).unwrap();
         let exporters: Vec<_> = [
             ("tool-correlation-full", OpenTelemetryType::Full),
@@ -50,10 +49,9 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
             let provider = SdkTracerProvider::builder()
                 .with_simple_exporter(memory.clone())
                 .build();
-            let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+            let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
                 provider, "test", projection,
-            )
-            .with_host(nemo_relay::api::subscriber::observability_host());
+            );
             subscriber.register(name).unwrap();
             (name, subscriber, memory)
         })

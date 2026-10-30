@@ -482,9 +482,9 @@ fn inline_sink_arrays_support_edit_add_remove_and_preserve_toml_form() {
         let logging = if section == "logging" { &parsed["logging"] } else { &parsed["daemon"]["logging"] };
         let mut runtime_document = toml::map::Map::new();
         runtime_document.insert("logging".into(), logging.clone());
-        let runtime = nemo_relay::logging::LoggingConfig::from_toml_document(&toml::to_string(&runtime_document).unwrap()).unwrap();
+        let runtime = nemo_relay_runtime::logging::LoggingConfig::from_toml_document(&toml::to_string(&runtime_document).unwrap()).unwrap();
         assert_eq!(runtime.sinks.len(), 2);
-        let nemo_relay::logging::LogSinkConfig::File(sink) = &runtime.sinks[0];
+        let nemo_relay_runtime::logging::LogSinkConfig::File(sink) = &runtime.sinks[0];
         assert_eq!(sink.path, PathBuf::from("changed.log"));
         assert_eq!(sink.queue_capacity, 128);
         assert!(sink.rotation.is_some());
@@ -790,9 +790,9 @@ fn daemon_logging_edits_preserve_application_logging() {
     let daemon = crate::configuration::resolve_daemon_logging_config(Some(&document.path)).unwrap();
     crate::configuration::set_test_system_config_dir(previous_system);
     assert!(!daemon.stderr_enabled);
-    assert_eq!(daemon.level, nemo_relay::logging::LogLevel::Debug);
+    assert_eq!(daemon.level, nemo_relay_runtime::logging::LogLevel::Debug);
     assert_eq!(daemon.flush_interval_millis, 0);
-    let nemo_relay::logging::LogSinkConfig::File(sink) = &daemon.sinks[0];
+    let nemo_relay_runtime::logging::LogSinkConfig::File(sink) = &daemon.sinks[0];
     assert_eq!(sink.path, PathBuf::from("daemon.log"));
     assert_eq!(sink.queue_capacity, 128);
     assert!(sink.rotation.is_some());

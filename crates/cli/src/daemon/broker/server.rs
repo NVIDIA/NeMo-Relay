@@ -38,7 +38,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::daemon::diagnostics as diag;
-use nemo_relay::diagnostics::{DaemonFailureCode, FailureClass};
+use nemo_relay_runtime::diagnostics::{DaemonFailureCode, FailureClass};
 
 use super::lifecycle::{McpSessionId, ResolvedTarget, WorkerRequest, WorkerTarget};
 use super::registry::{

@@ -8,8 +8,10 @@ use crate::acg::stability::StabilityAnalysisResult;
 use crate::types::cache::HotCache;
 use crate::types::metadata::{MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
-use nemo_relay::api::runtime::{ToolExecutionContext, create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay_runtime::api::runtime::{
+    ToolExecutionContext, create_scope_stack, set_thread_scope_stack,
+};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;

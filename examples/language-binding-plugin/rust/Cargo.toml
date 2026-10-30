@@ -9,6 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+nemo-relay-runtime.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true, default-features = true }
 

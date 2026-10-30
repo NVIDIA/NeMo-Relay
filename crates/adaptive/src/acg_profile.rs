@@ -5,7 +5,7 @@
 //! LLM requests.
 
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
 

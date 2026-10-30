@@ -4,10 +4,10 @@
 //! Unit tests for runtime in the NeMo Relay adaptive crate.
 
 use nemo_relay::api::llm::{LlmRequest, llm_request_intercepts};
-use nemo_relay::api::runtime::{
+use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay_runtime::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use serde_json::{Map, Value as Json};
 
 use crate::config::{
@@ -18,8 +18,8 @@ use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
 
 #[cfg(feature = "redis-backend")]
 const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
@@ -319,7 +319,7 @@ fn validate_config_reports_unknown_backend_and_acg_provider_per_policy() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "adaptive.unknown_backend"
-                && diag.level == nemo_relay::plugin::DiagnosticLevel::Warning)
+                && diag.level == nemo_relay_runtime::plugin::DiagnosticLevel::Warning)
     );
     assert!(
         warn_report

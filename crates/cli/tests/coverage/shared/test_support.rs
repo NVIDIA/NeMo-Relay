@@ -24,9 +24,10 @@ pub(crate) async fn http_model_listener() -> (tokio::net::TcpListener, std::net:
 
 pub(crate) fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
-                .expect("test logging should initialize");
+        let runtime = nemo_relay_runtime::logging::init_logging(
+            &nemo_relay_runtime::logging::LoggingConfig::default(),
+        )
+        .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }

@@ -3,7 +3,7 @@
 
 //! Unit tests for ir builder in the NeMo Relay adaptive crate.
 
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::codec::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, Message, MessageContent,
     ToolCall, ToolDefinition,
 };

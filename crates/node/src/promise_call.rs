@@ -22,15 +22,15 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, Threadsafe
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
     with_task_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     LlmStreamInner, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
     ScopeStackHandle, capture_propagation_context, current_scope_stack,
 };
-use nemo_relay::error::{FlowError, Result as FlowResult};
 
 use crate::api::{PropagationContext, propagation_context_to_napi};
 use crate::callback_factory;
@@ -75,7 +75,10 @@ pub type JsonStreamNextFn = Arc<
     dyn Fn(
             Json,
         ) -> Pin<
-            Box<dyn Future<Output = FlowResult<nemo_relay::api::runtime::LlmJsonStream>> + Send>,
+            Box<
+                dyn Future<Output = FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream>>
+                    + Send,
+            >,
         > + Send
         + Sync,
 >;
@@ -990,7 +993,7 @@ impl PromiseAwareFn {
         &self,
         args: Json,
         next: JsonStreamNextFn,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next), None)
             .await
     }
@@ -1001,7 +1004,7 @@ impl PromiseAwareFn {
         &self,
         build_arg0: Arg0Builder,
         next: JsonStreamNextFn,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, Some(next), None)
             .await
     }
@@ -1011,7 +1014,7 @@ impl PromiseAwareFn {
         &self,
         args: Json,
         stream_cancellation: &StreamCancellation,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(
             PrimaryArg::Json(args),
             false,
@@ -1027,7 +1030,7 @@ impl PromiseAwareFn {
         spread: bool,
         next: Option<JsonStreamNextFn>,
         stream_cancellation: Option<&StreamCancellation>,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (chunk_sender, chunk_receiver) =
             tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
@@ -1075,14 +1078,14 @@ impl PromiseAwareFn {
             .await
             .map_err(|e| FlowError::Internal(e.to_string()))??;
         cancellation_guard.disarm();
-        Ok(nemo_relay::api::runtime::LlmJsonStream::from_closeable(
-            JsCallbackStream {
+        Ok(
+            nemo_relay_runtime::api::runtime::LlmJsonStream::from_closeable(JsCallbackStream {
                 receiver: tokio_stream::wrappers::ReceiverStream::new(chunk_receiver),
                 completion: stream_completion,
                 closed,
                 cancellation,
-            },
-        ))
+            }),
+        )
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.

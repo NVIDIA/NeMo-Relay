@@ -15,8 +15,8 @@ pub(crate) mod openai_responses;
 
 use std::collections::HashSet;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::resolve::{ProviderSurface, detect_request_surface};
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::codec::resolve::{ProviderSurface, detect_request_surface};
 use serde_json::Value;
 use strum::AsRefStr;
 

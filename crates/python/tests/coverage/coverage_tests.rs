@@ -23,10 +23,10 @@ use crate::py_callable::{
 };
 use nemo_relay::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
+use nemo_relay::error::FlowError;
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionContext, LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_relay::error::FlowError;
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -717,7 +717,7 @@ def event_fail(event):
         let error = runtime
             .block_on(llm_sanitize(
                 request.clone(),
-                nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+                nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::default(),
             ))
             .unwrap_err();
         assert!(
@@ -766,7 +766,7 @@ def event_fail(event):
         let error = runtime
             .block_on(llm_resp(
                 json!({"ok": true}),
-                nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+                nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default(),
             ))
             .unwrap_err();
         assert!(
@@ -861,7 +861,7 @@ async def llm_intercept(name, request, context, next):
                 });
                 assert_eq!(
                     tool_intercept(
-                        nemo_relay::api::runtime::ToolExecutionContext::new(
+                        nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
                             "tool",
                             json!({"x": 2}),
                         ),
@@ -937,7 +937,7 @@ async def llm_stream_intercept(name, request, context, next):
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
                         let chunks = vec![Ok(json!({"chunk": "a"})), Ok(json!({"chunk": "b"}))];
-                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                        Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                             tokio_stream::iter(chunks),
                         ))
                     })
@@ -1037,7 +1037,7 @@ async def llm_stream_intercept_fail(name, request, context, next):
                     Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
                 assert!(
                     tool_intercept(
-                        nemo_relay::api::runtime::ToolExecutionContext::new(
+                        nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
                             "tool",
                             json!({"x": 1}),
                         ),
@@ -1092,7 +1092,7 @@ async def llm_stream_intercept_fail(name, request, context, next):
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
                         let chunks = vec![Ok(json!({"chunk": "downstream"}))];
-                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                        Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                             tokio_stream::iter(chunks),
                         ))
                     })
@@ -1115,7 +1115,7 @@ async def llm_stream_intercept_fail(name, request, context, next):
                     wrap_py_llm_stream_exec_intercept_fn(llm_stream_intercept_fail_py);
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
-                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                        Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                             tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
                         ))
                     })

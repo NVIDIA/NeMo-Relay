@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
-use nemo_relay::api::runtime::ToolExecutionContext;
 use nemo_relay::api::tool::ToolExecutionResult;
+use nemo_relay_runtime::api::runtime::ToolExecutionContext;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -297,12 +297,12 @@ unsafe extern "C" fn llm_exec_short_circuit_cb(
 
 struct OpaqueExecutionCodec;
 
-impl nemo_relay::codec::traits::LlmCodec for OpaqueExecutionCodec {
+impl nemo_relay_runtime::codec::traits::LlmCodec for OpaqueExecutionCodec {
     fn decode(
         &self,
         request: &LlmRequest,
-    ) -> nemo_relay::error::Result<nemo_relay::codec::request::AnnotatedLlmRequest> {
-        Ok(nemo_relay::codec::request::AnnotatedLlmRequest {
+    ) -> nemo_relay::error::Result<nemo_relay_runtime::codec::request::AnnotatedLlmRequest> {
+        Ok(nemo_relay_runtime::codec::request::AnnotatedLlmRequest {
             model: request.content["model"].as_str().map(str::to_owned),
             ..Default::default()
         })
@@ -310,7 +310,7 @@ impl nemo_relay::codec::traits::LlmCodec for OpaqueExecutionCodec {
 
     fn encode(
         &self,
-        annotated: &nemo_relay::codec::request::AnnotatedLlmRequest,
+        annotated: &nemo_relay_runtime::codec::request::AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> nemo_relay::error::Result<LlmRequest> {
         let mut request = original.clone();
@@ -320,12 +320,12 @@ impl nemo_relay::codec::traits::LlmCodec for OpaqueExecutionCodec {
     }
 }
 
-impl nemo_relay::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
+impl nemo_relay_runtime::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<nemo_relay::codec::response::AnnotatedLlmResponse> {
-        Ok(nemo_relay::codec::response::AnnotatedLlmResponse {
+    ) -> nemo_relay::error::Result<nemo_relay_runtime::codec::response::AnnotatedLlmResponse> {
+        Ok(nemo_relay_runtime::codec::response::AnnotatedLlmResponse {
             model: response["model"].as_str().map(str::to_owned),
             ..Default::default()
         })
@@ -617,7 +617,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         resolve(sanitize_request(
             make_request(),
-            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::default(),
         ))
         .unwrap(),
         None
@@ -628,7 +628,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         resolve(alias_request(
             make_request(),
-            nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::default(),
         ))
         .unwrap(),
         Some(make_request())
@@ -649,7 +649,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         resolve(wrapped_response(
             json!({"value": 2}),
-            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default(),
         ))
         .unwrap()
         .unwrap()["wrapped"],
@@ -660,7 +660,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
     assert_eq!(
         resolve(alias_response(
             json!({"value": 2}),
-            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default(),
         ))
         .unwrap(),
         Some(json!({"value": 2}))
@@ -671,7 +671,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
             wrap_llm_sanitize_response_fn(callback, std::ptr::null_mut(), None);
         let error = resolve(malformed_response(
             json!({"secret": "must be preserved"}),
-            nemo_relay::api::runtime::LlmSanitizeResponseContext::default(),
+            nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default(),
         ))
         .unwrap_err();
         assert!(
@@ -684,13 +684,13 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
 #[test]
 fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
     let runtime_identity =
-        nemo_relay::api::runtime::LlmCodecIdentity::Runtime("runtime\0codec".to_string());
+        nemo_relay_runtime::api::runtime::LlmCodecIdentity::Runtime("runtime\0codec".to_string());
 
     let request_sanitizer =
         wrap_llm_sanitize_request_fn(llm_request_alias_cb, std::ptr::null_mut(), None);
     let request_error = resolve(request_sanitizer(
         make_request(),
-        nemo_relay::api::runtime::LlmSanitizeRequestContext::with_identity(
+        nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::with_identity(
             runtime_identity.clone(),
         ),
     ))
@@ -710,7 +710,9 @@ fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
         wrap_llm_sanitize_response_fn(json_alias_cb, std::ptr::null_mut(), None);
     let response_error = resolve(response_sanitizer(
         json!({"secret": "must be preserved"}),
-        nemo_relay::api::runtime::LlmSanitizeResponseContext::with_identity(runtime_identity),
+        nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::with_identity(
+            runtime_identity,
+        ),
     ))
     .unwrap_err();
     assert!(
@@ -729,7 +731,7 @@ fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
 fn test_wrap_llm_request_intercept_with_annotated_input() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
-    let annotated = nemo_relay::codec::request::AnnotatedLlmRequest {
+    let annotated = nemo_relay_runtime::codec::request::AnnotatedLlmRequest {
         instructions: None,
         api_specific: None,
         messages: vec![],
@@ -796,7 +798,7 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
         .block_on(intercept(
             "llm",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
             next,
         ))
         .unwrap();
@@ -810,7 +812,7 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
         .block_on(absent_intercept(
             "ffi-none",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::new(
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::new(
                 Default::default(),
                 Some(Default::default()),
             ),
@@ -827,20 +829,20 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
             Ok(json!({"model": request.content["model"]}))
         })
     });
-    let request_codec: Arc<dyn nemo_relay::codec::traits::LlmCodec> =
+    let request_codec: Arc<dyn nemo_relay_runtime::codec::traits::LlmCodec> =
         Arc::new(OpaqueExecutionCodec);
-    let response_codec: Arc<dyn nemo_relay::codec::traits::LlmResponseCodec> =
+    let response_codec: Arc<dyn nemo_relay_runtime::codec::traits::LlmResponseCodec> =
         Arc::new(OpaqueExecutionCodec);
     let opaque = runtime
         .block_on(opaque_intercept(
             "ffi-opaque",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::new(
-                nemo_relay::api::runtime::LlmSanitizeRequestContext::for_request_codec(Some(
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::new(
+                nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::for_request_codec(Some(
                     request_codec,
                 )),
                 Some(
-                    nemo_relay::api::runtime::LlmSanitizeResponseContext::for_response_codec(Some(
+                    nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::for_response_codec(Some(
                         response_codec,
                     )),
                 ),
@@ -861,7 +863,7 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         wrap_llm_stream_exec_intercept_fn(llm_exec_short_circuit_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|_request| {
         Box::pin(async {
-            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+            Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                 tokio_stream::iter(vec![Ok(json!({"ignored": true}))]),
             ))
         })
@@ -870,7 +872,7 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         .block_on(stream_intercept(
             "llm",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
             next_stream,
         ))
         .unwrap();
@@ -881,7 +883,7 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         wrap_llm_stream_exec_intercept_fn(llm_exec_intercept_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
-            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+            Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                 tokio_stream::iter(vec![Ok(json!({
                     "model": request.content["model"].clone()
                 }))]),
@@ -892,7 +894,7 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
         .block_on(stream_intercept_with_next(
             "llm",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
             next_stream,
         ))
         .unwrap();

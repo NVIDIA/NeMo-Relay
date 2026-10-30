@@ -20,6 +20,7 @@ serde_json.workspace = true
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
+nemo-relay-runtime.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true, default-features = true, features = ["worker-grpc", "__skip-implicit-config"] }
 

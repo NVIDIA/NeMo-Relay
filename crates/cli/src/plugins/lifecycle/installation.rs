@@ -10,10 +10,13 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use flate2::read::GzDecoder;
-use nemo_relay::plugin::dynamic::{DynamicPluginCheckState, relay_version_matches};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use {
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
+    nemo_relay_runtime::plugin::dynamic::relay_version_matches,
+};
 
 use super::*;
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};

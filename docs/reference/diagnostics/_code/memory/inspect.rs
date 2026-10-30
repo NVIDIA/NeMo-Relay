@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay::diagnostics::DiagnosticQuery;
+use nemo_relay_runtime::diagnostics::DiagnosticQuery;
 
 let query = DiagnosticQuery {
     max_components: Some(0),

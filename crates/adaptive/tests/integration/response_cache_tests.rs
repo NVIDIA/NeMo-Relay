@@ -19,26 +19,28 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::registry::{
     deregister_tool_execution_intercept, register_tool_execution_intercept,
 };
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    NemoRelayContextState, ToolExecutionNextFn, global_context,
-};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{
-    DiagnosticLevel, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
-    test_validate_static_plugin_config,
-};
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, ResponseCacheKeyStrategy,
     StateConfig, ToolCacheConfig, ToolClass, ToolOverride,
 };
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
+    NemoRelayContextState, ToolExecutionNextFn, global_context,
+};
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::{Stream, StreamExt};
+use {
+    nemo_relay::plugin::test_initialize_plugin_host_exact,
+    nemo_relay::plugin::test_validate_static_plugin_config,
+    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_runtime::plugin::test_close_plugin_host,
+};
 
 #[path = "response_cache_common.rs"]
 mod response_cache_common;
@@ -3577,7 +3579,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
             }
         }
     });
-    let component = nemo_relay::plugin::PluginComponentSpec {
+    let component = nemo_relay_runtime::plugin::PluginComponentSpec {
         kind: "adaptive".to_string(),
         enabled: true,
         config: adaptive_json.as_object().unwrap().clone(),

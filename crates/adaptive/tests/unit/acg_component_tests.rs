@@ -17,10 +17,10 @@ use crate::config::AcgComponentConfig;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionContext, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn,
 };
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 

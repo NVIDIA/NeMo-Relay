@@ -3,7 +3,7 @@
 
 //! Process-owned CLI composition. Operations share bounded core recorders.
 use crate::{configuration::RuntimeDiagnosticsConfig, error::CliError};
-use nemo_relay::diagnostics::*;
+use nemo_relay_runtime::diagnostics::*;
 use std::{num::NonZeroU64, sync::OnceLock};
 
 static RUNTIME: OnceLock<CliDiagnostics> = OnceLock::new();

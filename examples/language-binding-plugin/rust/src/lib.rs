@@ -15,8 +15,6 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmRequestInterceptOutcome, LlmStreamCallExecuteParams,
     llm_call_execute, llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::callbacks::LlmJsonStream;
-use nemo_relay::api::runtime::{create_scope_stack, with_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
@@ -24,12 +22,19 @@ use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call_execute,
 };
-use nemo_relay::plugin::dynamic::{initialize, validate};
-use nemo_relay::plugin::{
-    ConfigDiagnostic, ConfigPolicy, Plugin, PluginComponentSpec, PluginConfig,
-    Result as PluginResult, deregister_plugin, list_plugin_kinds, register_plugin,
-};
+use nemo_relay_runtime::api::runtime::callbacks::LlmJsonStream;
+use nemo_relay_runtime::api::runtime::{create_scope_stack, with_scope_stack};
 use serde_json::{Map, Value as Json, json};
+use {
+    nemo_relay::plugin::list_plugin_kinds, nemo_relay_runtime::plugin::ConfigDiagnostic,
+    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::Plugin,
+    nemo_relay_runtime::plugin::PluginComponentSpec, nemo_relay_runtime::plugin::PluginConfig,
+    nemo_relay_runtime::plugin::Result as PluginResult,
+    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+};
+use {
+    nemo_relay_runtime::plugin::dynamic::initialize, nemo_relay_runtime::plugin::dynamic::validate,
+};
 
 pub struct DocumentationPlugin;
 
@@ -56,12 +61,12 @@ impl Plugin for DocumentationPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        context: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
+        context: &'a mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {
-            let settings =
-                config::parse(&config).map_err(nemo_relay::plugin::PluginError::InvalidConfig)?;
+            let settings = config::parse(&config)
+                .map_err(nemo_relay_runtime::plugin::PluginError::InvalidConfig)?;
             if settings.registration_control.enabled {
                 let reason = settings.registration_control.reason.clone();
                 context.register_conditional_middleware_guardrail(

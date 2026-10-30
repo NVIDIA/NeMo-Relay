@@ -40,15 +40,13 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
-use nemo_relay::diagnostics::{
-    DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
-};
 use nemo_relay_observability::OpenTelemetryType;
-use nemo_relay_observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay_observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
-use nemo_relay_observability::otel_metrics::{
-    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+use nemo_relay_observability::atif::AtifAgentInfo;
+use nemo_relay_observability::atof::AtofExporterConfig;
+use nemo_relay_observability::otel::OpenTelemetryConfig;
+use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
+use nemo_relay_runtime::diagnostics::{
+    DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
 };
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -79,9 +77,10 @@ mod trajectory_tool_correlation_tests;
 
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
-                .expect("test logging should initialize");
+        let runtime = nemo_relay_runtime::logging::init_logging(
+            &nemo_relay_runtime::logging::LoggingConfig::default(),
+        )
+        .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }
@@ -379,6 +378,7 @@ fn top_level_policy_controls_component_diagnostics() {
 }
 
 fn reset_runtime() {
+    nemo_relay::initialize_runtime();
     enable_operational_logs();
     let _ = test_close_plugin_host();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
@@ -458,11 +458,15 @@ fn builtin_backend_schema_exposes_the_hardened_custom_mark_default() {
 
 #[test]
 fn builtin_backend_editor_exposes_metric_string_allowlist_as_json() {
-    let schema = <BuiltinBackendConfig as nemo_relay::config_editor::EditorConfig>::editor_schema();
+    let schema =
+        <BuiltinBackendConfig as nemo_relay_runtime::config_editor::EditorConfig>::editor_schema();
     let field = schema
         .field("metric_string_attribute_allowlist")
         .expect("metric string allowlist should be editable");
-    assert_eq!(field.kind, nemo_relay::config_editor::EditorFieldKind::Json);
+    assert_eq!(
+        field.kind,
+        nemo_relay_runtime::config_editor::EditorFieldKind::Json
+    );
 }
 
 #[test]
@@ -2534,11 +2538,10 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("trace capture listener should bind");
     let trace_endpoint = format!("http://{}", trace_listener.local_addr().unwrap());
     let trace_request = capture_one_otlp_request(trace_listener);
-    let trace_subscriber = OpenTelemetrySubscriber::new(OpenTelemetryConfig::new(
+    let trace_subscriber = nemo_relay::api::exporter::opentelemetry(OpenTelemetryConfig::new(
         OpenTelemetryType::Full,
         trace_endpoint,
     ))
-    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     trace_subscriber
         .register("pii-target-glob-e2e-traces")
@@ -2548,10 +2551,10 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
     let metric_request = capture_otlp_requests(metric_listener, 2);
-    let metric_subscriber =
-        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
-            .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
-            .unwrap();
+    let metric_subscriber = nemo_relay::api::exporter::opentelemetry_metrics(
+        OpenTelemetryMetricConfig::new(metric_endpoint),
+    )
+    .unwrap();
     metric_subscriber
         .register("pii-target-glob-e2e-metrics")
         .unwrap();
@@ -2809,7 +2812,7 @@ async fn builtin_metric_marks_drop_invalid_envelopes() {
 #[tokio::test]
 async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
-    let annotated_response: nemo_relay::codec::response::AnnotatedLlmResponse =
+    let annotated_response: nemo_relay_runtime::codec::response::AnnotatedLlmResponse =
         serde_json::from_value(json!({
             "model": "claude-sonnet-4-6",
             "message": "private answer",
@@ -3969,7 +3972,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
     register_local_backend_provider(Arc::new(
-        move |config, _ctx: &mut dyn nemo_relay::plugin::PluginRegistrar| {
+        move |config, _ctx: &mut dyn nemo_relay_runtime::plugin::PluginRegistrar| {
             called_inner.store(true, Ordering::SeqCst);
             assert_eq!(config.mode, "local_model");
             Ok(())
@@ -4165,15 +4168,14 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
 
     let captured = capture_events("pii-regression-subscriber");
     let output = tempfile::tempdir().unwrap();
-    let atof = AtofExporter::new(
+    let atof = nemo_relay::api::exporter::atof(
         AtofExporterConfig::new()
             .with_output_directory(output.path())
             .with_filename("events.jsonl"),
     )
-    .map(|exporter| exporter.with_host(nemo_relay::api::subscriber::observability_host()))
     .unwrap();
     atof.register("pii-regression-atof").unwrap();
-    let atif = AtifExporter::new(
+    let atif = nemo_relay::api::exporter::atif(
         "pii-regression".into(),
         AtifAgentInfo {
             name: "test-agent".into(),
@@ -4182,40 +4184,37 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
             tool_definitions: None,
             extra: None,
         },
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     register_subscriber("pii-regression-atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression")
-        .with_host(nemo_relay::api::subscriber::observability_host());
+    let otel =
+        nemo_relay::api::exporter::opentelemetry_from_provider(otel_provider, "pii-regression");
     otel.register("pii-regression-otel").unwrap();
 
     let genai_exporter = InMemorySpanExporterBuilder::new().build();
     let genai_provider = SdkTracerProvider::builder()
         .with_simple_exporter(genai_exporter.clone())
         .build();
-    let genai = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let genai = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         genai_provider,
         "pii-regression",
         OpenTelemetryType::GenAi,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     genai.register("pii-regression-genai").unwrap();
 
     let openinference_exporter = InMemorySpanExporterBuilder::new().build();
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let openinference = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
         openinference_provider,
         "pii-regression",
         OpenTelemetryType::OpenInference,
-    )
-    .with_host(nemo_relay::api::subscriber::observability_host());
+    );
     openinference
         .register("pii-regression-openinference")
         .unwrap();

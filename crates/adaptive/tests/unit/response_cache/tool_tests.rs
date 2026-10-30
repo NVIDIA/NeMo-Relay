@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nemo_relay::api::runtime::ToolExecutionNextFn;
 use nemo_relay::api::tool::ToolExecutionResult;
+use nemo_relay_runtime::api::runtime::ToolExecutionNextFn;
 
 use super::*;
 use crate::config::ResponseCacheConfig;

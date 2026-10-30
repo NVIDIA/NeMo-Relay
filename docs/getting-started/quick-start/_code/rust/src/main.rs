@@ -7,7 +7,7 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
-use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::plugin::initialize;
 use nemo_relay::plugin::PluginConfig;
 use serde_json::json;
 use std::fs;

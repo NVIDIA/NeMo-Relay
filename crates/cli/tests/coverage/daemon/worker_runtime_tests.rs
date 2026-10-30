@@ -1346,7 +1346,7 @@ async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_crede
 
 #[tokio::test]
 async fn diagnostic_reads_do_not_activate_pending_or_draining_workers_and_revoke_on_control_loss() {
-    use nemo_relay::diagnostics::*;
+    use nemo_relay_runtime::diagnostics::*;
     let context = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {

@@ -3,15 +3,18 @@
 
 use crate::api::*;
 use crate::error::NemoRelayStatus;
-use nemo_relay::diagnostics::DiagnosticsSettings;
-use nemo_relay::plugin::dynamic::{PluginHostConfig, initialize};
+use nemo_relay_runtime::diagnostics::DiagnosticsSettings;
 use std::ffi::{CStr, CString};
+use {
+    nemo_relay_runtime::plugin::dynamic::PluginHostConfig,
+    nemo_relay_runtime::plugin::dynamic::initialize,
+};
 
 #[test]
 fn query_byte_limit_matches_core_contract() {
     assert_eq!(
         nemo_relay_diagnostics_query_max_bytes(),
-        nemo_relay::diagnostics::embedded::MAX_BINDING_QUERY_BYTES as u32
+        nemo_relay_runtime::diagnostics::embedded::MAX_BINDING_QUERY_BYTES as u32
     );
 }
 
@@ -82,7 +85,7 @@ async fn reader_owns_strings_and_survives_plugin_close() {
         unsafe { nemo_relay_diagnostics_snapshot_json(reader, std::ptr::null(), &mut out) },
         NemoRelayStatus::Ok
     );
-    let snapshot: nemo_relay::diagnostics::DiagnosticSnapshot =
+    let snapshot: nemo_relay_runtime::diagnostics::DiagnosticSnapshot =
         serde_json::from_str(unsafe { CStr::from_ptr(out) }.to_str().unwrap()).unwrap();
     assert_eq!(snapshot.schema_version, 1);
     unsafe {
@@ -92,7 +95,7 @@ async fn reader_owns_strings_and_survives_plugin_close() {
         unsafe { nemo_relay_diagnostics_memory_json(reader, std::ptr::null(), &mut out) },
         NemoRelayStatus::Ok
     );
-    let memory: nemo_relay::diagnostics::DiagnosticMemoryPage =
+    let memory: nemo_relay_runtime::diagnostics::DiagnosticMemoryPage =
         serde_json::from_str(unsafe { CStr::from_ptr(out) }.to_str().unwrap()).unwrap();
     assert_eq!(
         memory.component_occupied_bytes.get() + memory.shared_or_unassigned_reserved_bytes.get(),

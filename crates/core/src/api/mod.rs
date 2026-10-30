@@ -1,28 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public API for the NeMo Relay runtime.
+//! High-level lifecycle APIs and SDK-owned component constructors.
 
-/// Lifecycle event types and builder-backed event constructors.
-pub mod event;
-/// Exporter constructors with core runtime services supplied internally.
+pub use nemo_relay_runtime::api::{event, llm, optimization, registry, scope, subscriber, tool};
 pub mod exporter;
-/// LLM lifecycle helpers and managed execution entry points.
-pub mod llm;
-/// Plugin-neutral evidence recording for managed LLM calls.
-pub mod optimization;
-/// Global and scope-local middleware registration helpers.
-pub mod registry;
-/// System resource metric acquisition and polling APIs.
 pub mod resource_metrics;
-/// Advanced runtime state, callbacks, and scope-stack helpers.
-pub mod runtime;
-/// Scope stack lifecycle and mark-event entry points.
-pub mod scope;
-/// Global and scope-local event subscriber registration helpers.
-pub mod subscriber;
-/// Tool lifecycle helpers and managed execution entry points.
-pub mod tool;
-
-pub(crate) mod shared;
-pub(crate) mod skill_load;

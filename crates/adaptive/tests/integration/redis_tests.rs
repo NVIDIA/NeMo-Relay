@@ -11,11 +11,11 @@
 use std::sync::{Arc, Once, RwLock};
 
 use chrono::Utc;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
 use nemo_relay_adaptive::acg_learner::AcgLearner;
 use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
 use nemo_relay_adaptive::learner::traits::Learner;
+use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use uuid::Uuid;
 
 use nemo_relay_adaptive::redis::RedisBackend;
@@ -44,9 +44,10 @@ fn env_value_is_truthy(value: Option<&str>) -> bool {
 
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
-                .expect("test logging should initialize");
+        let runtime = nemo_relay_runtime::logging::init_logging(
+            &nemo_relay_runtime::logging::LoggingConfig::default(),
+        )
+        .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }

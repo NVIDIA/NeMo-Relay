@@ -27,29 +27,33 @@ use nemo_relay::api::registry::{
     deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
     register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
-use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::optimization::{
-    LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
-    LlmOptimizationModelTransition,
-};
-use nemo_relay::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
-use nemo_relay::codec::response::FinishReason;
-use nemo_relay::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
-use nemo_relay::json::Json;
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn,
+};
+use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay_runtime::codec::oci_genai::OCIGenAIChatCodec;
+use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay_runtime::codec::optimization::{
+    LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
+    LlmOptimizationModelTransition,
+};
+use nemo_relay_runtime::codec::request::{
+    AnnotatedLlmRequest, ContentPart, Message, MessageContent,
+};
+use nemo_relay_runtime::codec::response::FinishReason;
+use nemo_relay_runtime::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_runtime::json::Json;
 
 // ---------------------------------------------------------------------------
 // Test isolation
@@ -70,6 +74,7 @@ fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCat
 }
 
 fn reset_global() {
+    nemo_relay::initialize_runtime();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();

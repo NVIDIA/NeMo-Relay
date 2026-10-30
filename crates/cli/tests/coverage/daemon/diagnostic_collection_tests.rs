@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
-use nemo_relay::diagnostics::*;
+use nemo_relay_runtime::diagnostics::*;
 
 fn context() -> Diagnostics {
     Diagnostics::from_settings(

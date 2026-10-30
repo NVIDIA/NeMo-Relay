@@ -18,14 +18,20 @@ use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::resource_metrics as core_resource_metrics_api;
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay::api::scope as core_scope_api;
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::subscriber as core_subscriber_api;
+use nemo_relay::api::tool as core_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
     with_task_nested_publication_buffer, with_task_publication_context,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
@@ -38,14 +44,8 @@ use nemo_relay::api::runtime::{
     scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::codec::response::AnnotatedLlmResponse;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::PySet;
@@ -157,7 +157,7 @@ fn list_runtime_registrations(
 
 #[pyfunction(name = "_shutdown_default_logging")]
 fn py_shutdown_default_logging(py: Python<'_>) -> PyResult<()> {
-    py.detach(nemo_relay::logging::shutdown_default_logging)
+    py.detach(nemo_relay_runtime::logging::shutdown_default_logging)
         .map_err(flow_error_to_py_err)
 }
 
@@ -185,7 +185,8 @@ fn log(
     } else {
         format!("nemo_relay.python.{target}")
     };
-    nemo_relay::logging::emit_str(&level, &target, &message, fields).map_err(flow_error_to_py_err)
+    nemo_relay_runtime::logging::emit_str(&level, &target, &message, fields)
+        .map_err(flow_error_to_py_err)
 }
 
 fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
@@ -484,8 +485,10 @@ pub fn current_scope_stack_snapshot(
     stack: Option<&PyScopeStack>,
 ) -> PyResult<Option<crate::py_types::PyScopeStackSnapshot>> {
     let snapshot = match stack {
-        Some(stack) => nemo_relay::api::runtime::scope_stack_snapshot(&stack.inner).map(Some),
-        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+        Some(stack) => {
+            nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack.inner).map(Some)
+        }
+        None => nemo_relay_runtime::api::runtime::current_scope_stack_snapshot(),
     };
     snapshot
         .map(|snapshot| snapshot.map(|inner| crate::py_types::PyScopeStackSnapshot { inner }))
@@ -1950,19 +1953,19 @@ fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
 /// Lock dispatcher resources before a process forks.
 #[pyfunction]
 fn subscriber_dispatcher_before_fork() {
-    nemo_relay::api::runtime::subscriber_dispatcher::prepare_for_fork();
+    nemo_relay_runtime::api::runtime::subscriber_dispatcher::prepare_for_fork();
 }
 
 /// Unlock dispatcher resources in the parent after a process forks.
 #[pyfunction]
 fn subscriber_dispatcher_after_fork_parent() {
-    nemo_relay::api::runtime::subscriber_dispatcher::resume_after_fork_parent();
+    nemo_relay_runtime::api::runtime::subscriber_dispatcher::resume_after_fork_parent();
 }
 
 /// Reset inherited dispatcher resources in the child after a process forks.
 #[pyfunction]
 fn subscriber_dispatcher_after_fork_child() {
-    nemo_relay::api::runtime::subscriber_dispatcher::reset_after_fork_child();
+    nemo_relay_runtime::api::runtime::subscriber_dispatcher::reset_after_fork_child();
 }
 
 // ---------------------------------------------------------------------------

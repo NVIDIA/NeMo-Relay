@@ -7,13 +7,13 @@
 use serde_json::json;
 
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::request::{
+use nemo_relay::error::Result;
+use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::codec::request::{
     ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message, MessageContent,
     ToolCall, ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
-use nemo_relay::codec::traits::LlmCodec;
-use nemo_relay::error::Result;
+use nemo_relay_runtime::codec::traits::LlmCodec;
 
 // ---------------------------------------------------------------------------
 // Mock Codec for registry and resolution tests

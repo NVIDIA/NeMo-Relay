@@ -5,7 +5,7 @@
 use super::common::{control::now_unix_ms, protocol::SensitiveString};
 use crate::error::CliError;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use nemo_relay::diagnostics::*;
+use nemo_relay_runtime::diagnostics::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 pub(crate) const CAPABILITY: &str = "daemon_diagnostics_v1";

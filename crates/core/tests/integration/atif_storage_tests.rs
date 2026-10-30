@@ -18,13 +18,13 @@ mod plugin_host_test_support;
 
 use std::time::Duration;
 
-use nemo_relay::api::runtime::{
-    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
-};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::flush_subscribers;
-use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay_runtime::api::runtime::{
+    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
+};
+use nemo_relay_runtime::plugin::{PluginComponentSpec, PluginConfig};
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use plugin_host_test_support::{
     test_close_plugin_host, test_initialize_plugin_host_exact, test_plugin_host_report,

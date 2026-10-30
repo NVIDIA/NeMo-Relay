@@ -9,13 +9,9 @@ use crate::filesystem::bounded::read_bounded_regular_file;
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
-use nemo_relay::logging::{
+use nemo_relay_runtime::logging::{
     DEFAULT_FILE_SINK_QUEUE_ENTRIES, LogFormat, LogLevel, LogSinkConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES,
-};
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginKind,
-    DynamicPluginManifest, DynamicPluginStartupClass,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -24,6 +20,13 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::MutexGuard;
+use {
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginAttestationMode,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginKind,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginStartupClass,
+};
 
 use crate::plugins::policy::{
     DynamicPluginHostPolicy, DynamicPluginHostPolicyEffect, DynamicPluginHostPolicyRule,
@@ -4686,7 +4689,7 @@ format = "human"
             assert_eq!(sink.queue_capacity, 32);
             assert_eq!(
                 sink.failure_policy,
-                nemo_relay::logging::FileLogSinkFailurePolicy::Optional
+                nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Optional
             );
         }
     }
@@ -4698,7 +4701,7 @@ format = "human"
             assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
             assert_eq!(
                 sink.failure_policy,
-                nemo_relay::logging::FileLogSinkFailurePolicy::Required
+                nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Required
             );
         }
     }
@@ -5871,9 +5874,9 @@ fn logging_failure_policy_layers_by_sink_path_for_cli_and_daemon() {
             assert_eq!(
                 sink.failure_policy,
                 if override_field.is_empty() {
-                    nemo_relay::logging::FileLogSinkFailurePolicy::Optional
+                    nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Optional
                 } else {
-                    nemo_relay::logging::FileLogSinkFailurePolicy::Required
+                    nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Required
                 }
             );
         }

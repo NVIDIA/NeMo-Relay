@@ -159,25 +159,29 @@ use libc::c_char;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_relay::api::runtime::{
-    ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
-    current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
-    scope_stack_active, set_thread_scope_stack,
-};
 use nemo_relay::api::scope as core_scope_api;
 use nemo_relay::api::scope::ScopeAttributes;
 use nemo_relay::api::subscriber as core_subscriber_api;
 use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::PluginHostActivation;
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, deregister_plugin,
-    list_plugin_kinds, register_plugin,
-};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
+use nemo_relay_runtime::api::runtime::{
+    ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
+    current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
+    scope_stack_active, set_thread_scope_stack,
+};
+use nemo_relay_runtime::plugin::dynamic::PluginHostActivation;
 use tokio::runtime::Runtime;
+use {
+    nemo_relay::plugin::list_plugin_kinds, nemo_relay_runtime::plugin::ConfigDiagnostic,
+    nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::Plugin,
+    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginError,
+    nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
+};
 
 mod adaptive;
 mod diagnostics;
@@ -287,8 +291,9 @@ fn ignore_sigpipe() {}
 pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     clear_last_error();
     ignore_sigpipe();
-    let result = nemo_relay::shared_runtime::initialize_shared_runtime_binding("go")
-        .and_then(|()| nemo_relay::logging::initialize_default_logging());
+    nemo_relay::initialize_runtime();
+    let result = nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding("go")
+        .and_then(|()| nemo_relay_runtime::logging::initialize_default_logging());
     match result {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
@@ -302,7 +307,7 @@ pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_shutdown_default_logging() -> NemoRelayStatus {
     clear_last_error();
-    match nemo_relay::logging::shutdown_default_logging() {
+    match nemo_relay_runtime::logging::shutdown_default_logging() {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
     }
@@ -352,7 +357,7 @@ pub unsafe extern "C" fn nemo_relay_log(
         } else {
             format!("nemo_relay.go.{target}")
         };
-        nemo_relay::logging::emit_str(level, &target, message, fields)
+        nemo_relay_runtime::logging::emit_str(level, &target, message, fields)
     };
     match parse() {
         Ok(()) => NemoRelayStatus::Ok,

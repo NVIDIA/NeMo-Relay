@@ -3,14 +3,17 @@
 
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-use nemo_relay::plugin::{PluginError, Result as PluginResult, rollback_registrations};
+use nemo_relay_runtime::plugin::{PluginError, Result as PluginResult, rollback_registrations};
 
 use super::component::PiiRedactionConfig;
 use super::component::profile_registration_prefix;
 
 #[doc(hidden)]
 pub type LocalBackendProvider = Arc<
-    dyn Fn(PiiRedactionConfig, &mut dyn nemo_relay::plugin::PluginRegistrar) -> PluginResult<()>
+    dyn Fn(
+            PiiRedactionConfig,
+            &mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
+        ) -> PluginResult<()>
         + Send
         + Sync,
 >;
@@ -43,7 +46,7 @@ pub fn clear_local_backend_provider() -> PluginResult<()> {
 
 pub(super) fn register_local_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_runtime::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let provider = local_backend_provider_guard()?.clone();

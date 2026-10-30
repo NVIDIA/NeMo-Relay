@@ -8,7 +8,7 @@ use nemo_relay::api::llm::{
     llm_call_execute, llm_request_intercepts, llm_stream_call_execute,
 };
 use nemo_relay::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
-use nemo_relay::api::runtime::LlmJsonStream;
+use nemo_relay_runtime::api::runtime::LlmJsonStream;
 use serde_json::json;
 use tokio_stream::StreamExt;
 

@@ -11,8 +11,8 @@
 //! with their corresponding `nemo_relay_*_free` function.
 
 use libc::c_char;
-use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
-use nemo_relay::plugin::PluginRegistrar;
+use nemo_relay_runtime::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
+use nemo_relay_runtime::plugin::PluginRegistrar;
 use serde_json::Value as Json;
 
 use nemo_relay::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
@@ -25,9 +25,9 @@ use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 #[cfg(test)]
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::ToolHandle;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::plugin::dynamic::PluginHostActivation;
 use nemo_relay_adaptive::AdaptiveRuntime;
+use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_runtime::plugin::dynamic::PluginHostActivation;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 use crate::error::set_last_error;
@@ -96,7 +96,7 @@ pub struct FfiPluginHostActivation(pub std::sync::Mutex<Option<PluginHostActivat
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_relay::plugin::PluginRegistrar`, not an owned heap allocation.
+/// `nemo_relay_runtime::plugin::PluginRegistrar`, not an owned heap allocation.
 /// It is only valid for the duration of the plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.

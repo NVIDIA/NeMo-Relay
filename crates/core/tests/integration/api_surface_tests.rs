@@ -53,12 +53,6 @@ use nemo_relay::api::registry::{
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
-};
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::scope::{event, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
@@ -70,9 +64,15 @@ use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
 };
-use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::{FlowError, Result};
-use nemo_relay::json::Json;
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
+use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay_runtime::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_runtime::json::Json;
 use serde_json::{Map, json};
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());

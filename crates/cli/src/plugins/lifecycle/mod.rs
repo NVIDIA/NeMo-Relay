@@ -10,13 +10,21 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginFailure,
-    DynamicPluginFailurePhase, DynamicPluginKind, DynamicPluginLoadContract, DynamicPluginManifest,
-    DynamicPluginManifestLoad, DynamicPluginRecord, DynamicPluginValidationStatus, WorkerRuntime,
-};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use {
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginCheckState,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginCompatibility,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginFailure,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginFailurePhase,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginKind,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginLoadContract,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifest,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginManifestLoad,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginRecord,
+    nemo_relay_runtime::plugin::dynamic::DynamicPluginValidationStatus,
+    nemo_relay_runtime::plugin::dynamic::WorkerRuntime,
+};
 
 #[cfg(test)]
 use crate::configuration::resolve_plugins_config;
@@ -2727,7 +2735,7 @@ fn ensure_scope(
         scope,
         plugins_toml_path,
         state_path,
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_runtime::plugin::dynamic::DynamicPluginRegistry::new(),
     });
     scopes.len() - 1
 }
@@ -2745,9 +2753,11 @@ fn restore_plugins_toml(path: &std::path::Path, original: Option<&[u8]>) -> Resu
     Ok(())
 }
 
-fn optional_trust_failure(record: &nemo_relay::plugin::dynamic::DynamicPluginRecord) -> bool {
+fn optional_trust_failure(
+    record: &nemo_relay_runtime::plugin::dynamic::DynamicPluginRecord,
+) -> bool {
     record.status.startup_class
-        == Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional)
+        == Some(nemo_relay_runtime::plugin::dynamic::DynamicPluginStartupClass::Optional)
         && (record.status.validation.integrity == DynamicPluginCheckState::Invalid
             || record.status.validation.authenticity == DynamicPluginCheckState::Invalid)
 }
@@ -2757,7 +2767,7 @@ fn required_startup_failure(
     resolved_plugins: &[ResolvedDynamicPluginConfig],
 ) -> Option<String> {
     if entry.record.status.startup_class
-        != Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required)
+        != Some(nemo_relay_runtime::plugin::dynamic::DynamicPluginStartupClass::Required)
     {
         return None;
     }

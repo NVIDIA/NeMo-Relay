@@ -4,7 +4,7 @@
 //! Unit tests for plugin in the NeMo Relay FFI crate.
 
 use super::*;
-use nemo_relay::plugin::rollback_registrations;
+use nemo_relay_runtime::plugin::rollback_registrations;
 
 #[test]
 fn test_plugin_initialize_rejects_aliased_outputs_without_activating() {
@@ -793,7 +793,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             "ffi::tool",
         ]
     );
-    nemo_relay::plugin::rollback_registrations(&mut registrations);
+    nemo_relay_runtime::plugin::rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
 
@@ -1350,7 +1350,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
     }
 
     let mut registrations = inner.into_registrations();
-    nemo_relay::plugin::rollback_registrations(&mut registrations);
+    nemo_relay_runtime::plugin::rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
 

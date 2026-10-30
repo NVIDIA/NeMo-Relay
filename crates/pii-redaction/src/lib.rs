@@ -25,22 +25,22 @@ pub(crate) fn test_mutex() -> &'static Mutex<()> {
 #[cfg(test)]
 #[allow(missing_docs)]
 pub mod api {
-    pub use nemo_relay::api::*;
+    pub use nemo_relay_runtime::api::*;
 }
 
 #[cfg(test)]
 #[allow(missing_docs)]
 pub mod codec {
-    pub use nemo_relay::codec::*;
+    pub use nemo_relay_runtime::codec::*;
 }
 
 #[cfg(test)]
 #[allow(missing_docs)]
 pub mod plugin {
-    pub use nemo_relay::plugin::*;
+    pub use nemo_relay_runtime::plugin::*;
 
     pub fn ensure_builtin_plugins_registered() -> Result<()> {
-        nemo_relay::plugin::ensure_builtin_plugins_registered()?;
+        nemo_relay_runtime::plugin::ensure_builtin_plugins_registered()?;
         crate::component::register_pii_redaction_component()
     }
 }

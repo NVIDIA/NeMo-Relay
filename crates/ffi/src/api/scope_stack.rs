@@ -7,7 +7,7 @@ use super::{
     restore_thread_scope_stack, scope_stack_active, set_last_error, set_thread_scope_stack,
 };
 use crate::convert::str_to_c_string;
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     PropagationContext, capture_propagation_context, capture_propagation_context_with_root,
     capture_rootless_propagation_context, capture_traceparent, create_scope_stack_from_propagation,
     current_scope_stack_override, install_scope_stack_override, restore_scope_stack_override,
@@ -31,14 +31,15 @@ pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
         return NemoRelayStatus::NullPointer;
     }
     unsafe { *out = std::ptr::null_mut() };
-    let result = nemo_relay::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
-        snapshot
-            .map(|snapshot| {
-                serde_json::to_string(&snapshot)
-                    .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
-            })
-            .transpose()
-    });
+    let result =
+        nemo_relay_runtime::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
+            snapshot
+                .map(|snapshot| {
+                    serde_json::to_string(&snapshot)
+                        .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+                })
+                .transpose()
+        });
     match result {
         Ok(Some(snapshot)) => {
             unsafe { *out = str_to_c_string(&snapshot) };
