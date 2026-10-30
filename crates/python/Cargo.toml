@@ -26,8 +26,8 @@ nemo-relay-types.workspace = true
 nemo-relay-runtime.workspace = true
 nemo-relay-observability.workspace = true
 # First-party crates.
-nemo-relay = { workspace = true, features = ["atof-streaming", "object-store", "worker-grpc"] }
-nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay = { workspace = true }
+nemo-relay-adaptive = { workspace = true }
 nemo-relay-pii-redaction.workspace = true
 
 # Third-party dependencies.
@@ -46,7 +46,6 @@ libc.workspace = true
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
 
 # Third-party dependencies.
 tempfile.workspace = true

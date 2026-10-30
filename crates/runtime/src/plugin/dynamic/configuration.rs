@@ -26,8 +26,9 @@ const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 
 /// One validation result produced by core before dynamic code is loaded.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 pub struct DynamicPluginValidationReport {
     /// Canonical plugin identifier.
     pub plugin_id: String,
@@ -45,8 +46,7 @@ pub struct DynamicPluginValidationReport {
 }
 
 /// Combined static and dynamic host report.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PluginHostReport {
     /// Static plugin initialization report.
     pub config: crate::plugin::ConfigReport,
@@ -77,8 +77,9 @@ fn empty_resolved_config() -> Json {
 }
 
 /// Selects the scope of a standalone dynamic-plugin validation request.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case", tag = "target", content = "value")]
 pub(crate) enum PluginHostValidationTarget {
     /// Validate every enabled declaration in the effective host configuration.
@@ -92,8 +93,7 @@ pub(crate) enum PluginHostValidationTarget {
 
 /// Typed request for standalone, non-activating dynamic-plugin validation.
 #[cfg(test)]
-#[derive(Debug, Clone, serde::Serialize, Default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, serde::Serialize, Default, schemars::JsonSchema)]
 pub(crate) struct PluginHostValidationRequest {
     /// Programmatic static-plugin configuration applied after file layers.
     #[serde(default)]

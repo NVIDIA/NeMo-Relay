@@ -18,7 +18,7 @@ fn register_pricing_component() -> crate::plugin::Result<()> {
         nemo_relay_model_pricing::plugin::PricingPlugin,
     ))
 }
-use nemo_relay_model_pricing::pricing_test_mutex;
+use crate::test_support::pricing_test_mutex;
 
 struct ResetPricingResolverGuard;
 

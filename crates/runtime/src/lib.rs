@@ -46,3 +46,7 @@ pub mod pricing;
 #[cfg(test)]
 #[path = "../tests/support/composition.rs"]
 mod test_composition;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod test_support;

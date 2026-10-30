@@ -187,13 +187,7 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             }
         }
         "redis" => {
-            if !cfg!(feature = "redis-backend") {
-                report.diagnostics.push(response_cache_error(
-                    "response_cache.backend_unavailable",
-                    Some("backend.kind"),
-                    "redis backend requires building with the 'redis-backend' feature".to_string(),
-                ));
-            } else if config
+            if config
                 .backend
                 .config
                 .get("url")

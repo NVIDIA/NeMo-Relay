@@ -1071,7 +1071,6 @@ pub struct MetricEventProcessor {
 }
 
 impl MetricEventProcessor {
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new(
         meter: Meter,

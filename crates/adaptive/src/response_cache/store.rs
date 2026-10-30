@@ -7,7 +7,7 @@
 //! ([`crate::storage`]), which is shaped for specific learning records rather
 //! than a "store any value with a TTL" cache. The trait keeps the same
 //! object-safe, boxed-future style; the Redis backend lives behind the
-//! `redis-backend` feature.
+//! built-in Redis backend.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -310,13 +310,11 @@ impl CacheStore for InMemoryCacheStore {
 /// and a configurable key prefix. The connection is a [`ConnectionManager`]
 /// (cheap to clone, auto-reconnecting), cloned before each await so the store
 /// never blocks. Mirrors the connection pattern of [`crate::redis::RedisBackend`].
-#[cfg(feature = "redis-backend")]
 pub struct RedisCacheStore {
     conn: redis::aio::ConnectionManager,
     key_prefix: String,
 }
 
-#[cfg(feature = "redis-backend")]
 impl RedisCacheStore {
     /// Connects to Redis and returns a new store.
     ///
@@ -353,10 +351,8 @@ impl RedisCacheStore {
 }
 
 /// A hung Redis peer must degrade to fail-open, not block the request.
-#[cfg(feature = "redis-backend")]
 const REDIS_OP_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[cfg(feature = "redis-backend")]
 async fn with_redis_deadline<T>(
     operation: &'static str,
     future: impl Future<Output = Result<T>>,
@@ -369,7 +365,6 @@ async fn with_redis_deadline<T>(
     }
 }
 
-#[cfg(feature = "redis-backend")]
 impl CacheStore for RedisCacheStore {
     fn get<'a>(&'a self, key: &'a str) -> BoxCacheFuture<'a, Option<Arc<CacheEntry>>> {
         Box::pin(with_redis_deadline("GET", async move {
@@ -460,7 +455,7 @@ pub fn validate_backend_target(config: &ResponseCacheConfig) -> std::result::Res
 /// Builds the response-cache backend from config.
 ///
 /// Returns the boxed [`CacheStore`] used by the intercept and the `doctor`
-/// health check. Redis support is gated behind the `redis-backend` feature.
+/// health check. Redis support is built in.
 pub(crate) async fn build_store(config: &ResponseCacheConfig) -> Result<Arc<dyn CacheStore>> {
     match config.backend.kind.as_str() {
         "in_memory" => Ok(Arc::new(InMemoryCacheStore::new(
@@ -473,7 +468,6 @@ pub(crate) async fn build_store(config: &ResponseCacheConfig) -> Result<Arc<dyn 
     }
 }
 
-#[cfg(feature = "redis-backend")]
 async fn build_redis_store(config: &ResponseCacheConfig) -> Result<Arc<dyn CacheStore>> {
     use crate::response_cache::store::RedisCacheStore;
 
@@ -490,15 +484,6 @@ async fn build_redis_store(config: &ResponseCacheConfig) -> Result<Arc<dyn Cache
     Ok(Arc::new(store))
 }
 
-#[cfg(not(feature = "redis-backend"))]
-async fn build_redis_store(_config: &ResponseCacheConfig) -> Result<Arc<dyn CacheStore>> {
-    Err(AdaptiveError::InvalidConfig(
-        "response_cache: backend.kind = \"redis\" requires building with the 'redis-backend' \
-         feature"
-            .to_string(),
-    ))
-}
-
 fn redis_backend_url(config: &ResponseCacheConfig) -> Result<&str> {
     config
         .backend
@@ -512,21 +497,11 @@ fn redis_backend_url(config: &ResponseCacheConfig) -> Result<&str> {
         })
 }
 
-#[cfg(feature = "redis-backend")]
 fn validate_redis_backend_target(config: &ResponseCacheConfig) -> Result<()> {
     let url = redis_backend_url(config)?;
     redis::Client::open(url)
         .map(|_| ())
         .map_err(|err| AdaptiveError::Storage(format!("response_cache: redis client: {err}")))
-}
-
-#[cfg(not(feature = "redis-backend"))]
-fn validate_redis_backend_target(_config: &ResponseCacheConfig) -> Result<()> {
-    Err(AdaptiveError::InvalidConfig(
-        "response_cache: backend.kind = \"redis\" requires building with the 'redis-backend' \
-         feature"
-            .to_string(),
-    ))
 }
 
 #[cfg(test)]

@@ -788,14 +788,12 @@ impl OpenTelemetryConfig {
     }
 
     /// Creates an HTTP OTLP config for the given service name.
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn http_binary(service_name: impl Into<String>) -> Self {
         Self::new(OpenTelemetryType::Full, String::new()).with_service_name(service_name)
     }
 
     /// Creates a gRPC OTLP config for the given service name.
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn grpc(service_name: impl Into<String>) -> Self {
         Self::new(OpenTelemetryType::Full, String::new())
@@ -852,7 +850,6 @@ impl OpenTelemetryConfig {
         self
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn header(&self, key: &str) -> Option<&str> {
         self.headers.get(key).map(String::as_str)
@@ -881,7 +878,6 @@ impl OpenTelemetryFileSinkConfig {
     }
 }
 
-#[cfg(any(test, feature = "__test-support"))]
 impl Default for OpenTelemetryConfig {
     fn default() -> Self {
         Self::new(OpenTelemetryType::Full, String::new())
@@ -1516,7 +1512,6 @@ pub fn validate_headers(headers: &HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(test, feature = "__test-support"))]
 #[doc(hidden)]
 pub fn build_tracer_provider(
     config: &OpenTelemetryConfig,
@@ -1962,7 +1957,6 @@ pub struct DiagnosticBatchSpanProcessor {
 }
 
 impl DiagnosticBatchSpanProcessor {
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
@@ -1979,7 +1973,6 @@ impl DiagnosticBatchSpanProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_with_batch_config_and_retry_timeout<E: SpanExporter + 'static>(
         exporter: E,
@@ -2166,7 +2159,6 @@ pub struct OtelEventProcessor {
     pub active_spans: HashMap<Uuid, ActiveSpan>,
     pub completed_span_contexts: HashMap<Uuid, CompletedSpanContext>,
     pub completed_span_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
-    #[cfg(any(test, feature = "__test-support"))]
     pub provider: SdkTracerProvider,
     pub tracer: SdkTracer,
     pub instrumentation_scope: String,
@@ -2249,13 +2241,11 @@ pub fn ensure_dynamic_pipeline(
 }
 
 impl OtelEventProcessor {
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
         Self::new_with_mark_projection(provider, instrumentation_scope, MarkProjection::default())
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_openinference(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
         Self::new_with_mark_projection_and_exclusions_and_mappings(
@@ -2268,7 +2258,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_openinference_with_mark_projection(
         provider: SdkTracerProvider,
@@ -2285,7 +2274,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_openinference_with_mark_projection_and_exclusions(
         provider: SdkTracerProvider,
@@ -2303,7 +2291,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_with_mark_projection(
         provider: SdkTracerProvider,
@@ -2318,7 +2305,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_with_mark_projection_and_exclusions(
         provider: SdkTracerProvider,
@@ -2336,7 +2322,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new_with_mark_projection_and_exclusions_and_mappings(
         provider: SdkTracerProvider,
@@ -2358,7 +2343,6 @@ impl OtelEventProcessor {
         )
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     pub fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
@@ -2423,7 +2407,6 @@ impl OtelEventProcessor {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
             completed_span_expiry_index: BTreeMap::new(),
-            #[cfg(any(test, feature = "__test-support"))]
             provider,
             tracer,
             instrumentation_scope,
@@ -2442,7 +2425,6 @@ impl OtelEventProcessor {
         }
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn process(&mut self, event: &EventView<'_>) {
         self.process_with_root_tracer(event, None);
@@ -2568,7 +2550,6 @@ impl OtelEventProcessor {
             .unwrap_or_else(|| self.tracer.clone())
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn force_flush(&self) -> Result<()> {
         self.provider

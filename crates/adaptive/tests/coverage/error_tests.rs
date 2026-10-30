@@ -81,7 +81,6 @@ fn test_plugin_error_conversion_maps_all_variants() {
     assert_eq!(format!("{registration}"), "registration failed: subscriber");
 }
 
-#[cfg(feature = "redis-backend")]
 #[test]
 fn test_redis_error_variant_exists() {
     // Verify that the Redis variant exists and displays correctly.

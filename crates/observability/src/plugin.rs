@@ -29,7 +29,6 @@ use std::net::IpAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
-#[cfg(feature = "object-store")]
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -138,8 +137,7 @@ impl From<ComponentSpec> for PluginComponentSpec {
 /// Every section is optional. A missing section has the same activation
 /// behavior as a section with `enabled = false`: it contributes no runtime
 /// subscribers and performs no export work.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ObservabilityConfig {
     /// Observability config schema version.
     #[serde(default = "default_observability_config_version")]
@@ -179,8 +177,7 @@ impl Default for ObservabilityConfig {
 }
 
 /// Multi-endpoint OpenTelemetry export settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetrySectionConfig {
     /// Whether OpenTelemetry export is active.
     #[serde(default)]
@@ -205,8 +202,7 @@ pub struct OpenTelemetrySectionConfig {
 }
 
 /// Signal-common OTLP destination fields used by logs and metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetrySignalEndpointConfig {
     /// Required OTLP endpoint. Bare HTTP authorities gain the signal path.
     pub endpoint: String,
@@ -215,7 +211,7 @@ pub struct OpenTelemetrySignalEndpointConfig {
     pub tls: Option<OpenTelemetryTlsConfig>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
+    #[schemars(schema_with = "otlp_transport_schema")]
     pub transport: String,
     /// Extra exporter headers or metadata.
     #[serde(default)]
@@ -250,8 +246,7 @@ pub struct OpenTelemetrySignalEndpointConfig {
 }
 
 /// OTLP log pipeline settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetryLogSectionConfig {
     /// Whether log export is active.
     #[serde(default)]
@@ -261,7 +256,7 @@ pub struct OpenTelemetryLogSectionConfig {
     pub endpoints: Option<Vec<OpenTelemetrySignalEndpointConfig>>,
     /// Minimum exported telemetry-log severity.
     #[serde(default = "default_otel_log_minimum_severity")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "log_severity_schema"))]
+    #[schemars(schema_with = "log_severity_schema")]
     pub minimum_severity: String,
     /// Maximum queued log records.
     #[serde(default = "default_otel_log_max_queue_size")]
@@ -296,8 +291,7 @@ impl Default for OpenTelemetryLogSectionConfig {
 }
 
 /// OTLP metric pipeline settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetryMetricSectionConfig {
     /// Whether metric export is active.
     #[serde(default)]
@@ -310,10 +304,7 @@ pub struct OpenTelemetryMetricSectionConfig {
     pub export_interval_millis: u64,
     /// Preferred aggregation temporality.
     #[serde(default = "default_otel_metric_temporality")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "metric_temporality_schema")
-    )]
+    #[schemars(schema_with = "metric_temporality_schema")]
     pub temporality: String,
     /// Maximum retained metric instruments per destination.
     #[serde(default = "default_otel_metric_max_instruments")]
@@ -337,8 +328,7 @@ impl Default for OpenTelemetryMetricSectionConfig {
 }
 
 /// One typed OTLP destination.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetryEndpointConfig {
     /// Semantic projection emitted by this endpoint.
     #[serde(rename = "type")]
@@ -350,7 +340,7 @@ pub struct OpenTelemetryEndpointConfig {
     pub tls: Option<OpenTelemetryTlsConfig>,
     /// Representation used for point-in-time marks.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    #[schemars(schema_with = "mark_projection_schema")]
     pub mark_projection: MarkProjection,
     /// Mark names excluded from tool projection.
     #[serde(default = "default_mark_exclude_names")]
@@ -366,7 +356,7 @@ pub struct OpenTelemetryEndpointConfig {
     pub promote_resource_metadata_prefixes: Vec<String>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
+    #[schemars(schema_with = "otlp_transport_schema")]
     pub transport: String,
     /// Extra exporter headers or metadata.
     #[serde(default)]
@@ -416,8 +406,7 @@ pub struct OpenTelemetryEndpointConfig {
 /// collector. It shares the projection and batching settings with
 /// [`OpenTelemetryEndpointConfig`] and drops the fields that only a network
 /// destination has: endpoint, transport, headers, and timeout.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenTelemetryFileSinkConfig {
     /// Semantic projection written to this file.
     #[serde(rename = "type", default)]
@@ -429,18 +418,15 @@ pub struct OpenTelemetryFileSinkConfig {
     pub filename: Option<String>,
     /// On-disk encoding: `json_lines` or `proto`.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_file_format_schema"))]
+    #[schemars(schema_with = "otlp_file_format_schema")]
     pub format: OtlpFileFormat,
     /// File open mode: `append` or `overwrite`.
     #[serde(default = "default_otlp_file_sink_mode")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "otlp_file_sink_mode_schema")
-    )]
+    #[schemars(schema_with = "otlp_file_sink_mode_schema")]
     pub mode: String,
     /// Representation used for point-in-time marks.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    #[schemars(schema_with = "mark_projection_schema")]
     pub mark_projection: MarkProjection,
     /// Mark names excluded from tool projection.
     #[serde(default = "default_mark_exclude_names")]
@@ -488,8 +474,7 @@ pub struct OpenTelemetryFileSinkConfig {
 /// When enabled, this section wraps
 /// [`crate::atof::AtofExporter`] and writes the raw ATOF event
 /// stream to one or more explicitly configured file or stream sinks.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AtofSectionConfig {
     /// Whether ATOF JSONL export is active.
     #[serde(default)]
@@ -500,8 +485,7 @@ pub struct AtofSectionConfig {
 }
 
 /// One plugin-managed destination for raw ATOF events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AtofSinkSectionConfig {
     /// A local JSONL file.
@@ -511,8 +495,7 @@ pub enum AtofSinkSectionConfig {
 }
 
 /// File sink settings for the ATOF plugin section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AtofFileSinkSectionConfig {
     /// Directory containing the JSONL output file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -522,22 +505,18 @@ pub struct AtofFileSinkSectionConfig {
     pub filename: Option<String>,
     /// File open mode: `append` or `overwrite`.
     #[serde(default = "default_atof_mode")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "atof_mode_schema"))]
+    #[schemars(schema_with = "atof_mode_schema")]
     pub mode: String,
 }
 
 /// Stream sink settings for the ATOF plugin section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AtofStreamSinkSectionConfig {
     /// Endpoint URL.
     pub url: String,
     /// Transport: `http_post`, `websocket`, or `ndjson`.
     #[serde(default = "default_atof_endpoint_transport")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "atof_endpoint_transport_schema")
-    )]
+    #[schemars(schema_with = "atof_endpoint_transport_schema")]
     pub transport: String,
     /// Headers applied to endpoint requests or handshakes.
     #[serde(default)]
@@ -566,8 +545,7 @@ pub struct AtofStreamSinkSectionConfig {
 /// historical `{session_id}` placeholder in [`AtifSectionConfig::filename_template`] expands to
 /// the trajectory scope UUID so concurrent sibling trajectories cannot overwrite each other's
 /// files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AtifSectionConfig {
     /// Whether ATIF export is active.
     #[serde(default)]
@@ -648,8 +626,7 @@ impl Default for AtifSectionConfig {
 /// writing it to the local filesystem. The shape is tagged with a `type`
 /// discriminator so additional backends (for example, Azure Blob Storage) can
 /// be added without breaking existing configs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AtifStorageConfig {
     /// HTTP endpoint storage.
@@ -676,8 +653,7 @@ pub enum AtifStorageConfig {
 /// credentials are referenced by env var *name* (the `_var` suffix), so
 /// multiple destinations can each carry their own credentials without leaking
 /// secret material into the config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct S3StorageConfig {
     /// Destination bucket name. Must be non-empty.
     pub bucket: String,
@@ -716,8 +692,7 @@ pub struct S3StorageConfig {
 /// `application/json` body. Inline `headers` are merged with values resolved
 /// from `header_env`; `header_env` values are environment variable names, not
 /// secret values.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct HttpStorageConfig {
     /// Destination endpoint URL. Must use `http://` or `https://`.
     pub endpoint: String,
@@ -1344,13 +1319,11 @@ impl Plugin for ObservabilityPlugin {
 }
 
 /// Returns the JSON Schema for the observability component configuration.
-#[cfg(feature = "schema")]
 pub fn observability_config_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(ObservabilityConfig))
         .expect("observability config schema should serialize")
 }
 
-#[cfg(feature = "schema")]
 pub fn atof_mode_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -1359,14 +1332,12 @@ pub fn atof_mode_schema(
 
 /// A trace file sink defaults to `overwrite`, unlike the ATOF event sink: a run
 /// that reuses a filename should not read as one trajectory appended to another.
-#[cfg(feature = "schema")]
 pub fn otlp_file_sink_mode_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["append", "overwrite"], Some("overwrite"))
 }
 
-#[cfg(feature = "schema")]
 pub fn atof_endpoint_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -1377,28 +1348,24 @@ pub fn atof_endpoint_transport_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 pub fn otlp_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["http_binary", "grpc"], Some("http_binary"))
 }
 
-#[cfg(feature = "schema")]
 pub fn otlp_file_format_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["json_lines", "proto"], Some("json_lines"))
 }
 
-#[cfg(feature = "schema")]
 pub fn mark_projection_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["inherit", "event", "tool"], Some("inherit"))
 }
 
-#[cfg(feature = "schema")]
 pub fn log_severity_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -1409,7 +1376,6 @@ pub fn log_severity_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 pub fn metric_temporality_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -1420,7 +1386,6 @@ pub fn metric_temporality_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 pub fn string_enum_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
     values: &[&str],
@@ -1755,7 +1720,6 @@ pub fn deregister_atif_shutdown_subscriber(
     }
 }
 
-#[cfg(feature = "object-store")]
 pub fn build_atif_storage(
     index: usize,
     config: &AtifStorageConfig,
@@ -1774,17 +1738,6 @@ pub fn build_atif_storage(
         "Plugin resource access will be validated on first use"
     );
     Ok(storage)
-}
-
-#[cfg(not(feature = "object-store"))]
-pub fn build_atif_storage(
-    _index: usize,
-    _config: &AtifStorageConfig,
-    _plaintext: &PlaintextPolicy,
-) -> PluginResult<Arc<AtifRemoteStorage>> {
-    Err(PluginError::InvalidConfig(
-        "ATIF storage support is not enabled in this build".to_string(),
-    ))
 }
 
 #[derive(Clone)]
@@ -3225,21 +3178,6 @@ pub fn signal_shutdown_issue(
     }
 }
 
-#[cfg(any(test, feature = "__test-support"))]
-pub fn shutdown_opentelemetry_subscribers(
-    subscribers: &[Arc<OpenTelemetrySubscriber>],
-    host: &dyn crate::host::ObservabilityHost,
-) -> Option<OpenTelemetryShutdownFailure> {
-    let mut errors = Vec::new();
-    if let Err(error) = host.flush_subscribers() {
-        errors.push(OpenTelemetryShutdownIssue::other(
-            crate::otel::OpenTelemetryError::Core(error),
-        ));
-    }
-    errors.extend(shutdown_opentelemetry_providers(subscribers));
-    shutdown_failure_from_errors(errors)
-}
-
 pub fn shutdown_failure_from_errors(
     errors: Vec<OpenTelemetryShutdownIssue>,
 ) -> Option<OpenTelemetryShutdownFailure> {
@@ -3264,19 +3202,6 @@ pub fn shutdown_failure_from_errors(
     } else {
         OpenTelemetryShutdownFailure::Other(error)
     })
-}
-
-#[cfg(any(test, feature = "__test-support"))]
-pub fn shutdown_opentelemetry_providers(
-    subscribers: &[Arc<OpenTelemetrySubscriber>],
-) -> Vec<OpenTelemetryShutdownIssue> {
-    let mut errors = Vec::new();
-    for subscriber in subscribers {
-        if let Err(error) = subscriber.shutdown_provider() {
-            errors.push(OpenTelemetryShutdownIssue::trace(error));
-        }
-    }
-    errors
 }
 
 pub fn shutdown_indexed_opentelemetry_providers(
@@ -3339,11 +3264,8 @@ pub struct ManagedAtifExporter {
 
 pub struct PendingAtifWrite {
     pub agent_uuid: Uuid,
-    #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
     pub session_id: String,
-    // `filename` is consumed by the remote upload path, which is gated on the
-    // object-store feature; without it, only the local sink reads `local_path`.
-    #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
+    // Remote uploads use `filename`; local sinks use `local_path`.
     pub filename: String,
     pub local_root: Option<PathBuf>,
     pub local_path: Option<PathBuf>,
@@ -4179,7 +4101,6 @@ pub fn write_atif_local(root: &Path, path: &Path, payload: &[u8]) -> std::io::Re
     atomic_private_write(root, path, payload)
 }
 
-#[cfg(feature = "object-store")]
 pub fn write_atif_remote(
     storage: &[Arc<AtifRemoteStorage>],
     index: usize,
@@ -4189,17 +4110,6 @@ pub fn write_atif_remote(
         .get(index)
         .ok_or_else(|| std::io::Error::other(format!("ATIF storage[{index}] is not registered")))?;
     sink.put(&write.filename, &write.session_id, &write.payload)
-}
-
-#[cfg(not(feature = "object-store"))]
-pub fn write_atif_remote(
-    _storage: &[Arc<AtifRemoteStorage>],
-    _index: usize,
-    _write: &PendingAtifWrite,
-) -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "ATIF storage support is not enabled in this build",
-    ))
 }
 
 pub fn event_observation_key(event: &Event) -> String {
@@ -5155,38 +5065,6 @@ pub fn validate_atof_section(
     section: &AtofSectionConfig,
 ) {
     validate_atof_values(diagnostics, policy, section);
-    validate_atof_feature_support(diagnostics, policy, section);
-}
-
-#[cfg(not(feature = "atof-streaming"))]
-pub fn validate_atof_feature_support(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    section: &AtofSectionConfig,
-) {
-    if section.enabled
-        && section
-            .sinks
-            .iter()
-            .any(|sink| matches!(sink, AtofSinkSectionConfig::Stream(_)))
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "observability.unsupported_value",
-            Some("atof".to_string()),
-            Some("sinks".to_string()),
-            "ATOF stream sinks are not enabled in this build".to_string(),
-        );
-    }
-}
-
-#[cfg(feature = "atof-streaming")]
-pub fn validate_atof_feature_support(
-    _diagnostics: &mut Vec<ConfigDiagnostic>,
-    _policy: &ConfigPolicy,
-    _section: &AtofSectionConfig,
-) {
 }
 
 pub fn validate_atif_section(
@@ -5196,36 +5074,9 @@ pub fn validate_atif_section(
 ) {
     validate_atif_values(diagnostics, policy, section);
     validate_atif_file_export_support(diagnostics, policy, section);
-    validate_atif_storage_support(diagnostics, policy, section);
 }
 
 pub fn validate_atif_file_export_support(
-    _diagnostics: &mut Vec<ConfigDiagnostic>,
-    _policy: &ConfigPolicy,
-    _section: &AtifSectionConfig,
-) {
-}
-
-#[cfg(not(feature = "object-store"))]
-pub fn validate_atif_storage_support(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    section: &AtifSectionConfig,
-) {
-    if section.enabled && !section.storage.is_empty() {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "observability.feature_disabled",
-            Some("atif".to_string()),
-            Some("storage".to_string()),
-            "ATIF storage support is not enabled in this build".to_string(),
-        );
-    }
-}
-
-#[cfg(feature = "object-store")]
-pub fn validate_atif_storage_support(
     _diagnostics: &mut Vec<ConfigDiagnostic>,
     _policy: &ConfigPolicy,
     _section: &AtifSectionConfig,
@@ -6352,7 +6203,6 @@ pub fn validate_atof_stream_sink_values(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 pub fn is_valid_atof_stream_url(url: &str, transport: AtofEndpointTransport) -> bool {
     let Ok(url) = reqwest::Url::parse(url) else {
         return false;
@@ -6366,21 +6216,6 @@ pub fn is_valid_atof_stream_url(url: &str, transport: AtofEndpointTransport) -> 
         }
 }
 
-#[cfg(not(feature = "atof-streaming"))]
-pub fn is_valid_atof_stream_url(url: &str, transport: AtofEndpointTransport) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return false;
-    };
-    !rest.is_empty()
-        && !rest.starts_with('/')
-        && match transport {
-            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
-                matches!(scheme, "http" | "https")
-            }
-            AtofEndpointTransport::Websocket => matches!(scheme, "ws" | "wss"),
-        }
-}
-
 pub fn validate_atof_stream_header(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
@@ -6389,9 +6224,7 @@ pub fn validate_atof_stream_header(
     value: &str,
 ) {
     validate_atof_stream_header_name(diagnostics, policy, field, header);
-    #[cfg(not(feature = "atof-streaming"))]
-    let _ = value;
-    #[cfg(feature = "atof-streaming")]
+
     if let Err(error) = reqwest::header::HeaderValue::from_str(value) {
         push_policy_diag(
             diagnostics,
@@ -6410,10 +6243,8 @@ pub fn validate_atof_stream_header_name(
     field: &str,
     header: &str,
 ) {
-    #[cfg(feature = "atof-streaming")]
     let is_valid = reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_ok();
-    #[cfg(not(feature = "atof-streaming"))]
-    let is_valid = !header.trim().is_empty() && header.trim() == header;
+
     if !is_valid {
         push_policy_diag(
             diagnostics,
@@ -6577,7 +6408,6 @@ pub fn validate_atif_http_header(
     _value: &str,
 ) {
     validate_atif_http_header_name(diagnostics, policy, field, header);
-    #[cfg(feature = "object-store")]
     if let Err(err) = reqwest::header::HeaderValue::from_str(_value) {
         push_policy_diag(
             diagnostics,
@@ -6596,10 +6426,8 @@ pub fn validate_atif_http_header_name(
     field: &str,
     header: &str,
 ) {
-    #[cfg(feature = "object-store")]
     let is_valid = reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_ok();
-    #[cfg(not(feature = "object-store"))]
-    let is_valid = !header.trim().is_empty() && header.trim() == header;
+
     if !is_valid {
         push_policy_diag(
             diagnostics,
@@ -6620,22 +6448,13 @@ pub fn validate_atif_http_endpoint(
 ) {
     let trimmed = endpoint.trim();
     let mut is_valid = !trimmed.is_empty() && trimmed == endpoint;
-    #[cfg(feature = "object-store")]
     {
         is_valid = is_valid
             && reqwest::Url::parse(endpoint)
                 .map(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
                 .unwrap_or(false);
     }
-    #[cfg(not(feature = "object-store"))]
-    {
-        let valid_scheme = trimmed.starts_with("http://") || trimmed.starts_with("https://");
-        let has_host = trimmed
-            .split_once("://")
-            .map(|(_, rest)| !rest.is_empty() && !rest.starts_with('/'))
-            .unwrap_or(false);
-        is_valid = is_valid && valid_scheme && has_host;
-    }
+
     if !is_valid {
         push_policy_diag(
             diagnostics,
@@ -6848,9 +6667,6 @@ pub fn default_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-#[cfg(not(feature = "object-store"))]
-pub struct AtifRemoteStorage;
-
 /// Remote storage handle for ATIF trajectory uploads.
 ///
 /// The handle owns a dedicated OS thread that runs a single-threaded tokio
@@ -6858,7 +6674,6 @@ pub struct AtifRemoteStorage;
 /// event) submit uploads over a synchronous channel and block on the reply, so
 /// the handle stays safe to drive from any thread regardless of whether the
 /// caller is already inside another tokio runtime.
-#[cfg(feature = "object-store")]
 pub struct AtifRemoteStorage {
     pub sender: std::sync::mpsc::Sender<AtifUploadRequest>,
     pub key_prefix: String,
@@ -6867,7 +6682,6 @@ pub struct AtifRemoteStorage {
     pub access_state: AtomicU8,
 }
 
-#[cfg(feature = "object-store")]
 pub struct AtifUploadRequest {
     pub key: String,
     pub filename: String,
@@ -6876,7 +6690,6 @@ pub struct AtifUploadRequest {
     pub reply: std::sync::mpsc::Sender<std::io::Result<()>>,
 }
 
-#[cfg(feature = "object-store")]
 #[derive(Clone)]
 pub struct HttpUploadConfig {
     pub endpoint: String,
@@ -6885,7 +6698,6 @@ pub struct HttpUploadConfig {
     pub timeout: Duration,
 }
 
-#[cfg(feature = "object-store")]
 #[derive(Default)]
 pub struct S3BuilderOverrides {
     pub access_key_id: Option<String>,
@@ -6896,7 +6708,6 @@ pub struct S3BuilderOverrides {
     pub allow_http: Option<bool>,
 }
 
-#[cfg(feature = "object-store")]
 impl S3BuilderOverrides {
     pub fn resolve(index: usize, s3: &S3StorageConfig) -> std::io::Result<Self> {
         Ok(Self {
@@ -6941,7 +6752,6 @@ impl S3BuilderOverrides {
     }
 }
 
-#[cfg(feature = "object-store")]
 pub fn resolve_env_var_field(
     field: &str,
     var_name: Option<&str>,
@@ -6965,7 +6775,6 @@ pub fn resolve_env_var_field(
     }
 }
 
-#[cfg(feature = "object-store")]
 impl AtifRemoteStorage {
     pub fn from_config(
         index: usize,
@@ -7187,7 +6996,6 @@ impl AtifRemoteStorage {
     }
 }
 
-#[cfg(feature = "object-store")]
 impl HttpUploadConfig {
     pub fn resolve(
         index: usize,
@@ -7250,7 +7058,6 @@ impl HttpUploadConfig {
     }
 }
 
-#[cfg(feature = "object-store")]
 pub fn validate_http_headers(
     index: usize,
     headers: &HashMap<String, String>,
@@ -7270,7 +7077,6 @@ pub fn validate_http_headers(
     Ok(())
 }
 
-#[cfg(feature = "object-store")]
 pub async fn post_atif_http(
     client: &reqwest::Client,
     config: &HttpUploadConfig,
@@ -7312,7 +7118,6 @@ pub async fn post_atif_http(
     }
 }
 
-#[cfg(feature = "object-store")]
 pub fn normalize_storage_key_prefix(raw: Option<&str>) -> String {
     let trimmed = raw.unwrap_or("").trim();
     if trimmed.is_empty() {

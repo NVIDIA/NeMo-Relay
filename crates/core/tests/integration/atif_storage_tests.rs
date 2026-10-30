@@ -12,8 +12,6 @@
 //! used so concurrent runs cannot collide; an override is available via
 //! `NEMO_RELAY_S3_TEST_KEY_PREFIX` for environments that pin a prefix.
 
-#![cfg(feature = "object-store")]
-
 mod plugin_host_test_support;
 
 use std::time::Duration;

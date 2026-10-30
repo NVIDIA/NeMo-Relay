@@ -45,7 +45,7 @@ authoring SDKs.
 - **`diagnostics` module**: Portable snapshots and read reasons, plus diagnostic
   HTTP error envelopes, stable reasons, and numeric status mappings. HTTP
   framework responses and client retry policy remain in adapters.
-- **Optional `schema` feature**: `schemars` implementations for supported
+- **JSON Schema support**: Built-in `schemars` implementations for supported
   serializable types.
 
 ## Installation
@@ -54,12 +54,6 @@ Add the crate when implementing a Relay-adjacent SDK, protocol, or integration:
 
 ```bash
 cargo add nemo-relay-types
-```
-
-Enable JSON Schema support when needed:
-
-```bash
-cargo add nemo-relay-types --features schema
 ```
 
 ## Getting Started

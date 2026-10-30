@@ -23,3 +23,7 @@ per exporter, without a process-global callback registry.
 
 This package participates in the unified NeMo Relay release and is published
 before the core SDK.
+
+JSON Schema support, gRPC workers, object storage, and ATOF streaming are built
+in to their owning crates. These capabilities require no Cargo feature flags,
+including when consuming crates with `default-features = false`.

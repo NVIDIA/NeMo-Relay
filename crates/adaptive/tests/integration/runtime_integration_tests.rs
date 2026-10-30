@@ -3,6 +3,9 @@
 
 //! Integration tests for runtime integration in the NeMo Relay adaptive crate.
 
+#[path = "../support/plugin_host.rs"]
+mod plugin_host_test_support;
+
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, Once, RwLock};
 
@@ -43,13 +46,13 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 use {
-    nemo_relay::plugin::test_initialize_plugin_host_exact,
-    nemo_relay::plugin::test_validate_static_plugin_config,
+    crate::plugin_host_test_support::test_close_plugin_host,
+    crate::plugin_host_test_support::test_initialize_plugin_host_exact,
+    crate::plugin_host_test_support::test_validate_static_plugin_config,
     nemo_relay_runtime::plugin::ConfigDiagnostic, nemo_relay_runtime::plugin::DiagnosticLevel,
     nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginComponentSpec,
     nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::PluginError,
     nemo_relay_runtime::plugin::deregister_plugin, nemo_relay_runtime::plugin::register_plugin,
-    nemo_relay_runtime::plugin::test_close_plugin_host,
 };
 use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
 

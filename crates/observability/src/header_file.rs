@@ -285,7 +285,6 @@ pub fn validate_header_http_endpoint_typed(
 }
 
 /// Require protected WebSocket transport before attaching configured headers.
-#[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
 #[doc(hidden)]
 pub fn validate_header_websocket_endpoint(
     endpoint: &str,

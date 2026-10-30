@@ -6,13 +6,9 @@
 use super::*;
 use serde_json::json;
 
-#[cfg(feature = "redis-backend")]
 use std::io::{Read, Write};
-#[cfg(feature = "redis-backend")]
 use std::net::{TcpListener, TcpStream};
-#[cfg(feature = "redis-backend")]
 use std::thread;
-#[cfg(feature = "redis-backend")]
 use std::time::Duration;
 
 fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
@@ -28,7 +24,6 @@ fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
 
 const BIG: usize = 1 << 20; // 1 MiB — never evicts in these tests
 
-#[cfg(feature = "redis-backend")]
 fn read_redis_command(stream: &mut TcpStream) -> Vec<u8> {
     fn read_line(stream: &mut TcpStream, request: &mut Vec<u8>) -> String {
         let start = request.len();
@@ -66,7 +61,6 @@ fn read_redis_command(stream: &mut TcpStream) -> Vec<u8> {
     request
 }
 
-#[cfg(feature = "redis-backend")]
 fn start_redis_test_server(response: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test Redis peer");
     let url = format!(
@@ -95,7 +89,6 @@ fn start_redis_test_server(response: Vec<u8>) -> (String, thread::JoinHandle<Vec
     (url, server)
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(start_paused = true)]
 async fn redis_initialization_times_out_for_a_silent_peer() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -335,7 +328,6 @@ async fn an_unknown_backend_is_rejected_before_initialization() {
     ));
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test]
 async fn redis_backend_requires_a_url_before_connecting() {
     // This validates configuration locally and never attempts a network
@@ -354,7 +346,6 @@ async fn redis_backend_requires_a_url_before_connecting() {
     ));
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test]
 async fn redis_get_treats_an_entry_past_its_own_expiry_as_a_miss() {
     // Redis can retain a value briefly longer than the response-cache TTL.
@@ -384,7 +375,6 @@ async fn redis_get_treats_an_entry_past_its_own_expiry_as_a_miss() {
     );
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test]
 async fn configured_redis_backend_pings_and_reports_its_kind() {
     // This minimal RESP peer validates the configured store's operational

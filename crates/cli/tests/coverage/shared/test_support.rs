@@ -174,3 +174,6 @@ pub(crate) fn header(request: &str, name: &str) -> String {
         })
         .unwrap_or_else(|| panic!("missing {name} header in {request:?}"))
 }
+
+#[path = "plugin_host.rs"]
+pub(crate) mod plugin_host;

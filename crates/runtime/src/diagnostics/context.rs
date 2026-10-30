@@ -469,8 +469,8 @@ impl DiagnosticsReader {
                 ("plugin.native", true),
                 ("plugin.native.emission", true),
                 ("plugin.policy", true),
-                ("plugin.worker.host", cfg!(feature = "worker-grpc")),
-                ("plugin.worker.emission", cfg!(feature = "worker-grpc")),
+                ("plugin.worker.host", true),
+                ("plugin.worker.emission", true),
                 ("otel", false),
                 ("resource_metrics", false),
             ]

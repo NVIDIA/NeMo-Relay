@@ -14,15 +14,7 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["object-store"]
-object-store = ["nemo-relay-runtime/object-store", "nemo-relay-observability/object-store"]
-atof-streaming = ["nemo-relay-runtime/atof-streaming", "nemo-relay-observability/atof-streaming"]
-schema = ["nemo-relay-runtime/schema", "nemo-relay-types/schema", "nemo-relay-plugin/schema", "nemo-relay-model-pricing/schema", "nemo-relay-observability/schema"]
-worker-grpc = ["nemo-relay-runtime/worker-grpc"]
-__internal-gateway = ["nemo-relay-runtime/__internal-gateway"]
 __skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
-__test-plugin-host = ["nemo-relay-runtime/__test-plugin-host"]
-
 [dependencies]
 nemo-relay-codecs.workspace = true
 nemo-relay-runtime.workspace = true
@@ -37,8 +29,6 @@ uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
 nemo-relay-resource-metrics.workspace = true
-nemo-relay-observability = { workspace = true, features = ["__test-support"] }
-nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true }
@@ -91,7 +81,6 @@ object_store = { workspace = true, features = ["aws"] }
 opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }
 rcgen.workspace = true
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
-nemo-relay-runtime = { workspace = true, features = ["__test-plugin-host"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true, features = ["fs", "param"] }
@@ -118,7 +107,6 @@ path = "tests/integration/plugin_host_builtin_ownership_tests.rs"
 [[test]]
 name = "worker_plugin_integration"
 path = "tests/integration/worker_plugin_tests.rs"
-required-features = ["worker-grpc"]
 
 [[test]]
 name = "middleware_integration"
@@ -147,7 +135,6 @@ path = "tests/integration/api_surface_tests.rs"
 [[test]]
 name = "atif_storage_integration"
 path = "tests/integration/atif_storage_tests.rs"
-required-features = ["object-store"]
 
 [[test]]
 name = "embedded_diagnostics_startup"

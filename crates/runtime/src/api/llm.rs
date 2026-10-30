@@ -1899,7 +1899,6 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 
 /// Internal gateway support. This module has no compatibility guarantee.
 #[doc(hidden)]
-#[cfg(feature = "__internal-gateway")]
 pub mod gateway {
     use super::*;
 

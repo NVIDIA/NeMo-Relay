@@ -544,7 +544,7 @@ cacheable classes and cacheable overrides, plus the default policy.
 | `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
 | `key_strategy` | `"exact_request"` | What counts as the same request: `"exact_request"` or `"logical"`. Refer to [Key Strategies](#key-strategies). |
 | `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). A non-empty normalized allowlist policy also partitions the key. Known auth headers are rejected. |
-| `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |
+| `backend.kind` | `"in_memory"` | `"in_memory"` or `"redis"`. |
 | `backend.config.max_bytes` | 256 MiB | In-memory size budget; the oldest entries are evicted first. |
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
 | `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
@@ -590,8 +590,7 @@ Redis capacity and eviction in Redis itself.
   `x-api-key`.
 - `in_memory` `max_bytes` is zero or is not an integer.
 - `backend.kind` is unknown; or `redis` has a missing, non-string, or
-  whitespace-only `backend.config.url`, uses a non-string `key_prefix`, or is
-  unavailable because Relay was built without the `redis-backend` feature.
+  whitespace-only `backend.config.url`, or uses a non-string `key_prefix`.
 - A tool policy sets `ttl_seconds = 0` or a `bypass_rate` outside `[0.0, 1.0]`,
   or the same member name or pattern appears in two classes.
 - A tool class member or override key uses an unsupported wildcard form.

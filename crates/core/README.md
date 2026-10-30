@@ -222,3 +222,7 @@ metrics.shutdown()?;
 ## Documentation
 
 NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+JSON Schema support, gRPC workers, object storage, and ATOF streaming are built
+in to their owning crates. These capabilities require no Cargo feature flags,
+including when consuming crates with `default-features = false`.

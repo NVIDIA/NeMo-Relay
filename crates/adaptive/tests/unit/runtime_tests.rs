@@ -21,7 +21,6 @@ use crate::runtime::validation::validate_config;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
 
-#[cfg(feature = "redis-backend")]
 const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
 fn reset_runtime_context() {
@@ -131,7 +130,6 @@ async fn build_backend_supports_in_memory_and_rejects_unknown_kinds() {
     }
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn build_backend_redis_requires_url_and_maps_invalid_client_urls() {
     let missing_url = build_backend(&BackendSpec {
@@ -164,7 +162,6 @@ async fn build_backend_redis_requires_url_and_maps_invalid_client_urls() {
     }
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn build_backend_redis_supports_success_path_when_server_is_available() {
     if std::env::var_os(REDIS_TEST_ENV).is_none() {
@@ -201,27 +198,6 @@ async fn build_backend_redis_supports_success_path_when_server_is_available() {
         .await
         .expect("expected empty run listing");
     assert!(runs.is_empty());
-}
-
-#[cfg(not(feature = "redis-backend"))]
-#[tokio::test(flavor = "current_thread")]
-async fn build_backend_redis_reports_feature_disabled_when_compiled_out() {
-    let disabled = build_backend(&BackendSpec {
-        kind: "redis".to_string(),
-        config: serde_json::Map::from_iter([(
-            "url".to_string(),
-            Json::String("redis://127.0.0.1/".to_string()),
-        )]),
-    })
-    .await;
-
-    match disabled {
-        Err(AdaptiveError::InvalidConfig(message)) => {
-            assert!(message.contains("not enabled"));
-        }
-        Err(other) => panic!("unexpected feature-disabled error: {other}"),
-        Ok(_) => panic!("expected redis backend to be disabled in this build"),
-    }
 }
 
 #[test]

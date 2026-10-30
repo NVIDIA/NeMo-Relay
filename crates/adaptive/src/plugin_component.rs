@@ -537,7 +537,6 @@ fn adaptive_to_plugin_error(err: AdaptiveError) -> PluginError {
         AdaptiveError::Internal(message) => PluginError::Internal(message),
         AdaptiveError::RegistrationFailed(message) => PluginError::RegistrationFailed(message),
         AdaptiveError::ChannelClosed(message) => PluginError::Internal(message),
-        #[cfg(feature = "redis-backend")]
         AdaptiveError::Redis(err) => PluginError::Internal(err.to_string()),
     }
 }

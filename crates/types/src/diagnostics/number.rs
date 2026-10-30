@@ -67,7 +67,6 @@ impl<'de> Deserialize<'de> for DiagnosticNumber {
     }
 }
 
-#[cfg(feature = "schema")]
 impl schemars::JsonSchema for DiagnosticNumber {
     fn schema_name() -> String {
         "DiagnosticNumber".into()

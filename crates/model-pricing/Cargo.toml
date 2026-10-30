@@ -12,16 +12,11 @@ description = "Model pricing catalogs and cost estimation for NeMo Relay."
 [lints]
 workspace = true
 
-[features]
-default = []
-__test-support = []
-schema = ["dep:schemars", "nemo-relay-types/schema"]
-
 [dependencies]
 nemo-relay-plugin.workspace = true
 log = { workspace = true, features = ["kv", "kv_serde"] }
 nemo-relay-types.workspace = true
-schemars = { workspace = true, optional = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 thiserror.workspace = true

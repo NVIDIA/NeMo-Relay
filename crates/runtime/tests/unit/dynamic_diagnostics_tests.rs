@@ -82,7 +82,6 @@ fn plugin_lifetime_does_not_own_context_or_project_restricted_detail() {
     );
 }
 
-#[cfg(feature = "worker-grpc")]
 #[test]
 fn worker_transport_classifier_uses_structured_status() {
     for (status, class) in [
@@ -119,7 +118,6 @@ fn native_statuses_classify_failure_semantics_without_error_text() {
     }
 }
 
-#[cfg(feature = "worker-grpc")]
 #[test]
 fn worker_status_classes_and_caller_cancellation_are_distinct() {
     use tonic::Code;

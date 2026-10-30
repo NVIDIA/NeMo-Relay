@@ -13,7 +13,8 @@ pub(crate) fn detached_host() -> std::sync::Arc<dyn crate::host::ObservabilityHo
     std::sync::Arc::new(crate::host::DetachedHost)
 }
 pub(crate) fn test_mutex() -> &'static std::sync::Mutex<()> {
-    crate::test_mutex()
+    static MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &MUTEX
 }
 
 pub(crate) mod atif;
@@ -33,3 +34,8 @@ pub(crate) mod otel_metrics;
 pub(crate) mod otel_signal;
 
 pub(crate) mod plugin_component;
+
+pub(crate) fn pricing_test_mutex() -> &'static std::sync::Mutex<()> {
+    static MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &MUTEX
+}

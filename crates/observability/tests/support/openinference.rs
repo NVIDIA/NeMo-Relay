@@ -124,3 +124,25 @@ fn openinference_output_value(event: &Event) -> Option<(String, &'static str)> {
 
 #[path = "../unit/openinference_projection_tests.rs"]
 mod projection_tests;
+
+pub(crate) fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
+    SpanContext::new(
+        span_context.trace_id(),
+        span_context.span_id(),
+        span_context.trace_flags(),
+        false,
+        span_context.trace_state().clone(),
+    )
+}
+
+pub(crate) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
+    let seconds = timestamp.timestamp();
+    let nanos = timestamp.timestamp_subsec_nanos();
+    if seconds >= 0 {
+        UNIX_EPOCH + Duration::new(seconds as u64, nanos)
+    } else if nanos == 0 {
+        UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
+    } else {
+        UNIX_EPOCH - Duration::new(seconds.unsigned_abs() - 1, 1_000_000_000 - nanos)
+    }
+}

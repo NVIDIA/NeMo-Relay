@@ -11,8 +11,8 @@ use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use serde_json::json;
 use {
+    crate::test_support::plugin_host::test_close_plugin_host,
     nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::UnsupportedBehavior,
-    nemo_relay_runtime::plugin::test_close_plugin_host,
 };
 use {
     nemo_relay_runtime::plugin::Plugin, nemo_relay_runtime::plugin::PluginRegistrationContext,
@@ -316,7 +316,6 @@ fn assert_adaptive_internal_and_serialization_errors() {
     ));
 }
 
-#[cfg(feature = "redis-backend")]
 #[test]
 fn adaptive_to_plugin_error_maps_redis_variant() {
     let redis_error = redis::Client::open("redis://bad host").unwrap_err();

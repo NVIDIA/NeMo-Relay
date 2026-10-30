@@ -896,13 +896,11 @@ fn round_cost_amount(cost: f64) -> f64 {
     (cost * SCALE).round() / SCALE
 }
 
-#[cfg(any(test, feature = "__test-support"))]
-#[doc(hidden)]
-pub fn pricing_test_mutex() -> &'static std::sync::Mutex<()> {
-    static PRICING_TEST_MUTEX: std::sync::LazyLock<std::sync::Mutex<()>> =
-        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
-    &PRICING_TEST_MUTEX
-}
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+#[cfg(test)]
+use test_support::pricing_test_mutex;
 
 /// Built-in component implementation.
 pub mod plugin;

@@ -6,8 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Severity of a plugin configuration or activation diagnostic.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticLevel {
     /// Non-fatal compatibility, validation, or activation issue.
@@ -17,8 +16,7 @@ pub enum DiagnosticLevel {
 }
 
 /// Structured diagnostic reported while validating or activating plugin configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ConfigDiagnostic {
     /// Severity level for the diagnostic.
     pub level: DiagnosticLevel,

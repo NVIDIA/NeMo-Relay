@@ -10,8 +10,9 @@ use super::{
 use serde::{Deserialize, Serialize};
 
 /// Magnitude of an occurrence or loss counter, including overflow visibility.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticCount {
     /// Exact count unless saturation has occurred.
     pub value: DiagnosticNumber,
@@ -36,8 +37,9 @@ impl DiagnosticCount {
 ///
 /// Recent-evidence loss cannot roll back accepted counts. Saturated counts remain
 /// explicit lower bounds. Code and event filters never redefine the summary scope.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticTotals {
     /// Accepted recording calls, one per call regardless of occurrence delta.
     pub recorded_events_total: DiagnosticCount,
@@ -74,8 +76,9 @@ impl DiagnosticTotals {
 /// Context totals survive component refresh, replacement, and metadata reclamation.
 /// Component totals survive refresh for the same registration instance. Neither is
 /// reconstructed from retained events or reset by a filtered read.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticLifetimeSummary {
     /// Whole-context or whole-component-instance accounting, as named by the view.
     pub totals: DiagnosticTotals,
@@ -93,8 +96,7 @@ pub struct DiagnosticLifetimeSummary {
 /// describes this current period; it does not relabel the component lifetime totals.
 /// Totals count observations recorded after the refresh boundary, including work
 /// carrying an older captured origin, and evictions performed after the boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticRefreshSummary {
     /// Component-local generation increased by a successful refresh.
     pub generation: DiagnosticNumber,
@@ -109,8 +111,7 @@ pub struct DiagnosticRefreshSummary {
 }
 
 /// Lifetime occurrences for one code in its containing component instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticCounter {
     /// Canonical code; the component instance comes from the containing row.
     pub code: String,
@@ -121,8 +122,7 @@ pub struct DiagnosticCounter {
 }
 
 /// An aggregate bucket using component-relative elapsed time, never raw process ticks.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticWindowBucket {
     /// Inclusive elapsed offset from the component's monotonic start.
     pub start_elapsed_millis: DiagnosticNumber,
@@ -137,8 +137,7 @@ pub struct DiagnosticWindowBucket {
 }
 
 /// Actual observation interval and limitations of a fixed-bucket window.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticWindowCoverage {
     /// Availability of the admitted window series.
     pub availability: DiagnosticAvailability,
@@ -159,8 +158,7 @@ pub struct DiagnosticWindowCoverage {
 /// Batched deltas belong to their observation interval. Edge buckets cannot
 /// establish an exact arbitrary rolling interval or reconstruct occurrence times.
 /// Refreshing the component does not replace or duplicate this window.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticWindow {
     /// Duration of each fixed bucket.
     pub resolution_millis: DiagnosticNumber,

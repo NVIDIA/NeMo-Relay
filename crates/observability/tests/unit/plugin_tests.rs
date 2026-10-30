@@ -456,7 +456,6 @@ fn typed_insecure_http_hosts_serialize_an_explicit_empty_list() {
     assert_eq!(cleared.get("insecure_http_hosts"), Some(&json!([])));
 }
 
-#[cfg(feature = "object-store")]
 #[test]
 fn atif_http_storage_headers_follow_the_plaintext_policy() {
     let mut config = http_storage_config("http://release-api:8080/atif");
@@ -468,7 +467,6 @@ fn atif_http_storage_headers_follow_the_plaintext_policy() {
     assert!(HttpUploadConfig::resolve(0, &config, &listed).is_ok());
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn the_file_sink_schema_advertises_the_overwrite_default() {
     let schema = serde_json::to_value(schemars::schema_for!(OpenTelemetryFileSinkConfig)).unwrap();
@@ -487,7 +485,6 @@ fn the_file_sink_schema_advertises_the_overwrite_default() {
     ));
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn schema_contains_every_supported_observability_option() {
     let schema = observability_config_schema();
@@ -684,10 +681,7 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
             .contains("no output path")
     );
     let remote_error = results[1].1.as_ref().unwrap_err().to_string();
-    #[cfg(feature = "object-store")]
     assert!(remote_error.contains("storage[0]"));
-    #[cfg(not(feature = "object-store"))]
-    assert!(remote_error.contains("ATIF storage support is not enabled in this build"));
 }
 
 #[test]
@@ -1791,7 +1785,6 @@ fn file_sink_section(output_directory: &Path) -> OpenTelemetryFileSinkConfig {
     }
 }
 
-#[cfg(feature = "object-store")]
 fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
     HttpStorageConfig {
         endpoint: endpoint.into(),
@@ -1802,12 +1795,10 @@ fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
     }
 }
 
-#[cfg(feature = "schema")]
 fn schema_has_property(schema: &Json, name: &str) -> bool {
     schema_property(schema, name).is_some()
 }
 
-#[cfg(feature = "schema")]
 fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
     match schema {
         Json::Object(object) => {
@@ -1827,7 +1818,6 @@ fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
     }
 }
 
-#[cfg(feature = "schema")]
 fn schema_property_has_default(schema: &Json, name: &str, expected: Json) -> bool {
     schema_property_matches(schema, name, &|property| {
         property
@@ -1836,7 +1826,6 @@ fn schema_property_has_default(schema: &Json, name: &str, expected: Json) -> boo
     })
 }
 
-#[cfg(feature = "schema")]
 fn schema_property_has_enum(schema: &Json, name: &str, expected: &[&str]) -> bool {
     schema_property_matches(schema, name, &|property| {
         property
@@ -1850,7 +1839,6 @@ fn schema_property_has_enum(schema: &Json, name: &str, expected: &[&str]) -> boo
     })
 }
 
-#[cfg(feature = "schema")]
 fn schema_property_matches(schema: &Json, name: &str, predicate: &impl Fn(&Json) -> bool) -> bool {
     match schema {
         Json::Object(object) => {

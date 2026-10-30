@@ -13,6 +13,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde_json::json;
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[test]

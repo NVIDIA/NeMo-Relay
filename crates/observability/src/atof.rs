@@ -14,21 +14,17 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "atof-streaming")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::Duration;
 
 use chrono::Utc;
-#[cfg(feature = "atof-streaming")]
 use futures_util::{FutureExt, SinkExt, future::FusedFuture, stream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-#[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use super::header_file::{HeaderFiles, PlaintextPolicy};
-#[cfg(feature = "atof-streaming")]
 use super::header_file::{
     has_configured_headers, resolve_header_files, validate_header_files,
     validate_header_http_endpoint, validate_header_websocket_endpoint,
@@ -393,13 +389,10 @@ impl AtofExporterConfig {
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) const ATOF_STREAM_ENDPOINT_DISABLED: &str = "atof.stream_endpoint_disabled";
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) const ATOF_STREAM_CONNECTION_FAILED: &str = "atof.stream_connection_failed";
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) const ATOF_STREAM_DELIVERY_FAILED: &str = "atof.stream_delivery_failed";
 #[doc(hidden)]
@@ -698,7 +691,6 @@ pub(crate) fn stored_failure_result(path: &Path, state: &AtofExporterState) -> R
     Ok(())
 }
 
-#[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
 #[doc(hidden)]
 pub(crate) enum EndpointMessage {
     Event(String),
@@ -706,14 +698,12 @@ pub(crate) enum EndpointMessage {
     Close(std_mpsc::Sender<()>),
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) enum NdjsonBodyMessage {
     Event(Vec<u8>),
     Flush(std_mpsc::Sender<()>),
 }
 
-#[cfg(feature = "atof-streaming")]
 impl NdjsonBodyMessage {
     #[doc(hidden)]
     pub(crate) fn acknowledge_if_flush(self) {
@@ -732,7 +722,6 @@ pub(crate) struct AtofEndpointWorker {
 }
 
 /// Validated endpoint settings with headers resolved at activation.
-#[cfg(feature = "atof-streaming")]
 #[derive(Debug)]
 #[doc(hidden)]
 pub(crate) struct ActivatedAtofEndpoint {
@@ -763,19 +752,16 @@ impl EndpointDiagnostics {
         );
     }
 
-    #[cfg(feature = "atof-streaming")]
     #[doc(hidden)]
     pub(crate) fn endpoint_disabled(&self, detail: &str) {
         self.record(ATOF_STREAM_ENDPOINT_DISABLED, detail, 1);
     }
 
-    #[cfg(feature = "atof-streaming")]
     #[doc(hidden)]
     pub(crate) fn connection_failed(&self, detail: &str) {
         self.record(ATOF_STREAM_CONNECTION_FAILED, detail, 1);
     }
 
-    #[cfg(feature = "atof-streaming")]
     #[doc(hidden)]
     pub(crate) fn delivery_failed(&self, detail: &str, count: u64) {
         self.record(ATOF_STREAM_DELIVERY_FAILED, detail, count);
@@ -891,7 +877,6 @@ impl Unacknowledged {
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn start_endpoint_workers(
     configs: &[AtofStreamSinkConfig],
@@ -912,21 +897,6 @@ pub(crate) fn start_endpoint_workers(
     Ok(workers)
 }
 
-#[cfg(not(feature = "atof-streaming"))]
-#[doc(hidden)]
-pub(crate) fn start_endpoint_workers(
-    configs: &[AtofEndpointConfig],
-    _plaintext: &PlaintextPolicy,
-    _recorder: &ExporterRuntimeDiagnosticsRecorder,
-) -> Result<Vec<AtofEndpointWorker>> {
-    if configs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let message = "ATOF streaming endpoints are not supported in this build".to_string();
-    Err(AtofExporterError::InvalidEndpoint(message))
-}
-
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn start_endpoint_worker(
     index: usize,
@@ -973,7 +943,6 @@ pub(crate) fn start_endpoint_worker(
     })
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn validate_endpoint_config(
     config: AtofEndpointConfig,
@@ -1031,7 +1000,6 @@ pub(crate) fn validate_endpoint_config(
     })
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn resolved_header_map(
     headers: &HashMap<String, String>,
@@ -1070,7 +1038,6 @@ pub(crate) fn resolved_header_map(
     Ok(out)
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn run_endpoint_worker(
     index: usize,
@@ -1111,7 +1078,6 @@ pub(crate) fn run_endpoint_worker(
     });
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn run_http_post_endpoint(
     index: usize,
@@ -1228,7 +1194,6 @@ pub(crate) async fn run_http_post_endpoint(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn run_websocket_endpoint(
     index: usize,
@@ -1298,12 +1263,10 @@ pub(crate) async fn run_websocket_endpoint(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) type AtofWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-#[cfg(feature = "atof-streaming")]
 #[derive(Default)]
 #[doc(hidden)]
 pub(crate) struct WebSocketRetryState {
@@ -1312,7 +1275,6 @@ pub(crate) struct WebSocketRetryState {
     pub access_validated: bool,
 }
 
-#[cfg(feature = "atof-streaming")]
 impl WebSocketRetryState {
     #[doc(hidden)]
     pub(crate) fn record_failure(
@@ -1367,7 +1329,6 @@ impl WebSocketRetryState {
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn drain_websocket_pending(
     index: usize,
@@ -1399,7 +1360,6 @@ pub(crate) async fn drain_websocket_pending(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn drain_websocket_pending_inner(
     index: usize,
@@ -1454,7 +1414,6 @@ pub(crate) async fn drain_websocket_pending_inner(
     true
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn connect_websocket(
     endpoint: &ActivatedAtofEndpoint,
@@ -1496,7 +1455,6 @@ pub(crate) async fn connect_websocket(
 }
 
 /// Describe a WebSocket error without the endpoint URL.
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn websocket_error_detail(error: &tokio_tungstenite::tungstenite::Error) -> String {
     use tokio_tungstenite::tungstenite::Error;
@@ -1518,7 +1476,6 @@ pub(crate) fn websocket_error_detail(error: &tokio_tungstenite::tungstenite::Err
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn run_ndjson_endpoint(
     index: usize,
@@ -1612,7 +1569,6 @@ pub(crate) async fn run_ndjson_endpoint(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn build_ndjson_client(
     endpoint: &ActivatedAtofEndpoint,
@@ -1639,7 +1595,6 @@ pub(crate) fn build_ndjson_client(
         .map_err(|error| format!("client build failed: {error}"))
 }
 
-#[cfg(feature = "atof-streaming")]
 /// Return the upload body channel and a count of events read by the HTTP client.
 #[doc(hidden)]
 pub(crate) fn ndjson_body_channel() -> (
@@ -1668,7 +1623,6 @@ pub(crate) fn ndjson_body_channel() -> (
     (body_tx, reqwest::Body::wrap_stream(body_stream), written)
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn send_ndjson_event(
     index: usize,
@@ -1688,7 +1642,6 @@ pub(crate) fn send_ndjson_event(
     true
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn reject_ndjson_event(
     index: usize,
@@ -1707,7 +1660,6 @@ pub(crate) fn reject_ndjson_event(
     diagnostics.delivery_failed("ended its upload before an event was written", 1);
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn reject_ndjson_flush(
     index: usize,
@@ -1726,7 +1678,6 @@ pub(crate) fn reject_ndjson_flush(
     diagnostics.flush_failed("ended its upload before a flush was acknowledged");
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn send_ndjson_flush(
     index: usize,
@@ -1740,12 +1691,10 @@ pub(crate) fn send_ndjson_flush(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) type NdjsonUploadOutcome =
     std::result::Result<reqwest::Result<reqwest::Response>, tokio::task::JoinError>;
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn finish_ndjson_upload(
     index: usize,
@@ -1777,7 +1726,6 @@ pub(crate) async fn finish_ndjson_upload(
     let _ = done.send(());
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn report_ndjson_upload(
     index: usize,
@@ -1845,7 +1793,6 @@ pub(crate) fn report_ndjson_upload(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) async fn drain_closed(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
@@ -1867,7 +1814,6 @@ pub(crate) async fn drain_closed(
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String) -> String {
     match config.field_name_policy {
@@ -1876,7 +1822,6 @@ pub(crate) fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String)
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn replace_dotted_field_names(raw_json: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<Json>(raw_json) else {
@@ -1886,7 +1831,6 @@ pub(crate) fn replace_dotted_field_names(raw_json: &str) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| raw_json.to_string())
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn replace_dotted_value_keys(value: &mut Json) {
     match value {
@@ -1900,7 +1844,6 @@ pub(crate) fn replace_dotted_value_keys(value: &mut Json) {
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Json>) {
     let mut old = std::mem::take(object)
@@ -1919,7 +1862,6 @@ pub(crate) fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Js
     }
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> String {
     if !object.contains_key(&key) {
@@ -1934,7 +1876,6 @@ pub(crate) fn collision_free_key(object: &serde_json::Map<String, Json>, key: St
     unreachable!("unbounded suffix search must find a key")
 }
 
-#[cfg(feature = "atof-streaming")]
 #[doc(hidden)]
 pub(crate) fn log_http_error(index: usize, transport: &str, status: reqwest::StatusCode) {
     log::warn!(
@@ -1971,6 +1912,6 @@ mod atof_tests;
 #[path = "../tests/unit/atof_detached_tests.rs"]
 mod atof_detached_tests;
 
-#[cfg(all(test, feature = "atof-streaming"))]
+#[cfg(test)]
 #[path = "../tests/unit/atof_streaming_tests.rs"]
 mod atof_streaming_tests;

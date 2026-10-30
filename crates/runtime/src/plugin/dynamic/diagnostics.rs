@@ -141,7 +141,6 @@ impl PluginDiagnostics {
             self.failure(operation, class, phase);
         }
     }
-    #[cfg(feature = "worker-grpc")]
     pub(super) fn rpc_failure(
         &self,
         operation: Operation,
@@ -210,9 +209,7 @@ impl DiagnosticClassifier<super::DynamicPluginHostPolicyFailure> for PolicyFailu
         classification(Operation::Policy, FailureClass::PolicyRejected)
     }
 }
-#[cfg(feature = "worker-grpc")]
 struct WorkerStatusClassifier(Operation);
-#[cfg(feature = "worker-grpc")]
 impl DiagnosticClassifier<tonic::Status> for WorkerStatusClassifier {
     fn classify(&self, error: &tonic::Status) -> Classification {
         use tonic::Code;

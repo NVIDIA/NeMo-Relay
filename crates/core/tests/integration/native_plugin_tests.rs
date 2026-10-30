@@ -2573,43 +2573,6 @@ async fn plugin_host_rejects_a_second_active_host() {
     existing.close().expect("first host should close");
 }
 
-#[cfg(not(feature = "worker-grpc"))]
-#[tokio::test]
-async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
-        PluginConfig::default(),
-        [VerifiedDynamicPluginSpec {
-            plugin_id: "fixture_worker".into(),
-            kind: DynamicPluginKind::Worker,
-            manifest_ref: "unused-worker-manifest.toml".into(),
-            environment_ref: None,
-            config: Map::new(),
-        }],
-    )
-    .await
-    {
-        Ok((mut activation, _)) => {
-            activation
-                .close()
-                .expect("unexpected activation should close");
-            panic!("worker activation should require worker support");
-        }
-        Err(error) => error.to_string(),
-    };
-    assert!(error.contains("worker-grpc"), "{error}");
-
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest(&fixture);
-    let (mut activation, _) = nemo_relay::plugin::initialize_with_verified_specs(
-        PluginConfig::default(),
-        [host_spec("fixture_native", &manifest_ref)],
-    )
-    .await
-    .expect("failed worker activation must release the owner");
-    activation.close().expect("recovered host should close");
-}
-
 async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plugin::Result<()> {
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(PluginComponentSpec {

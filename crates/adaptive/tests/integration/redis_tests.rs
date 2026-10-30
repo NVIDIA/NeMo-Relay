@@ -6,8 +6,6 @@
 //! These tests require a running Redis instance at `redis://127.0.0.1/`
 //! and only run when `NEMO_RELAY_RUN_REDIS_TESTS=1` is set.
 
-#![cfg(feature = "redis-backend")]
-
 use std::sync::{Arc, Once, RwLock};
 
 use chrono::Utc;

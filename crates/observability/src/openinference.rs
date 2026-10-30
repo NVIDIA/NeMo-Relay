@@ -14,8 +14,6 @@ use super::{
     push_top_level_json_attributes, total_tokens_including_cache,
 };
 use crate::normalization::EventView;
-#[cfg(any(test, feature = "__test-support"))]
-use chrono::{DateTime, Utc};
 use nemo_relay_types::Json;
 use nemo_relay_types::api::scope::ScopeType;
 use nemo_relay_types::codec::request::{
@@ -25,12 +23,8 @@ use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage,
 };
 use opentelemetry::KeyValue;
-#[cfg(any(test, feature = "__test-support"))]
-use opentelemetry::trace::SpanContext;
 use opentelemetry::trace::SpanKind;
 use serde::Serialize;
-#[cfg(any(test, feature = "__test-support"))]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[doc(hidden)]
 pub fn span_kind(event: &EventView<'_>) -> SpanKind {
@@ -1169,32 +1163,6 @@ pub fn to_json_string<T: Serialize>(value: &T) -> Option<String> {
     serde_json::to_string(value).ok()
 }
 
-#[cfg(any(test, feature = "__test-support"))]
-#[doc(hidden)]
-pub fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
-    SpanContext::new(
-        span_context.trace_id(),
-        span_context.span_id(),
-        span_context.trace_flags(),
-        false,
-        span_context.trace_state().clone(),
-    )
-}
-
-#[cfg(any(test, feature = "__test-support"))]
-#[doc(hidden)]
-pub fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
-    let seconds = timestamp.timestamp();
-    let nanos = timestamp.timestamp_subsec_nanos();
-    if seconds >= 0 {
-        UNIX_EPOCH + Duration::new(seconds as u64, nanos)
-    } else if nanos == 0 {
-        UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
-    } else {
-        UNIX_EPOCH - Duration::new(seconds.unsigned_abs() - 1, 1_000_000_000 - nanos)
-    }
-}
-
 #[cfg(test)]
 #[path = "../tests/unit/openinference_tests.rs"]
 mod openinference_tests;
@@ -1202,3 +1170,6 @@ mod openinference_tests;
 #[cfg(test)]
 #[path = "../tests/unit/openinference_detached_tests.rs"]
 mod openinference_detached_tests;
+
+#[cfg(test)]
+pub(crate) use crate::test_support::openinference::to_system_time;

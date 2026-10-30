@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `key` names the fully-qualified projected attribute and `alias` names the
 /// additional attribute to emit with the same typed value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OtlpAttributeMapping {
     /// Fully-qualified projected attribute to copy.
     pub key: String,
@@ -33,17 +32,8 @@ impl OtlpAttributeMapping {
     }
 }
 
-#[cfg(any(test, feature = "__test-support"))]
-use std::sync::Mutex;
-
-#[cfg(any(test, feature = "__test-support"))]
-#[doc(hidden)]
-pub fn test_mutex() -> &'static Mutex<()> {
-    {
-        static MUTEX: Mutex<()> = Mutex::new(());
-        &MUTEX
-    }
-}
+#[cfg(test)]
+pub(crate) use test_support::test_mutex;
 
 pub mod atif;
 pub mod atof;
@@ -152,8 +142,9 @@ pub fn uses_separate_anthropic_cache_tokens(
 /// Marks remain canonical ATOF events regardless of this setting. Exporters
 /// apply the selected projection only when translating those events into a
 /// downstream trace format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkProjection {
     /// Use each exporter’s native handling for marks.
@@ -168,8 +159,9 @@ pub enum MarkProjection {
 }
 
 /// Semantic projection emitted by an OpenTelemetry exporter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenTelemetryType {
     /// Relay's complete lifecycle projection, including `nemo_relay.*` attributes.

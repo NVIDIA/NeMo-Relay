@@ -125,8 +125,7 @@ pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
     "OpenTelemetry runtime delivery failures";
 
 /// Canonical plugin configuration document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginConfig {
     /// Plugin config schema version.
     #[serde(default = "default_plugin_config_version")]
@@ -152,8 +151,7 @@ impl Default for PluginConfig {
 }
 
 /// Structured configuration and activation report.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConfigReport {
     /// Configuration and activation diagnostics in evaluation order.
     #[serde(default)]
@@ -1425,7 +1423,6 @@ fn nth_component_by_kind(components: &[Json], kind: &str, nth: usize) -> Option<
 }
 
 /// Returns the JSON Schema for the canonical plugin configuration document.
-#[cfg(feature = "schema")]
 pub fn plugin_config_schema() -> Json {
     serde_json::to_value(schemars::schema_for!(PluginConfig))
         .expect("plugin config schema should serialize")
@@ -2455,68 +2452,8 @@ fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     PluginError::Conflict(message.into())
 }
 
-#[cfg(any(test, feature = "__test-plugin-host"))]
-static TEST_PLUGIN_HOST: LazyLock<Mutex<Option<dynamic::PluginHostActivation>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-/// Test-only static validation entry point.
-#[doc(hidden)]
-#[cfg(any(test, feature = "__test-plugin-host"))]
-pub fn test_validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
-    validate_static_plugin_config(config)
-}
-
-/// Test-only owned-host initializer used while repository tests migrate away
-/// from the removed process-global lifecycle API.
-#[doc(hidden)]
-#[cfg(any(test, feature = "__test-plugin-host"))]
-pub async fn test_initialize_plugin_host_exact(config: PluginConfig) -> Result<ConfigReport> {
-    let previous = TEST_PLUGIN_HOST
-        .lock()
-        .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
-        .take();
-    if let Some(mut previous) = previous {
-        previous.close()?;
-    }
-    let activation = dynamic::PluginHostActivation::initialize_exact(config).await?;
-    let report = activation.report().config;
-    *TEST_PLUGIN_HOST.lock().map_err(|error| {
-        PluginError::Internal(format!("test plugin host lock poisoned: {error}"))
-    })? = Some(activation);
-    Ok(report)
-}
-
-/// Test-only deterministic cleanup for the owned host harness.
-#[doc(hidden)]
-#[cfg(any(test, feature = "__test-plugin-host"))]
-pub fn test_close_plugin_host() -> Result<()> {
-    let activation = TEST_PLUGIN_HOST
-        .lock()
-        .map_err(|error| PluginError::Internal(format!("test plugin host lock poisoned: {error}")))?
-        .take();
-    let Some(mut activation) = activation else {
-        return Ok(());
-    };
-    match activation.close() {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            *TEST_PLUGIN_HOST.lock().map_err(|lock_error| {
-                PluginError::Internal(format!("test plugin host lock poisoned: {lock_error}"))
-            })? = Some(activation);
-            Err(error)
-        }
-    }
-}
-
-/// Test-only snapshot of the owned host report.
-#[doc(hidden)]
-#[cfg(any(test, feature = "__test-plugin-host"))]
-pub fn test_plugin_host_report() -> Option<ConfigReport> {
-    TEST_PLUGIN_HOST
-        .lock()
-        .ok()
-        .and_then(|host| host.as_ref().map(|host| host.report().config))
-}
+#[cfg(test)]
+pub(crate) use crate::test_support::plugin_host::*;
 
 /// Updates the existing active-only runtime report.
 ///

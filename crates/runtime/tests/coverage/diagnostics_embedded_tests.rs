@@ -275,7 +275,6 @@ async fn embedded_host_selects_service_before_plugin_failure_and_reuses_it() {
     assert!(retained.snapshot_json("{}").is_ok());
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn native_integer_field_inventory_covers_the_canonical_schema() {
     fn inspect(value: &Json, field: &str) {
@@ -451,9 +450,12 @@ fn discovery_is_independent_of_query_permits_and_matches_core() {
             .iter()
             .any(|p| p.name == "otel" && !p.supported)
     );
-    assert!(info.discovery.producer_support.iter().any(
-        |p| p.name == "plugin.worker.emission" && p.supported == cfg!(feature = "worker-grpc")
-    ));
+    assert!(
+        info.discovery
+            .producer_support
+            .iter()
+            .any(|p| p.name == "plugin.worker.emission" && p.supported)
+    );
     assert!(info.discovery.detailed_memory_inspection && info.discovery.resource_correlation);
 }
 

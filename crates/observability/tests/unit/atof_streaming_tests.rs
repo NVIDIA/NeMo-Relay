@@ -4,20 +4,15 @@
 //! ATOF transport and delivery tests.
 
 use super::*;
-#[cfg(feature = "atof-streaming")]
 use futures_util::StreamExt;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent};
 use serde_json::json;
 use std::fs;
-#[cfg(feature = "atof-streaming")]
 use std::io::{Read, Write};
-#[cfg(feature = "atof-streaming")]
 use std::net::TcpListener;
 use std::sync::Arc;
-#[cfg(feature = "atof-streaming")]
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::handshake::server::{
     Request as WebSocketRequest, Response as WebSocketResponse,
 };
@@ -50,12 +45,10 @@ fn make_mark_event(name: &str) -> Event {
     ))
 }
 
-#[cfg(feature = "atof-streaming")]
 fn read_http_request(stream: &mut std::net::TcpStream) -> String {
     read_http_request_parts(stream).1
 }
 
-#[cfg(feature = "atof-streaming")]
 fn read_http_request_parts(stream: &mut std::net::TcpStream) -> (String, String) {
     let mut data = Vec::new();
     let mut buf = [0_u8; 1];
@@ -110,7 +103,6 @@ fn read_http_request_parts(stream: &mut std::net::TcpStream) -> (String, String)
     (headers, String::new())
 }
 
-#[cfg(feature = "atof-streaming")]
 fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -132,7 +124,6 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
-#[cfg(feature = "atof-streaming")]
 fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
     for _ in 0..100 {
         let snapshot = captures.lock().unwrap().clone();
@@ -144,7 +135,6 @@ fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec
     captures.lock().unwrap().clone()
 }
 
-#[cfg(feature = "atof-streaming")]
 fn start_websocket_capture_server(
     listener: TcpListener,
     captures: Arc<Mutex<Vec<String>>>,
@@ -178,12 +168,10 @@ fn start_websocket_capture_server(
     });
 }
 
-#[cfg(feature = "atof-streaming")]
 fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofEndpoint> {
     super::validate_endpoint_config(config, &PlaintextPolicy::LoopbackOnly)
 }
 
-#[cfg(feature = "atof-streaming")]
 fn test_endpoint_diagnostics(
     transport: AtofEndpointTransport,
 ) -> (EndpointDiagnostics, ExporterRuntimeDiagnosticsRecorder) {
@@ -197,7 +185,6 @@ fn test_endpoint_diagnostics(
     (diagnostics, recorder)
 }
 
-#[cfg(feature = "atof-streaming")]
 fn diagnostic_count(recorder: &ExporterRuntimeDiagnosticsRecorder, code: &str) -> u64 {
     recorder
         .snapshot()
@@ -205,7 +192,6 @@ fn diagnostic_count(recorder: &ExporterRuntimeDiagnosticsRecorder, code: &str) -
         .map_or(0, |diagnostic| diagnostic.count)
 }
 
-#[cfg(feature = "atof-streaming")]
 fn diagnostic_message(recorder: &ExporterRuntimeDiagnosticsRecorder, code: &str) -> String {
     recorder
         .snapshot()
@@ -216,7 +202,6 @@ fn diagnostic_message(recorder: &ExporterRuntimeDiagnosticsRecorder, code: &str)
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_field_name_policy_replaces_dots_recursively() {
     let config =
         AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
@@ -240,7 +225,6 @@ fn endpoint_field_name_policy_replaces_dots_recursively() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json() {
     let preserve =
         AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost);
@@ -254,7 +238,6 @@ fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_http_helper_edges_are_safe() {
     assert_eq!(
         AtofEndpointFieldNamePolicy::parse("unknown"),
@@ -264,7 +247,6 @@ fn endpoint_http_helper_edges_are_safe() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn streaming_sink_receives_raw_atof_events() {
     enable_operational_logs();
     let dir = temp_dir("atof-streaming-http");
@@ -306,7 +288,6 @@ fn streaming_sink_receives_raw_atof_events() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_endpoint_receives_fifo_json_text_events() {
     enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket");
@@ -340,7 +321,6 @@ fn websocket_endpoint_receives_fifo_json_text_events() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_flush_drains_events_queued_before_reconnect() {
     enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket-reconnect");
@@ -383,7 +363,6 @@ fn websocket_flush_drains_events_queued_before_reconnect() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn invalid_endpoint_config_errors_cleanly() {
     let dir = temp_dir("atof-invalid-endpoint");
 
@@ -411,7 +390,6 @@ fn invalid_endpoint_config_errors_cleanly() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn invalid_endpoint_scheme_errors_cleanly() {
     let dir = temp_dir("atof-invalid-endpoint-scheme");
 
@@ -461,7 +439,6 @@ fn invalid_endpoint_scheme_errors_cleanly() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn plaintext_stream_headers_require_a_listed_host_or_allow_insecure() {
     let listed = PlaintextPolicy::from_hosts(&["release-api".to_string()]).unwrap();
     for (url, transport) in [
@@ -489,7 +466,6 @@ fn plaintext_stream_headers_require_a_listed_host_or_allow_insecure() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-test".to_string(), "ok".to_string());
@@ -587,7 +563,6 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn configured_headers_require_protected_remote_atof_destinations() {
     let _guard = crate::test_support::test_mutex()
         .lock()
@@ -679,7 +654,6 @@ fn configured_headers_require_protected_remote_atof_destinations() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn file_backed_http_post_headers_reload_for_each_event() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("token");
@@ -755,7 +729,6 @@ fn file_backed_http_post_headers_reload_for_each_event() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn file_backed_ndjson_headers_refresh_when_a_stream_starts() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("token");
@@ -829,7 +802,6 @@ fn file_backed_ndjson_headers_refresh_when_a_stream_starts() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 #[allow(clippy::result_large_err)]
 fn file_backed_websocket_headers_refresh_on_reconnect() {
     let directory = tempfile::tempdir().unwrap();
@@ -903,7 +875,6 @@ fn file_backed_websocket_headers_refresh_on_reconnect() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_activation_snapshots_header_env() {
     let _guard = crate::test_support::test_mutex().lock().unwrap();
     let variable = format!("NEMO_RELAY_TEST_ATOF_HEADER_ENV_{}", std::process::id());
@@ -931,7 +902,6 @@ fn endpoint_activation_snapshots_header_env() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
     enable_operational_logs();
     let (diagnostics, recorder) = test_endpoint_diagnostics(AtofEndpointTransport::Ndjson);
@@ -973,7 +943,6 @@ fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_worker_reports_flush_and_close_timeouts() {
     enable_operational_logs();
     let (diagnostics, recorder) = test_endpoint_diagnostics(AtofEndpointTransport::HttpPost);
@@ -998,7 +967,6 @@ fn endpoint_worker_reports_flush_and_close_timeouts() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_worker_reports_drops_flush_and_close_after_its_worker_stopped() {
     enable_operational_logs();
     let (diagnostics, recorder) = test_endpoint_diagnostics(AtofEndpointTransport::HttpPost);
@@ -1031,7 +999,6 @@ fn endpoint_worker_reports_drops_flush_and_close_after_its_worker_stopped() {
     );
 }
 
-#[cfg(feature = "atof-streaming")]
 fn worker_that_drops_one_request(
     diagnostics: EndpointDiagnostics,
     timeout: std::time::Duration,
@@ -1048,7 +1015,6 @@ fn worker_that_drops_one_request(
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_worker_reports_flush_and_close_dropped_by_a_stopping_worker() {
     enable_operational_logs();
     let (diagnostics, recorder) = test_endpoint_diagnostics(AtofEndpointTransport::HttpPost);
@@ -1073,7 +1039,6 @@ fn endpoint_worker_reports_flush_and_close_dropped_by_a_stopping_worker() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
     enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1134,7 +1099,6 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_reports_request_transport_failure() {
     enable_operational_logs();
     let (diagnostics, recorder) = test_endpoint_diagnostics(AtofEndpointTransport::HttpPost);
@@ -1178,7 +1142,6 @@ fn http_endpoint_worker_reports_request_transport_failure() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn ndjson_endpoint_worker_streams_events_flushes_and_closes() {
     enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1219,7 +1182,6 @@ fn ndjson_endpoint_worker_streams_events_flushes_and_closes() {
     server.join().unwrap();
 }
 
-#[cfg(feature = "atof-streaming")]
 fn read_until_contains(stream: &mut std::net::TcpStream, needle: &str) -> String {
     let mut data = Vec::new();
     let mut buf = [0_u8; 1];
@@ -1230,7 +1192,6 @@ fn read_until_contains(stream: &mut std::net::TcpStream, needle: &str) -> String
     String::from_utf8_lossy(&data).to_string()
 }
 
-#[cfg(feature = "atof-streaming")]
 fn wait_for_diagnostic_count(
     recorder: &ExporterRuntimeDiagnosticsRecorder,
     code: &str,
@@ -1247,7 +1208,6 @@ fn wait_for_diagnostic_count(
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn ndjson_rejection_while_open_records_queued_events_before_close() {
     enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1324,7 +1284,6 @@ fn ndjson_rejection_while_open_records_queued_events_before_close() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_error_detail_omits_the_endpoint_url() {
     use tokio_tungstenite::tungstenite::Error;
     use tokio_tungstenite::tungstenite::error::UrlError;
@@ -1345,7 +1304,6 @@ fn websocket_error_detail_omits_the_endpoint_url() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
     enable_operational_logs();
     let endpoint = validate_endpoint_config(AtofEndpointConfig {
@@ -1391,7 +1349,6 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn endpoint_validation_helpers_cover_header_retry_and_collision_edges() {
     enable_operational_logs();
 
@@ -1438,7 +1395,6 @@ fn endpoint_validation_helpers_cover_header_retry_and_collision_edges() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn ndjson_upload_close_timeout_acknowledges_close() {
     enable_operational_logs();
     let request = tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -1476,7 +1432,6 @@ fn ndjson_upload_close_timeout_acknowledges_close() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn ndjson_upload_completion_reports_success_http_upload_and_task_failures() {
     enable_operational_logs();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1576,14 +1531,12 @@ fn ndjson_upload_completion_reports_success_http_upload_and_task_failures() {
     });
 }
 
-#[cfg(feature = "atof-streaming")]
 struct UnresponsiveServer {
     address: std::net::SocketAddr,
     stop: std::sync::mpsc::Sender<()>,
     thread: std::thread::JoinHandle<()>,
 }
 
-#[cfg(feature = "atof-streaming")]
 impl UnresponsiveServer {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1614,7 +1567,6 @@ impl UnresponsiveServer {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn delivered_stream_events_record_no_runtime_diagnostics() {
     enable_operational_logs();
     let (url, captures) = start_http_capture_server(2);
@@ -1634,7 +1586,6 @@ fn delivered_stream_events_record_no_runtime_diagnostics() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn rejected_http_post_events_record_delivery_failures() {
     enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1674,7 +1625,6 @@ fn rejected_http_post_events_record_delivery_failures() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn unanswered_http_post_requests_record_flush_and_close_timeouts() {
     enable_operational_logs();
     let server = UnresponsiveServer::start();
@@ -1720,7 +1670,6 @@ fn unanswered_http_post_requests_record_flush_and_close_timeouts() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_close_without_a_handshake_drops_pending_events() {
     enable_operational_logs();
     let server = UnresponsiveServer::start();

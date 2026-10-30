@@ -59,14 +59,14 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 # First-party crates (versions are updated by `just set-version`).
 nemo-relay-codecs = { version = "1.0.0", path = "crates/codecs" }
-nemo-relay-runtime = { version = "1.0.0", path = "crates/runtime", default-features = false }
-nemo-relay = { version = "1.0.0", path = "crates/core", default-features = false }
+nemo-relay-runtime = { version = "1.0.0", path = "crates/runtime" }
+nemo-relay = { version = "1.0.0", path = "crates/core" }
 nemo-relay-adaptive = { version = "1.0.0", path = "crates/adaptive" }
 nemo-relay-cli = { version = "1.0.0", path = "crates/cli" }
 nemo-relay-ffi = { version = "1.0.0", path = "crates/ffi" }
 nemo-relay-pii-redaction = { version = "1.0.0", path = "crates/pii-redaction" }
 nemo-relay-resource-metrics = { version = "1.0.0", path = "crates/resource-metrics" }
-nemo-relay-observability = { version = "1.0.0", path = "crates/observability", default-features = false }
+nemo-relay-observability = { version = "1.0.0", path = "crates/observability" }
 nemo-relay-model-pricing = { version = "1.0.0", path = "crates/model-pricing" }
 nemo-relay-plugin = { version = "1.0.0", path = "crates/plugin" }
 nemo-relay-types = { version = "1.0.0", path = "crates/types" }

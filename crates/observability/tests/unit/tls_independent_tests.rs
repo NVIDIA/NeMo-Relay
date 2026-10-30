@@ -234,7 +234,6 @@ fn tls_schema_aliases_editor_and_signal_inheritance() {
         assert_eq!(nested.fields.len(), 3);
         assert!(nested.field("private_key").unwrap().optional);
     }
-    #[cfg(feature = "schema")]
     {
         let schema =
             serde_json::to_value(schemars::schema_for!(OpenTelemetrySectionConfig)).unwrap();

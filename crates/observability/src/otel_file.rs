@@ -62,8 +62,9 @@ pub enum OtlpFileExporterError {
 }
 
 /// On-disk encoding used by [`OtlpFileSpanExporter`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OtlpFileFormat {
     /// One OTLP/JSON-encoded `ExportTraceServiceRequest` per line: the

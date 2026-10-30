@@ -32,9 +32,7 @@ use super::{
     PluginHostReport, resolve_plugin_host_config,
 };
 
-#[cfg(feature = "worker-grpc")]
 use super::worker::prepare_worker_plugins_with_trust;
-#[cfg(feature = "worker-grpc")]
 use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 
 /// Embedded startup configuration. Service settings are not plugin component
@@ -143,8 +141,7 @@ async fn activate_resolved(
 }
 
 /// One dynamic plugin component to load and activate in an embedding host.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct VerifiedDynamicPluginSpec {
     /// Expected plugin identifier from the authored manifest.
     pub plugin_id: String,
@@ -170,7 +167,6 @@ pub struct PluginHostActivation {
     active: bool,
     report: PluginHostReport,
     native: Option<NativePluginActivation>,
-    #[cfg(feature = "worker-grpc")]
     worker: Option<WorkerPluginActivation>,
     claim: Option<PluginHostLease>,
 }
@@ -276,17 +272,6 @@ impl PluginHostActivation {
         );
         let claim = acquire_plugin_host_lease()?;
 
-        #[cfg(not(feature = "worker-grpc"))]
-        if let Some(plugin) = dynamic_plugins
-            .iter()
-            .find(|plugin| plugin.kind == DynamicPluginKind::Worker)
-        {
-            return Err(crate::plugin::PluginError::InvalidConfig(format!(
-                "worker dynamic plugin '{}' requires the 'worker-grpc' feature",
-                plugin.plugin_id
-            )));
-        }
-
         // Builtin registration is cached process-wide. It must complete before
         // a dynamic plugin can claim a reserved builtin kind and permanently
         // cache a failed builtin registration attempt.
@@ -314,7 +299,6 @@ impl PluginHostActivation {
             })
             .transpose()?;
 
-        #[cfg(feature = "worker-grpc")]
         let worker = {
             // Register can discover and gate preceding static subscribers. Only
             // prepare workers here; their adapters register during initialization.
@@ -392,7 +376,6 @@ impl PluginHostActivation {
                 if let Some(native) = native {
                     std::mem::forget(native);
                 }
-                #[cfg(feature = "worker-grpc")]
                 if let Some(worker) = worker {
                     std::mem::forget(worker);
                 }
@@ -423,7 +406,6 @@ impl PluginHostActivation {
                     ..PluginHostReport::default()
                 },
                 native,
-                #[cfg(feature = "worker-grpc")]
                 worker,
                 claim: Some(claim),
             },
@@ -485,7 +467,6 @@ impl PluginHostActivation {
         if let Some(native) = &mut self.native {
             runtime_outcome.merge(native.deregister_plugin_kinds_checked());
         }
-        #[cfg(feature = "worker-grpc")]
         if let Some(worker) = &mut self.worker {
             runtime_outcome.merge(worker.deregister_plugin_kinds_checked());
         }
@@ -493,7 +474,6 @@ impl PluginHostActivation {
         // A worker cannot be stopped while its registry adapter might still be
         // callable. Only begin process shutdown once every kind is known to be
         // absent from the registry.
-        #[cfg(feature = "worker-grpc")]
         if runtime_outcome.safe_to_unload
             && let Some(worker) = &self.worker
         {
@@ -509,7 +489,6 @@ impl PluginHostActivation {
         // the activations unloads libraries and runtimes before releasing the
         // process-wide host claim.
         self.native.take();
-        #[cfg(feature = "worker-grpc")]
         self.worker.take();
         self.claim.take();
         self.active = false;
@@ -533,7 +512,6 @@ impl PluginHostActivation {
         if let Some(native) = self.native.take() {
             std::mem::forget(native);
         }
-        #[cfg(feature = "worker-grpc")]
         if let Some(worker) = self.worker.take() {
             std::mem::forget(worker);
         }

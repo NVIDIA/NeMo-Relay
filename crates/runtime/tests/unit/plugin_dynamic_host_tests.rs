@@ -33,7 +33,6 @@ fn unsafe_kind_deregistration_keeps_activation_retryable() {
         native: Some(NativePluginActivation::with_plugin_kind_for_test(
             "fixture.poisoned",
         )),
-        #[cfg(feature = "worker-grpc")]
         worker: None,
         claim: Some(claim),
     };
@@ -362,9 +361,6 @@ async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
     let _ = crate::plugin::test_close_plugin_host();
     let temp = tempfile::tempdir().unwrap();
     for kind in [DynamicPluginKind::RustDynamic, DynamicPluginKind::Worker] {
-        if kind == DynamicPluginKind::Worker && !cfg!(feature = "worker-grpc") {
-            continue;
-        }
         let (compat, load) = if kind == DynamicPluginKind::RustDynamic {
             (
                 "native_api = \"1\"",

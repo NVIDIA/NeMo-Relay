@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::test_support::pricing_test_mutex;
 use nemo_relay_model_pricing::{
-    PricingCatalog, PricingResolver, pricing_test_mutex, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 
 use serde_json::json;

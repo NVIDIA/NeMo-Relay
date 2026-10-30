@@ -382,3 +382,13 @@ fn is_start_event(event: &Event) -> bool {
 
 #[path = "../unit/atif_projection_tests.rs"]
 mod projection_tests;
+
+pub(crate) fn step_tool_call_ids(step: &AtifStep) -> Vec<String> {
+    step.tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|tool_call| tool_call.tool_call_id.clone())
+        .filter(|tool_call_id| !tool_call_id.is_empty())
+        .collect()
+}

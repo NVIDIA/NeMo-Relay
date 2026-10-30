@@ -22,8 +22,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 use {
-    nemo_relay::plugin::test_initialize_plugin_host_exact,
-    nemo_relay_runtime::plugin::PluginConfig, nemo_relay_runtime::plugin::test_close_plugin_host,
+    crate::test_support::plugin_host::test_close_plugin_host,
+    crate::test_support::plugin_host::test_initialize_plugin_host_exact,
+    nemo_relay_runtime::plugin::PluginConfig,
 };
 
 use super::*;

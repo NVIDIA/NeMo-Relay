@@ -12,8 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 /// Severity of evidence, independent of an operation's outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     /// Detailed instrumentation useful for tracing execution.
@@ -29,8 +28,9 @@ pub enum DiagnosticSeverity {
 }
 
 /// Observed operation outcome; severity does not imply this value.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticOutcome {
     /// No operation outcome was observed.
@@ -43,8 +43,7 @@ pub enum DiagnosticOutcome {
 }
 
 /// Optional caller correlation identifiers, excluded from aggregation keys.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticCorrelation<'a> {
     /// Trajectory session associated with the observation, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,8 +67,7 @@ pub struct DiagnosticCorrelation<'a> {
 /// let mut value = Classification::success(SuccessCode::SinkInitialized);
 /// value.canonical_code = "different.name".into();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Classification {
     /// Stable built-in name or registered namespaced extension name.
     canonical_code: Cow<'static, str>,
@@ -143,8 +141,7 @@ impl Classification {
 }
 
 /// Restricted optional recent evidence, independent of the accepted numeric summary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticDetail {
     /// Text copied within admitted byte capacity; bounding does not sanitize it.
     pub message: String,
@@ -153,8 +150,7 @@ pub struct DiagnosticDetail {
 }
 
 /// One recent observation with its actual class and original configuration attribution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticEvent {
     /// Unique source-local update sequence; it is not an occurrence counter.
     pub sequence: DiagnosticNumber,
@@ -189,8 +185,7 @@ pub struct DiagnosticEvent {
 /// Producer wall time is a claim with unknown clock skew. Host summaries and
 /// windows use host receipt time; clocks from different processes are never
 /// subtracted. Session rotation assigns a fresh source before sequence reset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RemoteDiagnosticOrigin {
     /// Host-issued diagnostic session/source incarnation.
     pub source_instance_id: uuid::Uuid,
@@ -224,8 +219,7 @@ impl DiagnosticEvent {
 /// This payload deliberately has no message, caller correlation, component name,
 /// plugin context, or configuration attribution. Unknown/extension codes are not
 /// automatically authorized for output by the recording service.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticOutputSummary {
     /// Source-local sequence of the accepted observation.
     pub sequence: DiagnosticNumber,

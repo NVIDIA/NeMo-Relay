@@ -91,7 +91,6 @@ impl BackendSpec {
         }
     }
 
-    #[cfg(feature = "redis-backend")]
     /// Creates a Redis backend spec.
     pub fn redis(url: impl Into<String>, key_prefix: impl Into<String>) -> Self {
         let mut config = Map::new();
@@ -349,7 +348,6 @@ fn default_backend_editor_config() -> Json {
     Json::Object(Map::new())
 }
 
-#[cfg(feature = "redis-backend")]
 fn default_redis_backend_editor_config() -> Json {
     serde_json::json!({"url": "", "key_prefix": "nemo_relay:"})
 }
@@ -357,7 +355,6 @@ fn default_redis_backend_editor_config() -> Json {
 static IN_MEMORY_BACKEND_EDITOR_SCHEMA: nemo_relay_runtime::config_editor::EditorSchema =
     nemo_relay_runtime::config_editor::EditorSchema { fields: &[] };
 
-#[cfg(feature = "redis-backend")]
 static REDIS_BACKEND_EDITOR_FIELDS: [nemo_relay_runtime::config_editor::EditorFieldSpec; 2] = [
     nemo_relay_runtime::config_editor::EditorFieldSpec {
         name: "url",
@@ -383,7 +380,6 @@ static REDIS_BACKEND_EDITOR_FIELDS: [nemo_relay_runtime::config_editor::EditorFi
     },
 ];
 
-#[cfg(feature = "redis-backend")]
 static REDIS_BACKEND_EDITOR_SCHEMA: nemo_relay_runtime::config_editor::EditorSchema =
     nemo_relay_runtime::config_editor::EditorSchema {
         fields: &REDIS_BACKEND_EDITOR_FIELDS,
@@ -393,21 +389,10 @@ fn in_memory_backend_editor_schema() -> &'static nemo_relay_runtime::config_edit
     &IN_MEMORY_BACKEND_EDITOR_SCHEMA
 }
 
-#[cfg(feature = "redis-backend")]
 fn redis_backend_editor_schema() -> &'static nemo_relay_runtime::config_editor::EditorSchema {
     &REDIS_BACKEND_EDITOR_SCHEMA
 }
 
-#[cfg(not(feature = "redis-backend"))]
-static BACKEND_EDITOR_VARIANTS: [nemo_relay_runtime::config_editor::EditorVariantSpec; 1] =
-    [nemo_relay_runtime::config_editor::EditorVariantSpec {
-        label: "In memory",
-        tag: "in_memory",
-        schema: in_memory_backend_editor_schema,
-        default: default_backend_editor_config,
-    }];
-
-#[cfg(feature = "redis-backend")]
 static BACKEND_EDITOR_VARIANTS: [nemo_relay_runtime::config_editor::EditorVariantSpec; 2] = [
     nemo_relay_runtime::config_editor::EditorVariantSpec {
         label: "In memory",
@@ -429,15 +414,6 @@ static BACKEND_EDITOR_CONFIG: nemo_relay_runtime::config_editor::EditorTaggedUni
         variants: &BACKEND_EDITOR_VARIANTS,
     };
 
-#[cfg(not(feature = "redis-backend"))]
-nemo_relay_runtime::editor_config! {
-    impl BackendSpec {
-        kind => { label: "kind", kind: Enum, values: ["in_memory"] },
-        config => { label: "config", kind: DiscriminatedSection, tagged_union: &BACKEND_EDITOR_CONFIG },
-    }
-}
-
-#[cfg(feature = "redis-backend")]
 nemo_relay_runtime::editor_config! {
     impl BackendSpec {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },

@@ -72,15 +72,14 @@ impl From<ComponentSpec> for PluginComponentSpec {
 }
 
 /// Canonical config document for the PII redaction component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PiiRedactionConfig {
     /// PII redaction config schema version.
     #[serde(default = "default_pii_redaction_config_version")]
     pub version: u32,
     /// Backend mode: `builtin` or `local_model`.
     #[serde(default = "default_mode", skip_serializing_if = "is_default_mode")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
+    #[schemars(schema_with = "mode_schema")]
     pub mode: String,
     /// Whether to sanitize managed LLM request payloads.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -106,7 +105,7 @@ pub struct PiiRedactionConfig {
     /// Compatibility fallback codec for LLM-managed surfaces without an active
     /// per-call codec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "codec_schema"))]
+    #[schemars(schema_with = "codec_schema")]
     pub codec: Option<String>,
     /// Ordered redaction profiles. When present, legacy backend and surface
     /// fields must be omitted and every enabled profile covers all supported
@@ -145,15 +144,14 @@ impl Default for PiiRedactionConfig {
 }
 
 /// One ordered redaction policy within the singleton PII component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PiiRedactionProfile {
     /// Whether this profile registers runtime sanitizers.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Backend mode: `builtin` or `local_model`.
     #[serde(default = "default_mode")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
+    #[schemars(schema_with = "mode_schema")]
     pub mode: String,
     /// Guardrail priority. Lower values run earlier; array order breaks ties.
     #[serde(default = "default_priority")]
@@ -179,19 +177,18 @@ impl Default for PiiRedactionProfile {
 }
 
 /// Built-in redaction backend settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BuiltinBackendConfig {
     /// Optional semantic sanitization preset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_preset_schema"))]
+    #[schemars(schema_with = "builtin_preset_schema")]
     pub preset: Option<String>,
     /// Action applied to matching string leaves.
     #[serde(
         default = "default_builtin_action",
         skip_serializing_if = "is_default_builtin_action"
     )]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
+    #[schemars(schema_with = "builtin_action_schema")]
     pub action: String,
     /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with
     /// [`Self::target_path_globs`] means every string leaf, except that
@@ -225,10 +222,7 @@ pub struct BuiltinBackendConfig {
         default = "default_custom_mark_payload_policy",
         skip_serializing_if = "is_default_custom_mark_payload_policy"
     )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "custom_mark_payload_policy_schema")
-    )]
+    #[schemars(schema_with = "custom_mark_payload_policy_schema")]
     pub custom_mark_payload_policy: String,
     /// Exact string values that the trajectory preset may preserve for each typed metric attribute.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -255,8 +249,7 @@ impl Default for BuiltinBackendConfig {
 }
 
 /// Local-backend settings for a future in-process local-model runtime.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LocalBackendConfig {
     /// Optional local-model backend identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,18 +472,15 @@ pub fn deregister_pii_redaction_component() -> bool {
 }
 
 /// Returns the JSON Schema for the PII redaction component configuration.
-#[cfg(feature = "schema")]
 pub fn pii_redaction_config_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(PiiRedactionConfig))
         .expect("PII redaction config schema should serialize")
 }
 
-#[cfg(feature = "schema")]
 fn mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     string_enum_schema(generator, &["builtin", "local_model"], Some("builtin"))
 }
 
-#[cfg(feature = "schema")]
 fn builtin_action_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -501,14 +491,12 @@ fn builtin_action_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 fn builtin_preset_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["trajectory_context"], None)
 }
 
-#[cfg(feature = "schema")]
 fn custom_mark_payload_policy_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -519,13 +507,11 @@ fn custom_mark_payload_policy_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     let codec_names = supported_codec_names();
     string_enum_schema(generator, &codec_names, None)
 }
 
-#[cfg(feature = "schema")]
 fn string_enum_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
     values: &[&str],

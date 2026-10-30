@@ -38,7 +38,6 @@ pub enum AdaptiveError {
     ChannelClosed(String),
 
     /// A Redis operation failed.
-    #[cfg(feature = "redis-backend")]
     #[error("redis error: {0}")]
     Redis(#[from] redis::RedisError),
 }

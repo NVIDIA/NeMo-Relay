@@ -43,12 +43,12 @@ use nemo_relay_runtime::api::runtime::{LlmJsonStream, create_scope_stack, set_th
 use serde_json::json;
 use tokio_stream::StreamExt;
 use {
-    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::DiagnosticLevel,
-    nemo_relay_runtime::plugin::UnsupportedBehavior,
+    crate::test_support::plugin_host::test_close_plugin_host,
+    nemo_relay_runtime::plugin::rollback_registrations,
 };
 use {
-    nemo_relay_runtime::plugin::rollback_registrations,
-    nemo_relay_runtime::plugin::test_close_plugin_host,
+    nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::DiagnosticLevel,
+    nemo_relay_runtime::plugin::UnsupportedBehavior,
 };
 
 fn reset_global() {
@@ -1326,7 +1326,6 @@ async fn bind_scope_reports_duplicate_scope_intercept_registration() {
     pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn response_cache_store_initialization_failure_fails_open() {
     let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;

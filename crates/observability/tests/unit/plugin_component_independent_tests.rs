@@ -994,7 +994,6 @@ fn atof_stream_header_validation_reports_invalid_values_and_environment_names() 
             .contains("environment variable that is blank")
     }));
 
-    #[cfg(feature = "atof-streaming")]
     {
         diagnostics.clear();
         validate_atof_stream_header(

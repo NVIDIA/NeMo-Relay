@@ -21,7 +21,7 @@ use super::otel::{
 /// exporter. Recreate the exporter to load new certificates or keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(schemars::JsonSchema)]
 pub struct OpenTelemetryTlsConfig {
     /// Path to a PEM CA bundle. Replaces the system's trusted CAs.
     #[serde(default, skip_serializing_if = "Option::is_none")]

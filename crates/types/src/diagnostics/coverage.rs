@@ -7,8 +7,9 @@ use super::{DiagnosticCount, DiagnosticNumber};
 use serde::{Deserialize, Serialize};
 
 /// Availability of evidence, without applying deployment or application health.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticAvailability {
     /// Evidence was supplied; other coverage fields still describe completeness.
@@ -25,8 +26,7 @@ pub enum DiagnosticAvailability {
 }
 
 /// Capability coverage, including explicitly deferred producer integrations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticCapability {
     /// Bounded capability name, such as `otel`.
     pub name: String,
@@ -37,8 +37,7 @@ pub struct DiagnosticCapability {
 }
 
 /// Boundaries of returned retained evidence, separate from cumulative counters.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticRetention {
     /// Oldest sequence in the selected retained event history, if present.
     pub oldest_event_sequence: Option<DiagnosticNumber>,
@@ -53,8 +52,7 @@ pub struct DiagnosticRetention {
 }
 
 /// Source loss state reserved independently of optional evidence capacity.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticLoss {
     /// Previously retained events reclaimed from the circular history.
     pub events_evicted: DiagnosticCount,
@@ -97,8 +95,9 @@ pub struct DiagnosticLoss {
 }
 
 /// Scope of summary and outcome-window values in a filtered response.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSummaryScope {
     /// Lifetime totals cover the whole selected component instance, not matching events.
@@ -108,8 +107,7 @@ pub enum DiagnosticSummaryScope {
 }
 
 /// Explicit evidence, retention, saturation, and producer integration coverage.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticCoverage {
     /// Availability of this diagnostic source context.
     pub availability: DiagnosticAvailability,

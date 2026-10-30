@@ -1420,7 +1420,6 @@ pub fn restore_thread_scope_stack(binding: ThreadScopeStackBinding) {
         .with(|context| *context.borrow_mut() = binding.active_event_trace_context);
 }
 
-#[cfg(feature = "worker-grpc")]
 pub(crate) fn install_thread_continuation_context(
     scope_stack: &ScopeStackHandle,
     active_event: Option<AnchoredActiveEvent>,

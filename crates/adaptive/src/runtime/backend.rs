@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use crate::config::BackendSpec;
 use crate::error::{AdaptiveError, Result};
-#[cfg(feature = "redis-backend")]
 use crate::redis::RedisBackend;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
@@ -24,7 +23,6 @@ pub async fn build_backend(
             );
             Ok(Arc::new(InMemoryBackend::new()))
         }
-        #[cfg(feature = "redis-backend")]
         "redis" => {
             let url = backend
                 .config
@@ -40,10 +38,7 @@ pub async fn build_backend(
                 |error| AdaptiveError::Storage(error.to_string()),
             )?))
         }
-        #[cfg(not(feature = "redis-backend"))]
-        "redis" => Err(AdaptiveError::InvalidConfig(
-            "redis backend is not enabled in this build".into(),
-        )),
+
         other => Err(AdaptiveError::InvalidConfig(format!(
             "unsupported backend '{other}'"
         ))),

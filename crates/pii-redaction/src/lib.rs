@@ -31,6 +31,7 @@ pub mod api {
 #[cfg(test)]
 #[allow(missing_docs)]
 pub mod plugin {
+    pub(crate) use crate::test_support::plugin_host::*;
     pub use nemo_relay_runtime::plugin::*;
 
     pub fn ensure_builtin_plugins_registered() -> Result<()> {
@@ -57,3 +58,7 @@ pub mod plugins {
 pub mod shared_runtime {
     pub fn reset_runtime_owner_for_tests() {}
 }
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod test_support;

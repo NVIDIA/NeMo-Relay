@@ -1179,7 +1179,6 @@ pub struct LogEventProcessor {
 }
 
 impl LogEventProcessor {
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn new(
         logger: SdkLogger,
@@ -1212,7 +1211,6 @@ impl LogEventProcessor {
         }
     }
 
-    #[cfg(any(test, feature = "__test-support"))]
     #[doc(hidden)]
     pub fn process(&mut self, event: &EventView<'_>) {
         self.process_with_logger(event, None);

@@ -24,8 +24,7 @@ use crate::plugin::{PluginError, Result};
 const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v1";
 
 /// Authored `relay-plugin.toml` manifest.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifest {
     /// Relay plugin manifest schema version.
     pub manifest_version: u32,
@@ -41,7 +40,7 @@ pub struct DynamicPluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<DynamicPluginManifestConfigSchema>,
     /// Runtime load contract.
-    #[cfg_attr(feature = "schema", schemars(with = "DynamicPluginManifestLoadSchema"))]
+    #[schemars(with = "DynamicPluginManifestLoadSchema")]
     pub load: DynamicPluginManifestLoad,
     /// Optional source-oriented author metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,8 +54,7 @@ pub struct DynamicPluginManifest {
 }
 
 /// Plugin identity block for `relay-plugin.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestPlugin {
     /// Stable plugin identifier.
     pub id: DynamicPluginId,
@@ -71,8 +69,7 @@ pub struct DynamicPluginManifestPlugin {
 }
 
 /// Compatibility block for `relay-plugin.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestCompat {
     /// Supported Relay version or version range.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,8 +83,7 @@ pub struct DynamicPluginManifestCompat {
 }
 
 /// Defaults block for authored manifests.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestDefaults {
     /// Explicit default desired enabled state.
     #[serde(default)]
@@ -95,16 +91,14 @@ pub struct DynamicPluginManifestDefaults {
 }
 
 /// Capability declarations for authored manifests.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestCapabilities {
     /// Required capability set.
     pub items: Vec<DynamicPluginCapability>,
 }
 
 /// Static configuration schema block for authored manifests.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestConfigSchema {
     /// Local JSON Schema path, resolved relative to `relay-plugin.toml`.
     pub path: String,
@@ -120,8 +114,7 @@ pub enum DynamicPluginManifestLoad {
 }
 
 /// Worker lane authored load block.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestWorkerLoad {
     /// Worker runtime when `kind = "worker"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -143,7 +136,7 @@ pub struct DynamicPluginManifestWorkerLoad {
 /// Time limits for short worker callbacks, in milliseconds, enforced by the host.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(schemars::JsonSchema)]
 pub struct WorkerCallbackTimeouts {
     /// Default deadline for this plugin. If omitted, the host uses 30 seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,11 +149,11 @@ pub struct WorkerCallbackTimeouts {
 /// Finite worker message limits, in bytes, keyed by callback registration name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(schemars::JsonSchema)]
 pub struct WorkerMessageLimits {
     /// Fallback for this plugin. If omitted, the host uses 4 MiB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2147483647)))]
+    #[schemars(range(min = 1, max = 2147483647))]
     pub default_bytes: Option<NonZeroU32>,
     /// Overrides for exact callback registration names, like callback timeouts.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -168,8 +161,7 @@ pub struct WorkerMessageLimits {
 }
 
 /// Native shared-library authored load block.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestRustDynamicLoad {
     /// Native library path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,7 +171,6 @@ pub struct DynamicPluginManifestRustDynamicLoad {
     pub symbol: Option<String>,
 }
 
-#[cfg(feature = "schema")]
 #[derive(schemars::JsonSchema)]
 #[allow(
     dead_code,
@@ -276,8 +267,7 @@ impl Serialize for DynamicPluginManifestLoad {
 }
 
 /// Source block for authored manifests.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestSource {
     /// Author-facing manifest root or package root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,8 +278,7 @@ pub struct DynamicPluginManifestSource {
 }
 
 /// Integrity/authenticity evidence block for authored manifests.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginManifestIntegrity {
     /// Expected artifact digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]

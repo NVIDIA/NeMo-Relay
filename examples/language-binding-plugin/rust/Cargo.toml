@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 nemo-relay-runtime.workspace = true
 # First-party crates.
-nemo-relay = { workspace = true, default-features = true }
+nemo-relay = { workspace = true }
 
 # Third-party dependencies.
 futures.workspace = true

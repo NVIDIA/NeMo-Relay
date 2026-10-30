@@ -34,7 +34,6 @@ mod policy;
 mod registry;
 mod schema;
 mod trust;
-#[cfg(feature = "worker-grpc")]
 mod worker;
 
 pub use bounded::*;
@@ -51,7 +50,6 @@ pub use policy::*;
 pub use registry::*;
 pub use schema::*;
 pub use trust::*;
-#[cfg(feature = "worker-grpc")]
 pub use worker::*;
 
 #[derive(Debug)]
@@ -142,7 +140,6 @@ pub(super) fn validate_tool_execution_context_compatibility(
     Ok(())
 }
 
-#[cfg(feature = "worker-grpc")]
 pub(super) fn validate_llm_execution_context_compatibility(
     relay: &str,
     plugin_kind: &str,
@@ -303,8 +300,9 @@ pub fn relay_version_matches(requirement: &VersionReq, version: &Version) -> boo
 }
 
 /// Plugin execution lane.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginKind {
@@ -315,8 +313,9 @@ pub enum DynamicPluginKind {
 }
 
 /// Managed runtime identity for worker-based plugins.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum WorkerRuntime {
@@ -329,8 +328,9 @@ pub enum WorkerRuntime {
 }
 
 /// Relay-enforced capability declared by a dynamic plugin.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginCapability {
@@ -343,8 +343,9 @@ pub enum DynamicPluginCapability {
 }
 
 /// Host policy startup classification for a plugin.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginStartupClass {
@@ -355,8 +356,9 @@ pub enum DynamicPluginStartupClass {
 }
 
 /// Host attestation policy mode.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginAttestationMode {
@@ -370,9 +372,18 @@ pub enum DynamicPluginAttestationMode {
 
 /// High-level verification state for one validation axis.
 #[derive(
-    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash, IntoStaticStr,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    IntoStaticStr,
+    schemars::JsonSchema,
 )]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginCheckState {
@@ -387,9 +398,18 @@ pub enum DynamicPluginCheckState {
 
 /// Observed runtime state for a dynamic plugin.
 #[derive(
-    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash, IntoStaticStr,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    IntoStaticStr,
+    schemars::JsonSchema,
 )]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginRuntimeState {
@@ -405,8 +425,9 @@ pub enum DynamicPluginRuntimeState {
 }
 
 /// Recent failure phase or policy-gate context for diagnostics and operator UX.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginFailurePhase {
@@ -421,8 +442,7 @@ pub enum DynamicPluginFailurePhase {
 }
 
 /// Stable metadata for one durable plugin record.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginMetadata {
     /// Canonical plugin identifier.
     pub id: DynamicPluginId,
@@ -446,8 +466,7 @@ pub struct DynamicPluginMetadata {
 }
 
 /// Source and resolved artifact facts for a plugin.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginSource {
     /// Canonical manifest location or reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -464,8 +483,7 @@ pub struct DynamicPluginSource {
 }
 
 /// Desired-state fields owned by user-facing operations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginSpec {
     /// Whether the plugin should be present in desired state.
     #[serde(default = "default_present")]
@@ -493,8 +511,7 @@ impl Default for DynamicPluginSpec {
 }
 
 /// Lane-specific compatibility declarations and resolved compatibility facts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DynamicPluginCompatibility {
     /// Native shared-library compatibility contract.
@@ -504,8 +521,7 @@ pub enum DynamicPluginCompatibility {
 }
 
 /// Compatibility contract for worker plugins.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginWorkerCompatibility {
     /// Compatible NeMo Relay version or version range.
     pub relay: String,
@@ -514,8 +530,7 @@ pub struct DynamicPluginWorkerCompatibility {
 }
 
 /// Compatibility contract for native shared libraries.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginRustCompatibility {
     /// Compatible NeMo Relay version or version range.
     pub relay: String,
@@ -524,8 +539,7 @@ pub struct DynamicPluginRustCompatibility {
 }
 
 /// Runtime entry contract for the resolved plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DynamicPluginLoadContract {
     /// Worker-based plugin registration target.
@@ -535,8 +549,7 @@ pub enum DynamicPluginLoadContract {
 }
 
 /// Lane-specific load contract for worker plugins.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginWorkerLoadContract {
     /// Host environment names or trailing-wildcard prefixes to forward at launch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -554,8 +567,7 @@ pub struct DynamicPluginWorkerLoadContract {
 }
 
 /// Lane-specific load contract for native shared libraries.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginRustLoadContract {
     /// Native dynamic library path.
     pub library: String,
@@ -564,8 +576,7 @@ pub struct DynamicPluginRustLoadContract {
 }
 
 /// One structured recent failure summary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginFailure {
     /// Failure phase or policy-gate context.
     pub phase: DynamicPluginFailurePhase,
@@ -576,8 +587,7 @@ pub struct DynamicPluginFailure {
 }
 
 /// Decomposed validation results for one plugin record.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginValidationStatus {
     /// Manifest schema/result state.
     #[serde(default)]
@@ -621,8 +631,7 @@ impl Default for DynamicPluginValidationStatus {
 }
 
 /// Observed runtime state for one plugin record.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginRuntimeStatus {
     /// Current observed runtime state.
     #[serde(default)]
@@ -654,8 +663,7 @@ impl Default for DynamicPluginRuntimeStatus {
 }
 
 /// Durable observed state for a plugin record.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginStatus {
     /// Validation and policy status.
     #[serde(default)]
@@ -675,8 +683,7 @@ pub struct DynamicPluginStatus {
 }
 
 /// Durable control-plane record for a dynamic plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct DynamicPluginRecord {
     /// Stable plugin metadata.
     pub metadata: DynamicPluginMetadata,

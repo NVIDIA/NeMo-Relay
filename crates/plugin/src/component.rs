@@ -47,8 +47,7 @@ pub enum PluginError {
 }
 
 /// One configured plugin component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginComponentSpec {
     /// Registered plugin kind string.
     pub kind: String,
@@ -75,8 +74,7 @@ impl PluginComponentSpec {
 }
 
 /// Bounded aggregate for a runtime failure observed by an active plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeDiagnostic {
     /// Stable failure classification.
     pub code: String,
@@ -95,8 +93,7 @@ pub struct RuntimeDiagnostic {
 }
 
 /// Policy for how unsupported plugin/runtime config is handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConfigPolicy {
     /// Policy applied when a component kind is unknown to the plugin registry.
     #[serde(default = "default_warn")]
@@ -168,8 +165,9 @@ nemo_relay_types::editor_config! {
 }
 
 /// Per-policy behavior for unsupported configuration.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum UnsupportedBehavior {
     /// Suppress the diagnostic entirely.

@@ -445,7 +445,6 @@ fn builtin_backend_config_default_matches_documented_action_default() {
     assert!(config.detector.is_none());
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn builtin_backend_schema_exposes_the_hardened_custom_mark_default() {
     let schema = pii_redaction_config_schema();

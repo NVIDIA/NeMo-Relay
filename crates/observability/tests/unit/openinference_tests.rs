@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use std::collections::HashMap;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[test]
 fn optimization_summary_emits_namespaced_openinference_attributes() {

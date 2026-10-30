@@ -4,6 +4,9 @@
 //! End-to-end tests for the adaptive plugin's `response_cache` feature
 //! (exact-match).
 
+#[path = "../support/plugin_host.rs"]
+mod plugin_host_test_support;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,10 +39,10 @@ use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::{Stream, StreamExt};
 use {
-    nemo_relay::plugin::test_initialize_plugin_host_exact,
-    nemo_relay::plugin::test_validate_static_plugin_config,
+    crate::plugin_host_test_support::test_close_plugin_host,
+    crate::plugin_host_test_support::test_initialize_plugin_host_exact,
+    crate::plugin_host_test_support::test_validate_static_plugin_config,
     nemo_relay_runtime::plugin::DiagnosticLevel, nemo_relay_runtime::plugin::PluginConfig,
-    nemo_relay_runtime::plugin::test_close_plugin_host,
 };
 
 #[path = "response_cache_common.rs"]
@@ -632,20 +635,6 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
         "an unknown backend kind must be rejected: {:?}",
         unknown.diagnostics
     );
-
-    // Without the redis-backend feature, selecting redis is rejected as unavailable.
-    #[cfg(not(feature = "redis-backend"))]
-    {
-        let redis = validate("redis");
-        assert!(
-            redis
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "response_cache.backend_unavailable"),
-            "redis without the redis-backend feature must be rejected: {:?}",
-            redis.diagnostics
-        );
-    }
 }
 
 #[tokio::test]
@@ -700,18 +689,6 @@ async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
         report.diagnostics
     );
 
-    #[cfg(not(feature = "redis-backend"))]
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.backend_unavailable"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.field.as_deref() == Some("backend.kind")
-        }),
-        "redis must be rejected when its backend feature is not compiled: {:?}",
-        report.diagnostics
-    );
-
-    #[cfg(feature = "redis-backend")]
     assert!(
         report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "response_cache.missing_redis_url"
@@ -2700,8 +2677,8 @@ async fn cache_coexists_with_acg_execution_intercept() {
 /// Shared-cache test: a second, independent store instance (a stand-in for
 /// another process / teammate) sees entries written by the first. Requires a
 /// local Redis and `NEMO_RELAY_RUN_REDIS_TESTS=1`; otherwise it skips. Compile
-/// with `--features redis-backend`.
-#[cfg(feature = "redis-backend")]
+/// with a configured Redis instance.
+
 #[tokio::test]
 async fn redis_backend_shares_entries_across_store_instances() {
     use std::time::Duration;

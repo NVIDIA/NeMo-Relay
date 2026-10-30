@@ -1301,15 +1301,7 @@ async fn collect_observability_component_checks(
     }
     checks.extend(observability_http_exporter_checks(config, probe_mode).await);
     if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
-        if atof_streaming_supported() {
-            checks.extend(observability_atof_stream_checks(config, probe_mode).await);
-        } else {
-            checks.push(Check {
-                name: "ATOF stream sink",
-                status: Status::Fail,
-                details: "ATOF stream sinks are not available in this binary".into(),
-            });
-        }
+        checks.extend(observability_atof_stream_checks(config, probe_mode).await);
     }
 }
 
@@ -1606,10 +1598,6 @@ fn atof_stream_sinks(config: &Value) -> Vec<(usize, &Value)> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn atof_streaming_supported() -> bool {
-    cfg!(feature = "atof-streaming")
 }
 
 async fn observability_atof_stream_checks(

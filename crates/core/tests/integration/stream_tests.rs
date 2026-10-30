@@ -154,7 +154,6 @@ fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
     items.lock().unwrap().clone()
 }
 
-#[cfg(feature = "__internal-gateway")]
 #[tokio::test]
 async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publication() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -266,7 +265,6 @@ async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publi
     }
 }
 
-#[cfg(feature = "__internal-gateway")]
 #[tokio::test]
 async fn response_completion_termination_and_failures_preserve_single_end_publication() {
     let _lock = TEST_MUTEX.lock().unwrap();

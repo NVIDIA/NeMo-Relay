@@ -33,7 +33,6 @@ pub fn validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
     host::validate_static_plugin_config(config)
 }
 /// Return the host configuration schema.
-#[cfg(feature = "schema")]
 pub fn plugin_config_schema() -> nemo_relay_types::Json {
     host::plugin_config_schema()
 }
@@ -82,16 +81,4 @@ where
 {
     crate::initialize_runtime();
     PluginHostActivation::initialize_with_verified_specs(config, dynamic_plugins).await
-}
-/// Validate through the explicit host test hook.
-#[cfg(feature = "__test-plugin-host")]
-pub fn test_validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
-    crate::initialize_runtime();
-    host::test_validate_static_plugin_config(config)
-}
-/// Activate through the explicit host test hook.
-#[cfg(feature = "__test-plugin-host")]
-pub async fn test_initialize_plugin_host_exact(config: PluginConfig) -> Result<ConfigReport> {
-    crate::initialize_runtime();
-    host::test_initialize_plugin_host_exact(config).await
 }

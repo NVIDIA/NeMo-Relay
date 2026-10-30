@@ -24,3 +24,7 @@ Provider implementations live in `nemo-relay-codecs`. Both its stateless
 `BuiltinLlmNormalizer` and runtime’s `RuntimeLlmNormalizer` implement the
 `LlmNormalizer` trait from `nemo-relay-types`. Runtime adds configured pricing
 to normalized responses; standalone codecs preserve provider-reported costs.
+
+JSON Schema support, gRPC workers, object storage, and ATOF streaming are built
+in to their owning crates. These capabilities require no Cargo feature flags,
+including when consuming crates with `default-features = false`.

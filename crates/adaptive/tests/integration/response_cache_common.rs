@@ -11,7 +11,8 @@ use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
 use nemo_relay_runtime::api::runtime::LlmExecutionNextFn;
 use serde_json::{Value as Json, json};
 use {
-    nemo_relay::plugin::test_initialize_plugin_host_exact, nemo_relay_runtime::plugin::PluginConfig,
+    crate::plugin_host_test_support::test_initialize_plugin_host_exact,
+    nemo_relay_runtime::plugin::PluginConfig,
 };
 
 pub fn chat_request(prompt: &str) -> LlmRequest {

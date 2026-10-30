@@ -12,16 +12,9 @@ description = "Built-in observability exporters and projections for NeMo Relay."
 [lints]
 workspace = true
 
-[features]
-default = []
-__test-support = []
-object-store = ["dep:object_store", "tokio/net", "tokio/time"]
-schema = ["dep:schemars", "nemo-relay-types/schema", "nemo-relay-plugin/schema", "nemo-relay-model-pricing/schema"]
-atof-streaming = ["dep:tokio-tungstenite", "tokio/io-util", "tokio/net", "tokio/rt-multi-thread", "tokio/time"]
-
 [dependencies]
 nemo-relay-plugin.workspace = true
-object_store = { workspace = true, features = ["aws"], optional = true }
+object_store = { workspace = true, features = ["aws"] }
 # First-party crates.
 nemo-relay-model-pricing.workspace = true
 nemo-relay-types.workspace = true
@@ -42,13 +35,13 @@ opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", 
 prost.workspace = true
 reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
-schemars = { workspace = true, optional = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
-tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"], optional = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 tonic.workspace = true
 unicode-general-category.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
@@ -62,7 +55,6 @@ windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_Fil
 [dev-dependencies]
 rcgen.workspace = true
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
-nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
 spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
 futures.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }

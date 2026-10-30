@@ -3509,18 +3509,6 @@ pub fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
         .collect()
 }
 
-#[cfg(any(test, feature = "__test-support"))]
-#[doc(hidden)]
-pub fn step_tool_call_ids(step: &AtifStep) -> Vec<String> {
-    step.tool_calls
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .map(|tool_call| tool_call.tool_call_id.clone())
-        .filter(|tool_call_id| !tool_call_id.is_empty())
-        .collect()
-}
-
 #[doc(hidden)]
 pub fn merge_observation_result(
     observation: &mut AtifObservation,

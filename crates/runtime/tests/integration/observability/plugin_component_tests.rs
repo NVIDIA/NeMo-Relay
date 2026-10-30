@@ -17,7 +17,6 @@ use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::EditorFieldKind;
 use crate::observability_test_support::otel::ExporterInitializationError;
-#[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
     PluginComponentSpec, PluginConfig, list_plugin_kinds, lookup_plugin, test_close_plugin_host,
@@ -785,7 +784,6 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
-#[cfg(feature = "object-store")]
 fn start_http_status_server(
     status: &'static str,
 ) -> (String, std::thread::JoinHandle<std::io::Result<()>>) {
@@ -952,12 +950,10 @@ fn pop(handle: &crate::api::scope::ScopeHandle) {
     .unwrap();
 }
 
-#[cfg(feature = "schema")]
 fn schema_has_property(schema: &Json, name: &str) -> bool {
     schema_property(schema, name).is_some()
 }
 
-#[cfg(feature = "schema")]
 fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
     match schema {
         Json::Object(object) => {
@@ -2453,7 +2449,6 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("sinks[2].timeout_millis") })
     );
-    #[cfg(feature = "atof-streaming")]
     assert!(
         report
             .diagnostics
@@ -2478,7 +2473,6 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("sinks[6].header_env.X-Api-Key") })
     );
-    #[cfg(feature = "atof-streaming")]
     assert!(
         report
             .diagnostics
@@ -2680,7 +2674,6 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn atof_stream_sinks_fan_out_and_teardown_all_workers() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -2726,7 +2719,6 @@ fn atof_stream_sinks_fan_out_and_teardown_all_workers() {
 }
 
 #[test]
-#[cfg(feature = "atof-streaming")]
 fn atof_stream_sink_header_env_is_snapshotted_at_activation() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -2776,7 +2768,6 @@ fn atof_stream_sink_header_env_is_snapshotted_at_activation() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
 fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -3604,7 +3595,6 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
 }
 
 #[test]
-#[cfg(feature = "object-store")]
 fn atif_open_agent_teardown_failure_retains_report_until_retry() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -4136,7 +4126,6 @@ fn plugin_signal_rejections_record_runtime_diagnostics() {
 }
 
 #[test]
-#[cfg(feature = "object-store")]
 fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -4220,7 +4209,6 @@ fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
     }
 }
 
-#[cfg(feature = "object-store")]
 fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
     HttpStorageConfig {
         endpoint: endpoint.into(),
@@ -4232,7 +4220,6 @@ fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
 }
 
 #[test]
-#[cfg(feature = "object-store")]
 fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -4306,7 +4293,6 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
 }
 
 #[tokio::test]
-#[cfg(feature = "object-store")]
 async fn post_atif_http_reports_transport_failure() {
     let config = HttpUploadConfig::resolve(
         0,
@@ -4334,7 +4320,6 @@ async fn post_atif_http_reports_transport_failure() {
 }
 
 #[test]
-#[cfg(feature = "object-store")]
 fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
@@ -5246,7 +5231,6 @@ fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
     }
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn plugin_schema_contains_generic_plugin_surface() {
     let schema = plugin_config_schema();

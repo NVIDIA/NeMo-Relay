@@ -154,3 +154,29 @@ mod tests;
 #[cfg(test)]
 #[path = "../../integration/observability/otel_tls_tests.rs"]
 mod tls_tests;
+
+pub(crate) fn shutdown_opentelemetry_subscribers(
+    subscribers: &[Arc<OpenTelemetrySubscriber>],
+    host: &dyn nemo_relay_observability::host::ObservabilityHost,
+) -> Option<OpenTelemetryShutdownFailure> {
+    let mut errors = Vec::new();
+    if let Err(error) = host.flush_subscribers() {
+        errors.push(OpenTelemetryShutdownIssue::other(
+            nemo_relay_observability::otel::OpenTelemetryError::Core(error),
+        ));
+    }
+    errors.extend(shutdown_opentelemetry_providers(subscribers));
+    shutdown_failure_from_errors(errors)
+}
+
+pub(crate) fn shutdown_opentelemetry_providers(
+    subscribers: &[Arc<OpenTelemetrySubscriber>],
+) -> Vec<OpenTelemetryShutdownIssue> {
+    let mut errors = Vec::new();
+    for subscriber in subscribers {
+        if let Err(error) = subscriber.shutdown_provider() {
+            errors.push(OpenTelemetryShutdownIssue::trace(error));
+        }
+    }
+    errors
+}

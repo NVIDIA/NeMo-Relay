@@ -14,7 +14,6 @@ use crate::api::runtime::scope_stack::{
     current_scope_stack, rebind_active_event_to_stack, scope_stack_active, snapshot_scope_stack,
     with_anchored_active_event,
 };
-#[cfg(feature = "worker-grpc")]
 use crate::api::runtime::scope_stack::{
     install_thread_continuation_context, restore_thread_scope_stack, with_scope_stack,
 };
@@ -23,7 +22,6 @@ use crate::api::runtime::subscriber_dispatcher::{
     capture_publication_context, with_task_nested_publication_buffer,
     with_task_publication_context,
 };
-#[cfg(feature = "worker-grpc")]
 use crate::api::runtime::subscriber_dispatcher::{
     with_nested_publication_buffer, with_publication_context,
 };
@@ -89,12 +87,10 @@ impl MiddlewareContinuationContext {
         })
     }
 
-    #[cfg(feature = "worker-grpc")]
     pub(crate) fn scope_stack(&self) -> ScopeStackHandle {
         self.scope_stack.clone()
     }
 
-    #[cfg(feature = "worker-grpc")]
     pub(crate) fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
         struct RestoreThreadContext(Option<crate::api::runtime::ThreadScopeStackBinding>);
 

@@ -13,10 +13,6 @@ readme = "README.md"
 [lints]
 workspace = true
 
-[features]
-default = []
-schema = ["dep:schemars", "nemo-relay-runtime/schema"]
-
 [dependencies]
 nemo-relay-codecs.workspace = true
 nemo-relay-types.workspace = true
@@ -27,14 +23,14 @@ nemo-relay-runtime.workspace = true
 # Third-party dependencies.
 log = { workspace = true, features = ["kv"] }
 regex.workspace = true
-schemars = { workspace = true, optional = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
+nemo-relay = { workspace = true }
 
 # Third-party dependencies.
 futures.workspace = true
