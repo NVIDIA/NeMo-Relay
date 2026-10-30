@@ -847,25 +847,26 @@ print(f"python/plugin/pyproject.toml version updated to {version}")
 PY
 }
 
+# Publish dependencies first, including dev dependencies used in package validation.
 published_cargo_packages() {
     printf '%s\n' \
         nemo-relay-types \
+        nemo-relay-worker-proto \
         nemo-relay-codecs \
         nemo-relay-plugin \
-        nemo-relay-diagnostics \
-        nemo-relay-logging \
-        nemo-relay-model-pricing \
-        nemo-relay-resource-metrics \
-        nemo-relay-observability \
-        nemo-relay-worker-proto \
         nemo-relay-worker \
+        nemo-relay-diagnostics \
+        nemo-relay-model-pricing \
+        nemo-relay-logging \
+        nemo-relay-observability \
+        nemo-relay-resource-metrics \
         nemo-relay-runtime \
         nemo-relay-plugin-host \
-        nemo-relay \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
         nemo-relay-ffi \
-        nemo-relay-cli
+        nemo-relay-cli \
+        nemo-relay
 }
 
 # Keep local wheel packaging aligned with the CI matrix without requiring raw

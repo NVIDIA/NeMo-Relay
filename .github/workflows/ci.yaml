@@ -427,24 +427,25 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
+          # Dependencies first; the standalone Rust SDK is published last.
           packages=(
             nemo-relay-types
+            nemo-relay-worker-proto
             nemo-relay-codecs
             nemo-relay-plugin
-            nemo-relay-diagnostics
-            nemo-relay-logging
-            nemo-relay-model-pricing
-            nemo-relay-resource-metrics
-            nemo-relay-observability
-            nemo-relay-worker-proto
             nemo-relay-worker
+            nemo-relay-diagnostics
+            nemo-relay-model-pricing
+            nemo-relay-logging
+            nemo-relay-observability
+            nemo-relay-resource-metrics
             nemo-relay-runtime
             nemo-relay-plugin-host
-            nemo-relay
             nemo-relay-adaptive
             nemo-relay-pii-redaction
             nemo-relay-ffi
             nemo-relay-cli
+            nemo-relay
           )
           for package in "${packages[@]}"; do
             if cargo info "${package}@${version}" --registry crates-io >/dev/null 2>&1; then
