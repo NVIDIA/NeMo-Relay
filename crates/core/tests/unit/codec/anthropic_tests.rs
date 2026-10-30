@@ -69,6 +69,7 @@ fn full_anthropic_response() -> Json {
             "input_tokens": 1024,
             "output_tokens": 256,
             "cache_creation_input_tokens": 512,
+            "cache_creation": {"ephemeral_1h_input_tokens": 200},
             "cache_read_input_tokens": 0
         }
     })
@@ -103,6 +104,7 @@ fn test_decode_full_response() {
     assert_eq!(usage.total_tokens, Some(1280));
     assert_eq!(usage.cache_read_tokens, Some(0));
     assert_eq!(usage.cache_write_tokens, Some(512));
+    assert_eq!(usage.cache_write_1h_tokens, Some(200));
 }
 
 #[test]

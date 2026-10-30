@@ -94,6 +94,16 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
             "cacheWrite",
         ],
     );
+    let cache_write_1h_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "cache_write_1h_tokens",
+            "cache_creation_1h_input_tokens",
+            "cacheWrite1hTokens",
+            "cacheCreation1hInputTokens",
+        ],
+    );
     let uncached_input_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,
@@ -105,6 +115,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         && reported_total_tokens.is_none()
         && cache_read_tokens.is_none()
         && cache_write_tokens.is_none()
+        && cache_write_1h_tokens.is_none()
         && uncached_input_tokens.is_none()
     {
         return None;
@@ -118,6 +129,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cache_write_1h_tokens,
         uncached_input_tokens,
         cost: None,
     })
