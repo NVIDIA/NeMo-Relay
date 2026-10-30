@@ -27,7 +27,6 @@ mod snapshot_fixture;
 
 /// Sampling ownership and polling lifecycle.
 pub mod manager;
-#[doc(hidden)]
 #[allow(missing_docs)]
 pub(crate) mod memory;
 /// Collect a fresh resource snapshot on a Tokio blocking worker.

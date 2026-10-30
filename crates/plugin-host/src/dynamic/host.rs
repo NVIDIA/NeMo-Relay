@@ -178,8 +178,7 @@ impl PluginHostActivation {
     /// This is for callers that deliberately resolved their own configuration
     /// layers before entering core. Normal embeddings should use
     /// [`initialize`] so core owns discovery and policy resolution.
-    #[doc(hidden)]
-    pub async fn initialize_exact(config: PluginConfig) -> Result<Self> {
+    pub(crate) async fn initialize_exact(config: PluginConfig) -> Result<Self> {
         let resolved_config = super::sanitized_plugin_config(&config);
         let (mut activation, report) = Self::activate_validated(
             config,
@@ -204,8 +203,7 @@ impl PluginHostActivation {
     /// This internal integration hook exists solely for the CLI's managed
     /// Python-environment attestation. Bindings and embedding applications use
     /// [`initialize`].
-    #[doc(hidden)]
-    pub async fn initialize_with_verified_specs<I>(
+    pub(crate) async fn initialize_with_verified_specs<I>(
         config: PluginConfig,
         dynamic_plugins: I,
     ) -> Result<(Self, ConfigReport)>

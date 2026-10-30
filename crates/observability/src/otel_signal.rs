@@ -444,8 +444,7 @@ pub fn automatic_signal_endpoint(
 
 /// Reject malformed percent escapes before the SDK can attach any credentials.
 /// Validate only the header list selected by the SDK's signal-first precedence.
-#[doc(hidden)]
-pub fn validate_automatic_header_environment(signal_variable: &'static str) -> Result<()> {
+pub(crate) fn validate_automatic_header_environment(signal_variable: &'static str) -> Result<()> {
     let (variable, value) = match std::env::var(signal_variable) {
         Ok(value) => (signal_variable, value),
         Err(_) => match std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {
@@ -507,8 +506,7 @@ pub fn automatic_otlp_http_client(signal: &str) -> ExporterInitializationResult<
     super::OpenTelemetryTlsConfig::from_environment(signal)?.http_client(&endpoint, None)
 }
 
-#[doc(hidden)]
-pub fn automatic_otlp_grpc_tls(
+pub(crate) fn automatic_otlp_grpc_tls(
     signal: &str,
 ) -> ExporterInitializationResult<Option<tonic::transport::ClientTlsConfig>> {
     let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))?
@@ -584,8 +582,7 @@ pub fn signal_resource(
     ))
 }
 
-#[doc(hidden)]
-pub fn signal_resource_attributes(
+pub(crate) fn signal_resource_attributes(
     service_name: Option<&str>,
     service_namespace: Option<&str>,
     service_version: Option<&str>,
@@ -609,8 +606,7 @@ pub fn signal_resource_attributes(
     attributes
 }
 
-#[doc(hidden)]
-pub fn canonical_resource_key(attributes: &[KeyValue]) -> String {
+pub(crate) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
     let mut entries = attributes
         .iter()
         .map(|attribute| format!("{}={:?}", attribute.key.as_str(), attribute.value))
@@ -663,8 +659,7 @@ pub fn promoted_signal_resource_attributes(
     (key != base_key).then_some((key, attributes))
 }
 
-#[doc(hidden)]
-pub fn record_metadata_promotion_issues(
+pub(crate) fn record_metadata_promotion_issues(
     runtime_diagnostics: &SignalRuntimeDiagnostics,
     mut issues: Vec<MetadataPromotionIssue>,
     kind: &str,

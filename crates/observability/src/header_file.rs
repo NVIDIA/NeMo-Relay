@@ -17,8 +17,7 @@ use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 #[doc(hidden)]
 pub type HeaderFiles = HashMap<String, String>;
 
-#[doc(hidden)]
-pub fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     match parse_host(host) {
         Some(HostRef::Ip(ip)) => ip.is_loopback(),
         Some(HostRef::Name(name)) => name.eq_ignore_ascii_case("localhost"),
@@ -33,8 +32,7 @@ pub enum HostRef<'a> {
 }
 
 /// Parse a host strictly enough that every HTTP stack resolves it to the same address.
-#[doc(hidden)]
-pub fn parse_host(host: &str) -> Option<HostRef<'_>> {
+pub(crate) fn parse_host(host: &str) -> Option<HostRef<'_>> {
     if let Some(bracketed) = host.strip_prefix('[') {
         let ip = bracketed.strip_suffix(']')?.parse::<Ipv6Addr>().ok()?;
         return Some(HostRef::Ip(ip.into()));
@@ -146,8 +144,7 @@ impl PlaintextPolicy {
 }
 
 /// Reject `insecure_http_hosts` entries that are not a bare hostname or IP address.
-#[doc(hidden)]
-pub fn validate_insecure_http_hosts(hosts: &[String]) -> Result<(), String> {
+pub(crate) fn validate_insecure_http_hosts(hosts: &[String]) -> Result<(), String> {
     PlaintextPolicy::from_hosts(hosts).map(drop)
 }
 
@@ -185,8 +182,7 @@ impl EndpointTransportError {
 }
 
 /// Explain why an endpoint may not carry protected traffic, or return `None` when it may.
-#[doc(hidden)]
-pub fn plaintext_rejection(
+pub(crate) fn plaintext_rejection(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
@@ -219,8 +215,7 @@ pub fn plaintext_rejection(
 }
 
 /// Require HTTPS, or plain HTTP to a destination the policy allows, for OTLP export.
-#[doc(hidden)]
-pub fn validate_otlp_transport(
+pub(crate) fn validate_otlp_transport(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
     signal: &str,
@@ -251,8 +246,7 @@ pub fn has_configured_headers(
     !headers.is_empty() || !header_env.is_empty() || !header_files.is_empty()
 }
 
-#[doc(hidden)]
-pub fn validate_header_destination(
+pub(crate) fn validate_header_destination(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
@@ -267,8 +261,7 @@ pub fn validate_header_destination(
 }
 
 /// Require protected HTTP transport before attaching configured headers.
-#[doc(hidden)]
-pub fn validate_header_http_endpoint(
+pub(crate) fn validate_header_http_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
@@ -285,8 +278,7 @@ pub fn validate_header_http_endpoint_typed(
 }
 
 /// Require protected WebSocket transport before attaching configured headers.
-#[doc(hidden)]
-pub fn validate_header_websocket_endpoint(
+pub(crate) fn validate_header_websocket_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
@@ -330,8 +322,9 @@ pub fn validate_header_files(
 }
 
 /// Read header values immediately before a request. Never include a value in errors.
-#[doc(hidden)]
-pub fn resolve_header_files(header_files: &HeaderFiles) -> Result<HashMap<String, String>, String> {
+pub(crate) fn resolve_header_files(
+    header_files: &HeaderFiles,
+) -> Result<HashMap<String, String>, String> {
     let mut resolved = HashMap::with_capacity(header_files.len());
     for (header, path) in header_files {
         let value = fs::read_to_string(path)

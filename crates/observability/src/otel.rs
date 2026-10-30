@@ -110,8 +110,7 @@ impl IdGenerator for RelayIdGenerator {
     }
 }
 
-#[doc(hidden)]
-pub fn with_relay_ids<T>(uuid: Uuid, build: impl FnOnce() -> T) -> T {
+pub(crate) fn with_relay_ids<T>(uuid: Uuid, build: impl FnOnce() -> T) -> T {
     #[doc(hidden)]
     pub struct ResetPendingIds;
 
@@ -291,8 +290,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
-#[doc(hidden)]
-pub fn trace_endpoint_log_identity(endpoint: &str) -> String {
+pub(crate) fn trace_endpoint_log_identity(endpoint: &str) -> String {
     if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
         return "the environment-configured OTLP endpoint".to_string();
     }
@@ -317,8 +315,7 @@ pub fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-#[doc(hidden)]
-pub fn validate_trace_endpoint(
+pub(crate) fn validate_trace_endpoint(
     endpoint: &str,
     plaintext: &PlaintextPolicy,
 ) -> ExporterInitializationResult<()> {
@@ -1368,8 +1365,7 @@ impl OpenTelemetrySubscriber {
     }
 }
 
-#[doc(hidden)]
-pub fn flush_trace_providers(
+pub(crate) fn flush_trace_providers(
     provider: SdkTracerProvider,
     dynamic_providers: Vec<SdkTracerProvider>,
 ) -> std::result::Result<(), String> {
@@ -1385,8 +1381,7 @@ pub fn flush_trace_providers(
     errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn shutdown_trace_providers(
+pub(crate) fn shutdown_trace_providers(
     provider: SdkTracerProvider,
     dynamic_providers: Vec<SdkTracerProvider>,
 ) -> std::result::Result<(), String> {
@@ -1409,8 +1404,7 @@ pub fn shutdown_trace_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn build_owned_tracer_provider(
+pub(crate) fn build_owned_tracer_provider(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 ) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
@@ -1418,8 +1412,7 @@ pub fn build_owned_tracer_provider(
     build_owned_tracer_provider_with_resource(config, runtime_diagnostics, resource_attributes)
 }
 
-#[doc(hidden)]
-pub fn build_owned_tracer_provider_with_resource(
+pub(crate) fn build_owned_tracer_provider_with_resource(
     config: TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
@@ -1472,8 +1465,7 @@ pub fn build_owned_tracer_provider_with_resource(
     ))
 }
 
-#[doc(hidden)]
-pub fn reject_global_header_environment() -> Result<()> {
+pub(crate) fn reject_global_header_environment() -> Result<()> {
     for variable in [
         "OTEL_EXPORTER_OTLP_HEADERS",
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
@@ -1485,8 +1477,7 @@ pub fn reject_global_header_environment() -> Result<()> {
     Ok(())
 }
 
-#[doc(hidden)]
-pub fn validate_headers(headers: &HashMap<String, String>) -> Result<()> {
+pub(crate) fn validate_headers(headers: &HashMap<String, String>) -> Result<()> {
     let mut normalized = HashSet::new();
     for (key, value) in headers {
         let normalized_key = key.to_ascii_lowercase();
@@ -1512,19 +1503,7 @@ pub fn validate_headers(headers: &HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
-#[doc(hidden)]
-pub fn build_tracer_provider(
-    config: &OpenTelemetryConfig,
-    runtime_diagnostics: SignalRuntimeDiagnostics,
-) -> Result<SdkTracerProvider> {
-    let config = TraceConfig::Endpoint(config.clone());
-    let attributes = configured_resource_attributes(&config);
-    build_tracer_provider_with_resource(&config, runtime_diagnostics, attributes)
-        .map_err(OpenTelemetryError::from)
-}
-
-#[doc(hidden)]
-pub fn build_tracer_provider_with_resource(
+pub(crate) fn build_tracer_provider_with_resource(
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
     resource_attributes: Vec<KeyValue>,
@@ -1552,8 +1531,7 @@ pub fn build_tracer_provider_with_resource(
 }
 
 /// Builds the OTLP network exporter for an endpoint destination.
-#[doc(hidden)]
-pub fn otlp_span_exporter(
+pub(crate) fn otlp_span_exporter(
     settings: &OpenTelemetryConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
 ) -> ExporterInitializationResult<OtlpSpanExporter> {
@@ -1663,8 +1641,7 @@ pub fn otlp_span_exporter(
 }
 
 /// Wraps any span exporter in the shared provider, batching, and diagnostics.
-#[doc(hidden)]
-pub fn provider_with_exporter<E: SpanExporter + 'static>(
+pub(crate) fn provider_with_exporter<E: SpanExporter + 'static>(
     exporter: E,
     config: &TraceConfig,
     runtime_diagnostics: SignalRuntimeDiagnostics,
@@ -1704,8 +1681,7 @@ pub fn provider_with_exporter<E: SpanExporter + 'static>(
     Ok(provider)
 }
 
-#[doc(hidden)]
-pub fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
+pub(crate) fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
     if matches!(config, TraceConfig::Endpoint(endpoint) if endpoint.automatic) {
         return Vec::new();
     }
@@ -1729,8 +1705,7 @@ pub fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn canonical_resource_key(attributes: &[KeyValue]) -> String {
+pub(crate) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
     let mut entries = attributes
         .iter()
         .map(|attribute| format!("{}={:?}", attribute.key.as_str(), attribute.value))
@@ -1787,8 +1762,7 @@ impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
 }
 
 /// Return a safe reason for TLS failures that must stop the exporter.
-#[doc(hidden)]
-pub fn safe_tls_failure_reason(
+pub(crate) fn safe_tls_failure_reason(
     mut error: &(dyn std::error::Error + 'static),
 ) -> Option<&'static str> {
     loop {
@@ -2201,8 +2175,7 @@ pub struct ResourcePipelineRequest {
     pub fallback_tracer: SdkTracer,
 }
 
-#[doc(hidden)]
-pub fn ensure_dynamic_pipeline(
+pub(crate) fn ensure_dynamic_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicTracePipeline>>,
     request: ResourcePipelineRequest,
 ) -> Option<SdkTracer> {
@@ -3159,13 +3132,11 @@ impl OtelEventProcessor {
     }
 }
 
-#[doc(hidden)]
-pub fn metadata_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+pub(crate) fn metadata_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
     event.metadata()?.get(key)?.as_str()
 }
 
-#[doc(hidden)]
-pub fn span_kind(event: &EventView<'_>) -> SpanKind {
+pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
     match semantic_scope_type(event) {
         Some(ScopeType::Llm) => SpanKind::Client,
         Some(
@@ -3180,13 +3151,11 @@ pub fn span_name(event: &EventView<'_>) -> String {
     event.name().to_string()
 }
 
-#[doc(hidden)]
-pub fn semantic_scope_type(event: &EventView<'_>) -> Option<ScopeType> {
+pub(crate) fn semantic_scope_type(event: &EventView<'_>) -> Option<ScopeType> {
     event.scope_type()
 }
 
-#[doc(hidden)]
-pub fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
+pub(crate) fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
     match scope_type {
         Some(ScopeType::Agent) => "agent",
         Some(ScopeType::Function) => "function",
@@ -3243,16 +3212,14 @@ pub fn end_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn push_optimization_attributes(
+pub(crate) fn push_optimization_attributes(
     attributes: &mut Vec<KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
     crate::push_common_optimization_attributes(attributes, summary);
 }
 
-#[doc(hidden)]
-pub fn cost_from_llm_event(event: &EventView<'_>) -> Option<(f64, String)> {
+pub(crate) fn cost_from_llm_event(event: &EventView<'_>) -> Option<(f64, String)> {
     if let Some(response) = event.normalized_llm_response() {
         let response = response.as_ref();
         if let Some(usage) = response.usage.as_ref() {
@@ -3284,13 +3251,11 @@ pub fn cost_from_llm_event(event: &EventView<'_>) -> Option<(f64, String)> {
     .and_then(|cost| cost_total_and_currency(&cost))
 }
 
-#[doc(hidden)]
-pub fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
+pub(crate) fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
     Some((cost.total_or_component_sum()?, cost.currency.clone()))
 }
 
-#[doc(hidden)]
-pub fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+pub(crate) fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
@@ -3326,8 +3291,7 @@ pub fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+pub(crate) fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
         KeyValue::new(
@@ -3356,8 +3320,7 @@ pub fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
+pub(crate) fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
     SpanContext::new(
         span_context.trace_id(),
         span_context.span_id(),
@@ -3368,8 +3331,7 @@ pub fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
 }
 
 /// OTLP encodes timestamps as an unsigned 64-bit count of nanoseconds since Unix epoch.
-#[doc(hidden)]
-pub fn accept_otlp_timestamp(
+pub(crate) fn accept_otlp_timestamp(
     event: &EventView<'_>,
     diagnostics: &SignalRuntimeDiagnostics,
 ) -> bool {
@@ -3396,8 +3358,7 @@ pub fn accept_otlp_timestamp(
     valid
 }
 
-#[doc(hidden)]
-pub fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
+pub(crate) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
     let seconds = timestamp.timestamp();
     let nanos = timestamp.timestamp_subsec_nanos();
     if seconds >= 0 {

@@ -14,7 +14,6 @@ pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     open_or_create_private_dir(path).map(drop)
 }
 
-#[doc(hidden)]
 fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -82,8 +81,7 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
     Ok(current)
 }
 
-#[doc(hidden)]
-pub fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {
+pub(crate) fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {
     let (parent, filename) = prepare_confined_parent(root, path)?;
     parent.open_private_file(&filename, append)
 }
@@ -122,7 +120,6 @@ pub fn atomic_private_write(root: &Path, path: &Path, payload: &[u8]) -> io::Res
     }))
 }
 
-#[doc(hidden)]
 fn prepare_confined_parent(root: &Path, path: &Path) -> io::Result<(ConfinedDir, OsString)> {
     let mut current = open_or_create_private_dir(root)?;
     let relative = path.strip_prefix(root).map_err(|_| {

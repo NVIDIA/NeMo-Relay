@@ -26,8 +26,7 @@ use opentelemetry::KeyValue;
 use opentelemetry::trace::SpanKind;
 use serde::Serialize;
 
-#[doc(hidden)]
-pub fn span_kind(event: &EventView<'_>) -> SpanKind {
+pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
     match semantic_scope_type(event) {
         Some(ScopeType::Llm) => SpanKind::Client,
         Some(
@@ -42,13 +41,11 @@ pub fn span_name(event: &EventView<'_>) -> String {
     event.name().to_string()
 }
 
-#[doc(hidden)]
-pub fn semantic_scope_type(event: &EventView<'_>) -> Option<ScopeType> {
+pub(crate) fn semantic_scope_type(event: &EventView<'_>) -> Option<ScopeType> {
     event.scope_type()
 }
 
-#[doc(hidden)]
-pub fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
+pub(crate) fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
     match scope_type {
         Some(ScopeType::Agent) => "agent",
         Some(ScopeType::Function) => "function",
@@ -175,8 +172,7 @@ pub fn end_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn push_llm_usage_attributes(
+pub(crate) fn push_llm_usage_attributes(
     attributes: &mut Vec<KeyValue>,
     provider: Option<&str>,
     response: Option<&AnnotatedLlmResponse>,
@@ -208,8 +204,7 @@ pub fn push_llm_usage_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(request) = event.annotated_request() {
         push_annotated_request_attributes(attributes, request);
         return;
@@ -230,8 +225,7 @@ pub fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event
     }
 }
 
-#[doc(hidden)]
-pub fn push_llm_response_attributes(
+pub(crate) fn push_llm_response_attributes(
     attributes: &mut Vec<KeyValue>,
     event: &EventView<'_>,
     normalized: Option<&AnnotatedLlmResponse>,
@@ -253,8 +247,7 @@ pub fn push_llm_response_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_annotated_request_attributes(
+pub(crate) fn push_annotated_request_attributes(
     attributes: &mut Vec<KeyValue>,
     request: &AnnotatedLlmRequest,
 ) {
@@ -273,8 +266,7 @@ pub fn push_annotated_request_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_annotated_response_attributes(
+pub(crate) fn push_annotated_response_attributes(
     attributes: &mut Vec<KeyValue>,
     response: &AnnotatedLlmResponse,
 ) {
@@ -310,16 +302,14 @@ pub fn push_annotated_response_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_optimization_attributes(
+pub(crate) fn push_optimization_attributes(
     attributes: &mut Vec<KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
     crate::push_common_optimization_attributes(attributes, summary);
 }
 
-#[doc(hidden)]
-pub fn push_annotated_input_messages(
+pub(crate) fn push_annotated_input_messages(
     attributes: &mut Vec<KeyValue>,
     messages: &[Message],
     start_index: usize,
@@ -400,8 +390,7 @@ pub fn push_annotated_input_messages(
     }
 }
 
-#[doc(hidden)]
-pub fn exclusive_tool_result_parts(content: &MessageContent) -> Option<&[ContentPart]> {
+pub(crate) fn exclusive_tool_result_parts(content: &MessageContent) -> Option<&[ContentPart]> {
     let MessageContent::Parts(parts) = content else {
         return None;
     };
@@ -412,8 +401,7 @@ pub fn exclusive_tool_result_parts(content: &MessageContent) -> Option<&[Content
     .then_some(parts)
 }
 
-#[doc(hidden)]
-pub fn push_tool_result_input_message(
+pub(crate) fn push_tool_result_input_message(
     attributes: &mut Vec<KeyValue>,
     index: usize,
     tool_call_id: &str,
@@ -432,24 +420,21 @@ pub fn push_tool_result_input_message(
     ));
 }
 
-#[doc(hidden)]
-pub fn tool_message_content(content: &MessageContent) -> Option<String> {
+pub(crate) fn tool_message_content(content: &MessageContent) -> Option<String> {
     match content {
         MessageContent::Text(text) => Some(text.clone()),
         MessageContent::Parts(parts) => to_json_string(parts),
     }
 }
 
-#[doc(hidden)]
-pub fn tool_result_content(content: &Json) -> String {
+pub(crate) fn tool_result_content(content: &Json) -> String {
     match content {
         Json::String(text) => text.clone(),
         value => value.to_string(),
     }
 }
 
-#[doc(hidden)]
-pub fn push_annotated_tools(attributes: &mut Vec<KeyValue>, tools: &[ToolDefinition]) {
+pub(crate) fn push_annotated_tools(attributes: &mut Vec<KeyValue>, tools: &[ToolDefinition]) {
     for (index, tool) in tools.iter().enumerate() {
         if let Some(json) = to_json_string(tool) {
             attributes.push(KeyValue::new(
@@ -460,8 +445,7 @@ pub fn push_annotated_tools(attributes: &mut Vec<KeyValue>, tools: &[ToolDefinit
     }
 }
 
-#[doc(hidden)]
-pub fn push_response_tool_calls(
+pub(crate) fn push_response_tool_calls(
     attributes: &mut Vec<KeyValue>,
     message_index: usize,
     tool_calls: &[ResponseToolCall],
@@ -478,8 +462,7 @@ pub fn push_response_tool_calls(
     }
 }
 
-#[doc(hidden)]
-pub fn push_message_role(
+pub(crate) fn push_message_role(
     attributes: &mut Vec<KeyValue>,
     prefix: &'static str,
     index: usize,
@@ -491,8 +474,7 @@ pub fn push_message_role(
     ));
 }
 
-#[doc(hidden)]
-pub fn push_message_text_value(
+pub(crate) fn push_message_text_value(
     attributes: &mut Vec<KeyValue>,
     prefix: &'static str,
     index: usize,
@@ -504,8 +486,7 @@ pub fn push_message_text_value(
     ));
 }
 
-#[doc(hidden)]
-pub fn message_content_text(content: &MessageContent) -> Option<String> {
+pub(crate) fn message_content_text(content: &MessageContent) -> Option<String> {
     match content {
         MessageContent::Text(text) => display_text_from_string(text),
         MessageContent::Parts(parts) => {
@@ -529,15 +510,13 @@ pub fn message_content_text(content: &MessageContent) -> Option<String> {
     }
 }
 
-#[doc(hidden)]
-pub fn replay_llm_payload(input: &Json) -> Option<&Json> {
+pub(crate) fn replay_llm_payload(input: &Json) -> Option<&Json> {
     let content = input.as_object().and_then(|object| object.get("content"))?;
     let content_object = content.as_object()?;
     is_openclaw_replay_payload(content_object).then_some(content)
 }
 
-#[doc(hidden)]
-pub fn replay_llm_response(output: &Json) -> Option<&Json> {
+pub(crate) fn replay_llm_response(output: &Json) -> Option<&Json> {
     output
         .as_object()
         .and_then(|object| object.get("openclaw"))
@@ -545,8 +524,7 @@ pub fn replay_llm_response(output: &Json) -> Option<&Json> {
         .map(|_| output)
 }
 
-#[doc(hidden)]
-pub fn is_openclaw_replay_payload(content: &serde_json::Map<String, Json>) -> bool {
+pub(crate) fn is_openclaw_replay_payload(content: &serde_json::Map<String, Json>) -> bool {
     content
         .get("source")
         .and_then(Json::as_str)
@@ -554,8 +532,7 @@ pub fn is_openclaw_replay_payload(content: &serde_json::Map<String, Json>) -> bo
         || content.contains_key("placeholderRequest")
 }
 
-#[doc(hidden)]
-pub fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) {
+pub(crate) fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) {
     let mut next_index = 0usize;
     if let Some(system_prompt) = input.get("systemPrompt").and_then(display_text_from_json) {
         push_message_role(attributes, "llm.input_messages", next_index, "system");
@@ -585,8 +562,7 @@ pub fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) 
     }
 }
 
-#[doc(hidden)]
-pub fn push_replay_input_message(
+pub(crate) fn push_replay_input_message(
     attributes: &mut Vec<KeyValue>,
     index: usize,
     message: &Json,
@@ -608,8 +584,7 @@ pub fn push_replay_input_message(
     true
 }
 
-#[doc(hidden)]
-pub fn push_replay_response_attributes(attributes: &mut Vec<KeyValue>, output: &Json) {
+pub(crate) fn push_replay_response_attributes(attributes: &mut Vec<KeyValue>, output: &Json) {
     if output.get("role").is_none()
         && output.get("content").is_none()
         && output.get("tool_calls").is_none()
@@ -632,8 +607,7 @@ pub fn push_replay_response_attributes(attributes: &mut Vec<KeyValue>, output: &
     }
 }
 
-#[doc(hidden)]
-pub fn push_raw_output_tool_calls(
+pub(crate) fn push_raw_output_tool_calls(
     attributes: &mut Vec<KeyValue>,
     message_index: usize,
     tool_calls: &[Json],
@@ -657,8 +631,7 @@ pub fn push_raw_output_tool_calls(
 
 // Raw replay payloads are an OpenInference-local fallback. Provider-shaped
 // responses should use codec-normalized response tool calls instead.
-#[doc(hidden)]
-pub fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
+pub(crate) fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
     tool_call
         .get("id")
         .or_else(|| tool_call.get("tool_call_id"))
@@ -666,8 +639,7 @@ pub fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
         .and_then(Json::as_str)
 }
 
-#[doc(hidden)]
-pub fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
+pub(crate) fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
     tool_call
         .get("name")
         .and_then(Json::as_str)
@@ -682,8 +654,7 @@ pub fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
         .or_else(|| tool_call.get("function_name").and_then(Json::as_str))
 }
 
-#[doc(hidden)]
-pub fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
+pub(crate) fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
     tool_call
         .get("function")
         .and_then(|function| function.get("arguments"))
@@ -692,8 +663,7 @@ pub fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
         .or_else(|| tool_call.get("input"))
 }
 
-#[doc(hidden)]
-pub fn push_output_tool_call(
+pub(crate) fn push_output_tool_call(
     attributes: &mut Vec<KeyValue>,
     message_index: usize,
     call_index: usize,
@@ -727,8 +697,7 @@ pub fn push_output_tool_call(
     }
 }
 
-#[doc(hidden)]
-pub fn finish_reason_value(reason: &FinishReason) -> String {
+pub(crate) fn finish_reason_value(reason: &FinishReason) -> String {
     match reason {
         FinishReason::Complete => "complete".to_string(),
         FinishReason::Length => "length".to_string(),
@@ -738,8 +707,7 @@ pub fn finish_reason_value(reason: &FinishReason) -> String {
     }
 }
 
-#[doc(hidden)]
-pub fn cost_total_from_llm_event(
+pub(crate) fn cost_total_from_llm_event(
     event: &EventView<'_>,
     normalized_response: Option<&AnnotatedLlmResponse>,
     fallback_usage: Option<&Usage>,
@@ -775,8 +743,7 @@ pub fn cost_total_from_llm_event(
     .and_then(|cost| cost.total_for_currency("USD"))
 }
 
-#[doc(hidden)]
-pub fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+pub(crate) fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
@@ -812,8 +779,10 @@ pub fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn push_projected_mark_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_projected_mark_attributes(
+    attributes: &mut Vec<KeyValue>,
+    event: &EventView<'_>,
+) {
     let mark_name = event.name().to_string();
     attributes.push(KeyValue::new("tool.name", mark_name.clone()));
     attributes.push(KeyValue::new("tool_call.function.name", mark_name));
@@ -827,30 +796,25 @@ pub fn push_projected_mark_attributes(attributes: &mut Vec<KeyValue>, event: &Ev
     }
 }
 
-#[doc(hidden)]
-pub fn remove_start_model_name(attributes: &mut Vec<KeyValue>) {
+pub(crate) fn remove_start_model_name(attributes: &mut Vec<KeyValue>) {
     attributes.retain(|attribute| attribute.key.as_str() != "llm.model_name");
 }
 
-#[doc(hidden)]
-pub fn push_model_name(attributes: &mut Vec<KeyValue>, model_name: String) {
+pub(crate) fn push_model_name(attributes: &mut Vec<KeyValue>, model_name: String) {
     attributes.push(KeyValue::new("llm.model_name", model_name));
 }
 
-#[doc(hidden)]
-pub fn push_orphan_mark_attributes(attributes: &mut Vec<KeyValue>) {
+pub(crate) fn push_orphan_mark_attributes(attributes: &mut Vec<KeyValue>) {
     attributes.push(KeyValue::new("openinference.span.kind", "CHAIN"));
     attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
 }
 
-#[doc(hidden)]
-pub fn push_tool_mark_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_tool_mark_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     attributes.push(KeyValue::new("openinference.span.kind", "TOOL"));
     push_projected_mark_attributes(attributes, event);
 }
 
-#[doc(hidden)]
-pub fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+pub(crate) fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new(
             "openinference.span.kind",
@@ -884,8 +848,7 @@ pub fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
     attributes
 }
 
-#[doc(hidden)]
-pub fn openinference_span_kind(scope_type: Option<ScopeType>) -> &'static str {
+pub(crate) fn openinference_span_kind(scope_type: Option<ScopeType>) -> &'static str {
     match scope_type {
         Some(ScopeType::Agent) => "AGENT",
         Some(ScopeType::Tool) => "TOOL",
@@ -899,8 +862,7 @@ pub fn openinference_span_kind(scope_type: Option<ScopeType>) -> &'static str {
     }
 }
 
-#[doc(hidden)]
-pub fn openinference_input_value(event: &EventView<'_>) -> Option<(String, &'static str)> {
+pub(crate) fn openinference_input_value(event: &EventView<'_>) -> Option<(String, &'static str)> {
     let input = event.input()?;
 
     if event
@@ -915,16 +877,14 @@ pub fn openinference_input_value(event: &EventView<'_>) -> Option<(String, &'sta
     to_json_string(input).map(|json| (json, "application/json"))
 }
 
-#[doc(hidden)]
-pub fn openinference_output_value(event: &EventView<'_>) -> Option<(String, &'static str)> {
+pub(crate) fn openinference_output_value(event: &EventView<'_>) -> Option<(String, &'static str)> {
     let output = event.output()?;
     display_text_from_json(output)
         .map(|display| (display, "text/plain"))
         .or_else(|| to_json_string(output).map(|json| (json, "application/json")))
 }
 
-#[doc(hidden)]
-pub fn llm_input_display_value(input: &Json) -> Option<String> {
+pub(crate) fn llm_input_display_value(input: &Json) -> Option<String> {
     let content = match input {
         Json::Object(object) => object.get("content").unwrap_or(input),
         _ => input,
@@ -936,8 +896,7 @@ pub fn llm_input_display_value(input: &Json) -> Option<String> {
         .or_else(|| display_text_from_json(content))
 }
 
-#[doc(hidden)]
-pub fn sanitized_llm_input_json(input: &Json) -> Option<String> {
+pub(crate) fn sanitized_llm_input_json(input: &Json) -> Option<String> {
     match input {
         Json::Object(object) => {
             let mut sanitized = object.clone();
@@ -948,8 +907,7 @@ pub fn sanitized_llm_input_json(input: &Json) -> Option<String> {
     }
 }
 
-#[doc(hidden)]
-pub fn display_text_from_json(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_json(value: &Json) -> Option<String> {
     match value {
         Json::String(text) => display_text_from_string(text),
         Json::Object(object) => {
@@ -977,8 +935,7 @@ pub fn display_text_from_json(value: &Json) -> Option<String> {
     }
 }
 
-#[doc(hidden)]
-pub fn display_text_from_openai_responses_output(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_openai_responses_output(value: &Json) -> Option<String> {
     let items = value.as_array()?;
     let mut entries = Vec::new();
     let mut tool_names = Vec::new();
@@ -1010,8 +967,7 @@ pub fn display_text_from_openai_responses_output(value: &Json) -> Option<String>
     if text.is_empty() { None } else { Some(text) }
 }
 
-#[doc(hidden)]
-pub fn display_text_from_openai_responses_content(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_openai_responses_content(value: &Json) -> Option<String> {
     let content = value.as_array()?;
     let text = content
         .iter()
@@ -1029,8 +985,7 @@ pub fn display_text_from_openai_responses_content(value: &Json) -> Option<String
     if text.is_empty() { None } else { Some(text) }
 }
 
-#[doc(hidden)]
-pub fn display_text_from_messages(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_messages(value: &Json) -> Option<String> {
     let messages = value.as_array()?;
     let text = messages
         .iter()
@@ -1042,8 +997,7 @@ pub fn display_text_from_messages(value: &Json) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-#[doc(hidden)]
-pub fn display_text_from_message(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_message(value: &Json) -> Option<String> {
     let role = value
         .get("role")
         .and_then(Json::as_str)
@@ -1062,8 +1016,7 @@ pub fn display_text_from_message(value: &Json) -> Option<String> {
     Some(format!("{role}: {display}"))
 }
 
-#[doc(hidden)]
-pub fn display_text_from_string(text: &str) -> Option<String> {
+pub(crate) fn display_text_from_string(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
@@ -1076,8 +1029,7 @@ pub fn display_text_from_string(text: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-#[doc(hidden)]
-pub fn display_text_from_chat_choices(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_chat_choices(value: &Json) -> Option<String> {
     let choices = value.as_array()?;
     for choice in choices {
         let Some(message) = choice.get("message") else {
@@ -1097,8 +1049,7 @@ pub fn display_text_from_chat_choices(value: &Json) -> Option<String> {
     None
 }
 
-#[doc(hidden)]
-pub fn display_text_from_content_blocks(items: &[Json]) -> Option<String> {
+pub(crate) fn display_text_from_content_blocks(items: &[Json]) -> Option<String> {
     let mut entries = items
         .iter()
         .filter_map(content_block_display_text)
@@ -1117,8 +1068,7 @@ pub fn display_text_from_content_blocks(items: &[Json]) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-#[doc(hidden)]
-pub fn content_block_display_text(item: &Json) -> Option<String> {
+pub(crate) fn content_block_display_text(item: &Json) -> Option<String> {
     if let Some(text) = item.as_str() {
         return Some(text.to_string());
     }
@@ -1133,8 +1083,7 @@ pub fn content_block_display_text(item: &Json) -> Option<String> {
     item.get("text").and_then(Json::as_str).map(str::to_string)
 }
 
-#[doc(hidden)]
-pub fn display_text_from_tool_calls(value: &Json) -> Option<String> {
+pub(crate) fn display_text_from_tool_calls(value: &Json) -> Option<String> {
     let calls = value.as_array()?;
     let names = calls.iter().filter_map(tool_call_name).collect::<Vec<_>>();
     if names.is_empty() {
@@ -1144,8 +1093,7 @@ pub fn display_text_from_tool_calls(value: &Json) -> Option<String> {
     }
 }
 
-#[doc(hidden)]
-pub fn tool_call_name(value: &Json) -> Option<String> {
+pub(crate) fn tool_call_name(value: &Json) -> Option<String> {
     value
         .get("name")
         .and_then(Json::as_str)

@@ -335,7 +335,6 @@ pub struct AtifTrajectory {
 // AtifExporter
 // ---------------------------------------------------------------------------
 
-#[doc(hidden)]
 pub(crate) struct AtifExporterState {
     pub(crate) session_id: String,
     pub(crate) trajectory_id: String,
@@ -467,8 +466,7 @@ impl AtifExporter {
 /// return the inner `content` value. Otherwise return the input unchanged.
 ///
 /// This avoids leaking the NeMo Relay transport wrapper into the trajectory.
-#[doc(hidden)]
-pub fn unwrap_llm_request(input: &Json) -> Json {
+pub(crate) fn unwrap_llm_request(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && obj.contains_key("content")
         && obj.contains_key("headers")
@@ -484,8 +482,7 @@ pub fn unwrap_llm_request(input: &Json) -> Json {
 /// ATIF agent message.
 /// Tool-call-only responses use an empty string message and keep the full
 /// response under `Step.extra.llm_response`.
-#[doc(hidden)]
-pub fn extract_llm_response_message(output: &Json) -> Json {
+pub(crate) fn extract_llm_response_message(output: &Json) -> Json {
     let Some(obj) = output.as_object() else {
         return atif_content_value(output);
     };
@@ -497,8 +494,7 @@ pub fn extract_llm_response_message(output: &Json) -> Json {
     atif_content_value(output)
 }
 
-#[doc(hidden)]
-pub fn extract_object_llm_response_message(
+pub(crate) fn extract_object_llm_response_message(
     output: &Json,
     obj: &serde_json::Map<String, Json>,
 ) -> Option<Json> {
@@ -522,31 +518,29 @@ pub fn extract_object_llm_response_message(
     tool_call_array(output).map(|_| empty_message())
 }
 
-#[doc(hidden)]
-pub fn extract_content_message(output: &Json, content: &Json) -> Json {
+pub(crate) fn extract_content_message(output: &Json, content: &Json) -> Json {
     anthropic_messages_content_message(output, content)
         .unwrap_or_else(|| atif_content_value(content))
 }
 
-#[doc(hidden)]
-pub fn assistant_message_content(obj: &serde_json::Map<String, Json>) -> Option<Json> {
+pub(crate) fn assistant_message_content(obj: &serde_json::Map<String, Json>) -> Option<Json> {
     obj.get("assistant_message")
         .and_then(Json::as_object)
         .and_then(|assistant| non_null_object_field(assistant, "content"))
 }
 
-#[doc(hidden)]
-pub fn non_null_object_field(obj: &serde_json::Map<String, Json>, key: &str) -> Option<Json> {
+pub(crate) fn non_null_object_field(
+    obj: &serde_json::Map<String, Json>,
+    key: &str,
+) -> Option<Json> {
     obj.get(key).filter(|value| !value.is_null()).cloned()
 }
 
-#[doc(hidden)]
-pub fn empty_message() -> Json {
+pub(crate) fn empty_message() -> Json {
     Json::String(String::new())
 }
 
-#[doc(hidden)]
-pub fn atif_content_value(value: &Json) -> Json {
+pub(crate) fn atif_content_value(value: &Json) -> Json {
     match value {
         Json::String(_) => value.clone(),
         Json::Null => empty_message(),
@@ -568,8 +562,7 @@ pub fn atif_content_value(value: &Json) -> Json {
 }
 
 /// Project only displayable user content; the full request stays in `extra.llm_request`.
-#[doc(hidden)]
-pub fn atif_user_content_value(value: &Json) -> Json {
+pub(crate) fn atif_user_content_value(value: &Json) -> Json {
     let Some(parts) = value.as_array() else {
         return atif_content_value(value);
     };
@@ -582,8 +575,7 @@ pub fn atif_user_content_value(value: &Json) -> Json {
     atif_content_value(&supported)
 }
 
-#[doc(hidden)]
-pub fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<Json> {
+pub(crate) fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<Json> {
     let object = output.as_object()?;
     if object.get("type").and_then(Json::as_str) != Some("message") {
         return None;
@@ -615,8 +607,7 @@ pub fn anthropic_messages_content_message(output: &Json, content: &Json) -> Opti
     }
 }
 
-#[doc(hidden)]
-pub fn observation_content_value(value: &Json) -> Option<Json> {
+pub(crate) fn observation_content_value(value: &Json) -> Option<Json> {
     let value = nemo_relay_types::codec::tool::projected_tool_result(value)
         .map_or(value, |(content, _)| content);
     match value {
@@ -625,8 +616,7 @@ pub fn observation_content_value(value: &Json) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn observation_extra(
+pub(crate) fn observation_extra(
     event: &EventView<'_>,
     output: Option<&Json>,
     content: Option<&Json>,
@@ -654,8 +644,7 @@ pub fn observation_extra(
 
 /// Strip each content part to its ATIF fields. Returns `None` unless `value` is an array of
 /// supported text and image parts, so callers never emit a partially converted array.
-#[doc(hidden)]
-pub fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
+pub(crate) fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
     value
         .as_array()?
         .iter()
@@ -664,8 +653,7 @@ pub fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
         .map(Json::Array)
 }
 
-#[doc(hidden)]
-pub fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
+pub(crate) fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
     match part.get("type")?.as_str()? {
         "text" => Some(serde_json::json!({
             "type": "text",
@@ -679,8 +667,7 @@ pub fn canonicalize_atif_content_part(part: &Json) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn atif_image_source(source: &Json) -> Option<Json> {
+pub(crate) fn atif_image_source(source: &Json) -> Option<Json> {
     let media_type = source.get("media_type")?.as_str()?;
     let path = source.get("path")?.as_str()?;
     match media_type {
@@ -691,13 +678,11 @@ pub fn atif_image_source(source: &Json) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn json_to_string(value: &Json) -> String {
+pub(crate) fn json_to_string(value: &Json) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-#[doc(hidden)]
-pub fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
+pub(crate) fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
     let object = output.as_object()?;
     object
         .get("raw_response")
@@ -712,8 +697,7 @@ pub fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&
         .and_then(|message| message.get(field))
 }
 
-#[doc(hidden)]
-pub fn openai_responses_output_message(output: &Json) -> Option<Json> {
+pub(crate) fn openai_responses_output_message(output: &Json) -> Option<Json> {
     let object = output.as_object()?;
     if let Some(output_text) = object.get("output_text").and_then(Json::as_str) {
         return Some(Json::String(output_text.to_string()));
@@ -732,8 +716,7 @@ pub fn openai_responses_output_message(output: &Json) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn collect_openai_responses_output_text(item: &Json, text_parts: &mut Vec<String>) {
+pub(crate) fn collect_openai_responses_output_text(item: &Json, text_parts: &mut Vec<String>) {
     let Some(item_obj) = item.as_object() else {
         return;
     };
@@ -752,8 +735,7 @@ pub fn collect_openai_responses_output_text(item: &Json, text_parts: &mut Vec<St
     }
 }
 
-#[doc(hidden)]
-pub fn collect_openai_responses_content_text(
+pub(crate) fn collect_openai_responses_content_text(
     content: &[Json],
     block_type: &str,
     text_parts: &mut Vec<String>,
@@ -808,8 +790,7 @@ pub const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 /// Supports NeMo Relay `token_usage` and provider-native `usage` payloads.
 /// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
 /// Returns `None` if the response has no recognized token or cost metrics.
-#[doc(hidden)]
-pub fn extract_metrics(
+pub(crate) fn extract_metrics(
     pricing: &dyn nemo_relay_types::codec::pricing::CostEstimator,
     output: &Json,
     provider: Option<&str>,
@@ -927,8 +908,7 @@ pub fn extract_metrics(
     })
 }
 
-#[doc(hidden)]
-pub fn merge_metrics(
+pub(crate) fn merge_metrics(
     primary: Option<AtifMetrics>,
     supplemental: Option<&AtifMetrics>,
 ) -> Option<AtifMetrics> {
@@ -943,8 +923,7 @@ pub fn merge_metrics(
     }
 }
 
-#[doc(hidden)]
-pub fn merge_metrics_fields(target: &mut AtifMetrics, supplemental: &AtifMetrics) {
+pub(crate) fn merge_metrics_fields(target: &mut AtifMetrics, supplemental: &AtifMetrics) {
     if target.prompt_tokens.is_none() {
         target.prompt_tokens = supplemental.prompt_tokens;
     }
@@ -969,8 +948,7 @@ pub fn merge_metrics_fields(target: &mut AtifMetrics, supplemental: &AtifMetrics
     merge_metrics_extra(&mut target.extra, &supplemental.extra);
 }
 
-#[doc(hidden)]
-pub fn merge_metrics_extra(target: &mut Option<Json>, supplemental: &Option<Json>) {
+pub(crate) fn merge_metrics_extra(target: &mut Option<Json>, supplemental: &Option<Json>) {
     let Some(supplemental) = supplemental else {
         return;
     };
@@ -987,8 +965,7 @@ pub fn merge_metrics_extra(target: &mut Option<Json>, supplemental: &Option<Json
     }
 }
 
-#[doc(hidden)]
-pub fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
+pub(crate) fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
     let output = output.as_object()?;
     output
         .get("token_usage")
@@ -996,15 +973,13 @@ pub fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json
         .and_then(Json::as_object)
 }
 
-#[doc(hidden)]
-pub fn response_model_name(output: &Json) -> Option<&str> {
+pub(crate) fn response_model_name(output: &Json) -> Option<&str> {
     output
         .as_object()
         .and_then(|object| object.get("model").and_then(Json::as_str))
 }
 
-#[doc(hidden)]
-pub fn sum_options(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+pub(crate) fn sum_options(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left + right),
         (Some(value), None) | (None, Some(value)) => Some(value),
@@ -1016,8 +991,7 @@ pub fn sum_options(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 ///
 /// The request content may have `reasoning_effort` (e.g. `"high"`, `"medium"`,
 /// or a numeric value). Returns the value as Json for flexibility.
-#[doc(hidden)]
-pub fn extract_reasoning_effort(input: &Json) -> Option<Json> {
+pub(crate) fn extract_reasoning_effort(input: &Json) -> Option<Json> {
     if let Some(obj) = input.as_object()
         && let Some(v) = obj.get("reasoning_effort")
         && !v.is_null()
@@ -1031,8 +1005,7 @@ pub fn extract_reasoning_effort(input: &Json) -> Option<Json> {
 ///
 /// The agent's explicit internal reasoning may appear in the response under the
 /// `"reasoning"` key. Returns `None` if absent or not a string.
-#[doc(hidden)]
-pub fn extract_reasoning_content(output: &Json) -> Option<String> {
+pub(crate) fn extract_reasoning_content(output: &Json) -> Option<String> {
     if let Some(obj) = output.as_object()
         && let Some(r) = obj.get("reasoning")
     {
@@ -1051,13 +1024,11 @@ pub fn extract_reasoning_content(output: &Json) -> Option<String> {
 ///
 /// Returns the latest user message content if present, a prompt if present, or
 /// a stringified representation of the input as a last resort.
-#[doc(hidden)]
-pub fn extract_user_messages(input: &Json) -> Json {
+pub(crate) fn extract_user_messages(input: &Json) -> Json {
     atif_user_content_value(&extract_user_message_content(input))
 }
 
-#[doc(hidden)]
-pub fn extract_user_message_content(input: &Json) -> Json {
+pub(crate) fn extract_user_message_content(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(messages) = obj.get("messages").and_then(Json::as_array)
         && let Some(message) = messages
@@ -1085,8 +1056,7 @@ pub fn extract_user_message_content(input: &Json) -> Json {
     input.clone()
 }
 
-#[doc(hidden)]
-pub fn llm_start_user_step_message(
+pub(crate) fn llm_start_user_step_message(
     event: &EventView<'_>,
     input: &Json,
     has_paired_end: bool,
@@ -1108,8 +1078,7 @@ pub fn llm_start_user_step_message(
 }
 
 // Display projection only: request signatures must retain native image data.
-#[doc(hidden)]
-pub fn raw_provider_user_message(input: &Json) -> Option<Json> {
+pub(crate) fn raw_provider_user_message(input: &Json) -> Option<Json> {
     if let Some(contents) = input.get("contents").and_then(Json::as_array) {
         let parts = contents
             .iter()
@@ -1153,8 +1122,7 @@ pub fn raw_provider_user_message(input: &Json) -> Option<Json> {
     ))
 }
 
-#[doc(hidden)]
-pub fn gemini_contents_turn_state(contents: &[Json]) -> Option<RequestTurnState> {
+pub(crate) fn gemini_contents_turn_state(contents: &[Json]) -> Option<RequestTurnState> {
     let content = contents.last()?;
     match content.get("role").and_then(Json::as_str) {
         Some("model") => Some(RequestTurnState::Continuation),
@@ -1179,8 +1147,7 @@ pub fn gemini_contents_turn_state(contents: &[Json]) -> Option<RequestTurnState>
     }
 }
 
-#[doc(hidden)]
-pub fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
+pub(crate) fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     let object = input.as_object()?;
     let oci_request = object.get("chatRequest").unwrap_or(input);
     if oci_request.get("apiFormat").and_then(Json::as_str) == Some("GENERIC")
@@ -1212,8 +1179,7 @@ pub fn request_turn_state_from_raw(input: &Json) -> Option<RequestTurnState> {
     object.get("prompt").map(|_| RequestTurnState::FreshUser)
 }
 
-#[doc(hidden)]
-pub fn request_turn_state_from_annotation(
+pub(crate) fn request_turn_state_from_annotation(
     request: &AnnotatedLlmRequest,
 ) -> Option<RequestTurnState> {
     request
@@ -1223,8 +1189,7 @@ pub fn request_turn_state_from_annotation(
         .find_map(annotated_message_turn_state)
 }
 
-#[doc(hidden)]
-pub fn chat_messages_turn_state(messages: &[Json]) -> Option<RequestTurnState> {
+pub(crate) fn chat_messages_turn_state(messages: &[Json]) -> Option<RequestTurnState> {
     messages
         .iter()
         .rev()
@@ -1232,8 +1197,7 @@ pub fn chat_messages_turn_state(messages: &[Json]) -> Option<RequestTurnState> {
         .find_map(raw_chat_message_turn_state)
 }
 
-#[doc(hidden)]
-pub fn raw_chat_message_turn_state(
+pub(crate) fn raw_chat_message_turn_state(
     message: &serde_json::Map<String, Json>,
 ) -> Option<RequestTurnState> {
     match message.get("role").and_then(Json::as_str) {
@@ -1247,8 +1211,7 @@ pub fn raw_chat_message_turn_state(
     }
 }
 
-#[doc(hidden)]
-pub fn raw_content_starts_new_turn(content: &Json) -> bool {
+pub(crate) fn raw_content_starts_new_turn(content: &Json) -> bool {
     match content {
         Json::String(_) => true,
         Json::Array(parts) => {
@@ -1265,8 +1228,7 @@ pub fn raw_content_starts_new_turn(content: &Json) -> bool {
     }
 }
 
-#[doc(hidden)]
-pub fn raw_content_part_is_user_input(part: &Json) -> bool {
+pub(crate) fn raw_content_part_is_user_input(part: &Json) -> bool {
     matches!(
         part.get("type").and_then(Json::as_str),
         Some(
@@ -1283,16 +1245,14 @@ pub fn raw_content_part_is_user_input(part: &Json) -> bool {
     )
 }
 
-#[doc(hidden)]
-pub fn raw_content_part_is_tool_continuation(part: &Json) -> bool {
+pub(crate) fn raw_content_part_is_tool_continuation(part: &Json) -> bool {
     matches!(
         part.get("type").and_then(Json::as_str),
         Some("tool_result" | "tool_use")
     )
 }
 
-#[doc(hidden)]
-pub fn openai_responses_turn_state(input: &Json) -> Option<RequestTurnState> {
+pub(crate) fn openai_responses_turn_state(input: &Json) -> Option<RequestTurnState> {
     if input.is_string() {
         return Some(RequestTurnState::FreshUser);
     }
@@ -1305,8 +1265,7 @@ pub fn openai_responses_turn_state(input: &Json) -> Option<RequestTurnState> {
         .find_map(openai_responses_item_turn_state)
 }
 
-#[doc(hidden)]
-pub fn openai_responses_item_turn_state(
+pub(crate) fn openai_responses_item_turn_state(
     item: &serde_json::Map<String, Json>,
 ) -> Option<RequestTurnState> {
     match item.get("type").and_then(Json::as_str) {
@@ -1320,8 +1279,7 @@ pub fn openai_responses_item_turn_state(
     }
 }
 
-#[doc(hidden)]
-pub fn openai_responses_input_message(input: &Json) -> Option<Json> {
+pub(crate) fn openai_responses_input_message(input: &Json) -> Option<Json> {
     if input.is_string() {
         return Some(atif_content_value(input));
     }
@@ -1333,8 +1291,7 @@ pub fn openai_responses_input_message(input: &Json) -> Option<Json> {
         .find_map(openai_responses_input_item_message)
 }
 
-#[doc(hidden)]
-pub fn openai_responses_input_item_message(item: &Json) -> Option<Json> {
+pub(crate) fn openai_responses_input_item_message(item: &Json) -> Option<Json> {
     let item_obj = item.as_object()?;
     if item_obj.get("role").and_then(Json::as_str) != Some("user") {
         return None;
@@ -1343,8 +1300,7 @@ pub fn openai_responses_input_item_message(item: &Json) -> Option<Json> {
     openai_responses_input_content_message(content)
 }
 
-#[doc(hidden)]
-pub fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
+pub(crate) fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
     if content.is_string() {
         return Some(atif_content_value(content));
     }
@@ -1377,8 +1333,7 @@ pub fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
-#[doc(hidden)]
-pub fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
+pub(crate) fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
     let (arr, origin) = if let Some(tool_calls) = tool_call_array(output).filter(|a| !a.is_empty())
     {
         (
@@ -1442,8 +1397,7 @@ pub enum ToolCallOrigin {
 }
 
 /// Select the first usable correlation identifier for the provider payload shape.
-#[doc(hidden)]
-pub fn tool_call_id_for_origin(
+pub(crate) fn tool_call_id_for_origin(
     tool_call: &serde_json::Map<String, Json>,
     origin: ToolCallOrigin,
 ) -> Option<&str> {
@@ -1472,8 +1426,7 @@ pub fn tool_call_id_for_origin(
 // Annotation adapters: project user content from normalized parts. Assistant
 // responses still use the raw extractor for multimodal content.
 
-#[doc(hidden)]
-pub fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
+pub(crate) fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
     let content = request
         .messages
         .iter()
@@ -1496,8 +1449,7 @@ pub fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Opt
     }
 }
 
-#[doc(hidden)]
-pub fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
+pub(crate) fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
     match part {
         ContentPart::Text { text, .. } => Some(serde_json::json!({"type": "text", "text": text})),
         ContentPart::Image { image, .. } => Some(serde_json::json!({
@@ -1509,8 +1461,7 @@ pub fn atif_annotated_user_content_part(part: &ContentPart) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnState> {
+pub(crate) fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnState> {
     match message {
         Message::System { .. } | Message::Developer { .. } => None,
         Message::User { content, .. } => Some(if annotated_content_starts_new_turn(content) {
@@ -1527,8 +1478,7 @@ pub fn annotated_message_turn_state(message: &Message) -> Option<RequestTurnStat
     }
 }
 
-#[doc(hidden)]
-pub fn annotated_content_starts_new_turn(content: &MessageContent) -> bool {
+pub(crate) fn annotated_content_starts_new_turn(content: &MessageContent) -> bool {
     match content {
         MessageContent::Text(_) => true,
         MessageContent::Parts(parts) => {
@@ -1556,8 +1506,7 @@ pub fn annotated_content_starts_new_turn(content: &MessageContent) -> bool {
     }
 }
 
-#[doc(hidden)]
-pub fn provider_native_turn_state(value: &Json) -> Option<RequestTurnState> {
+pub(crate) fn provider_native_turn_state(value: &Json) -> Option<RequestTurnState> {
     let object = value.as_object()?;
     if object.get("type").is_some() {
         return openai_responses_item_turn_state(object);
@@ -1570,8 +1519,9 @@ pub fn provider_native_turn_state(value: &Json) -> Option<RequestTurnState> {
     }
 }
 
-#[doc(hidden)]
-pub fn atif_message_from_annotated_response(response: &AnnotatedLlmResponse) -> Option<Json> {
+pub(crate) fn atif_message_from_annotated_response(
+    response: &AnnotatedLlmResponse,
+) -> Option<Json> {
     match &response.message {
         Some(MessageContent::Text(text)) => Some(Json::String(text.clone())),
         // Multimodal: defer to the raw extractor (returns None to fall back).
@@ -1583,8 +1533,7 @@ pub fn atif_message_from_annotated_response(response: &AnnotatedLlmResponse) -> 
     }
 }
 
-#[doc(hidden)]
-pub fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
+pub(crate) fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
     output
         .as_object()
         .and_then(|object| object.get("tool_calls"))
@@ -1600,8 +1549,7 @@ pub fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
         .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
 }
 
-#[doc(hidden)]
-pub fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
+pub(crate) fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
     let items = output
         .as_object()
         .and_then(|object| object.get("output"))
@@ -1613,8 +1561,7 @@ pub fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>>
     (!function_call_items.is_empty()).then_some(function_call_items)
 }
 
-#[doc(hidden)]
-pub fn anthropic_messages_tool_use_items(output: &Json) -> Option<Vec<&Json>> {
+pub(crate) fn anthropic_messages_tool_use_items(output: &Json) -> Option<Vec<&Json>> {
     let object = output.as_object()?;
     if object.get("type").and_then(Json::as_str) != Some("message") {
         return None;
@@ -1627,8 +1574,7 @@ pub fn anthropic_messages_tool_use_items(output: &Json) -> Option<Vec<&Json>> {
     (!tool_use_items.is_empty()).then_some(tool_use_items)
 }
 
-#[doc(hidden)]
-pub fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
+pub(crate) fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
     let Some(raw_arguments) = raw_arguments else {
         return serde_json::json!({});
     };
@@ -1644,8 +1590,7 @@ pub fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
     }
 }
 
-#[doc(hidden)]
-pub fn tool_call_extra(tool_call: &Json) -> Option<Json> {
+pub(crate) fn tool_call_extra(tool_call: &Json) -> Option<Json> {
     let object = tool_call.as_object()?;
     let mut extra = serde_json::Map::new();
 
@@ -1682,8 +1627,7 @@ pub fn tool_call_extra(tool_call: &Json) -> Option<Json> {
     (!extra.is_empty()).then_some(Json::Object(extra))
 }
 
-#[doc(hidden)]
-pub fn event_extra(event: &EventView<'_>) -> Json {
+pub(crate) fn event_extra(event: &EventView<'_>) -> Json {
     let mut extra = serde_json::Map::new();
     extra.insert(
         "event_uuid".to_string(),
@@ -1711,8 +1655,7 @@ pub fn event_extra(event: &EventView<'_>) -> Json {
 ///
 /// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Each token
 /// or cost total is populated only when at least one step provides that field.
-#[doc(hidden)]
-pub fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
+pub(crate) fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
     let mut totals = FinalMetricsTotals::default();
     for metrics in steps.iter().filter_map(|step| step.metrics.as_ref()) {
         totals.add(metrics);
@@ -1793,15 +1736,13 @@ impl FinalMetricsTotals {
     }
 }
 
-#[doc(hidden)]
-pub fn add_u64_total(total: &mut Option<u64>, value: Option<u64>) {
+pub(crate) fn add_u64_total(total: &mut Option<u64>, value: Option<u64>) {
     if let Some(value) = value {
         *total = Some(total.unwrap_or(0) + value);
     }
 }
 
-#[doc(hidden)]
-pub fn add_f64_total(total: &mut Option<f64>, value: Option<f64>) {
+pub(crate) fn add_f64_total(total: &mut Option<f64>, value: Option<f64>) {
     if let Some(value) = value {
         *total = Some(total.unwrap_or(0.0) + value);
     }
@@ -1814,8 +1755,7 @@ pub fn add_f64_total(total: &mut Option<f64>, value: Option<f64>) {
 /// Build an [`AtifAncestry`] from a NeMo Relay [`Event`].
 ///
 /// `name_map` is a pre-pass uuid → name lookup used to resolve `parent_name`.
-#[doc(hidden)]
-pub fn build_ancestry(
+pub(crate) fn build_ancestry(
     event: &EventView<'_>,
     name_map: &std::collections::HashMap<Uuid, String>,
 ) -> AtifAncestry {
@@ -1831,8 +1771,7 @@ pub fn build_ancestry(
 ///
 /// If `start_ts` is `None`, both timestamps are omitted to preserve the
 /// requirement that they are always emitted together or not at all.
-#[doc(hidden)]
-pub fn build_invocation_info(
+pub(crate) fn build_invocation_info(
     start_ts: Option<DateTime<Utc>>,
     end_ts: DateTime<Utc>,
     invocation_id: Option<String>,
@@ -1847,8 +1786,7 @@ pub fn build_invocation_info(
     }
 }
 
-#[doc(hidden)]
-pub fn delegation_tool_call_id(value: &Json) -> Option<String> {
+pub(crate) fn delegation_tool_call_id(value: &Json) -> Option<String> {
     [
         &["tool_call_id"][..],
         &["toolCallId"],
@@ -1871,8 +1809,7 @@ pub fn delegation_tool_call_id(value: &Json) -> Option<String> {
     .find_map(|path| json_string_at(value, path))
 }
 
-#[doc(hidden)]
-pub fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
+pub(crate) fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
     let mut current = value;
     for key in path {
         current = current.get(*key)?;
@@ -1989,8 +1926,7 @@ pub struct LlmSpanCandidate {
     pub non_exact_provider_payload: bool,
 }
 
-#[doc(hidden)]
-pub fn build_llm_dedupe(events: &[&EventView<'_>]) -> LlmDedupeLookups {
+pub(crate) fn build_llm_dedupe(events: &[&EventView<'_>]) -> LlmDedupeLookups {
     let candidates = collect_llm_span_candidates(events);
     let mut lookups = LlmDedupeLookups::default();
 
@@ -2005,8 +1941,7 @@ pub fn build_llm_dedupe(events: &[&EventView<'_>]) -> LlmDedupeLookups {
     lookups
 }
 
-#[doc(hidden)]
-pub fn collect_llm_span_candidates(events: &[&EventView<'_>]) -> Vec<LlmSpanCandidate> {
+pub(crate) fn collect_llm_span_candidates(events: &[&EventView<'_>]) -> Vec<LlmSpanCandidate> {
     let mut spans: HashMap<Uuid, LlmSpanParts<'_>> = HashMap::new();
     for event in events {
         if event.category().map(|category| category.as_str()) != Some("llm") {
@@ -2066,8 +2001,7 @@ impl LlmSpanCandidate {
     }
 }
 
-#[doc(hidden)]
-pub fn llm_request_signature(input: &Json) -> String {
+pub(crate) fn llm_request_signature(input: &Json) -> String {
     let content = unwrap_llm_request(input);
     // Responses display extraction joins text and omits accompanying image/file
     // parts. Match multimodal requests using their raw latest user content.
@@ -2091,8 +2025,7 @@ pub fn llm_request_signature(input: &Json) -> String {
     json_to_string(&atif_content_value(&extract_user_message_content(&content)))
 }
 
-#[doc(hidden)]
-pub fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
+pub(crate) fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
     input.as_array()?.iter().rev().find_map(|item| {
         if item.get("role").and_then(Json::as_str) == Some("user") {
             item.get("content")
@@ -2102,24 +2035,27 @@ pub fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
     })
 }
 
-#[doc(hidden)]
-pub fn llm_response_signature(output: &Json) -> String {
+pub(crate) fn llm_response_signature(output: &Json) -> String {
     json_to_string(&serde_json::json!({
         "message": extract_llm_response_message(output),
         "tool_calls": extract_tool_calls(output),
     }))
 }
 
-#[doc(hidden)]
-pub fn llm_request_correlation_keys(start: &EventView<'_>, end: &EventView<'_>) -> HashSet<String> {
+pub(crate) fn llm_request_correlation_keys(
+    start: &EventView<'_>,
+    end: &EventView<'_>,
+) -> HashSet<String> {
     let mut keys = HashSet::new();
     collect_llm_request_correlation_keys(start, &mut keys);
     collect_llm_request_correlation_keys(end, &mut keys);
     keys
 }
 
-#[doc(hidden)]
-pub fn collect_llm_request_correlation_keys(event: &EventView<'_>, keys: &mut HashSet<String>) {
+pub(crate) fn collect_llm_request_correlation_keys(
+    event: &EventView<'_>,
+    keys: &mut HashSet<String>,
+) {
     if let Some(metadata) = event.metadata() {
         collect_request_correlation_values(metadata, keys);
     }
@@ -2129,8 +2065,7 @@ pub fn collect_llm_request_correlation_keys(event: &EventView<'_>, keys: &mut Ha
     }
 }
 
-#[doc(hidden)]
-pub fn collect_request_correlation_values(value: &Json, keys: &mut HashSet<String>) {
+pub(crate) fn collect_request_correlation_values(value: &Json, keys: &mut HashSet<String>) {
     for path in [
         &["api_call_id"][..],
         &["apiCallId"],
@@ -2162,15 +2097,17 @@ pub fn collect_request_correlation_values(value: &Json, keys: &mut HashSet<Strin
     }
 }
 
-#[doc(hidden)]
-pub fn insert_correlation_key(keys: &mut HashSet<String>, kind: &str, value: Option<String>) {
+pub(crate) fn insert_correlation_key(
+    keys: &mut HashSet<String>,
+    kind: &str,
+    value: Option<String>,
+) {
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         keys.insert(format!("{kind}:{value}"));
     }
 }
 
-#[doc(hidden)]
-pub fn same_physical_llm_request(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+pub(crate) fn same_physical_llm_request(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
     same_parent(left, right)
         && compatible_model_names(left, right)
         && llm_spans_overlap(left, right)
@@ -2178,14 +2115,15 @@ pub fn same_physical_llm_request(left: &LlmSpanCandidate, right: &LlmSpanCandida
             || complementary_hook_and_gateway_spans(left, right))
 }
 
-#[doc(hidden)]
-pub fn same_llm_payload_signatures(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+pub(crate) fn same_llm_payload_signatures(
+    left: &LlmSpanCandidate,
+    right: &LlmSpanCandidate,
+) -> bool {
     left.request_signature == right.request_signature
         && left.response_signature == right.response_signature
 }
 
-#[doc(hidden)]
-pub fn complementary_hook_and_gateway_spans(
+pub(crate) fn complementary_hook_and_gateway_spans(
     left: &LlmSpanCandidate,
     right: &LlmSpanCandidate,
 ) -> bool {
@@ -2201,8 +2139,7 @@ pub fn complementary_hook_and_gateway_spans(
             || shared_llm_request_correlation_key(left, right))
 }
 
-#[doc(hidden)]
-pub fn shared_llm_request_correlation_key(
+pub(crate) fn shared_llm_request_correlation_key(
     left: &LlmSpanCandidate,
     right: &LlmSpanCandidate,
 ) -> bool {
@@ -2211,26 +2148,22 @@ pub fn shared_llm_request_correlation_key(
         .is_disjoint(&right.request_correlation_keys)
 }
 
-#[doc(hidden)]
-pub fn same_parent(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+pub(crate) fn same_parent(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
     left.parent_uuid.is_some() && left.parent_uuid == right.parent_uuid
 }
 
-#[doc(hidden)]
-pub fn compatible_model_names(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+pub(crate) fn compatible_model_names(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
     match (&left.model_name, &right.model_name) {
         (Some(left_model), Some(right_model)) => left_model == right_model,
         _ => true,
     }
 }
 
-#[doc(hidden)]
-pub fn llm_spans_overlap(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+pub(crate) fn llm_spans_overlap(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
     left.start_ts <= right.end_ts && right.start_ts <= left.end_ts
 }
 
-#[doc(hidden)]
-pub fn suppress_lower_fidelity_llm_span(
+pub(crate) fn suppress_lower_fidelity_llm_span(
     left: &LlmSpanCandidate,
     right: &LlmSpanCandidate,
     lookups: &mut LlmDedupeLookups,
@@ -2242,8 +2175,7 @@ pub fn suppress_lower_fidelity_llm_span(
     }
 }
 
-#[doc(hidden)]
-pub fn suppress_llm_span(
+pub(crate) fn suppress_llm_span(
     suppressed: &LlmSpanCandidate,
     canonical: &LlmSpanCandidate,
     lookups: &mut LlmDedupeLookups,
@@ -2258,8 +2190,7 @@ pub fn suppress_llm_span(
     }
 }
 
-#[doc(hidden)]
-pub fn llm_event_fidelity_score(event: &EventView<'_>) -> u8 {
+pub(crate) fn llm_event_fidelity_score(event: &EventView<'_>) -> u8 {
     let Some(metadata) = event.metadata().and_then(Json::as_object) else {
         return 50;
     };
@@ -2292,16 +2223,14 @@ pub fn llm_event_fidelity_score(event: &EventView<'_>) -> u8 {
     50
 }
 
-#[doc(hidden)]
-pub fn is_hook_instrumented_llm_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_hook_instrumented_llm_event(event: &EventView<'_>) -> bool {
     event
         .metadata()
         .and_then(Json::as_object)
         .is_some_and(|metadata| metadata.contains_key("hook_event_name"))
 }
 
-#[doc(hidden)]
-pub fn is_gateway_instrumented_llm_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_gateway_instrumented_llm_event(event: &EventView<'_>) -> bool {
     event
         .metadata()
         .and_then(Json::as_object)
@@ -2310,8 +2239,7 @@ pub fn is_gateway_instrumented_llm_event(event: &EventView<'_>) -> bool {
         })
 }
 
-#[doc(hidden)]
-pub fn has_non_exact_provider_payload(event: &EventView<'_>) -> bool {
+pub(crate) fn has_non_exact_provider_payload(event: &EventView<'_>) -> bool {
     event
         .metadata()
         .and_then(Json::as_object)
@@ -2342,8 +2270,7 @@ pub struct LlmToolCallRecord {
     pub key: Option<ToolCallMatchKey>,
 }
 
-#[doc(hidden)]
-pub fn build_tool_call_correlations(events: &[&EventView<'_>]) -> HashMap<Uuid, String> {
+pub(crate) fn build_tool_call_correlations(events: &[&EventView<'_>]) -> HashMap<Uuid, String> {
     let (mut correlations, executions, tool_calls) = collect_tool_correlation_inputs(events);
     let consumed_tool_call_ids = consumed_tool_call_ids(&correlations);
     let executions_by_key = group_unmatched_executions_by_key(executions, &correlations);
@@ -2352,13 +2279,11 @@ pub fn build_tool_call_correlations(events: &[&EventView<'_>]) -> HashMap<Uuid, 
     correlations
 }
 
-#[doc(hidden)]
-pub fn consumed_tool_call_ids(correlations: &HashMap<Uuid, String>) -> HashSet<String> {
+pub(crate) fn consumed_tool_call_ids(correlations: &HashMap<Uuid, String>) -> HashSet<String> {
     correlations.values().cloned().collect()
 }
 
-#[doc(hidden)]
-pub fn collect_tool_correlation_inputs(
+pub(crate) fn collect_tool_correlation_inputs(
     events: &[&EventView<'_>],
 ) -> (
     HashMap<Uuid, String>,
@@ -2376,8 +2301,7 @@ pub fn collect_tool_correlation_inputs(
     (explicit, executions, tool_calls)
 }
 
-#[doc(hidden)]
-pub fn collect_tool_correlation_event(
+pub(crate) fn collect_tool_correlation_event(
     event: &EventView<'_>,
     explicit: &mut HashMap<Uuid, String>,
     executions: &mut Vec<ToolExecutionRecord>,
@@ -2397,8 +2321,7 @@ pub fn collect_tool_correlation_event(
     }
 }
 
-#[doc(hidden)]
-pub fn event_signature<'a>(
+pub(crate) fn event_signature<'a>(
     event: &EventView<'a>,
 ) -> (
     &'a str,
@@ -2413,8 +2336,7 @@ pub fn event_signature<'a>(
     )
 }
 
-#[doc(hidden)]
-pub fn collect_tool_execution_start(
+pub(crate) fn collect_tool_execution_start(
     event: &EventView<'_>,
     explicit: &mut HashMap<Uuid, String>,
     executions: &mut Vec<ToolExecutionRecord>,
@@ -2430,15 +2352,19 @@ pub fn collect_tool_execution_start(
     executions.push(record);
 }
 
-#[doc(hidden)]
-pub fn collect_explicit_tool_call_id(event: &EventView<'_>, explicit: &mut HashMap<Uuid, String>) {
+pub(crate) fn collect_explicit_tool_call_id(
+    event: &EventView<'_>,
+    explicit: &mut HashMap<Uuid, String>,
+) {
     if let Some(tool_call_id) = event.tool_call_id() {
         explicit.insert(event.uuid(), tool_call_id.to_string());
     }
 }
 
-#[doc(hidden)]
-pub fn collect_llm_tool_calls(event: &EventView<'_>, tool_calls: &mut Vec<LlmToolCallRecord>) {
+pub(crate) fn collect_llm_tool_calls(
+    event: &EventView<'_>,
+    tool_calls: &mut Vec<LlmToolCallRecord>,
+) {
     let Some(calls) = event.data().and_then(extract_tool_calls) else {
         return;
     };
@@ -2448,8 +2374,7 @@ pub fn collect_llm_tool_calls(event: &EventView<'_>, tool_calls: &mut Vec<LlmToo
     }));
 }
 
-#[doc(hidden)]
-pub fn group_unmatched_executions_by_key(
+pub(crate) fn group_unmatched_executions_by_key(
     executions: Vec<ToolExecutionRecord>,
     correlations: &HashMap<Uuid, String>,
 ) -> HashMap<ToolCallMatchKey, Vec<Uuid>> {
@@ -2465,8 +2390,7 @@ pub fn group_unmatched_executions_by_key(
     grouped
 }
 
-#[doc(hidden)]
-pub fn group_tool_calls_by_key(
+pub(crate) fn group_tool_calls_by_key(
     tool_calls: Vec<LlmToolCallRecord>,
     consumed_tool_call_ids: &HashSet<String>,
 ) -> HashMap<ToolCallMatchKey, Vec<String>> {
@@ -2482,8 +2406,7 @@ pub fn group_tool_calls_by_key(
     grouped
 }
 
-#[doc(hidden)]
-pub fn apply_keyed_tool_correlations(
+pub(crate) fn apply_keyed_tool_correlations(
     correlations: &mut HashMap<Uuid, String>,
     executions_by_key: HashMap<ToolCallMatchKey, Vec<Uuid>>,
     tool_calls_by_key: &HashMap<ToolCallMatchKey, Vec<String>>,
@@ -2498,8 +2421,7 @@ pub fn apply_keyed_tool_correlations(
     }
 }
 
-#[doc(hidden)]
-pub fn insert_keyed_tool_correlations(
+pub(crate) fn insert_keyed_tool_correlations(
     correlations: &mut HashMap<Uuid, String>,
     execution_uuids: Vec<Uuid>,
     tool_call_ids: &[String],
@@ -2509,16 +2431,14 @@ pub fn insert_keyed_tool_correlations(
     }
 }
 
-#[doc(hidden)]
-pub fn tool_execution_match_key(event: &EventView<'_>) -> Option<ToolCallMatchKey> {
+pub(crate) fn tool_execution_match_key(event: &EventView<'_>) -> Option<ToolCallMatchKey> {
     let arguments = event
         .data()
         .map(|data| normalize_tool_arguments(Some(data)))?;
     tool_call_match_key(event.name(), &arguments)
 }
 
-#[doc(hidden)]
-pub fn tool_call_match_key(name: &str, arguments: &Json) -> Option<ToolCallMatchKey> {
+pub(crate) fn tool_call_match_key(name: &str, arguments: &Json) -> Option<ToolCallMatchKey> {
     if name.is_empty() {
         return None;
     }
@@ -3367,15 +3287,16 @@ impl StepConversionState {
     }
 }
 
-#[doc(hidden)]
-pub fn normalized_response_model_name(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn normalized_response_model_name(event: &EventView<'_>) -> Option<String> {
     event
         .normalized_llm_response()
         .and_then(|response| response.as_ref().model.clone())
 }
 
-#[doc(hidden)]
-pub fn effective_model_for_pair(start: &EventView<'_>, end: &EventView<'_>) -> Option<String> {
+pub(crate) fn effective_model_for_pair(
+    start: &EventView<'_>,
+    end: &EventView<'_>,
+) -> Option<String> {
     normalized_response_model_name(end)
         .or_else(|| manual::model_name_from_manual_llm_output(end.output()).map(ToOwned::to_owned))
         .or_else(|| {
@@ -3388,13 +3309,11 @@ pub fn effective_model_for_pair(start: &EventView<'_>, end: &EventView<'_>) -> O
         .or_else(|| model_name_for_llm_event(end))
 }
 
-#[doc(hidden)]
-pub fn effective_response_model_name(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn effective_response_model_name(event: &EventView<'_>) -> Option<String> {
     effective_model_for_pair(event, event)
 }
 
-#[doc(hidden)]
-pub fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
+pub(crate) fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
     let mut observed_later = HashSet::new();
     let mut keep = vec![true; steps.len()];
 
@@ -3425,8 +3344,7 @@ pub struct ToolCallDedupeKey {
     pub arguments: String,
 }
 
-#[doc(hidden)]
-pub fn projected_tool_call_duplicate(
+pub(crate) fn projected_tool_call_duplicate(
     step: &AtifStep,
     observed_later: &HashSet<ToolCallDedupeKey>,
 ) -> bool {
@@ -3440,8 +3358,7 @@ pub fn projected_tool_call_duplicate(
             .all(|tool_call_key| observed_later.contains(tool_call_key))
 }
 
-#[doc(hidden)]
-pub fn projected_tool_call_candidate(step: &AtifStep) -> bool {
+pub(crate) fn projected_tool_call_candidate(step: &AtifStep) -> bool {
     step.source == "agent"
         && step.message == empty_message()
         && step.observation.is_none()
@@ -3454,8 +3371,7 @@ pub fn projected_tool_call_candidate(step: &AtifStep) -> bool {
             .is_some_and(|tool_calls| !tool_calls.is_empty())
 }
 
-#[doc(hidden)]
-pub fn extend_observed_tool_call_keys(
+pub(crate) fn extend_observed_tool_call_keys(
     observed_later: &mut HashSet<ToolCallDedupeKey>,
     step: &AtifStep,
 ) {
@@ -3464,8 +3380,7 @@ pub fn extend_observed_tool_call_keys(
     }
 }
 
-#[doc(hidden)]
-pub fn observed_tool_call_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+pub(crate) fn observed_tool_call_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
     let step_tool_call_keys = step_tool_call_dedupe_keys(step);
     step.observation
         .as_ref()
@@ -3473,8 +3388,7 @@ pub fn observed_tool_call_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
         .unwrap_or_default()
 }
 
-#[doc(hidden)]
-pub fn matching_observation_tool_call_keys(
+pub(crate) fn matching_observation_tool_call_keys(
     observation: &AtifObservation,
     step_tool_call_keys: &[ToolCallDedupeKey],
 ) -> Vec<ToolCallDedupeKey> {
@@ -3486,8 +3400,7 @@ pub fn matching_observation_tool_call_keys(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn matching_tool_call_keys(
+pub(crate) fn matching_tool_call_keys(
     source_call_id: &str,
     step_tool_call_keys: &[ToolCallDedupeKey],
 ) -> Vec<ToolCallDedupeKey> {
@@ -3498,8 +3411,7 @@ pub fn matching_tool_call_keys(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+pub(crate) fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
     step.tool_calls
         .as_deref()
         .unwrap_or_default()
@@ -3513,8 +3425,7 @@ pub fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
         .collect()
 }
 
-#[doc(hidden)]
-pub fn merge_observation_result(
+pub(crate) fn merge_observation_result(
     observation: &mut AtifObservation,
     mut result: AtifObservationResult,
 ) {
@@ -3542,8 +3453,7 @@ pub fn merge_observation_result(
     observation.results.push(result);
 }
 
-#[doc(hidden)]
-pub fn merge_observation_extra(existing: &mut Option<Json>, incoming: Json) {
+pub(crate) fn merge_observation_extra(existing: &mut Option<Json>, incoming: Json) {
     let Some(existing_extra) = existing.as_mut() else {
         *existing = Some(incoming);
         return;
@@ -3557,8 +3467,7 @@ pub fn merge_observation_extra(existing: &mut Option<Json>, incoming: Json) {
     }
 }
 
-#[doc(hidden)]
-pub fn subagent_dispatch_arguments(child: &AgentScopeNode, event: &EventView<'_>) -> Json {
+pub(crate) fn subagent_dispatch_arguments(child: &AgentScopeNode, event: &EventView<'_>) -> Json {
     let mut arguments = serde_json::Map::new();
     arguments.insert("name".to_string(), Json::String(child.name.clone()));
     if let Some(session_id) = &child.session_id {
@@ -3572,8 +3481,10 @@ pub fn subagent_dispatch_arguments(child: &AgentScopeNode, event: &EventView<'_>
     Json::Object(arguments)
 }
 
-#[doc(hidden)]
-pub fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet<String>) {
+pub(crate) fn prune_subagent_refs(
+    steps: &mut Vec<AtifStep>,
+    child_trajectory_ids: &HashSet<String>,
+) {
     for step in steps.iter_mut() {
         let Some(observation) = &mut step.observation else {
             continue;
@@ -3612,15 +3523,13 @@ pub fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &Has
     renumber_steps(steps);
 }
 
-#[doc(hidden)]
-pub fn renumber_steps(steps: &mut [AtifStep]) {
+pub(crate) fn renumber_steps(steps: &mut [AtifStep]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.step_id = index + 1;
     }
 }
 
-#[doc(hidden)]
-pub fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> bool {
+pub(crate) fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> bool {
     result
         .extra
         .as_ref()
@@ -3630,8 +3539,7 @@ pub fn observation_result_has_tool_result_extra(result: &AtifObservationResult) 
         })
 }
 
-#[doc(hidden)]
-pub fn refresh_tool_call_lookup(
+pub(crate) fn refresh_tool_call_lookup(
     last_tool_call_map: &mut std::collections::HashMap<String, String>,
     tool_calls: &Option<Vec<AtifToolCall>>,
 ) -> Vec<String> {
@@ -3728,8 +3636,9 @@ impl AgentScopeTree {
     }
 }
 
-#[doc(hidden)]
-pub fn agent_scope_maps(events: &[&EventView<'_>]) -> (HashMap<Uuid, Uuid>, AgentScopeRoles) {
+pub(crate) fn agent_scope_maps(
+    events: &[&EventView<'_>],
+) -> (HashMap<Uuid, Uuid>, AgentScopeRoles) {
     let mut scope_parent_map = HashMap::new();
     let mut agent_scope_roles = HashMap::new();
 
@@ -3744,8 +3653,7 @@ pub fn agent_scope_maps(events: &[&EventView<'_>]) -> (HashMap<Uuid, Uuid>, Agen
     (scope_parent_map, agent_scope_roles)
 }
 
-#[doc(hidden)]
-pub fn agent_uuids_from_events(
+pub(crate) fn agent_uuids_from_events(
     events: &[&EventView<'_>],
     scope_parent_map: &HashMap<Uuid, Uuid>,
     agent_scope_roles: &AgentScopeRoles,
@@ -3758,8 +3666,7 @@ pub fn agent_uuids_from_events(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn should_include_agent_scope(
+pub(crate) fn should_include_agent_scope(
     event: &EventView<'_>,
     scope_parent_map: &HashMap<Uuid, Uuid>,
     agent_scope_roles: &AgentScopeRoles,
@@ -3779,8 +3686,7 @@ pub fn should_include_agent_scope(
         .is_none()
 }
 
-#[doc(hidden)]
-pub fn agent_scope_nodes(
+pub(crate) fn agent_scope_nodes(
     events: &[&EventView<'_>],
     scope_parent_map: &HashMap<Uuid, Uuid>,
     agent_uuids: &HashSet<Uuid>,
@@ -3812,15 +3718,13 @@ pub fn agent_scope_nodes(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn is_included_agent_scope(event: &EventView<'_>, agent_uuids: &HashSet<Uuid>) -> bool {
+pub(crate) fn is_included_agent_scope(event: &EventView<'_>, agent_uuids: &HashSet<Uuid>) -> bool {
     is_start_event(event)
         && event.scope_type() == Some(nemo_relay_types::api::scope::ScopeType::Agent)
         && agent_uuids.contains(&event.uuid())
 }
 
-#[doc(hidden)]
-pub fn agent_session_id(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn agent_session_id(event: &EventView<'_>) -> Option<String> {
     event
         .metadata()
         .and_then(|metadata| metadata.get("session_id"))
@@ -3828,8 +3732,7 @@ pub fn agent_session_id(event: &EventView<'_>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-#[doc(hidden)]
-pub fn link_agent_children(nodes: &mut HashMap<Uuid, AgentScopeNode>) -> Vec<Uuid> {
+pub(crate) fn link_agent_children(nodes: &mut HashMap<Uuid, AgentScopeNode>) -> Vec<Uuid> {
     let mut child_links = Vec::new();
     let mut roots = Vec::new();
     for node in nodes.values() {
@@ -3847,8 +3750,7 @@ pub fn link_agent_children(nodes: &mut HashMap<Uuid, AgentScopeNode>) -> Vec<Uui
     roots
 }
 
-#[doc(hidden)]
-pub fn sort_agent_tree(roots: &mut [Uuid], nodes: &mut HashMap<Uuid, AgentScopeNode>) {
+pub(crate) fn sort_agent_tree(roots: &mut [Uuid], nodes: &mut HashMap<Uuid, AgentScopeNode>) {
     let start_timestamps = nodes
         .iter()
         .map(|(uuid, node)| (*uuid, node.start_timestamp))
@@ -3860,8 +3762,7 @@ pub fn sort_agent_tree(roots: &mut [Uuid], nodes: &mut HashMap<Uuid, AgentScopeN
     }
 }
 
-#[doc(hidden)]
-pub fn agent_scope_role<'a>(event: &EventView<'a>) -> Option<&'a str> {
+pub(crate) fn agent_scope_role<'a>(event: &EventView<'a>) -> Option<&'a str> {
     let event = event.as_event();
     event
         .metadata()
@@ -3869,20 +3770,17 @@ pub fn agent_scope_role<'a>(event: &EventView<'a>) -> Option<&'a str> {
         .and_then(Json::as_str)
 }
 
-#[doc(hidden)]
-pub fn is_agent_scope_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_agent_scope_event(event: &EventView<'_>) -> bool {
     event.scope_type() == Some(nemo_relay_types::api::scope::ScopeType::Agent)
 }
 
-#[doc(hidden)]
-pub fn is_subagent_reference_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_subagent_reference_event(event: &EventView<'_>) -> bool {
     agent_scope_role(event) == Some("subagent")
         || event.metadata().and_then(delegation_tool_call_id).is_some()
         || event.data().and_then(delegation_tool_call_id).is_some()
 }
 
-#[doc(hidden)]
-pub fn nearest_agent_parent(
+pub(crate) fn nearest_agent_parent(
     mut current: Option<Uuid>,
     scope_parent_map: &HashMap<Uuid, Uuid>,
     agent_uuids: &HashSet<Uuid>,
@@ -3897,8 +3795,7 @@ pub fn nearest_agent_parent(
     None
 }
 
-#[doc(hidden)]
-pub fn nearest_non_turn_agent_parent(
+pub(crate) fn nearest_non_turn_agent_parent(
     mut current: Option<Uuid>,
     scope_parent_map: &HashMap<Uuid, Uuid>,
     agent_scope_roles: &HashMap<Uuid, Option<String>>,
@@ -3920,8 +3817,7 @@ pub fn nearest_non_turn_agent_parent(
 // Event-to-step mapping
 // ---------------------------------------------------------------------------
 
-#[doc(hidden)]
-pub fn events_to_trajectory(
+pub(crate) fn events_to_trajectory(
     session_id: &str,
     trajectory_id: &str,
     agent_info: AtifAgentInfo,
@@ -3955,15 +3851,13 @@ pub fn events_to_trajectory(
     )
 }
 
-#[doc(hidden)]
-pub fn can_use_agent_scope_tree(tree: &AgentScopeTree, events: &[&EventView<'_>]) -> bool {
+pub(crate) fn can_use_agent_scope_tree(tree: &AgentScopeTree, events: &[&EventView<'_>]) -> bool {
     events.iter().all(|event| {
         is_agent_scope_event(event) || !is_step_event(event) || tree.owner_agent(event).is_some()
     })
 }
 
-#[doc(hidden)]
-pub fn is_step_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_step_event(event: &EventView<'_>) -> bool {
     matches!(
         (
             event.kind(),
@@ -3986,8 +3880,7 @@ pub fn is_step_event(event: &EventView<'_>) -> bool {
     )
 }
 
-#[doc(hidden)]
-pub fn agent_scope_to_trajectory(
+pub(crate) fn agent_scope_to_trajectory(
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
     session_id: &str,
@@ -4056,8 +3949,7 @@ pub fn agent_scope_to_trajectory(
     )
 }
 
-#[doc(hidden)]
-pub fn trajectory_from_parts(
+pub(crate) fn trajectory_from_parts(
     session_id: String,
     trajectory_id: Option<String>,
     agent: AtifAgentInfo,
@@ -4080,8 +3972,7 @@ pub fn trajectory_from_parts(
     }
 }
 
-#[doc(hidden)]
-pub fn events_to_steps_for_agent(
+pub(crate) fn events_to_steps_for_agent(
     events: &[&EventView<'_>],
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
@@ -4124,8 +4015,7 @@ pub fn events_to_steps_for_agent(
 /// 4. Tool End observation results are correlated with the preceding LLM End's
 ///    promoted tool_calls by function name → `source_call_id`.
 /// 5. Mark and other Scope Start/End events → skipped.
-#[doc(hidden)]
-pub fn events_to_steps(events: &[&EventView<'_>]) -> Vec<AtifStep> {
+pub(crate) fn events_to_steps(events: &[&EventView<'_>]) -> Vec<AtifStep> {
     let mut sorted: Vec<&EventView<'_>> = events.to_vec();
     sorted.sort_by_key(|e| *e.timestamp());
     let lookups = EventLookupMaps::from_events(&sorted);
@@ -4138,8 +4028,7 @@ pub fn events_to_steps(events: &[&EventView<'_>]) -> Vec<AtifStep> {
     state.finish()
 }
 
-#[doc(hidden)]
-pub fn is_start_event(event: &EventView<'_>) -> bool {
+pub(crate) fn is_start_event(event: &EventView<'_>) -> bool {
     event.scope_category() == Some(nemo_relay_types::api::event::ScopeCategory::Start)
 }
 

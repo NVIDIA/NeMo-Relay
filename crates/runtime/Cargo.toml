@@ -38,36 +38,12 @@ uuid = { workspace = true, features = ["v7", "serde"] }
 # First-party crates.
 nemo-relay-diagnostics.workspace = true
 nemo-relay-model-pricing = { workspace = true }
-nemo-relay-observability = { workspace = true }
-nemo-relay-plugin.workspace = true
 nemo-relay-resource-metrics.workspace = true
 
 # Third-party dependencies.
-async-trait.workspace = true
-base64.workspace = true
-http.workspace = true
-prost.workspace = true
-reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
-ring.workspace = true
-sha2.workspace = true
-tempfile.workspace = true
-toml.workspace = true
-opentelemetry-http.workspace = true
-opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
-opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
-rustls = { workspace = true, features = ["ring", "std", "tls12"] }
-tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
-sysinfo = { workspace = true, features = ["system", "network"] }
 futures.workspace = true
-object_store = { workspace = true, features = ["aws"] }
-opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }
-opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
-rcgen.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
-tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
-tokio-stream = { workspace = true, default-features = true, features = ["net"] }
-tonic = { workspace = true, default-features = true, features = ["transport"] }
 
 [[test]]
 name = "codec_integration"

@@ -389,20 +389,13 @@ impl AtofExporterConfig {
     }
 }
 
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_ENDPOINT_DISABLED: &str = "atof.stream_endpoint_disabled";
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_CONNECTION_FAILED: &str = "atof.stream_connection_failed";
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_DELIVERY_FAILED: &str = "atof.stream_delivery_failed";
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_EVENTS_DROPPED: &str = "atof.stream_events_dropped";
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_FLUSH_FAILED: &str = "atof.stream_flush_failed";
-#[doc(hidden)]
 pub(crate) const ATOF_STREAM_CLOSE_FAILED: &str = "atof.stream_close_failed";
 
-#[doc(hidden)]
 pub(crate) struct AtofExporterState {
     pub writer: Option<BufWriter<File>>,
     pub last_error: Option<String>,
@@ -424,7 +417,6 @@ impl AtofExporter {
         Self::new_with_plaintext_policy(config, &PlaintextPolicy::LoopbackOnly, None)
     }
 
-    #[doc(hidden)]
     pub(crate) fn new_with_plaintext_policy(
         config: AtofExporterConfig,
         plaintext: &PlaintextPolicy,
@@ -642,7 +634,6 @@ impl AtofExporter {
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn default_filename() -> String {
     format!(
         "nemo-relay-events-{}.jsonl",
@@ -650,17 +641,14 @@ pub(crate) fn default_filename() -> String {
     )
 }
 
-#[doc(hidden)]
 pub(crate) fn default_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-#[doc(hidden)]
 pub(crate) fn default_endpoint_timeout_millis() -> u64 {
     3_000
 }
 
-#[doc(hidden)]
 pub(crate) fn open_file(root: &Path, path: &Path, mode: AtofExporterMode) -> Result<File> {
     open_private(root, path, matches!(mode, AtofExporterMode::Append)).map_err(|source| {
         AtofExporterError::OpenFile {
@@ -670,7 +658,6 @@ pub(crate) fn open_file(root: &Path, path: &Path, mode: AtofExporterMode) -> Res
     })
 }
 
-#[doc(hidden)]
 pub(crate) fn write_json_value(
     writer: &mut BufWriter<File>,
     value: &Json,
@@ -680,7 +667,6 @@ pub(crate) fn write_json_value(
     writer.flush().map_err(|error| error.to_string())
 }
 
-#[doc(hidden)]
 pub(crate) fn stored_failure_result(path: &Path, state: &AtofExporterState) -> Result<()> {
     if let Some(message) = &state.last_error {
         return Err(AtofExporterError::StoredFailure {
@@ -691,21 +677,18 @@ pub(crate) fn stored_failure_result(path: &Path, state: &AtofExporterState) -> R
     Ok(())
 }
 
-#[doc(hidden)]
 pub(crate) enum EndpointMessage {
     Event(String),
     Flush(std_mpsc::Sender<()>),
     Close(std_mpsc::Sender<()>),
 }
 
-#[doc(hidden)]
 pub(crate) enum NdjsonBodyMessage {
     Event(Vec<u8>),
     Flush(std_mpsc::Sender<()>),
 }
 
 impl NdjsonBodyMessage {
-    #[doc(hidden)]
     pub(crate) fn acknowledge_if_flush(self) {
         if let Self::Flush(done) = self {
             let _ = done.send(());
@@ -713,7 +696,6 @@ impl NdjsonBodyMessage {
     }
 }
 
-#[doc(hidden)]
 pub(crate) struct AtofEndpointWorker {
     pub sender: tokio::sync::mpsc::UnboundedSender<EndpointMessage>,
     pub timeout: Duration,
@@ -723,7 +705,6 @@ pub(crate) struct AtofEndpointWorker {
 
 /// Validated endpoint settings with headers resolved at activation.
 #[derive(Debug)]
-#[doc(hidden)]
 pub(crate) struct ActivatedAtofEndpoint {
     pub config: AtofEndpointConfig,
     pub headers: reqwest::header::HeaderMap,
@@ -731,7 +712,6 @@ pub(crate) struct ActivatedAtofEndpoint {
 }
 
 #[derive(Clone)]
-#[doc(hidden)]
 pub(crate) struct EndpointDiagnostics {
     pub recorder: ExporterRuntimeDiagnosticsRecorder,
     pub transport: AtofEndpointTransport,
@@ -739,7 +719,6 @@ pub(crate) struct EndpointDiagnostics {
 }
 
 impl EndpointDiagnostics {
-    #[doc(hidden)]
     pub(crate) fn record(&self, code: &str, detail: &str, count: u64) {
         self.recorder.record(
             code,
@@ -752,39 +731,32 @@ impl EndpointDiagnostics {
         );
     }
 
-    #[doc(hidden)]
     pub(crate) fn endpoint_disabled(&self, detail: &str) {
         self.record(ATOF_STREAM_ENDPOINT_DISABLED, detail, 1);
     }
 
-    #[doc(hidden)]
     pub(crate) fn connection_failed(&self, detail: &str) {
         self.record(ATOF_STREAM_CONNECTION_FAILED, detail, 1);
     }
 
-    #[doc(hidden)]
     pub(crate) fn delivery_failed(&self, detail: &str, count: u64) {
         self.record(ATOF_STREAM_DELIVERY_FAILED, detail, count);
     }
 
-    #[doc(hidden)]
     pub(crate) fn events_dropped(&self, detail: &str, count: u64) {
         self.record(ATOF_STREAM_EVENTS_DROPPED, detail, count);
     }
 
-    #[doc(hidden)]
     pub(crate) fn flush_failed(&self, detail: &str) {
         self.record(ATOF_STREAM_FLUSH_FAILED, detail, 1);
     }
 
-    #[doc(hidden)]
     pub(crate) fn close_failed(&self, detail: &str) {
         self.record(ATOF_STREAM_CLOSE_FAILED, detail, 1);
     }
 }
 
 impl AtofEndpointWorker {
-    #[doc(hidden)]
     pub(crate) fn enqueue(&self, raw_json: String) {
         if self.sender.send(EndpointMessage::Event(raw_json)).is_err() {
             self.diagnostics
@@ -792,7 +764,6 @@ impl AtofEndpointWorker {
         }
     }
 
-    #[doc(hidden)]
     pub(crate) fn flush(&self) {
         let (tx, rx) = std_mpsc::channel();
         let Err(failure) = self.send_and_wait(EndpointMessage::Flush(tx), &rx) else {
@@ -811,7 +782,6 @@ impl AtofEndpointWorker {
             .flush_failed(&failure.detail("a flush", self.timeout));
     }
 
-    #[doc(hidden)]
     pub(crate) fn close(&self) {
         let (tx, rx) = std_mpsc::channel();
         let Err(failure) = self.send_and_wait(EndpointMessage::Close(tx), &rx) else {
@@ -830,7 +800,6 @@ impl AtofEndpointWorker {
             .close_failed(&failure.detail("close", self.timeout));
     }
 
-    #[doc(hidden)]
     pub(crate) fn send_and_wait(
         &self,
         message: EndpointMessage,
@@ -848,14 +817,12 @@ impl AtofEndpointWorker {
 }
 
 /// Why the endpoint worker did not acknowledge a flush or close request.
-#[doc(hidden)]
 pub(crate) enum Unacknowledged {
     WorkerStopped,
     Timeout,
 }
 
 impl Unacknowledged {
-    #[doc(hidden)]
     pub(crate) fn reason(&self) -> &'static str {
         match self {
             Self::WorkerStopped => "worker_stopped",
@@ -863,7 +830,6 @@ impl Unacknowledged {
         }
     }
 
-    #[doc(hidden)]
     pub(crate) fn detail(&self, operation: &str, timeout: Duration) -> String {
         match self {
             Self::WorkerStopped => {
@@ -877,7 +843,6 @@ impl Unacknowledged {
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn start_endpoint_workers(
     configs: &[AtofStreamSinkConfig],
     plaintext: &PlaintextPolicy,
@@ -897,7 +862,6 @@ pub(crate) fn start_endpoint_workers(
     Ok(workers)
 }
 
-#[doc(hidden)]
 pub(crate) fn start_endpoint_worker(
     index: usize,
     config: AtofEndpointConfig,
@@ -943,7 +907,6 @@ pub(crate) fn start_endpoint_worker(
     })
 }
 
-#[doc(hidden)]
 pub(crate) fn validate_endpoint_config(
     config: AtofEndpointConfig,
     plaintext: &PlaintextPolicy,
@@ -1000,7 +963,6 @@ pub(crate) fn validate_endpoint_config(
     })
 }
 
-#[doc(hidden)]
 pub(crate) fn resolved_header_map(
     headers: &HashMap<String, String>,
     header_env: &HashMap<String, String>,
@@ -1038,7 +1000,6 @@ pub(crate) fn resolved_header_map(
     Ok(out)
 }
 
-#[doc(hidden)]
 pub(crate) fn run_endpoint_worker(
     index: usize,
     endpoint: ActivatedAtofEndpoint,
@@ -1078,7 +1039,6 @@ pub(crate) fn run_endpoint_worker(
     });
 }
 
-#[doc(hidden)]
 pub(crate) async fn run_http_post_endpoint(
     index: usize,
     endpoint: ActivatedAtofEndpoint,
@@ -1194,7 +1154,6 @@ pub(crate) async fn run_http_post_endpoint(
     }
 }
 
-#[doc(hidden)]
 pub(crate) async fn run_websocket_endpoint(
     index: usize,
     endpoint: ActivatedAtofEndpoint,
@@ -1263,12 +1222,10 @@ pub(crate) async fn run_websocket_endpoint(
     }
 }
 
-#[doc(hidden)]
 pub(crate) type AtofWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Default)]
-#[doc(hidden)]
 pub(crate) struct WebSocketRetryState {
     pub attempts: u64,
     pub warning_emitted: bool,
@@ -1276,7 +1233,6 @@ pub(crate) struct WebSocketRetryState {
 }
 
 impl WebSocketRetryState {
-    #[doc(hidden)]
     pub(crate) fn record_failure(
         &mut self,
         index: usize,
@@ -1298,7 +1254,6 @@ impl WebSocketRetryState {
         }
     }
 
-    #[doc(hidden)]
     pub(crate) fn record_recovered(&mut self, index: usize) {
         if self.attempts > 0 {
             log::info!(
@@ -1329,7 +1284,6 @@ impl WebSocketRetryState {
     }
 }
 
-#[doc(hidden)]
 pub(crate) async fn drain_websocket_pending(
     index: usize,
     endpoint: &ActivatedAtofEndpoint,
@@ -1360,7 +1314,6 @@ pub(crate) async fn drain_websocket_pending(
     }
 }
 
-#[doc(hidden)]
 pub(crate) async fn drain_websocket_pending_inner(
     index: usize,
     endpoint: &ActivatedAtofEndpoint,
@@ -1414,7 +1367,6 @@ pub(crate) async fn drain_websocket_pending_inner(
     true
 }
 
-#[doc(hidden)]
 pub(crate) async fn connect_websocket(
     endpoint: &ActivatedAtofEndpoint,
 ) -> std::result::Result<AtofWebSocket, String> {
@@ -1455,7 +1407,6 @@ pub(crate) async fn connect_websocket(
 }
 
 /// Describe a WebSocket error without the endpoint URL.
-#[doc(hidden)]
 pub(crate) fn websocket_error_detail(error: &tokio_tungstenite::tungstenite::Error) -> String {
     use tokio_tungstenite::tungstenite::Error;
     use tokio_tungstenite::tungstenite::error::UrlError;
@@ -1476,7 +1427,6 @@ pub(crate) fn websocket_error_detail(error: &tokio_tungstenite::tungstenite::Err
     }
 }
 
-#[doc(hidden)]
 pub(crate) async fn run_ndjson_endpoint(
     index: usize,
     endpoint: ActivatedAtofEndpoint,
@@ -1569,7 +1519,6 @@ pub(crate) async fn run_ndjson_endpoint(
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn build_ndjson_client(
     endpoint: &ActivatedAtofEndpoint,
 ) -> std::result::Result<reqwest::Client, String> {
@@ -1596,7 +1545,6 @@ pub(crate) fn build_ndjson_client(
 }
 
 /// Return the upload body channel and a count of events read by the HTTP client.
-#[doc(hidden)]
 pub(crate) fn ndjson_body_channel() -> (
     tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
     reqwest::Body,
@@ -1623,7 +1571,6 @@ pub(crate) fn ndjson_body_channel() -> (
     (body_tx, reqwest::Body::wrap_stream(body_stream), written)
 }
 
-#[doc(hidden)]
 pub(crate) fn send_ndjson_event(
     index: usize,
     body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
@@ -1642,7 +1589,6 @@ pub(crate) fn send_ndjson_event(
     true
 }
 
-#[doc(hidden)]
 pub(crate) fn reject_ndjson_event(
     index: usize,
     reason: &'static str,
@@ -1660,7 +1606,6 @@ pub(crate) fn reject_ndjson_event(
     diagnostics.delivery_failed("ended its upload before an event was written", 1);
 }
 
-#[doc(hidden)]
 pub(crate) fn reject_ndjson_flush(
     index: usize,
     reason: &'static str,
@@ -1678,7 +1623,6 @@ pub(crate) fn reject_ndjson_flush(
     diagnostics.flush_failed("ended its upload before a flush was acknowledged");
 }
 
-#[doc(hidden)]
 pub(crate) fn send_ndjson_flush(
     index: usize,
     body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
@@ -1691,11 +1635,9 @@ pub(crate) fn send_ndjson_flush(
     }
 }
 
-#[doc(hidden)]
 pub(crate) type NdjsonUploadOutcome =
     std::result::Result<reqwest::Result<reqwest::Response>, tokio::task::JoinError>;
 
-#[doc(hidden)]
 pub(crate) async fn finish_ndjson_upload(
     index: usize,
     upload: impl std::future::Future<Output = NdjsonUploadOutcome>,
@@ -1726,7 +1668,6 @@ pub(crate) async fn finish_ndjson_upload(
     let _ = done.send(());
 }
 
-#[doc(hidden)]
 pub(crate) fn report_ndjson_upload(
     index: usize,
     outcome: NdjsonUploadOutcome,
@@ -1793,7 +1734,6 @@ pub(crate) fn report_ndjson_upload(
     }
 }
 
-#[doc(hidden)]
 pub(crate) async fn drain_closed(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
     diagnostics: &EndpointDiagnostics,
@@ -1814,7 +1754,6 @@ pub(crate) async fn drain_closed(
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String) -> String {
     match config.field_name_policy {
         AtofEndpointFieldNamePolicy::Preserve => raw_json,
@@ -1822,7 +1761,6 @@ pub(crate) fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String)
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn replace_dotted_field_names(raw_json: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<Json>(raw_json) else {
         return raw_json.to_string();
@@ -1831,7 +1769,6 @@ pub(crate) fn replace_dotted_field_names(raw_json: &str) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| raw_json.to_string())
 }
 
-#[doc(hidden)]
 pub(crate) fn replace_dotted_value_keys(value: &mut Json) {
     match value {
         Json::Object(object) => replace_dotted_object_keys(object),
@@ -1844,7 +1781,6 @@ pub(crate) fn replace_dotted_value_keys(value: &mut Json) {
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Json>) {
     let mut old = std::mem::take(object)
         .into_iter()
@@ -1862,7 +1798,6 @@ pub(crate) fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Js
     }
 }
 
-#[doc(hidden)]
 pub(crate) fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> String {
     if !object.contains_key(&key) {
         return key;
@@ -1876,7 +1811,6 @@ pub(crate) fn collision_free_key(object: &serde_json::Map<String, Json>, key: St
     unreachable!("unbounded suffix search must find a key")
 }
 
-#[doc(hidden)]
 pub(crate) fn log_http_error(index: usize, transport: &str, status: reqwest::StatusCode) {
     log::warn!(
         target: "nemo_relay.observability",

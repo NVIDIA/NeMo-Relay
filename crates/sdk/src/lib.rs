@@ -131,6 +131,17 @@ pub mod subscriber {
 /// Adaptive contribution recording for Rust integrations.
 pub use nemo_relay_runtime::api::optimization;
 /// Plugin contracts, configuration, and activation.
+///
+/// Initialize through the functions in this module so the SDK composes its
+/// built-in plugins before validation and activation. Host-only constructors
+/// are not available on the returned handle:
+///
+/// ```compile_fail,E0624
+/// use nemo_relay::plugin::{PluginConfig, PluginHostActivation};
+/// async fn bypass_composition() {
+///     let _ = PluginHostActivation::initialize_exact(PluginConfig::default()).await;
+/// }
+/// ```
 pub mod plugin {
     pub use nemo_relay_builtins::plugin::{
         ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
@@ -140,7 +151,9 @@ pub mod plugin {
         validate_exact, validate_static_plugin_config,
     };
     pub use nemo_relay_plugin::component::{
-        ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginRegistrar,
+        ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
+        PluginRegistrar, PluginRegistration, PluginRegistrationCleanupOutcome, Result,
+        RuntimeDiagnostic, UnsupportedBehavior, apply_global_config_policy,
     };
 }
 /// Structured resource measurements and on-demand collection.

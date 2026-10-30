@@ -128,8 +128,7 @@ static OPEN_WRITERS: LazyLock<Mutex<HashMap<PathBuf, Weak<SharedFileWriter>>>> =
 /// `<root>/../elsewhere`; every component after `root` has to be a plain name.
 /// `open_private` enforces this when it opens the file, but a reused handle
 /// never reaches that call and the parent is created before it.
-#[doc(hidden)]
-pub fn is_confined_output(root: &Path, path: &Path) -> bool {
+pub(crate) fn is_confined_output(root: &Path, path: &Path) -> bool {
     path.strip_prefix(root).is_ok_and(|relative| {
         !relative.as_os_str().is_empty()
             && relative
@@ -139,8 +138,7 @@ pub fn is_confined_output(root: &Path, path: &Path) -> bool {
 }
 
 /// Identifies an output file for the registry.
-#[doc(hidden)]
-pub fn writer_key(path: &Path) -> PathBuf {
+pub(crate) fn writer_key(path: &Path) -> PathBuf {
     let resolved_parent = path
         .parent()
         .and_then(|parent| parent.canonicalize().ok())
@@ -151,8 +149,7 @@ pub fn writer_key(path: &Path) -> PathBuf {
     }
 }
 
-#[doc(hidden)]
-pub fn shared_writer(
+pub(crate) fn shared_writer(
     root: &Path,
     path: &Path,
     format: OtlpFileFormat,
@@ -328,27 +325,23 @@ impl SpanExporter for OtlpFileSpanExporter {
 }
 
 /// Reports a frame the length prefix cannot describe.
-#[doc(hidden)]
-pub fn frame_too_large(length: usize) -> String {
+pub(crate) fn frame_too_large(length: usize) -> String {
     format!("OTLP export of {length} bytes exceeds the length-delimited frame maximum")
 }
 
 /// Reports a failed export write.
-#[doc(hidden)]
-pub fn write_failure(path: &Path, error: &std::io::Error) -> OTelSdkError {
+pub(crate) fn write_failure(path: &Path, error: &std::io::Error) -> OTelSdkError {
     OTelSdkError::InternalFailure(format!("failed to write OTLP export to {path:?}: {error}"))
 }
 
 /// Reports a failed flush, shared by `shutdown_with_timeout` and `force_flush`.
-#[doc(hidden)]
-pub fn flush_failure(path: &Path, error: &std::io::Error) -> OTelSdkError {
+pub(crate) fn flush_failure(path: &Path, error: &std::io::Error) -> OTelSdkError {
     OTelSdkError::InternalFailure(format!(
         "failed to flush OTLP output file {path:?}: {error}"
     ))
 }
 
-#[doc(hidden)]
-pub fn lock_poisoned(path: &Path) -> String {
+pub(crate) fn lock_poisoned(path: &Path) -> String {
     format!("the OTLP file exporter state lock for {path:?} was poisoned")
 }
 

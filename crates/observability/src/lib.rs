@@ -117,8 +117,7 @@ pub fn total_tokens_including_cache(
 /// false, so the input total of an OpenAI-shaped response for a Claude model does not count its
 /// cache tokens twice. A custom or undeclared shape returns true only when the provider name
 /// starts with `anthropic` or `claude` in any case.
-#[doc(hidden)]
-pub fn uses_separate_anthropic_cache_tokens(
+pub(crate) fn uses_separate_anthropic_cache_tokens(
     provider: Option<&str>,
     response: Option<&AnnotatedLlmResponse>,
 ) -> bool {
@@ -183,8 +182,7 @@ pub fn default_mark_exclude_names() -> Vec<String> {
 
 pub use nemo_relay_types::trace::{format_traceparent, relay_span_id, relay_trace_id};
 
-#[doc(hidden)]
-pub fn push_common_optimization_attributes(
+pub(crate) fn push_common_optimization_attributes(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
@@ -195,8 +193,7 @@ pub fn push_common_optimization_attributes(
     push_optimization_pricing_provenance(attributes, summary);
 }
 
-#[doc(hidden)]
-pub fn push_optimization_models_and_tokens(
+pub(crate) fn push_optimization_models_and_tokens(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
@@ -226,8 +223,7 @@ pub fn push_optimization_models_and_tokens(
     }
 }
 
-#[doc(hidden)]
-pub fn push_optimization_cost(
+pub(crate) fn push_optimization_cost(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     label: &str,
     cost: Option<&nemo_relay_types::codec::response::CostEstimate>,
@@ -259,8 +255,7 @@ pub fn push_optimization_cost(
     }
 }
 
-#[doc(hidden)]
-pub fn push_optimization_savings_and_status(
+pub(crate) fn push_optimization_savings_and_status(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
@@ -292,8 +287,7 @@ pub fn push_optimization_savings_and_status(
     ));
 }
 
-#[doc(hidden)]
-pub fn push_optimization_pricing_provenance(
+pub(crate) fn push_optimization_pricing_provenance(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
 ) {
@@ -386,14 +380,12 @@ pub fn validate_metadata_promotion_prefixes(
     Ok(())
 }
 
-#[doc(hidden)]
-pub fn is_valid_metadata_promotion_prefix(prefix: &str) -> bool {
+pub(crate) fn is_valid_metadata_promotion_prefix(prefix: &str) -> bool {
     let key = prefix.strip_suffix('.').unwrap_or(prefix);
     is_valid_event_metadata_attribute_key(key)
 }
 
-#[doc(hidden)]
-pub fn is_blank_attribute_mapping_name(value: &str) -> bool {
+pub(crate) fn is_blank_attribute_mapping_name(value: &str) -> bool {
     value.chars().all(|character| {
         character.is_whitespace()
             || matches!(
@@ -513,8 +505,7 @@ pub fn push_serialized_top_level_attributes<T: Serialize + ?Sized>(
     }
 }
 
-#[doc(hidden)]
-pub fn push_top_level_json_value(
+pub(crate) fn push_top_level_json_value(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     key: &str,
     value: &nemo_relay_types::Json,
@@ -583,8 +574,7 @@ pub const RESERVED_OTEL_ATTRIBUTE_NAMESPACES: &[&str] = &[
     "user.",
 ];
 
-#[doc(hidden)]
-pub fn is_reserved_otel_attribute_key(key: &str) -> bool {
+pub(crate) fn is_reserved_otel_attribute_key(key: &str) -> bool {
     key == "metadata"
         || RESERVED_OTEL_ATTRIBUTE_NAMESPACES
             .iter()
@@ -644,8 +634,7 @@ pub fn promote_event_metadata_attributes(
     result
 }
 
-#[doc(hidden)]
-pub fn metadata_value_to_otel(
+pub(crate) fn metadata_value_to_otel(
     value: &nemo_relay_types::Json,
 ) -> std::result::Result<opentelemetry::Value, &'static str> {
     use opentelemetry::Value;
@@ -660,8 +649,7 @@ pub fn metadata_value_to_otel(
     }
 }
 
-#[doc(hidden)]
-pub fn metadata_number_to_otel(
+pub(crate) fn metadata_number_to_otel(
     value: &serde_json::Number,
 ) -> std::result::Result<opentelemetry::Value, &'static str> {
     use opentelemetry::Value;
@@ -680,8 +668,7 @@ pub fn metadata_number_to_otel(
         .ok_or("number is not representable as an OTLP attribute")
 }
 
-#[doc(hidden)]
-pub fn metadata_array_to_otel(
+pub(crate) fn metadata_array_to_otel(
     values: &[nemo_relay_types::Json],
 ) -> std::result::Result<opentelemetry::Value, &'static str> {
     use opentelemetry::{Array, Value};
@@ -710,8 +697,7 @@ pub fn metadata_array_to_otel(
     }
 }
 
-#[doc(hidden)]
-pub fn metadata_number_array_to_otel(
+pub(crate) fn metadata_number_array_to_otel(
     values: &[nemo_relay_types::Json],
 ) -> std::result::Result<opentelemetry::Value, &'static str> {
     use opentelemetry::{Array, Value};
@@ -810,8 +796,7 @@ pub fn attribute_mapping_aliases(
 ///
 /// Agent hook adapters may preserve the canonical event name in metadata while
 /// using a generic mark name, so both representations are matched.
-#[doc(hidden)]
-pub fn mark_name_is_excluded(
+pub(crate) fn mark_name_is_excluded(
     event: &nemo_relay_types::api::event::Event,
     excluded_names: &[String],
 ) -> bool {
@@ -943,8 +928,7 @@ pub fn model_name_for_llm_event(event: &EventView<'_>) -> Option<String> {
         .or(manual_request_model)
 }
 
-#[doc(hidden)]
-pub fn set_span_status_from_event_metadata<S>(
+pub(crate) fn set_span_status_from_event_metadata<S>(
     span: &mut S,
     event: &nemo_relay_types::api::event::Event,
 ) where

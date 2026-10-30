@@ -69,7 +69,7 @@ pub async fn initialize_with_diagnostics(
 /// Activate an exact configuration without discovering additional files.
 pub async fn initialize_exact(config: PluginConfig) -> Result<PluginHostActivation> {
     crate::initialize_runtime();
-    PluginHostActivation::initialize_exact(config).await
+    host::initialize_exact(config).await
 }
 /// Activate CLI-verified artifacts under the runtime host's lease.
 pub async fn initialize_with_verified_specs<I>(
@@ -80,7 +80,7 @@ where
     I: IntoIterator<Item = host::VerifiedDynamicPluginSpec>,
 {
     crate::initialize_runtime();
-    PluginHostActivation::initialize_with_verified_specs(config, dynamic_plugins).await
+    host::initialize_with_verified_specs(config, dynamic_plugins).await
 }
 
 /// Register an application plugin after reserving the default built-in kinds.

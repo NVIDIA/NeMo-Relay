@@ -13,8 +13,7 @@ static TEST_PLUGIN_HOST: LazyLock<Mutex<Option<PluginHostActivation>>> =
 
 pub async fn test_initialize_plugin_host_exact(config: PluginConfig) -> Result<ConfigReport> {
     test_close_plugin_host()?;
-    let activation =
-        nemo_relay_plugin_host::dynamic::PluginHostActivation::initialize_exact(config).await?;
+    let activation = nemo_relay_plugin_host::initialize_exact(config).await?;
     let report = activation.report().config;
     *TEST_PLUGIN_HOST.lock().map_err(|error| {
         PluginError::Internal(format!("test plugin host lock poisoned: {error}"))

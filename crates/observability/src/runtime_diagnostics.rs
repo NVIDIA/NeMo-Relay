@@ -142,8 +142,7 @@ impl ExporterRuntimeDiagnosticsRecorder {
     }
 }
 
-#[doc(hidden)]
-pub fn truncate_runtime_diagnostic_message(message: String) -> String {
+pub(crate) fn truncate_runtime_diagnostic_message(message: String) -> String {
     if message.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
         return message;
     }
@@ -155,8 +154,7 @@ pub fn truncate_runtime_diagnostic_message(message: String) -> String {
     truncated
 }
 
-#[doc(hidden)]
-pub fn combine_runtime_diagnostic_messages(messages: &BTreeSet<String>) -> String {
+pub(crate) fn combine_runtime_diagnostic_messages(messages: &BTreeSet<String>) -> String {
     messages
         .iter()
         .fold(String::new(), |mut combined, message| {

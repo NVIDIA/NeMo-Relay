@@ -20,13 +20,11 @@ pub enum ManualCostPolicy {
     AtifUsdOnly,
 }
 
-#[doc(hidden)]
-pub fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
+pub(crate) fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
     output?.as_object()?.get("model").and_then(Json::as_str)
 }
 
-#[doc(hidden)]
-pub fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
+pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
     let object = output?.as_object()?;
     let usage = object.get("usage").and_then(Json::as_object);
     let token_usage = object.get("token_usage").and_then(Json::as_object);
@@ -128,8 +126,7 @@ pub fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
     })
 }
 
-#[doc(hidden)]
-pub fn cost_from_manual_llm_output(
+pub(crate) fn cost_from_manual_llm_output(
     output: Option<&Json>,
     policy: ManualCostPolicy,
 ) -> Option<(f64, String)> {
@@ -141,8 +138,7 @@ pub fn cost_from_manual_llm_output(
         .or_else(|| token_usage.and_then(|usage| cost_from_manual_usage(usage, policy)))
 }
 
-#[doc(hidden)]
-pub fn cost_from_manual_usage(
+pub(crate) fn cost_from_manual_usage(
     usage: &Map<String, Json>,
     policy: ManualCostPolicy,
 ) -> Option<(f64, String)> {
@@ -192,8 +188,7 @@ impl ManualCostPolicy {
 // Keep a reported total only when it is internally consistent with the component
 // counts. Deriving a total from components is a provider-specific concern owned by
 // the provider codecs, not this manual fallback, so an absent total stays absent.
-#[doc(hidden)]
-pub fn normalize_total_tokens(
+pub(crate) fn normalize_total_tokens(
     total_tokens: Option<u64>,
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
@@ -209,8 +204,7 @@ pub fn normalize_total_tokens(
     }
 }
 
-#[doc(hidden)]
-pub fn first_u64_from_manual_usage(
+pub(crate) fn first_u64_from_manual_usage(
     usage: Option<&Map<String, Json>>,
     token_usage: Option<&Map<String, Json>>,
     keys: &[&str],
@@ -220,8 +214,7 @@ pub fn first_u64_from_manual_usage(
         .or_else(|| token_usage.and_then(|value| first_u64(value, keys)))
 }
 
-#[doc(hidden)]
-pub fn first_nested_u64_from_manual_usage(
+pub(crate) fn first_nested_u64_from_manual_usage(
     usage: Option<&Map<String, Json>>,
     token_usage: Option<&Map<String, Json>>,
     parent_key: &str,
@@ -232,14 +225,16 @@ pub fn first_nested_u64_from_manual_usage(
         .or_else(|| token_usage.and_then(|value| nested_u64(value, parent_key, child_key)))
 }
 
-#[doc(hidden)]
-pub fn first_u64(usage: &Map<String, Json>, keys: &[&str]) -> Option<u64> {
+pub(crate) fn first_u64(usage: &Map<String, Json>, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| usage.get(*key).and_then(Json::as_u64))
 }
 
-#[doc(hidden)]
-pub fn nested_u64(usage: &Map<String, Json>, parent_key: &str, child_key: &str) -> Option<u64> {
+pub(crate) fn nested_u64(
+    usage: &Map<String, Json>,
+    parent_key: &str,
+    child_key: &str,
+) -> Option<u64> {
     usage
         .get(parent_key)
         .and_then(Json::as_object)

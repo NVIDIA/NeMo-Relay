@@ -674,8 +674,7 @@ impl OpenTelemetryMetricSubscriber {
     }
 }
 
-#[doc(hidden)]
-pub fn dynamic_metric_providers(
+pub(crate) fn dynamic_metric_providers(
     pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
 ) -> Vec<SdkMeterProvider> {
     pipelines
@@ -686,8 +685,7 @@ pub fn dynamic_metric_providers(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn flush_metric_providers(
+pub(crate) fn flush_metric_providers(
     provider: SdkMeterProvider,
     dynamic_providers: Vec<SdkMeterProvider>,
 ) -> std::result::Result<(), String> {
@@ -703,8 +701,7 @@ pub fn flush_metric_providers(
     errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn shutdown_metric_providers(
+pub(crate) fn shutdown_metric_providers(
     provider: SdkMeterProvider,
     dynamic_providers: Vec<SdkMeterProvider>,
 ) -> std::result::Result<(), String> {
@@ -718,8 +715,8 @@ pub fn shutdown_metric_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn build_automatic_metric_exporter() -> ExporterInitializationResult<OtlpMetricExporter> {
+pub(crate) fn build_automatic_metric_exporter() -> ExporterInitializationResult<OtlpMetricExporter>
+{
     let builder = OtlpMetricExporter::builder();
     Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
@@ -747,8 +744,7 @@ pub fn build_automatic_metric_exporter() -> ExporterInitializationResult<OtlpMet
     )
 }
 
-#[doc(hidden)]
-pub fn build_metric_exporter(
+pub(crate) fn build_metric_exporter(
     config: &OpenTelemetryMetricConfig,
 ) -> ExporterInitializationResult<OtlpMetricExporter> {
     let exporter = if config.automatic {
@@ -824,8 +820,7 @@ pub fn build_metric_exporter(
     Ok(exporter)
 }
 
-#[doc(hidden)]
-pub fn build_metric_provider(
+pub(crate) fn build_metric_provider(
     config: &OpenTelemetryMetricConfig,
     diagnostics: Arc<MetricDeliveryDiagnostics>,
     resource_attributes: Option<Vec<KeyValue>>,
@@ -867,8 +862,7 @@ pub fn build_metric_provider(
 }
 
 /// Return false at capacity so callers route through the configured base provider.
-#[doc(hidden)]
-pub fn ensure_dynamic_metric_pipeline(
+pub(crate) fn ensure_dynamic_metric_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
     config: &OpenTelemetryMetricConfig,
     instrumentation_scope: &str,
@@ -1242,8 +1236,7 @@ impl MetricEventProcessor {
     }
 }
 
-#[doc(hidden)]
-pub fn gen_ai_stream_time_to_first_chunk_measurement(
+pub(crate) fn gen_ai_stream_time_to_first_chunk_measurement(
     event: &EventView<'_>,
 ) -> Option<ValidatedMetricMeasurement> {
     if event.scope_category() != Some(nemo_relay_types::api::event::ScopeCategory::End)
@@ -1268,8 +1261,7 @@ pub fn gen_ai_stream_time_to_first_chunk_measurement(
     ValidatedMetricMeasurement::try_from(&measurement).ok()
 }
 
-#[doc(hidden)]
-pub fn lock_metric_processor<'a>(
+pub(crate) fn lock_metric_processor<'a>(
     processor: &'a Mutex<MetricEventProcessor>,
     recovery_warned: &AtomicBool,
 ) -> MutexGuard<'a, MetricEventProcessor> {
@@ -1288,8 +1280,7 @@ pub fn lock_metric_processor<'a>(
     }
 }
 
-#[doc(hidden)]
-pub fn metric_attribute_set_fingerprint(attributes: &MetricAttributes) -> Option<[u8; 32]> {
+pub(crate) fn metric_attribute_set_fingerprint(attributes: &MetricAttributes) -> Option<[u8; 32]> {
     if attributes.is_empty() {
         return None;
     }
@@ -1347,13 +1338,11 @@ pub fn metric_attribute_set_fingerprint(attributes: &MetricAttributes) -> Option
     Some(hasher.finalize().into())
 }
 
-#[doc(hidden)]
-pub fn hash_metric_attribute_count(hasher: &mut Sha256, count: usize) {
+pub(crate) fn hash_metric_attribute_count(hasher: &mut Sha256, count: usize) {
     hasher.update((count as u64).to_be_bytes());
 }
 
-#[doc(hidden)]
-pub fn hash_metric_attribute_bytes(hasher: &mut Sha256, value: &[u8]) {
+pub(crate) fn hash_metric_attribute_bytes(hasher: &mut Sha256, value: &[u8]) {
     hash_metric_attribute_count(hasher, value.len());
     hasher.update(value);
 }
@@ -1390,8 +1379,7 @@ impl MetricRecordError {
     }
 }
 
-#[doc(hidden)]
-pub fn build_instrument(
+pub(crate) fn build_instrument(
     meter: &Meter,
     name: &str,
     descriptor: &MetricDescriptor,
@@ -1417,8 +1405,11 @@ macro_rules! configured_instrument {
     }};
 }
 
-#[doc(hidden)]
-pub fn build_counter(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+pub(crate) fn build_counter(
+    meter: &Meter,
+    name: &str,
+    descriptor: &MetricDescriptor,
+) -> CachedInstrument {
     match descriptor.value_type {
         MetricValueType::U64 => CachedInstrument::U64Counter(
             configured_instrument!(meter.u64_counter(name.to_string()), descriptor).build(),
@@ -1430,8 +1421,7 @@ pub fn build_counter(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -
     }
 }
 
-#[doc(hidden)]
-pub fn build_up_down_counter(
+pub(crate) fn build_up_down_counter(
     meter: &Meter,
     name: &str,
     descriptor: &MetricDescriptor,
@@ -1449,8 +1439,11 @@ pub fn build_up_down_counter(
     }
 }
 
-#[doc(hidden)]
-pub fn build_gauge(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+pub(crate) fn build_gauge(
+    meter: &Meter,
+    name: &str,
+    descriptor: &MetricDescriptor,
+) -> CachedInstrument {
     match descriptor.value_type {
         MetricValueType::U64 => CachedInstrument::U64Gauge(
             configured_instrument!(meter.u64_gauge(name.to_string()), descriptor).build(),
@@ -1464,8 +1457,7 @@ pub fn build_gauge(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> 
     }
 }
 
-#[doc(hidden)]
-pub fn build_histogram(
+pub(crate) fn build_histogram(
     meter: &Meter,
     name: &str,
     descriptor: &MetricDescriptor,
@@ -1491,8 +1483,10 @@ pub fn build_histogram(
     }
 }
 
-#[doc(hidden)]
-pub fn record_measurement(instrument: &CachedInstrument, measurement: &ValidatedMetricMeasurement) {
+pub(crate) fn record_measurement(
+    instrument: &CachedInstrument,
+    measurement: &ValidatedMetricMeasurement,
+) {
     let attributes = metric_attributes(&measurement.attributes);
     match (instrument, measurement.value) {
         (CachedInstrument::U64Counter(instrument), MetricValue::U64(value)) => {
@@ -1534,8 +1528,7 @@ pub fn metric_attributes(attributes: &MetricAttributes) -> Vec<KeyValue> {
         .collect()
 }
 
-#[doc(hidden)]
-pub fn metric_attribute_value(value: &AttributeValue) -> Value {
+pub(crate) fn metric_attribute_value(value: &AttributeValue) -> Value {
     match value {
         AttributeValue::String(value) => Value::String(value.clone().into()),
         AttributeValue::Bool(value) => Value::Bool(*value),

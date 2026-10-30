@@ -45,8 +45,7 @@ pub const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
 #[doc(hidden)]
 pub const GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: &str = "gen_ai.usage.cache_write.input_tokens";
 
-#[doc(hidden)]
-pub fn has_gen_ai_semantics(event: &EventView<'_>) -> bool {
+pub(crate) fn has_gen_ai_semantics(event: &EventView<'_>) -> bool {
     matches!(
         event.scope_type(),
         Some(
@@ -59,8 +58,7 @@ pub fn has_gen_ai_semantics(event: &EventView<'_>) -> bool {
     ) || is_agent_turn(event)
 }
 
-#[doc(hidden)]
-pub fn is_agent_turn(event: &EventView<'_>) -> bool {
+pub(crate) fn is_agent_turn(event: &EventView<'_>) -> bool {
     event.scope_type() == Some(ScopeType::Custom)
         && event
             .metadata()
@@ -92,8 +90,7 @@ pub fn span_name(event: &EventView<'_>) -> String {
     )
 }
 
-#[doc(hidden)]
-pub fn span_kind(event: &EventView<'_>) -> SpanKind {
+pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
     match event.scope_type() {
         Some(ScopeType::Agent | ScopeType::Tool) => SpanKind::Internal,
         Some(ScopeType::Llm | ScopeType::Embedder | ScopeType::Retriever) => SpanKind::Client,
@@ -175,8 +172,7 @@ pub fn end_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
 
 /// Build the low-cardinality dimensions required by the standard GenAI client
 /// metrics. Returns `None` when Relay cannot determine the required provider.
-#[doc(hidden)]
-pub fn client_metric_attributes(event: &EventView<'_>) -> Option<Json> {
+pub(crate) fn client_metric_attributes(event: &EventView<'_>) -> Option<Json> {
     let provider = provider_name(event)?;
     let mut attributes = Map::new();
     attributes.insert(
@@ -211,8 +207,10 @@ pub fn client_metric_attributes(event: &EventView<'_>) -> Option<Json> {
     Some(Json::Object(attributes))
 }
 
-#[doc(hidden)]
-pub fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_embedding_response_attributes(
+    attributes: &mut Vec<KeyValue>,
+    event: &EventView<'_>,
+) {
     if let Some(value) = scalar_string(
         event,
         &[semconv::GEN_AI_RESPONSE_MODEL, "response_model", "model"],
@@ -231,8 +229,7 @@ pub fn push_embedding_response_attributes(attributes: &mut Vec<KeyValue>, event:
     }
 }
 
-#[doc(hidden)]
-pub fn operation_name(event: &EventView<'_>) -> &'static str {
+pub(crate) fn operation_name(event: &EventView<'_>) -> &'static str {
     match event.scope_type() {
         Some(ScopeType::Agent) => OPERATION_INVOKE_AGENT,
         Some(ScopeType::Custom) if is_agent_turn(event) => OPERATION_INVOKE_AGENT,
@@ -244,8 +241,7 @@ pub fn operation_name(event: &EventView<'_>) -> &'static str {
     }
 }
 
-#[doc(hidden)]
-pub fn llm_operation_name(event: &EventView<'_>) -> &'static str {
+pub(crate) fn llm_operation_name(event: &EventView<'_>) -> &'static str {
     let name = event.name().to_ascii_lowercase();
     if name.contains("generate_content") || name.contains("generatecontent") {
         OPERATION_GENERATE_CONTENT
@@ -256,8 +252,10 @@ pub fn llm_operation_name(event: &EventView<'_>) -> &'static str {
     }
 }
 
-#[doc(hidden)]
-pub fn push_provider_and_server_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_provider_and_server_attributes(
+    attributes: &mut Vec<KeyValue>,
+    event: &EventView<'_>,
+) {
     if let Some(provider) = provider_name(event) {
         attributes.push(KeyValue::new(semconv::GEN_AI_PROVIDER_NAME, provider));
     }
@@ -269,8 +267,7 @@ pub fn push_provider_and_server_attributes(attributes: &mut Vec<KeyValue>, event
     }
 }
 
-#[doc(hidden)]
-pub fn push_conversation_attribute(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_conversation_attribute(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(conversation_id) = scalar_string(
         event,
         &[
@@ -287,8 +284,7 @@ pub fn push_conversation_attribute(attributes: &mut Vec<KeyValue>, event: &Event
     }
 }
 
-#[doc(hidden)]
-pub fn push_agent_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_agent_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     attributes.push(KeyValue::new(semconv::GEN_AI_AGENT_NAME, agent_name(event)));
     if let Some(value) = scalar_string(
         event,
@@ -305,8 +301,7 @@ pub fn push_agent_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'
     }
 }
 
-#[doc(hidden)]
-pub fn push_explicit_internal_agent_attributes(
+pub(crate) fn push_explicit_internal_agent_attributes(
     attributes: &mut Vec<KeyValue>,
     event: &EventView<'_>,
 ) {
@@ -320,15 +315,16 @@ pub fn push_explicit_internal_agent_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_model_attribute(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_model_attribute(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(model) = request_model(event) {
         attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_MODEL, model));
     }
 }
 
-#[doc(hidden)]
-pub fn push_embedding_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_embedding_request_attributes(
+    attributes: &mut Vec<KeyValue>,
+    event: &EventView<'_>,
+) {
     push_model_attribute(attributes, event);
     if let Some(value) = scalar_i64(
         event,
@@ -356,8 +352,7 @@ pub fn push_embedding_request_attributes(attributes: &mut Vec<KeyValue>, event: 
     }
 }
 
-#[doc(hidden)]
-pub fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     let Some(request) = event.normalized_llm_request() else {
         push_model_attribute(attributes, event);
         return;
@@ -427,8 +422,7 @@ pub fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event
     push_api_specific_request_attributes(attributes, request.api_specific.as_ref());
 }
 
-#[doc(hidden)]
-pub fn push_api_specific_request_attributes(
+pub(crate) fn push_api_specific_request_attributes(
     attributes: &mut Vec<KeyValue>,
     api_specific: Option<&ApiSpecificRequest>,
 ) {
@@ -468,8 +462,7 @@ pub fn push_api_specific_request_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(value) = event.time_to_first_chunk() {
         attributes.push(KeyValue::new(
             semconv::GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
@@ -526,8 +519,7 @@ pub fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Even
     }
 }
 
-#[doc(hidden)]
-pub fn request_reasoning_level(
+pub(crate) fn request_reasoning_level(
     event: &EventView<'_>,
     request: &nemo_relay_types::codec::request::AnnotatedLlmRequest,
 ) -> Option<String> {
@@ -551,8 +543,7 @@ pub fn request_reasoning_level(
     })
 }
 
-#[doc(hidden)]
-pub fn requested_output_type(
+pub(crate) fn requested_output_type(
     event: &EventView<'_>,
     api_specific: Option<&ApiSpecificRequest>,
 ) -> Option<String> {
@@ -574,8 +565,7 @@ pub fn requested_output_type(
     })
 }
 
-#[doc(hidden)]
-pub fn json_output_type(format: &Json) -> Option<String> {
+pub(crate) fn json_output_type(format: &Json) -> Option<String> {
     matches!(
         format.as_object()?.get("type")?.as_str()?,
         "json_object" | "json_schema"
@@ -583,8 +573,7 @@ pub fn json_output_type(format: &Json) -> Option<String> {
     .then(|| "json".to_string())
 }
 
-#[doc(hidden)]
-pub fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> {
+pub(crate) fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> {
     match modalities? {
         [modality] if modality == "audio" => Some("speech".to_string()),
         [modality] if modality == "text" => Some("text".to_string()),
@@ -592,8 +581,7 @@ pub fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> 
     }
 }
 
-#[doc(hidden)]
-pub fn reasoning_output_tokens(
+pub(crate) fn reasoning_output_tokens(
     event: &EventView<'_>,
     response: &AnnotatedLlmResponse,
 ) -> Option<i64> {
@@ -614,15 +602,16 @@ pub fn reasoning_output_tokens(
         })
 }
 
-#[doc(hidden)]
-pub fn gen_ai_input_tokens(event: &EventView<'_>, response: &AnnotatedLlmResponse) -> Option<i64> {
+pub(crate) fn gen_ai_input_tokens(
+    event: &EventView<'_>,
+    response: &AnnotatedLlmResponse,
+) -> Option<i64> {
     let usage = response.usage.as_ref()?;
     let provider = provider_name(event);
     super::input_tokens_including_cache(provider.as_deref(), Some(response), usage).and_then(to_i64)
 }
 
-#[doc(hidden)]
-pub fn input_messages_json(messages: &[Message]) -> Option<String> {
+pub(crate) fn input_messages_json(messages: &[Message]) -> Option<String> {
     if messages.is_empty() {
         return None;
     }
@@ -630,8 +619,7 @@ pub fn input_messages_json(messages: &[Message]) -> Option<String> {
     serde_json::to_string(&messages).ok()
 }
 
-#[doc(hidden)]
-pub fn system_instructions_json(instructions: &MessageContent) -> Option<String> {
+pub(crate) fn system_instructions_json(instructions: &MessageContent) -> Option<String> {
     let parts = content_parts(instructions);
     if parts.is_empty() {
         return None;
@@ -639,8 +627,7 @@ pub fn system_instructions_json(instructions: &MessageContent) -> Option<String>
     serde_json::to_string(&parts).ok()
 }
 
-#[doc(hidden)]
-pub fn input_message(message: &Message) -> Json {
+pub(crate) fn input_message(message: &Message) -> Json {
     let (role, name, mut parts) = match message {
         Message::System { content, name } => ("system", name.as_ref(), content_parts(content)),
         Message::Developer { content, name } => {
@@ -740,8 +727,7 @@ pub fn input_message(message: &Message) -> Json {
     Json::Object(object)
 }
 
-#[doc(hidden)]
-pub fn is_tool_result_message(content: &MessageContent) -> bool {
+pub(crate) fn is_tool_result_message(content: &MessageContent) -> bool {
     matches!(
         content,
         MessageContent::Parts(parts)
@@ -752,8 +738,7 @@ pub fn is_tool_result_message(content: &MessageContent) -> bool {
     )
 }
 
-#[doc(hidden)]
-pub fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
+pub(crate) fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
     let mut parts = response
         .message
         .as_ref()
@@ -788,16 +773,14 @@ pub fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
     serde_json::to_string(&[Json::Object(object)]).ok()
 }
 
-#[doc(hidden)]
-pub fn content_parts(content: &MessageContent) -> Vec<Json> {
+pub(crate) fn content_parts(content: &MessageContent) -> Vec<Json> {
     match content {
         MessageContent::Text(content) => vec![text_part(content)],
         MessageContent::Parts(parts) => parts.iter().map(content_part).collect(),
     }
 }
 
-#[doc(hidden)]
-pub fn content_part(part: &ContentPart) -> Json {
+pub(crate) fn content_part(part: &ContentPart) -> Json {
     match part {
         ContentPart::Text { text, .. } => text_part(text),
         ContentPart::Refusal { refusal, .. } => text_part(refusal),
@@ -826,18 +809,15 @@ pub fn content_part(part: &ContentPart) -> Json {
     }
 }
 
-#[doc(hidden)]
-pub fn serialized_part(kind: &str, part: &ContentPart) -> Json {
+pub(crate) fn serialized_part(kind: &str, part: &ContentPart) -> Json {
     generic_part(kind, &serde_json::to_value(part).unwrap_or(Json::Null))
 }
 
-#[doc(hidden)]
-pub fn text_part(content: &str) -> Json {
+pub(crate) fn text_part(content: &str) -> Json {
     serde_json::json!({"type": "text", "content": content})
 }
 
-#[doc(hidden)]
-pub fn generic_part(kind: &str, value: &Json) -> Json {
+pub(crate) fn generic_part(kind: &str, value: &Json) -> Json {
     let mut object = value
         .as_object()
         .cloned()
@@ -846,22 +826,19 @@ pub fn generic_part(kind: &str, value: &Json) -> Json {
     Json::Object(object)
 }
 
-#[doc(hidden)]
-pub fn message_content_value(content: &MessageContent) -> Json {
+pub(crate) fn message_content_value(content: &MessageContent) -> Json {
     match content {
         MessageContent::Text(text) => Json::String(text.clone()),
         MessageContent::Parts(parts) => serde_json::to_value(parts).unwrap_or(Json::Null),
     }
 }
 
-#[doc(hidden)]
-pub fn push_tool_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_tool_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_NAME, tool_name(event)));
     push_tool_metadata(attributes, event);
 }
 
-#[doc(hidden)]
-pub fn push_tool_metadata(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_tool_metadata(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(value) = tool_metadata_string(event, &[semconv::GEN_AI_TOOL_TYPE, "tool_type"]) {
         attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_TYPE, value));
     }
@@ -890,14 +867,15 @@ pub fn push_tool_metadata(attributes: &mut Vec<KeyValue>, event: &EventView<'_>)
 
 // Tool data is arbitrary user content: a payload's `description`, `tool_type`,
 // or even a dotted semantic key must not masquerade as instrumentation metadata.
-#[doc(hidden)]
-pub fn tool_metadata_string(event: &EventView<'_>, keys: &[&str]) -> Option<String> {
+pub(crate) fn tool_metadata_string(event: &EventView<'_>, keys: &[&str]) -> Option<String> {
     tool_metadata_with_origin(event, keys).map(|(value, _)| value)
 }
 
 // Explicit aliases and typed profile metadata outrank inferred canonical keys.
-#[doc(hidden)]
-pub fn tool_metadata_with_origin(event: &EventView<'_>, keys: &[&str]) -> Option<(String, bool)> {
+pub(crate) fn tool_metadata_with_origin(
+    event: &EventView<'_>,
+    keys: &[&str],
+) -> Option<(String, bool)> {
     let mut fallback = None;
     for key in keys {
         let profile = event
@@ -927,8 +905,9 @@ pub fn tool_metadata_with_origin(event: &EventView<'_>, keys: &[&str]) -> Option
     fallback
 }
 
-#[doc(hidden)]
-pub fn inferred_tool_attribute_keys(event: &EventView<'_>) -> std::collections::HashSet<String> {
+pub(crate) fn inferred_tool_attribute_keys(
+    event: &EventView<'_>,
+) -> std::collections::HashSet<String> {
     [
         (
             semconv::GEN_AI_TOOL_TYPE,
@@ -947,8 +926,11 @@ pub fn inferred_tool_attribute_keys(event: &EventView<'_>) -> std::collections::
     .collect()
 }
 
-#[doc(hidden)]
-pub fn push_tool_content(attributes: &mut Vec<KeyValue>, key: &'static str, value: Option<&Json>) {
+pub(crate) fn push_tool_content(
+    attributes: &mut Vec<KeyValue>,
+    key: &'static str,
+    value: Option<&Json>,
+) {
     let Some(value) = value else { return };
     let parsed = value
         .as_str()
@@ -962,8 +944,7 @@ pub fn push_tool_content(attributes: &mut Vec<KeyValue>, key: &'static str, valu
     }
 }
 
-#[doc(hidden)]
-pub fn push_tool_definitions(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_tool_definitions(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     let Some(request) = event.normalized_llm_request() else {
         return;
     };
@@ -985,8 +966,7 @@ pub fn push_tool_definitions(attributes: &mut Vec<KeyValue>, event: &EventView<'
     }
 }
 
-#[doc(hidden)]
-pub fn push_retrieval_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_retrieval_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     if let Some(value) = data_source_id(event) {
         attributes.push(KeyValue::new(semconv::GEN_AI_DATA_SOURCE_ID, value));
     }
@@ -996,8 +976,7 @@ pub fn push_retrieval_attributes(attributes: &mut Vec<KeyValue>, event: &EventVi
     }
 }
 
-#[doc(hidden)]
-pub fn finish_reason(reason: &FinishReason) -> &str {
+pub(crate) fn finish_reason(reason: &FinishReason) -> &str {
     match reason {
         FinishReason::Complete => "stop",
         FinishReason::Length => "length",
@@ -1007,8 +986,7 @@ pub fn finish_reason(reason: &FinishReason) -> &str {
     }
 }
 
-#[doc(hidden)]
-pub fn request_model(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn request_model(event: &EventView<'_>) -> Option<String> {
     event
         .normalized_llm_request()
         .and_then(|request| request.as_ref().model.clone())
@@ -1021,8 +999,7 @@ pub fn request_model(event: &EventView<'_>) -> Option<String> {
         })
 }
 
-#[doc(hidden)]
-pub fn provider_name(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn provider_name(event: &EventView<'_>) -> Option<String> {
     scalar_string(
         event,
         &[semconv::GEN_AI_PROVIDER_NAME, "provider_name", "provider"],
@@ -1031,8 +1008,7 @@ pub fn provider_name(event: &EventView<'_>) -> Option<String> {
     .or_else(|| provider_from_normalized_request(event).map(str::to_string))
 }
 
-#[doc(hidden)]
-pub fn provider_from_event_name(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn provider_from_event_name(event: &EventView<'_>) -> Option<String> {
     let name = event.name().to_ascii_lowercase();
     [
         ("azure_ai_inference", "azure.ai.inference"),
@@ -1058,8 +1034,7 @@ pub fn provider_from_event_name(event: &EventView<'_>) -> Option<String> {
     .find_map(|(needle, provider)| name.contains(needle).then(|| provider.to_string()))
 }
 
-#[doc(hidden)]
-pub fn provider_from_normalized_request(event: &EventView<'_>) -> Option<&'static str> {
+pub(crate) fn provider_from_normalized_request(event: &EventView<'_>) -> Option<&'static str> {
     let request = event.normalized_llm_request()?;
     match request.as_ref().api_specific.as_ref()? {
         ApiSpecificRequest::AnthropicMessages { .. } => Some("anthropic"),
@@ -1073,8 +1048,7 @@ pub fn provider_from_normalized_request(event: &EventView<'_>) -> Option<&'stati
     }
 }
 
-#[doc(hidden)]
-pub fn agent_name(event: &EventView<'_>) -> String {
+pub(crate) fn agent_name(event: &EventView<'_>) -> String {
     scalar_string(event, &[semconv::GEN_AI_AGENT_NAME]).unwrap_or_else(|| event.name().to_string())
 }
 
@@ -1084,8 +1058,7 @@ pub fn tool_name(event: &EventView<'_>) -> String {
         .unwrap_or_else(|| event.name().to_string())
 }
 
-#[doc(hidden)]
-pub fn data_source_id(event: &EventView<'_>) -> Option<String> {
+pub(crate) fn data_source_id(event: &EventView<'_>) -> Option<String> {
     scalar_string(
         event,
         &[
@@ -1097,8 +1070,7 @@ pub fn data_source_id(event: &EventView<'_>) -> Option<String> {
     )
 }
 
-#[doc(hidden)]
-pub fn push_error_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
+pub(crate) fn push_error_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
     let is_error = event
         .metadata()
         .and_then(Value::as_object)
@@ -1113,8 +1085,7 @@ pub fn push_error_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'
     attributes.push(KeyValue::new(semconv::ERROR_TYPE, error_type));
 }
 
-#[doc(hidden)]
-pub fn scalar_string(event: &EventView<'_>, keys: &[&str]) -> Option<String> {
+pub(crate) fn scalar_string(event: &EventView<'_>, keys: &[&str]) -> Option<String> {
     find_scalar(event, keys, |value| {
         value
             .as_str()
@@ -1123,15 +1094,13 @@ pub fn scalar_string(event: &EventView<'_>, keys: &[&str]) -> Option<String> {
     })
 }
 
-#[doc(hidden)]
-pub fn scalar_i64(event: &EventView<'_>, keys: &[&str]) -> Option<i64> {
+pub(crate) fn scalar_i64(event: &EventView<'_>, keys: &[&str]) -> Option<i64> {
     find_scalar(event, keys, |value| {
         value.as_i64().or_else(|| value.as_u64().and_then(to_i64))
     })
 }
 
-#[doc(hidden)]
-pub fn semantic_string(event: &EventView<'_>, key: &str) -> Option<String> {
+pub(crate) fn semantic_string(event: &EventView<'_>, key: &str) -> Option<String> {
     find_scalar(event, &[key], |value| {
         value
             .as_str()
@@ -1140,8 +1109,7 @@ pub fn semantic_string(event: &EventView<'_>, key: &str) -> Option<String> {
     })
 }
 
-#[doc(hidden)]
-pub fn string_values(event: &EventView<'_>, keys: &[&str]) -> Option<Vec<String>> {
+pub(crate) fn string_values(event: &EventView<'_>, keys: &[&str]) -> Option<Vec<String>> {
     find_scalar(event, keys, |value| match value {
         Json::String(value) if !value.trim().is_empty() => Some(vec![value.clone()]),
         Json::Array(values) => {
@@ -1159,8 +1127,7 @@ pub fn string_values(event: &EventView<'_>, keys: &[&str]) -> Option<Vec<String>
     })
 }
 
-#[doc(hidden)]
-pub fn find_scalar<T>(
+pub(crate) fn find_scalar<T>(
     event: &EventView<'_>,
     keys: &[&str],
     convert: impl Fn(&Json) -> Option<T>,
@@ -1177,8 +1144,7 @@ pub fn find_scalar<T>(
     })
 }
 
-#[doc(hidden)]
-pub fn object_value<'a>(object: &'a Map<String, Json>, key: &str) -> Option<&'a Json> {
+pub(crate) fn object_value<'a>(object: &'a Map<String, Json>, key: &str) -> Option<&'a Json> {
     object.get(key).or_else(|| {
         ["usage", "request", "response"]
             .into_iter()
@@ -1187,8 +1153,7 @@ pub fn object_value<'a>(object: &'a Map<String, Json>, key: &str) -> Option<&'a 
     })
 }
 
-#[doc(hidden)]
-pub fn event_objects<'a>(event: &EventView<'a>) -> Vec<&'a Map<String, Json>> {
+pub(crate) fn event_objects<'a>(event: &EventView<'a>) -> Vec<&'a Map<String, Json>> {
     let event = event.as_event();
     let mut objects = Vec::new();
     if let Some(value) = event.metadata().and_then(Value::as_object) {
@@ -1200,14 +1165,12 @@ pub fn event_objects<'a>(event: &EventView<'a>) -> Vec<&'a Map<String, Json>> {
     objects
 }
 
-#[doc(hidden)]
-pub fn string_array(values: impl IntoIterator<Item = String>) -> opentelemetry::Value {
+pub(crate) fn string_array(values: impl IntoIterator<Item = String>) -> opentelemetry::Value {
     opentelemetry::Value::Array(opentelemetry::Array::String(
         values.into_iter().map(Into::into).collect(),
     ))
 }
 
-#[doc(hidden)]
-pub fn to_i64(value: u64) -> Option<i64> {
+pub(crate) fn to_i64(value: u64) -> Option<i64> {
     i64::try_from(value).ok()
 }

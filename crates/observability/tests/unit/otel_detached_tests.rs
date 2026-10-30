@@ -25,6 +25,16 @@ use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
 
+fn build_tracer_provider(
+    config: &OpenTelemetryConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+) -> Result<SdkTracerProvider> {
+    let config = TraceConfig::Endpoint(config.clone());
+    let attributes = configured_resource_attributes(&config);
+    build_tracer_provider_with_resource(&config, runtime_diagnostics, attributes)
+        .map_err(OpenTelemetryError::from)
+}
+
 #[test]
 fn shutdown_is_idempotent_for_all_otlp_subscribers() {
     let _guard = crate::test_mutex().lock().unwrap();

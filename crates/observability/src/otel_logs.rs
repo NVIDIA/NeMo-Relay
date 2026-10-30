@@ -585,8 +585,7 @@ impl OpenTelemetryLogSubscriber {
     }
 }
 
-#[doc(hidden)]
-pub fn dynamic_log_providers(
+pub(crate) fn dynamic_log_providers(
     pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
 ) -> Vec<SdkLoggerProvider> {
     pipelines
@@ -597,8 +596,7 @@ pub fn dynamic_log_providers(
         .collect()
 }
 
-#[doc(hidden)]
-pub fn flush_log_providers(
+pub(crate) fn flush_log_providers(
     provider: SdkLoggerProvider,
     dynamic_providers: Vec<SdkLoggerProvider>,
 ) -> std::result::Result<(), String> {
@@ -614,8 +612,7 @@ pub fn flush_log_providers(
     errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn shutdown_log_providers(
+pub(crate) fn shutdown_log_providers(
     provider: SdkLoggerProvider,
     dynamic_providers: Vec<SdkLoggerProvider>,
 ) -> std::result::Result<(), String> {
@@ -629,8 +626,7 @@ pub fn shutdown_log_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-#[doc(hidden)]
-pub fn build_automatic_log_exporter() -> ExporterInitializationResult<OtlpLogExporter> {
+pub(crate) fn build_automatic_log_exporter() -> ExporterInitializationResult<OtlpLogExporter> {
     let builder = OtlpLogExporter::builder();
     Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
@@ -658,8 +654,7 @@ pub fn build_automatic_log_exporter() -> ExporterInitializationResult<OtlpLogExp
     )
 }
 
-#[doc(hidden)]
-pub fn build_log_exporter(
+pub(crate) fn build_log_exporter(
     config: &OpenTelemetryLogConfig,
 ) -> ExporterInitializationResult<OtlpLogExporter> {
     let exporter = if config.automatic {
@@ -732,8 +727,7 @@ pub fn build_log_exporter(
     Ok(exporter)
 }
 
-#[doc(hidden)]
-pub fn build_log_provider(
+pub(crate) fn build_log_provider(
     config: &OpenTelemetryLogConfig,
     diagnostics: Arc<LogDeliveryDiagnostics>,
     resource_attributes: Option<Vec<KeyValue>>,
@@ -780,8 +774,7 @@ pub fn build_log_provider(
 }
 
 /// Return false at capacity so callers route through the configured base provider.
-#[doc(hidden)]
-pub fn ensure_dynamic_log_pipeline(
+pub(crate) fn ensure_dynamic_log_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
     config: &OpenTelemetryLogConfig,
     instrumentation_scope: &str,
@@ -1325,8 +1318,7 @@ impl LogEventProcessor {
     }
 }
 
-#[doc(hidden)]
-pub fn mark_severity(event: &EventView<'_>) -> std::result::Result<LogSeverity, String> {
+pub(crate) fn mark_severity(event: &EventView<'_>) -> std::result::Result<LogSeverity, String> {
     let Some(value) = event
         .metadata()
         .and_then(Json::as_object)
@@ -1342,8 +1334,7 @@ pub fn mark_severity(event: &EventView<'_>) -> std::result::Result<LogSeverity, 
         .map_err(|error| error.to_string())
 }
 
-#[doc(hidden)]
-pub fn otel_severity(severity: LogSeverity) -> (Severity, &'static str) {
+pub(crate) fn otel_severity(severity: LogSeverity) -> (Severity, &'static str) {
     match severity {
         LogSeverity::Trace => (Severity::Trace, "TRACE"),
         LogSeverity::Debug => (Severity::Debug, "DEBUG"),
@@ -1353,8 +1344,7 @@ pub fn otel_severity(severity: LogSeverity) -> (Severity, &'static str) {
     }
 }
 
-#[doc(hidden)]
-pub fn add_log_attributes(
+pub(crate) fn add_log_attributes(
     record: &mut opentelemetry_sdk::logs::SdkLogRecord,
     event: &EventView<'_>,
 ) {
@@ -1390,8 +1380,7 @@ pub fn add_log_attributes(
     }
 }
 
-#[doc(hidden)]
-pub fn sanitized_metadata(metadata: Option<&Json>) -> Option<Json> {
+pub(crate) fn sanitized_metadata(metadata: Option<&Json>) -> Option<Json> {
     let metadata = metadata?.clone();
     match metadata {
         Json::Object(mut object) => {
@@ -1402,15 +1391,13 @@ pub fn sanitized_metadata(metadata: Option<&Json>) -> Option<Json> {
     }
 }
 
-#[doc(hidden)]
-pub fn json_body(value: &Json) -> Option<AnyValue> {
+pub(crate) fn json_body(value: &Json) -> Option<AnyValue> {
     (!value.is_null())
         .then(|| json_any_value(value, true))
         .flatten()
 }
 
-#[doc(hidden)]
-pub fn json_any_value(value: &Json, nested: bool) -> Option<AnyValue> {
+pub(crate) fn json_any_value(value: &Json, nested: bool) -> Option<AnyValue> {
     match value {
         Json::Null => nested.then(|| AnyValue::from("null")),
         Json::Bool(value) => Some(AnyValue::Boolean(*value)),
@@ -1437,8 +1424,7 @@ pub fn json_any_value(value: &Json, nested: bool) -> Option<AnyValue> {
     }
 }
 
-#[doc(hidden)]
-pub fn json_map(values: &Map<String, Json>) -> HashMap<Key, AnyValue> {
+pub(crate) fn json_map(values: &Map<String, Json>) -> HashMap<Key, AnyValue> {
     values
         .iter()
         .filter_map(|(key, value)| {

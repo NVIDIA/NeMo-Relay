@@ -34,21 +34,18 @@ pub struct OpenTelemetryTlsConfig {
     pub private_key: Option<String>,
 }
 
-#[doc(hidden)]
-pub fn invalid(field: &str, reason: &str) -> ExporterInitializationError {
+pub(crate) fn invalid(field: &str, reason: &str) -> ExporterInitializationError {
     ExporterInitializationError::InvalidTlsConfiguration(format!("tls.{field}: {reason}"))
 }
 
-#[doc(hidden)]
-pub fn invalid_identity() -> ExporterInitializationError {
+pub(crate) fn invalid_identity() -> ExporterInitializationError {
     invalid(
         "client_certificate/private_key",
         "invalid PEM client identity",
     )
 }
 
-#[doc(hidden)]
-pub fn normalize_private_key(pem: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn normalize_private_key(pem: &[u8]) -> Result<Vec<u8>> {
     // Preserve reqwest's last-key selection, but give both transports one key.
     let key = PrivateKeyDer::pem_slice_iter(pem)
         .collect::<std::result::Result<Vec<_>, _>>()
