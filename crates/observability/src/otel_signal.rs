@@ -73,10 +73,10 @@ pub fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>) -> Res
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct SignalRuntimeDiagnostics {
-    pub recorder: ExporterRuntimeDiagnosticsRecorder,
+    recorder: ExporterRuntimeDiagnosticsRecorder,
     // Shared by every resource pipeline for this trace endpoint. Once set,
     // recreating the subscriber is the only way to resume sending.
-    pub terminal_trace_tls_failure: Arc<OnceLock<&'static str>>,
+    terminal_trace_tls_failure: Arc<OnceLock<&'static str>>,
 }
 
 impl SignalRuntimeDiagnostics {

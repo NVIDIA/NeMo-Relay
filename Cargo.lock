@@ -2211,6 +2211,7 @@ dependencies = [
  "http",
  "log",
  "nemo-relay-codecs",
+ "nemo-relay-logging",
  "nemo-relay-model-pricing",
  "nemo-relay-plugin",
  "nemo-relay-types",

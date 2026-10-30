@@ -1,33 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for Relay OTLP metric routing and recording.
+//! Exporter failures remain logged when the local diagnostic recorder is full.
 
 use super::*;
 use nemo_relay_logging::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
 };
-use nemo_relay_runtime::api::event::{
-    BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,
-    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
-};
-use nemo_relay_types::Json;
-use opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::LogsService;
-use opentelemetry_proto::tonic::collector::logs::v1::{
-    ExportLogsServiceRequest, ExportLogsServiceResponse,
-};
-use opentelemetry_proto::tonic::collector::metrics::v1::metrics_service_server::MetricsService;
-use opentelemetry_proto::tonic::collector::metrics::v1::{
-    ExportMetricsServiceRequest, ExportMetricsServiceResponse,
-};
-use opentelemetry_proto::tonic::common::v1::{KeyValue as OtlpKeyValue, any_value};
-use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
-use serde_json::json;
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::{Temporality, exporter::PushMetricExporter};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -56,7 +39,9 @@ impl PushMetricExporter for FailingMetricExporter {
 
 #[test]
 fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
-    let _logging_lock = crate::test_support::lock_test_logging();
+    let _logging_lock = crate::test_support::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let temporary_directory = tempfile::tempdir().unwrap();
     let log_path = temporary_directory.path().join("metric-export.log.jsonl");
     let runtime = init_logging(&LoggingConfig {
@@ -70,8 +55,7 @@ fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
         ..LoggingConfig::default()
     })
     .unwrap();
-    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None)
-        .with_host(crate::observability_test_support::core_host());
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
     for index in 0..32 {
         runtime_diagnostics.record(
             format!("test.diagnostic.{index}"),

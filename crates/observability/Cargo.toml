@@ -54,6 +54,7 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
+nemo-relay-logging.workspace = true
 nemo-relay-codecs.workspace = true
 rcgen.workspace = true
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }

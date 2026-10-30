@@ -884,7 +884,7 @@ impl Default for OpenTelemetryConfig {
 /// OpenTelemetry-backed NeMo Relay subscriber.
 #[derive(Clone)]
 pub struct OpenTelemetrySubscriber {
-    pub inner: Arc<Inner>,
+    inner: Arc<Inner>,
 }
 
 /// Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
@@ -914,17 +914,16 @@ impl Default for OpenTelemetrySubscriberOptions {
     }
 }
 
-#[doc(hidden)]
-pub struct Inner {
-    pub host: crate::host::HostCell,
+struct Inner {
+    host: crate::host::HostCell,
     // Keep `provider` before `_runtime`: the provider must be dropped before
     // `ExporterRuntime` joins and tears down its Tokio runtime. Do not reorder
     // these fields.
-    pub provider: SdkTracerProvider,
-    pub processor: Arc<Mutex<OtelEventProcessor>>,
-    pub runtime_diagnostics: SignalRuntimeDiagnostics,
-    pub subscriber: EventSubscriberFn,
-    pub _runtime: Option<ExporterRuntime>,
+    provider: SdkTracerProvider,
+    processor: Arc<Mutex<OtelEventProcessor>>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    subscriber: EventSubscriberFn,
+    _runtime: Option<ExporterRuntime>,
 }
 
 impl Drop for Inner {
@@ -945,11 +944,10 @@ impl Drop for Inner {
     }
 }
 
-#[doc(hidden)]
-pub struct ExporterRuntime {
-    pub stop: Option<mpsc::Sender<()>>,
-    pub thread: Option<thread::JoinHandle<()>>,
-    pub runtime_diagnostics: SignalRuntimeDiagnostics,
+pub(crate) struct ExporterRuntime {
+    pub(crate) stop: Option<mpsc::Sender<()>>,
+    pub(crate) thread: Option<thread::JoinHandle<()>>,
+    pub(crate) runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl Drop for ExporterRuntime {
@@ -1205,8 +1203,7 @@ impl OpenTelemetrySubscriber {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[doc(hidden)]
-    pub fn from_tracer_provider_with_scope_and_type(
+    fn from_tracer_provider_with_scope_and_type(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
         otel_type: OpenTelemetryType,
@@ -2162,7 +2159,7 @@ pub struct CompletedSpanContext {
 pub struct DynamicTracePipeline {
     pub provider: SdkTracerProvider,
     pub tracer: SdkTracer,
-    pub _runtime: ExporterRuntime,
+    pub(crate) _runtime: ExporterRuntime,
 }
 
 #[doc(hidden)]

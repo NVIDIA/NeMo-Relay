@@ -43,24 +43,22 @@ impl ExporterRuntimeDiagnostics {
 }
 
 #[derive(Debug, Default)]
-#[doc(hidden)]
-pub struct RuntimeDiagnosticState {
-    pub diagnostics: BTreeMap<String, RuntimeDiagnosticEntry>,
+struct RuntimeDiagnosticState {
+    diagnostics: BTreeMap<String, RuntimeDiagnosticEntry>,
 }
 
 #[derive(Debug)]
-#[doc(hidden)]
-pub struct RuntimeDiagnosticEntry {
-    pub diagnostic: ExporterRuntimeDiagnostic,
-    pub messages: BTreeSet<String>,
+struct RuntimeDiagnosticEntry {
+    diagnostic: ExporterRuntimeDiagnostic,
+    messages: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct ExporterRuntimeDiagnosticsRecorder {
-    pub host: crate::host::HostCell,
-    pub state: Arc<Mutex<RuntimeDiagnosticState>>,
-    pub plugin_field: Option<String>,
+    host: crate::host::HostCell,
+    state: Arc<Mutex<RuntimeDiagnosticState>>,
+    plugin_field: Option<String>,
 }
 
 impl ExporterRuntimeDiagnosticsRecorder {

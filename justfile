@@ -193,6 +193,7 @@ generate_docs_api_references() {
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
+    uv run --no-sync python -m unittest scripts.tests.test_rust_library_reference
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py
 }
 
@@ -1084,7 +1085,7 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay-types --test documentation_examples
+    cargo test --locked -p nemo-relay-types -p nemo-relay --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:

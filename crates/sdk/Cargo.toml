@@ -10,6 +10,9 @@ repository.workspace = true
 description = "Public Rust SDK composition and lifecycle APIs for NeMo Relay."
 readme = "README.md"
 
+# These tests compile shared documentation source available only in the repository.
+exclude = ["tests/documentation_examples.rs"]
+
 [lints]
 workspace = true
 

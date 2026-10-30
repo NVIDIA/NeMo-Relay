@@ -324,20 +324,19 @@ pub fn resolve_http_log_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// OpenTelemetry log-backed Relay event subscriber.
 #[derive(Clone)]
 pub struct OpenTelemetryLogSubscriber {
-    pub inner: Arc<LogSubscriberInner>,
+    inner: Arc<LogSubscriberInner>,
 }
 
-#[doc(hidden)]
-pub struct LogSubscriberInner {
-    pub host: crate::host::HostCell,
+struct LogSubscriberInner {
+    host: crate::host::HostCell,
     // Drop the processor and logger before the provider, then stop its runtime.
-    pub _processor: Arc<Mutex<LogEventProcessor>>,
-    pub provider: SdkLoggerProvider,
-    pub dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicLogPipeline>>>,
-    pub delivery_diagnostics: Arc<LogDeliveryDiagnostics>,
-    pub runtime_diagnostics: SignalRuntimeDiagnostics,
-    pub subscriber: EventSubscriberFn,
-    pub _runtime: SignalExporterRuntime,
+    _processor: Arc<Mutex<LogEventProcessor>>,
+    provider: SdkLoggerProvider,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicLogPipeline>>>,
+    delivery_diagnostics: Arc<LogDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    subscriber: EventSubscriberFn,
+    _runtime: SignalExporterRuntime,
 }
 
 impl Drop for LogSubscriberInner {
@@ -351,11 +350,10 @@ impl Drop for LogSubscriberInner {
     }
 }
 
-#[doc(hidden)]
-pub struct DynamicLogPipeline {
-    pub provider: SdkLoggerProvider,
-    pub logger: SdkLogger,
-    pub _runtime: SignalExporterRuntime,
+struct DynamicLogPipeline {
+    provider: SdkLoggerProvider,
+    logger: SdkLogger,
+    _runtime: SignalExporterRuntime,
 }
 
 impl OpenTelemetryLogSubscriber {
@@ -585,7 +583,7 @@ impl OpenTelemetryLogSubscriber {
     }
 }
 
-pub(crate) fn dynamic_log_providers(
+fn dynamic_log_providers(
     pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
 ) -> Vec<SdkLoggerProvider> {
     pipelines
@@ -774,7 +772,7 @@ pub(crate) fn build_log_provider(
 }
 
 /// Return false at capacity so callers route through the configured base provider.
-pub(crate) fn ensure_dynamic_log_pipeline(
+fn ensure_dynamic_log_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicLogPipeline>>,
     config: &OpenTelemetryLogConfig,
     instrumentation_scope: &str,

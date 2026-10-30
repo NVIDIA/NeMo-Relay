@@ -412,7 +412,7 @@ def _render_heading(node: Tag, page: Page, pages_by_html: dict[Path, Page]) -> s
     if not text or text in {"Auto Trait Implementations", "Blanket Implementations"}:
         return ""
     levels = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}
-    return f"{levels[node.name]} {text}\n\n"
+    return f"{levels[node.name]} {_escape_text(text)}\n\n"
 
 
 def _render_section_header(node: Tag, _page: Page, _pages_by_html: dict[Path, Page], _depth: int) -> str:

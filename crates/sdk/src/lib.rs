@@ -12,6 +12,23 @@
 pub use nemo_relay_builtins::initialize_runtime;
 
 /// Runtime-bound exporter constructors and their configuration contracts.
+///
+/// Exporter pipeline state is private; use lifecycle methods and diagnostic snapshots.
+///
+/// ```compile_fail,E0616
+/// use nemo_relay::exporter::otel::OpenTelemetrySubscriber;
+/// fn pipeline(subscriber: &OpenTelemetrySubscriber) { let _ = &subscriber.inner; }
+/// ```
+///
+/// ```compile_fail,E0616
+/// use nemo_relay::exporter::otel_logs::OpenTelemetryLogSubscriber;
+/// fn pipeline(subscriber: &OpenTelemetryLogSubscriber) { let _ = &subscriber.inner; }
+/// ```
+///
+/// ```compile_fail,E0616
+/// use nemo_relay::exporter::otel_metrics::OpenTelemetryMetricSubscriber;
+/// fn pipeline(subscriber: &OpenTelemetryMetricSubscriber) { let _ = &subscriber.inner; }
+/// ```
 pub mod exporter {
     pub use nemo_relay_builtins::exporter::*;
     pub use nemo_relay_observability::{
@@ -43,9 +60,9 @@ pub mod context {
         PropagationContext, ScopeStackHandle, ThreadScopeStackBinding, capture_propagation_context,
         capture_propagation_context_with_root, capture_rootless_propagation_context,
         capture_thread_scope_stack, capture_traceparent, create_scope_stack,
-        create_scope_stack_from_propagation, fork_scope_stack, propagate_scope_to_thread,
-        restore_thread_scope_stack, set_thread_scope_stack, with_scope_stack,
-        with_task_scope_stack,
+        create_scope_stack_from_propagation, current_scope_stack_snapshot, fork_scope_stack,
+        propagate_scope_to_thread, restore_thread_scope_stack, set_thread_scope_stack,
+        with_scope_stack, with_task_scope_stack,
     };
 }
 /// Scope lifecycle and event emission.

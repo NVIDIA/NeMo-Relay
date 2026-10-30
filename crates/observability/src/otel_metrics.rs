@@ -361,21 +361,20 @@ pub fn resolve_http_metric_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// OpenTelemetry metric-backed Relay event subscriber.
 #[derive(Clone)]
 pub struct OpenTelemetryMetricSubscriber {
-    pub inner: Arc<MetricSubscriberInner>,
+    inner: Arc<MetricSubscriberInner>,
 }
 
-#[doc(hidden)]
-pub struct MetricSubscriberInner {
-    pub host: crate::host::HostCell,
+struct MetricSubscriberInner {
+    host: crate::host::HostCell,
     // Drop instruments and meter before the provider, then stop its runtime.
-    pub _processor: Arc<Mutex<MetricEventProcessor>>,
-    pub router: Arc<MetricRouter>,
-    pub provider: SdkMeterProvider,
-    pub dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
-    pub delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
-    pub runtime_diagnostics: SignalRuntimeDiagnostics,
-    pub subscriber: EventSubscriberFn,
-    pub _runtime: SignalExporterRuntime,
+    _processor: Arc<Mutex<MetricEventProcessor>>,
+    router: Arc<MetricRouter>,
+    provider: SdkMeterProvider,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
+    delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    subscriber: EventSubscriberFn,
+    _runtime: SignalExporterRuntime,
 }
 
 impl Drop for MetricSubscriberInner {
@@ -390,33 +389,29 @@ impl Drop for MetricSubscriberInner {
 }
 
 #[derive(Clone)]
-#[doc(hidden)]
-pub struct MetricProcessorHandle {
-    pub processor: Arc<Mutex<MetricEventProcessor>>,
-    pub recovery_warned: Arc<AtomicBool>,
+struct MetricProcessorHandle {
+    processor: Arc<Mutex<MetricEventProcessor>>,
+    recovery_warned: Arc<AtomicBool>,
 }
 
-#[doc(hidden)]
-pub struct DynamicMetricPipeline {
-    pub provider: SdkMeterProvider,
-    pub handle: MetricProcessorHandle,
-    pub _runtime: SignalExporterRuntime,
+struct DynamicMetricPipeline {
+    provider: SdkMeterProvider,
+    handle: MetricProcessorHandle,
+    _runtime: SignalExporterRuntime,
 }
 
-#[doc(hidden)]
-pub struct MetricRouter {
-    pub base: MetricProcessorHandle,
-    pub dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
-    pub lineage: Mutex<SignalResourceLineage<String>>,
-    pub config: OpenTelemetryMetricConfig,
-    pub instrumentation_scope: String,
-    pub delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
-    pub runtime_diagnostics: SignalRuntimeDiagnostics,
+struct MetricRouter {
+    base: MetricProcessorHandle,
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicMetricPipeline>>>,
+    lineage: Mutex<SignalResourceLineage<String>>,
+    config: OpenTelemetryMetricConfig,
+    instrumentation_scope: String,
+    delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl MetricRouter {
-    #[doc(hidden)]
-    pub fn route(&self, event: &EventView<'_>) -> MetricProcessorHandle {
+    fn route(&self, event: &EventView<'_>) -> MetricProcessorHandle {
         let root_route = || {
             promoted_signal_resource_attributes(
                 event,
@@ -480,8 +475,7 @@ impl MetricRouter {
             .unwrap_or_else(|| self.base.clone())
     }
 
-    #[doc(hidden)]
-    pub fn process_validated(
+    fn process_validated(
         &self,
         event: &EventView<'_>,
         measurements: &[ValidatedMetricMeasurement],
@@ -491,8 +485,7 @@ impl MetricRouter {
         processor.process_validated(event, measurements);
     }
 
-    #[doc(hidden)]
-    pub fn process(&self, event: &EventView<'_>) {
+    fn process(&self, event: &EventView<'_>) {
         let handle = self.route(event);
         let mut processor = lock_metric_processor(&handle.processor, &handle.recovery_warned);
         processor.process(event);
@@ -674,7 +667,7 @@ impl OpenTelemetryMetricSubscriber {
     }
 }
 
-pub(crate) fn dynamic_metric_providers(
+fn dynamic_metric_providers(
     pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
 ) -> Vec<SdkMeterProvider> {
     pipelines
@@ -862,7 +855,7 @@ pub(crate) fn build_metric_provider(
 }
 
 /// Return false at capacity so callers route through the configured base provider.
-pub(crate) fn ensure_dynamic_metric_pipeline(
+fn ensure_dynamic_metric_pipeline(
     pipelines: &Mutex<HashMap<String, DynamicMetricPipeline>>,
     config: &OpenTelemetryMetricConfig,
     instrumentation_scope: &str,
@@ -1565,3 +1558,7 @@ impl OpenTelemetryMetricSubscriber {
 #[cfg(test)]
 #[path = "../tests/unit/otel_metrics_detached_tests.rs"]
 mod otel_metrics_detached_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/otel_metrics_logging_tests.rs"]
+mod logging_tests;

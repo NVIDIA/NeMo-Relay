@@ -284,6 +284,7 @@ docs:
   - 'python/nemo_relay/**'
   - 'scripts/build-docs.sh'
   - 'scripts/docs/**'
+  - 'scripts/tests/test_rust_library_reference.py'
 
 rust:
   - '.agents/plugins/marketplace.json'

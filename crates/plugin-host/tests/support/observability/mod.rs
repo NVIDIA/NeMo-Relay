@@ -13,7 +13,6 @@ pub(crate) mod openinference;
 pub(crate) mod otel;
 pub(crate) mod otel_genai;
 pub(crate) mod otel_logs;
-pub(crate) mod otel_metrics;
 pub(crate) mod otel_signal;
 pub(crate) mod plugin_component;
 pub(crate) mod runtime_diagnostics;

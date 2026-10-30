@@ -505,30 +505,7 @@ relay.registerLlmSanitizeRequestGuardrail(
 </Tab>
 <Tab title="Rust" language="rust">
 
-```rust
-use std::sync::Arc;
-use nemo_relay_runtime::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use nemo_relay::registry::register_llm_sanitize_request_guardrail;
-
-register_llm_sanitize_request_guardrail(
-    "redact-openai-chat",
-    10,
-    Arc::new(|mut request, context| {
-        Box::pin(async move {
-            if context.codec() == &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-                && let Some(codec) = context.resolve_codec()
-                && let Ok(mut annotated) = codec.decode(&request)
-            {
-                annotated.messages.clear();
-                if let Ok(encoded) = codec.encode(&annotated, &request) {
-                    request = encoded;
-                }
-            }
-            Ok(Some(request))
-        })
-    }),
-)?;
-```
+<Code src="_code/redact_openai.rs" language="rust" />
 
 </Tab>
 </Tabs>
