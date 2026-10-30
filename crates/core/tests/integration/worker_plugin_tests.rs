@@ -125,7 +125,6 @@ fn assert_worker_stage_failure(
 }
 
 fn enable_operational_logs() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
 }
 

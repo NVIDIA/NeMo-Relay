@@ -7,7 +7,7 @@ use std::env::VarError;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use crate::error::{FlowError, Result};
+use nemo_relay_types::error::{FlowError, Result};
 use serde::Deserialize;
 
 const LOG_LEVEL_ENV: &str = "NEMO_RELAY_LOG";

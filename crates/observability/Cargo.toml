@@ -55,7 +55,6 @@ windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_Fil
 [dev-dependencies]
 rcgen.workspace = true
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
-spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
 futures.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server", "transport", "router"] }

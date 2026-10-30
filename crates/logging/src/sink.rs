@@ -23,7 +23,7 @@ use super::config::{
 use super::diagnostics::{LoggingDiagnostics, SinkDiagnostics, file_open_failure_reason};
 use super::format::RelayFormatter;
 use super::rotation::{SizeRotatingFileWriter, rotated_log_path};
-use crate::error::{FlowError, Result};
+use nemo_relay_types::error::{FlowError, Result};
 
 #[cfg(test)]
 pub(crate) fn build_logger(
@@ -585,5 +585,5 @@ pub(super) fn log_level_filter(level: LogLevel) -> log::LevelFilter {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/logging_sink_tests.rs"]
+#[path = "../tests/coverage/logging_sink_tests.rs"]
 mod tests;

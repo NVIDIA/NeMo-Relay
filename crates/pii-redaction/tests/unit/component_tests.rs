@@ -75,10 +75,9 @@ mod trajectory_tool_correlation_tests;
 
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime = nemo_relay_runtime::logging::init_logging(
-            &nemo_relay_runtime::logging::LoggingConfig::default(),
-        )
-        .expect("test logging should initialize");
+        let runtime =
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
+                .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }

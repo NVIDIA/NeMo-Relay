@@ -19,7 +19,6 @@ use tokio_tungstenite::tungstenite::handshake::server::{
 use uuid::Uuid;
 
 fn enable_operational_logs() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
 }
 

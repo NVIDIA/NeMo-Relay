@@ -13,11 +13,11 @@ use nemo_relay_diagnostics::{
     DiagnosticQuery, Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, Observation,
     PluginErrorClassifier, PluginFailureCode, RecordOutcome,
 };
-use nemo_relay_runtime::logging::{
+use nemo_relay_logging::{
     FileLogRotationConfig, FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig,
     LoggingRuntime,
 };
-use nemo_relay_runtime::plugin::PluginError;
+use nemo_relay_plugin::component::PluginError;
 use serde_json::Value;
 
 #[path = "support/diagnostic_allocations.rs"]

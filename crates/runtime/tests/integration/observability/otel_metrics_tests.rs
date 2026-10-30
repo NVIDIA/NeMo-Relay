@@ -9,7 +9,7 @@ use crate::api::event::{
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::json::Json;
-use crate::logging::{
+use nemo_relay_logging::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
 };
 use opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::LogsService;
@@ -56,7 +56,7 @@ impl PushMetricExporter for FailingMetricExporter {
 
 #[test]
 fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
-    let _logging_lock = crate::logging::lock_test_logging();
+    let _logging_lock = crate::test_support::lock_test_logging();
     let temporary_directory = tempfile::tempdir().unwrap();
     let log_path = temporary_directory.path().join("metric-export.log.jsonl");
     let runtime = init_logging(&LoggingConfig {
@@ -89,7 +89,7 @@ fn metric_export_failure_logging_is_independent_of_diagnostic_capacity() {
 
     let result = futures::executor::block_on(exporter.export(&ResourceMetrics::default()));
     assert!(result.is_err());
-    runtime.logger.flush();
+    runtime.flush();
     let mut contents = String::new();
     for _ in 0..50 {
         contents = std::fs::read_to_string(&log_path).unwrap_or_default();

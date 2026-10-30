@@ -472,7 +472,6 @@ impl Plugin for BackgroundTaskPlugin {
 }
 
 fn reset_global() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     test_close_plugin_host().unwrap();

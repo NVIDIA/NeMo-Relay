@@ -2664,7 +2664,6 @@ struct BuiltFixture {
 }
 
 fn build_fixture_plugin() -> BuiltFixture {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     let manifest_dir = TempDir::new().expect("fixture manifest dir");
     let library_path = prepared_plugin_fixture("NEMO_RELAY_TEST_NATIVE_PLUGIN");

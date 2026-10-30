@@ -5,7 +5,8 @@
 
 use nemo_relay_diagnostics::embedded::EmbeddedDiagnosticError;
 use nemo_relay_diagnostics::*;
-use nemo_relay_runtime::{logging, plugin};
+use nemo_relay_logging as logging;
+use nemo_relay_runtime::plugin;
 #[tokio::test]
 async fn embedded_host_selects_service_before_plugin_failure_and_reuses_it() {
     // nextest runs this process-global scenario in its own process.

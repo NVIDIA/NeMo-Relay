@@ -437,6 +437,7 @@ jobs:
             nemo-relay-worker-proto
             nemo-relay-worker
             nemo-relay-diagnostics
+            nemo-relay-logging
             nemo-relay-runtime
             nemo-relay
             nemo-relay-adaptive

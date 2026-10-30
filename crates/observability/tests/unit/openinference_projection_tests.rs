@@ -2312,7 +2312,6 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
 
 #[test]
 fn scope_end_metadata_sets_openinference_span_status() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     let cases = [
         (

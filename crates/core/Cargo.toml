@@ -29,6 +29,7 @@ opentelemetry_sdk = { workspace = true, features = ["trace"] }
 uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
+nemo-relay-logging.workspace = true
 nemo-relay-resource-metrics.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
@@ -59,7 +60,6 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 sha2.workspace = true
 shell-words.workspace = true
-spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
 strum = { workspace = true, features = ["derive"] }
 tempfile.workspace = true
 thiserror.workspace = true
@@ -68,7 +68,6 @@ tokio-stream = { workspace = true, default-features = true, features = ["net"] }
 toml.workspace = true
 tonic = { workspace = true, default-features = true, features = ["transport"] }
 tower = { workspace = true, features = ["util"] }
-tracing = { workspace = true, features = ["std", "log"] }
 typed-builder.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
 opentelemetry-http.workspace = true

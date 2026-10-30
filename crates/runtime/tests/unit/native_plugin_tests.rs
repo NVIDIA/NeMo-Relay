@@ -57,11 +57,11 @@ use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 
 #[test]
 fn native_logging_preserves_levels_targets_and_structured_fields() {
-    use crate::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
 
-    let _logging = crate::logging::lock_test_logging();
+    let _logging = crate::test_support::lock_test_logging();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("native.jsonl");
     let runtime = init_logging(&LoggingConfig {

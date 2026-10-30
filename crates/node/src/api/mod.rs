@@ -118,7 +118,7 @@ fn register_node_environment() -> FlowResult<()> {
     let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    nemo_relay_runtime::logging::initialize_default_logging()?;
+    nemo_relay_logging::initialize_default_logging()?;
     NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
     Ok(())
 }
@@ -128,7 +128,7 @@ fn cleanup_node_environment() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
-        && let Err(error) = nemo_relay_runtime::logging::shutdown_default_logging()
+        && let Err(error) = nemo_relay_logging::shutdown_default_logging()
     {
         eprintln!("nemo-relay: operational logging shutdown failed: {error}");
     }
@@ -153,7 +153,7 @@ pub fn log(
     } else {
         format!("nemo_relay.node.{target}")
     };
-    nemo_relay_runtime::logging::emit_str(&level, &target, &message, fields)
+    nemo_relay_logging::emit_str(&level, &target, &message, fields)
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 

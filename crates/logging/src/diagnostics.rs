@@ -9,7 +9,6 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use spdlog::Logger;
 
-use crate::error::{FlowError, Result};
 use nemo_relay_diagnostics::{
     ComponentRecorder, ComponentRegistration, Diagnostics, Observation, ProjectionError,
     ProjectionGuard,
@@ -18,6 +17,7 @@ use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, DiagnosticClassifier, DiagnosticOutputSummary,
     DiagnosticSeverity, FailureClass, FailureCode, LoggingFailureCode, SuccessCode,
 };
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::LoggingConfig;
 

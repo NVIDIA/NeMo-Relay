@@ -1113,7 +1113,7 @@ async fn disconnected_worker_requests_log_pass_through_without_changing_response
         );
         return;
     }
-    use nemo_relay_runtime::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -4053,7 +4053,7 @@ async fn published_worker_probe_failure_retains_the_session_and_reports_recovery
         );
         return;
     }
-    use nemo_relay_runtime::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -4569,7 +4569,7 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
         );
         return;
     }
-    use nemo_relay_runtime::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();

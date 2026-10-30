@@ -206,12 +206,12 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
 
 #[test]
 fn worker_logging_authenticates_and_preserves_structured_records() {
-    use crate::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel as RelayLogLevel, LogSinkConfig, LoggingConfig,
         init_logging,
     };
 
-    let _logging = crate::logging::lock_test_logging();
+    let _logging = crate::test_support::lock_test_logging();
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -506,7 +506,6 @@ fn worker_gate_cleanup_recovers_a_poisoned_ownership_lock() {
 }
 
 fn enable_operational_logs() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
 }
 

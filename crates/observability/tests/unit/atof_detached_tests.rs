@@ -849,7 +849,6 @@ fn chat_wire_start_payload() -> Json {
 }
 
 fn enable_operational_logs() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
 }
 

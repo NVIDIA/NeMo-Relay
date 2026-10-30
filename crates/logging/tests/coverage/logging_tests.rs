@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::logging::{
+use crate::{
     FileLogRotationConfig, FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel,
     LogSinkConfig, LoggingConfig, LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES,
     MAX_FILE_SINK_RETAINED_FILES, build_logger, format_event_for_test, init_logging,

@@ -148,5 +148,5 @@ pub(crate) fn rotated_log_path(base_path: &Path, index: usize) -> PathBuf {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/logging_rotation_tests.rs"]
+#[path = "../tests/coverage/logging_rotation_tests.rs"]
 mod tests;

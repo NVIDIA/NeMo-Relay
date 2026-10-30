@@ -157,7 +157,7 @@ fn list_runtime_registrations(
 
 #[pyfunction(name = "_shutdown_default_logging")]
 fn py_shutdown_default_logging(py: Python<'_>) -> PyResult<()> {
-    py.detach(nemo_relay_runtime::logging::shutdown_default_logging)
+    py.detach(nemo_relay_logging::shutdown_default_logging)
         .map_err(flow_error_to_py_err)
 }
 
@@ -185,8 +185,7 @@ fn log(
     } else {
         format!("nemo_relay.python.{target}")
     };
-    nemo_relay_runtime::logging::emit_str(&level, &target, &message, fields)
-        .map_err(flow_error_to_py_err)
+    nemo_relay_logging::emit_str(&level, &target, &message, fields).map_err(flow_error_to_py_err)
 }
 
 fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {

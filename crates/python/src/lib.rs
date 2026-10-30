@@ -53,7 +53,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
             "failed to initialize NeMo Relay runtime ownership: {e}"
         ))
     })?;
-    nemo_relay_runtime::logging::initialize_default_logging().map_err(|e| {
+    nemo_relay_logging::initialize_default_logging().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Relay operational logging: {e}"
         ))

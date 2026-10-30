@@ -42,10 +42,9 @@ fn env_value_is_truthy(value: Option<&str>) -> bool {
 
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
-        let runtime = nemo_relay_runtime::logging::init_logging(
-            &nemo_relay_runtime::logging::LoggingConfig::default(),
-        )
-        .expect("test logging should initialize");
+        let runtime =
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
+                .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
 }

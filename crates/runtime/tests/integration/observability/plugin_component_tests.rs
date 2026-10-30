@@ -854,7 +854,6 @@ fn wait_for_captures(captures: &Arc<Mutex<Vec<HttpCapture>>>, expected: usize) -
 }
 
 fn reset_runtime() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     let _ = test_close_plugin_host();
     crate::shared_runtime::reset_runtime_owner_for_tests();

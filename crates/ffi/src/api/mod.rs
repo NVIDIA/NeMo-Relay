@@ -293,7 +293,7 @@ pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     ignore_sigpipe();
     nemo_relay::initialize_runtime();
     let result = nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding("go")
-        .and_then(|()| nemo_relay_runtime::logging::initialize_default_logging());
+        .and_then(|()| nemo_relay_logging::initialize_default_logging());
     match result {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
@@ -307,7 +307,7 @@ pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_shutdown_default_logging() -> NemoRelayStatus {
     clear_last_error();
-    match nemo_relay_runtime::logging::shutdown_default_logging() {
+    match nemo_relay_logging::shutdown_default_logging() {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
     }
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn nemo_relay_log(
         } else {
             format!("nemo_relay.go.{target}")
         };
-        nemo_relay_runtime::logging::emit_str(level, &target, message, fields)
+        nemo_relay_logging::emit_str(level, &target, message, fields)
     };
     match parse() {
         Ok(()) => NemoRelayStatus::Ok,

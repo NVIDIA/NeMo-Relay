@@ -189,7 +189,6 @@ fn test_attach_estimated_cost_uses_event_provider() {
 
 #[test]
 fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()

@@ -7,7 +7,7 @@ use super::{
     normalize_path_components, now_millis, reserved_sink_paths, resolve_log_path, spdlog_level,
     stderr_error_handler,
 };
-use crate::logging::{
+use crate::{
     FileLogRotationConfig, FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES,
 };
@@ -401,7 +401,7 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
 
 #[test]
 fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
-    use crate::logging::diagnostics::LoggingDiagnostics;
+    use crate::diagnostics::LoggingDiagnostics;
     use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     let diagnostics = enabled_diagnostics();
@@ -498,13 +498,13 @@ impl Sink for FailingRecordSink {
 
 #[test]
 fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failure() {
-    use crate::logging::{
+    use crate::{
         LoggingRuntime,
         diagnostics::{LoggingDiagnostics, attach_projection},
     };
     use nemo_relay_diagnostics::DiagnosticQuery;
 
-    let _guard = crate::logging::lock_test_logging();
+    let _guard = crate::lock_test_logging();
     struct RestoreMaxLevel(log::LevelFilter);
     impl Drop for RestoreMaxLevel {
         fn drop(&mut self) {
@@ -532,7 +532,7 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         handler,
     ));
     let logger = Logger::builder().sink(boundary).build_arc().unwrap();
-    crate::logging::set_active_relay_logger(&logger);
+    crate::set_active_relay_logger(&logger);
     let projection = attach_projection(&diagnostics, &logger).unwrap();
     let runtime = LoggingRuntime {
         root_relay_id: diagnostics.source().instance_id.to_string(),
@@ -580,10 +580,10 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
 
 #[test]
 fn logging_shutdown_records_final_flush_failures_before_closing_component_handles() {
-    use crate::logging::{LoggingRuntime, diagnostics::LoggingDiagnostics};
+    use crate::{LoggingRuntime, diagnostics::LoggingDiagnostics};
     use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
-    let _guard = crate::logging::lock_test_logging();
+    let _guard = crate::lock_test_logging();
     let diagnostics = enabled_diagnostics();
     let config = LoggingConfig {
         stderr_enabled: false,
@@ -647,7 +647,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
 
 #[test]
 fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
-    use crate::logging::diagnostics::LoggingDiagnostics;
+    use crate::diagnostics::LoggingDiagnostics;
     use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     let diagnostics = enabled_diagnostics();
@@ -720,7 +720,7 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
 
 #[test]
 fn stderr_backend_failures_record_once_without_projection_recursion() {
-    use crate::logging::LoggingRuntime;
+    use crate::LoggingRuntime;
     use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_STDERR_DIAGNOSTICS_CHILD";
@@ -815,7 +815,7 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
 
 #[test]
 fn late_diagnostic_attachment_reaches_existing_sink_error_handlers() {
-    use crate::logging::diagnostics::LoggingDiagnostics;
+    use crate::diagnostics::LoggingDiagnostics;
     let disabled = nemo_relay_diagnostics::Diagnostics::default();
     let config = LoggingConfig::default();
     let mut adapter = LoggingDiagnostics::new(&disabled, &config);

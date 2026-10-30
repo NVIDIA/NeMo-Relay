@@ -21,8 +21,8 @@ use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 
 use self::diagnostics::{LoggingDiagnostics, LoggingProjection};
-use crate::error::{FlowError, Result};
 use nemo_relay_diagnostics::Diagnostics;
+use nemo_relay_types::error::{FlowError, Result};
 
 pub use config::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
@@ -236,6 +236,11 @@ impl LoggingRuntime {
     /// Built-in defaults are used when no logging environment variables are present.
     pub fn configure_from_environment() -> Result<Self> {
         Self::configure(LoggingConfig::from_environment()?.unwrap_or_default())
+    }
+
+    /// Flush all operational sinks.
+    pub fn flush(&self) {
+        self.logger.flush();
     }
 
     /// Returns the process root Relay ID attached to operational records after initialization.
@@ -464,5 +469,5 @@ pub fn emit_str(level: &str, target: &str, message: &str, fields: Map<String, Js
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/logging_tests.rs"]
+#[path = "../tests/coverage/logging_tests.rs"]
 mod tests;

@@ -50,7 +50,6 @@ impl Drop for ResetPricingResolverGuard {
 }
 
 fn reset_global() {
-    let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();

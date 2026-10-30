@@ -16,7 +16,7 @@ mod context;
 
 pub mod error;
 pub mod json;
-pub mod logging;
+
 #[cfg(test)]
 #[path = "../tests/support/observability_runtime.rs"]
 mod observability_runtime;

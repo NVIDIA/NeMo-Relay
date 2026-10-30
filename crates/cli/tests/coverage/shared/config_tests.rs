@@ -9,7 +9,7 @@ use crate::filesystem::bounded::read_bounded_regular_file;
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
-use nemo_relay_runtime::logging::{
+use nemo_relay_logging::{
     DEFAULT_FILE_SINK_QUEUE_ENTRIES, LogFormat, LogLevel, LogSinkConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES,
 };
@@ -4689,7 +4689,7 @@ format = "human"
             assert_eq!(sink.queue_capacity, 32);
             assert_eq!(
                 sink.failure_policy,
-                nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Optional
+                nemo_relay_logging::FileLogSinkFailurePolicy::Optional
             );
         }
     }
@@ -4701,7 +4701,7 @@ format = "human"
             assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
             assert_eq!(
                 sink.failure_policy,
-                nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Required
+                nemo_relay_logging::FileLogSinkFailurePolicy::Required
             );
         }
     }
@@ -5874,9 +5874,9 @@ fn logging_failure_policy_layers_by_sink_path_for_cli_and_daemon() {
             assert_eq!(
                 sink.failure_policy,
                 if override_field.is_empty() {
-                    nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Optional
+                    nemo_relay_logging::FileLogSinkFailurePolicy::Optional
                 } else {
-                    nemo_relay_runtime::logging::FileLogSinkFailurePolicy::Required
+                    nemo_relay_logging::FileLogSinkFailurePolicy::Required
                 }
             );
         }

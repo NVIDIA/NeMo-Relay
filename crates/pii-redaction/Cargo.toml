@@ -30,6 +30,7 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+nemo-relay-logging.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true }
 

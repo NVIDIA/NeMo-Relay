@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue};
-use nemo_relay_runtime::logging::LoggingConfig;
+use nemo_relay_logging::LoggingConfig;
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
 use serde::Deserialize;

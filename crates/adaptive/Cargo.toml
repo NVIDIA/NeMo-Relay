@@ -40,6 +40,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 __skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
 
 [dev-dependencies]
+nemo-relay-logging.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true }
 
