@@ -713,6 +713,10 @@ fn load_one_worker_plugin(
             environment_ref: spec.environment_ref.as_deref(),
             plugin_id: &spec.plugin_id,
             entrypoint: &entrypoint,
+            forward_env: match &manifest.load {
+                DynamicPluginManifestLoad::Worker(load) => &load.forward_env,
+                _ => unreachable!("validated worker manifest"),
+            },
             activation_id: &activation_id,
             auth_token: &auth_token,
             host_endpoint: &host_advertise,
@@ -1199,6 +1203,7 @@ async fn connect_worker(
 }
 
 struct WorkerProcessLaunch<'a> {
+    forward_env: &'a [String],
     runtime: WorkerRuntime,
     manifest_path: &'a Path,
     environment_ref: Option<&'a str>,
@@ -1241,9 +1246,10 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             (Command::new(entrypoint), command_display)
         }
     };
-    minimize_worker_environment(&mut command);
+    minimize_worker_environment(&mut command, spec.forward_env);
     command
         .current_dir(manifest_dir)
+        .env_remove("NEMO_RELAY_WORKER_ENDPOINT_FILE")
         .env("NEMO_RELAY_WORKER_ID", spec.activation_id)
         .env("NEMO_RELAY_PLUGIN_ID", spec.plugin_id)
         .env("NEMO_RELAY_WORKER_SOCKET", spec.worker_endpoint)
@@ -1272,7 +1278,7 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
     })
 }
 
-fn minimize_worker_environment(command: &mut Command) {
+fn minimize_worker_environment(command: &mut Command, forward_env: &[String]) {
     const ALLOWLIST: &[&str] = &[
         "PATH",
         "SYSTEMROOT",
@@ -1283,12 +1289,28 @@ fn minimize_worker_environment(command: &mut Command) {
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
     ];
-    let retained = ALLOWLIST
-        .iter()
-        .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
-        .collect::<Vec<_>>();
     command.env_clear();
-    command.envs(retained);
+    for (name, value) in std::env::vars_os() {
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        // Windows environment variable names are case-insensitive.
+        #[cfg(windows)]
+        let name_str = name_str.to_ascii_uppercase();
+        let matches = |pattern: &str| {
+            #[cfg(windows)]
+            let pattern = pattern.to_ascii_uppercase();
+            match pattern.strip_suffix('*') {
+                Some(prefix) => name_str.starts_with(prefix),
+                None => name_str == pattern,
+            }
+        };
+        if ALLOWLIST.iter().any(|pattern| matches(pattern))
+            || forward_env.iter().any(|pattern| matches(pattern))
+        {
+            command.env(name, value);
+        }
+    }
 }
 
 fn resolve_python_executable(

@@ -538,6 +538,9 @@ pub enum DynamicPluginLoadContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DynamicPluginWorkerLoadContract {
+    /// Host environment names or trailing-wildcard prefixes to forward at launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forward_env: Vec<String>,
     /// Managed worker runtime identity.
     pub runtime: WorkerRuntime,
     /// Worker entrypoint or registration target.
