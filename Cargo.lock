@@ -2176,7 +2176,6 @@ dependencies = [
  "log",
  "nemo-relay-diagnostics",
  "nemo-relay-plugin",
- "nemo-relay-runtime",
  "nemo-relay-types",
  "opentelemetry",
  "opentelemetry_sdk",

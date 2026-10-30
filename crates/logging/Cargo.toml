@@ -26,7 +26,6 @@ tracing = { workspace = true, features = ["std", "log"] }
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
-nemo-relay-runtime.workspace = true
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "internal-logs"] }
 nemo-relay-plugin.workspace = true
