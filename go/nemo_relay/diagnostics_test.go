@@ -14,7 +14,7 @@ import (
 )
 
 func TestQueryByteLimitMatchesSharedContractFixture(t *testing.T) {
-	fixturePath := filepath.Join("..", "..", "crates", "runtime", "tests", "fixtures", "diagnostics_query_contract.json")
+	fixturePath := filepath.Join("..", "..", "crates", "diagnostics", "tests", "fixtures", "diagnostics_query_contract.json")
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
