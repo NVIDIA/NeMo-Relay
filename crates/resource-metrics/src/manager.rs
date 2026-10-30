@@ -1,10 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(missing_docs)]
+
+//! Process resource collection, sampling ownership, and polling lifecycle.
+
+/// Receives each periodic resource snapshot.
+pub type SnapshotSink = Arc<dyn Fn(&ResourceMetricsSnapshot) + Send + Sync>;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, RwLock, TryLockError, Weak};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -15,7 +22,7 @@ use nemo_relay_types::api::resource_metrics::{
 
 use super::network::NetworkSampler;
 use super::units::convert_snapshot;
-use crate::error::{FlowError, Result};
+use crate::{Error as FlowError, Result};
 
 #[cfg(not(windows))]
 use super::collector::owned_process_tree_target;
@@ -25,21 +32,18 @@ use super::collector::{
     self, CollectionTarget, GlobalCpuSampler, ProcessCpuSample, ProcessIoSample,
     current_process_target,
 };
-use crate::api::runtime::scope_stack::ScopeStack;
-use crate::plugins::resource_metrics::config::{
-    ResourceMetricsConfig, ResourceMetricsMeasurementScope,
-};
+use crate::config::{ResourceMetricsConfig, ResourceMetricsMeasurementScope};
 
-static GLOBAL_MANAGER: Mutex<Option<Arc<ResourceMetricsManager>>> = Mutex::new(None);
-static MANAGER_OWNER_PID: AtomicU32 = AtomicU32::new(0);
-static ACTIVE_OWNER_PID: AtomicU32 = AtomicU32::new(0);
+pub static GLOBAL_MANAGER: Mutex<Option<Arc<ResourceMetricsManager>>> = Mutex::new(None);
+pub static MANAGER_OWNER_PID: AtomicU32 = AtomicU32::new(0);
+pub static ACTIVE_OWNER_PID: AtomicU32 = AtomicU32::new(0);
 
-pub(crate) fn runtime_inherited_across_fork() -> bool {
+pub fn runtime_inherited_across_fork() -> bool {
     let owner = ACTIVE_OWNER_PID.load(Ordering::Acquire);
     owner != 0 && owner != std::process::id()
 }
 
-fn ensure_process_owner() -> Result<()> {
+pub fn ensure_process_owner() -> Result<()> {
     if runtime_inherited_across_fork() {
         return Err(FlowError::InvalidArgument(
             "resource_metrics runtime was inherited across fork; exec and activate it in the child before collecting"
@@ -50,54 +54,54 @@ fn ensure_process_owner() -> Result<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum SamplingSeries {
+pub enum SamplingSeries {
     OnDemand,
     Polling,
 }
 
 #[derive(Debug, Clone)]
-struct SamplingBaseline {
-    sampled_at: Instant,
-    process_cpu_times: HashMap<(u32, u64), u64>,
-    target_generation: u64,
+pub struct SamplingBaseline {
+    pub sampled_at: Instant,
+    pub process_cpu_times: HashMap<(u32, u64), u64>,
+    pub target_generation: u64,
 }
 
-struct DiskBaseline {
-    sampled_at: Instant,
-    counters: HashMap<(u32, u64), (Option<u64>, Option<u64>)>,
-    target_generation: u64,
+pub struct DiskBaseline {
+    pub sampled_at: Instant,
+    pub counters: HashMap<(u32, u64), (Option<u64>, Option<u64>)>,
+    pub target_generation: u64,
 }
 
-struct ManagerState {
-    memory: super::memory::LatestMemory,
-    collection_ordinal: u64,
-    application_target: CollectionTarget,
-    target: CollectionTarget,
-    target_generation: u64,
-    active_runtime_generation: Option<u64>,
-    config: Option<ResourceMetricsConfig>,
-    on_demand_baseline: Option<SamplingBaseline>,
-    polling_baseline: Option<SamplingBaseline>,
-    on_demand_disk_baseline: Option<DiskBaseline>,
-    polling_disk_baseline: Option<DiskBaseline>,
-    on_demand_network_sampler: Option<NetworkSampler>,
-    polling_network_sampler: Option<NetworkSampler>,
-    on_demand_global_cpu_sampler: Option<GlobalCpuSampler>,
-    polling_global_cpu_sampler: Option<GlobalCpuSampler>,
-    on_demand_sampling_state: Arc<Mutex<collector::SamplingState>>,
-    polling_sampling_state: Arc<Mutex<collector::SamplingState>>,
-    cli_launch_prepared: bool,
-    awaiting_owned_target: bool,
+pub struct ManagerState {
+    pub memory: super::memory::LatestMemory,
+    pub collection_ordinal: u64,
+    pub application_target: CollectionTarget,
+    pub target: CollectionTarget,
+    pub target_generation: u64,
+    pub active_runtime_generation: Option<u64>,
+    pub config: Option<ResourceMetricsConfig>,
+    pub on_demand_baseline: Option<SamplingBaseline>,
+    pub polling_baseline: Option<SamplingBaseline>,
+    pub on_demand_disk_baseline: Option<DiskBaseline>,
+    pub polling_disk_baseline: Option<DiskBaseline>,
+    pub on_demand_network_sampler: Option<NetworkSampler>,
+    pub polling_network_sampler: Option<NetworkSampler>,
+    pub on_demand_global_cpu_sampler: Option<GlobalCpuSampler>,
+    pub polling_global_cpu_sampler: Option<GlobalCpuSampler>,
+    pub on_demand_sampling_state: Arc<Mutex<collector::SamplingState>>,
+    pub polling_sampling_state: Arc<Mutex<collector::SamplingState>>,
+    pub cli_launch_prepared: bool,
+    pub awaiting_owned_target: bool,
 }
 
-pub(crate) struct ResourceMetricsManager {
-    collector_id: uuid::Uuid,
-    owner_pid: u32,
-    state: Mutex<ManagerState>,
+pub struct ResourceMetricsManager {
+    pub collector_id: uuid::Uuid,
+    pub owner_pid: u32,
+    pub state: Mutex<ManagerState>,
 }
 
 impl ResourceMetricsManager {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let application_target = current_process_target(ResourceMeasurementScope::ProcessTree)?;
         Ok(Self {
             collector_id: uuid::Uuid::now_v7(),
@@ -126,7 +130,7 @@ impl ResourceMetricsManager {
         })
     }
 
-    fn activate(&self, target: CollectionTarget, config: ResourceMetricsConfig) -> Result<u64> {
+    pub fn activate(&self, target: CollectionTarget, config: ResourceMetricsConfig) -> Result<u64> {
         ensure_process_owner()?;
         if self.owner_pid != std::process::id() {
             return Err(FlowError::InvalidArgument(
@@ -161,7 +165,7 @@ impl ResourceMetricsManager {
         Ok(runtime_generation)
     }
 
-    fn deactivate(&self, runtime_generation: u64) {
+    pub fn deactivate(&self, runtime_generation: u64) {
         if self.owner_pid != std::process::id() {
             return;
         }
@@ -189,7 +193,7 @@ impl ResourceMetricsManager {
         }
     }
 
-    fn target_owned_process_tree(&self, target: CollectionTarget) -> Option<u64> {
+    pub fn target_owned_process_tree(&self, target: CollectionTarget) -> Option<u64> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.active_runtime_generation?;
         if state.config.as_ref().is_none_or(|config| {
@@ -212,7 +216,7 @@ impl ResourceMetricsManager {
         Some(state.target_generation)
     }
 
-    fn restore_application_target(&self, generation: u64) {
+    pub fn restore_application_target(&self, generation: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.target_generation == generation {
             state.target_generation = state.target_generation.saturating_add(1);
@@ -232,10 +236,7 @@ impl ResourceMetricsManager {
         }
     }
 
-    pub(crate) fn collect_blocking(
-        &self,
-        series: SamplingSeries,
-    ) -> Result<ResourceMetricsSnapshot> {
+    pub fn collect_blocking(&self, series: SamplingSeries) -> Result<ResourceMetricsSnapshot> {
         ensure_process_owner()?;
         if self.owner_pid != std::process::id() {
             return Err(FlowError::InvalidArgument(
@@ -299,7 +300,7 @@ impl ResourceMetricsManager {
         )
     }
 
-    fn finish_collection_with_ticket(
+    pub fn finish_collection_with_ticket(
         &self,
         mut collected: collector::CollectedSnapshot,
         config: &ResourceMetricsConfig,
@@ -386,14 +387,14 @@ impl ResourceMetricsManager {
         Ok(collected.snapshot)
     }
 
-    fn polling_target_pending(&self) -> bool {
+    pub fn polling_target_pending(&self) -> bool {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .awaiting_owned_target
     }
 
-    fn prepare_cli_owned_target(self: &Arc<Self>) -> Result<CliResourceMetricsLaunchGuard> {
+    pub fn prepare_cli_owned_target(self: &Arc<Self>) -> Result<CliResourceMetricsLaunchGuard> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.cli_launch_prepared {
             return Err(FlowError::AlreadyExists(
@@ -407,7 +408,7 @@ impl ResourceMetricsManager {
     }
 }
 
-fn invalidated_snapshot(mut snapshot: ResourceMetricsSnapshot) -> ResourceMetricsSnapshot {
+pub fn invalidated_snapshot(mut snapshot: ResourceMetricsSnapshot) -> ResourceMetricsSnapshot {
     snapshot.timestamp = Utc::now();
     snapshot.process_sampling = None;
     if let Some(cpu) = &mut snapshot.cpu {
@@ -466,7 +467,7 @@ fn invalidated_snapshot(mut snapshot: ResourceMetricsSnapshot) -> ResourceMetric
     snapshot
 }
 
-fn derive_cpu_rate(
+pub fn derive_cpu_rate(
     snapshot: &mut ResourceMetricsSnapshot,
     sampled_at: Instant,
     process_cpu_samples: &[ProcessCpuSample],
@@ -537,7 +538,7 @@ fn derive_cpu_rate(
     cpu.consumption_rate = Some(ResourceMeasurement::new(value, CpuUnit::LogicalProcessors));
 }
 
-fn calculate_disk_rate(
+pub fn calculate_disk_rate(
     samples: &[ProcessIoSample],
     previous: &DiskBaseline,
     read: bool,
@@ -583,7 +584,7 @@ fn calculate_disk_rate(
     (rate, supplied)
 }
 
-fn derive_disk_rates(
+pub fn derive_disk_rates(
     snapshot: &mut ResourceMetricsSnapshot,
     sampled_at: Instant,
     samples: &[ProcessIoSample],
@@ -666,11 +667,7 @@ fn derive_disk_rates(
     }
 }
 
-#[cfg(test)]
-#[path = "../../tests/unit/resource_metrics/manager_tests.rs"]
-mod cpu_rate_tests;
-
-pub(crate) async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
+pub async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
     // Reject an inherited runtime before attempting to schedule work on it.
     ensure_process_owner()?;
     tokio::task::spawn_blocking(|| global_manager()?.collect_blocking(SamplingSeries::OnDemand))
@@ -680,7 +677,7 @@ pub(crate) async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
         })?
 }
 
-pub(crate) fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
+pub fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
     ensure_process_owner()?;
     let pid = std::process::id();
     let owner = MANAGER_OWNER_PID
@@ -717,24 +714,24 @@ pub(crate) fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
 }
 
 /// Owns the optional resource metrics polling thread for a built-in plugin activation.
-pub(crate) struct ResourceMetricsRuntime {
-    manager: Arc<ResourceMetricsManager>,
-    runtime_generation: u64,
-    stop: Option<Sender<()>>,
-    polling_thread: Option<JoinHandle<()>>,
+pub struct ResourceMetricsRuntime {
+    pub manager: Arc<ResourceMetricsManager>,
+    pub runtime_generation: u64,
+    pub stop: Option<Sender<()>>,
+    pub polling_thread: Option<JoinHandle<()>>,
 }
 
 /// Temporarily directs collection to a CLI-owned process tree.
 #[doc(hidden)]
 pub struct ResourceMetricsTargetGuard {
-    manager: Arc<ResourceMetricsManager>,
-    generation: u64,
+    pub manager: Arc<ResourceMetricsManager>,
+    pub generation: u64,
 }
 
 /// Keeps a CLI launch's process-tree target pending until the launched child is selected.
 #[doc(hidden)]
 pub struct CliResourceMetricsLaunchGuard {
-    manager: Arc<ResourceMetricsManager>,
+    pub manager: Arc<ResourceMetricsManager>,
 }
 
 impl Drop for CliResourceMetricsLaunchGuard {
@@ -751,7 +748,7 @@ impl Drop for CliResourceMetricsLaunchGuard {
     }
 }
 
-pub(crate) fn prepare_cli_owned_process_tree() -> Result<CliResourceMetricsLaunchGuard> {
+pub fn prepare_cli_owned_process_tree() -> Result<CliResourceMetricsLaunchGuard> {
     global_manager()?.prepare_cli_owned_target()
 }
 
@@ -765,9 +762,7 @@ impl Drop for ResourceMetricsTargetGuard {
 }
 
 #[cfg(not(windows))]
-pub(crate) fn target_owned_process_tree(
-    process_id: u32,
-) -> Result<Option<ResourceMetricsTargetGuard>> {
+pub fn target_owned_process_tree(process_id: u32) -> Result<Option<ResourceMetricsTargetGuard>> {
     let manager = global_manager()?;
     let target = owned_process_tree_target(process_id)?;
     Ok(manager
@@ -779,7 +774,7 @@ pub(crate) fn target_owned_process_tree(
 }
 
 #[cfg(windows)]
-pub(crate) fn target_owned_process_tree_with_job_handle(
+pub fn target_owned_process_tree_with_job_handle(
     process_id: u32,
     job_handle: isize,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {
@@ -794,7 +789,10 @@ pub(crate) fn target_owned_process_tree_with_job_handle(
 }
 
 impl ResourceMetricsRuntime {
-    pub(crate) fn configure_current_process(config: ResourceMetricsConfig) -> Result<Self> {
+    pub fn configure_current_process(
+        config: ResourceMetricsConfig,
+        emit: SnapshotSink,
+    ) -> Result<Self> {
         let mut config = config;
         let scope = match config.measurement_scope {
             ResourceMetricsMeasurementScope::RuntimeDefault
@@ -811,16 +809,16 @@ impl ResourceMetricsRuntime {
             }
             ResourceMeasurementScope::ProcessTree => ResourceMetricsMeasurementScope::ProcessTree,
         };
-        Self::configure_target(config, current_process_target(scope)?)
+        Self::configure_target(config, current_process_target(scope)?, emit)
     }
 
-    fn configure_target(config: ResourceMetricsConfig, target: CollectionTarget) -> Result<Self> {
+    pub fn configure_target(
+        config: ResourceMetricsConfig,
+        target: CollectionTarget,
+        emit: SnapshotSink,
+    ) -> Result<Self> {
         config.validate()?;
         let manager = global_manager()?;
-        let active_scope_stack = crate::api::runtime::current_scope_stack();
-        let fallback_root_stack =
-            crate::api::runtime::scope_stack::root_scope_stack_snapshot(&active_scope_stack)?;
-        let fallback_scope_stack = Arc::downgrade(&active_scope_stack);
         let runtime_generation = manager.activate(target, config.clone())?;
         let (stop, polling_thread) = if config.polling.enabled {
             let (stop, receiver) = mpsc::channel();
@@ -828,15 +826,8 @@ impl ResourceMetricsRuntime {
             let interval = Duration::from_millis(config.polling.interval_millis);
             let polling_thread = match thread::Builder::new()
                 .name("nemo-relay-resource-metrics".into())
-                .spawn(move || {
-                    polling_loop(
-                        manager_for_thread,
-                        receiver,
-                        interval,
-                        fallback_scope_stack,
-                        fallback_root_stack,
-                    )
-                }) {
+                .spawn(move || polling_loop(manager_for_thread, receiver, interval, emit))
+            {
                 Ok(thread) => thread,
                 Err(error) => {
                     manager.deactivate(runtime_generation);
@@ -875,24 +866,16 @@ impl Drop for ResourceMetricsRuntime {
     }
 }
 
-fn polling_loop(
+pub fn polling_loop(
     manager: Arc<ResourceMetricsManager>,
     stop: mpsc::Receiver<()>,
     interval: Duration,
-    fallback_scope_stack: Weak<RwLock<ScopeStack>>,
-    fallback_root_stack: crate::api::runtime::ScopeStackHandle,
+    emit: SnapshotSink,
 ) {
     loop {
         if !manager.polling_target_pending() {
             match manager.collect_blocking(SamplingSeries::Polling) {
-                Ok(snapshot) => {
-                    let fallback = fallback_scope_stack
-                        .upgrade()
-                        .unwrap_or_else(|| Arc::clone(&fallback_root_stack));
-                    crate::api::resource_metrics::emit_resource_metrics_snapshot(
-                        &snapshot, &fallback,
-                    )
-                }
+                Ok(snapshot) => emit(&snapshot),
                 Err(error) => {
                     log::warn!(target: "nemo_relay.plugin", event = "resource_metrics_collection_failed", error_kind = "inactive"; "Resource metrics poll was skipped: {error}")
                 }
@@ -907,7 +890,7 @@ fn polling_loop(
 
 /// Read an existing manager only. Inspection must not resolve settings, start a manager,
 /// collect, or retarget it. Fork checks precede every potentially inherited lock.
-pub(crate) fn latest_memory_view(
+pub fn latest_memory_view(
     source_pid: Option<u32>,
 ) -> nemo_relay_types::diagnostics::ResourceMemoryView {
     use nemo_relay_types::diagnostics::{ResourceMemoryAvailability, ResourceMemoryView};
@@ -950,3 +933,7 @@ pub(crate) fn latest_memory_view(
         config.memory_inspection.stale_after_millis,
     )
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/resource_metrics/manager_tests.rs"]
+mod tests;

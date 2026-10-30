@@ -725,8 +725,11 @@ fn polling_releases_an_abandoned_agent_stack_and_uses_its_root() {
     config.polling.enabled = true;
     config.polling.interval_millis = 200;
     let runtime =
-        crate::resource_metrics::manager::ResourceMetricsRuntime::configure_current_process(config)
-            .unwrap();
+        crate::resource_metrics::manager::ResourceMetricsRuntime::configure_current_process(
+            config,
+            super::polling_snapshot_sink().unwrap(),
+        )
+        .unwrap();
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(2)).unwrap(),
         Some(agent.uuid)

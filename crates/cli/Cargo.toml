@@ -28,6 +28,7 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-resource-metrics.workspace = true
 nemo-relay-model-pricing.workspace = true
 # First-party crates.
 nemo-relay = { workspace = true, features = ["object-store", "worker-grpc", "__internal-gateway"] }

@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::api::runtime::scope_stack::{ScopeStack, ScopeStackHandle};
 use crate::api::scope::{self, ScopeHandle};
 use crate::error::Result;
-pub use crate::plugins::resource_metrics::config::{
+pub use nemo_relay_resource_metrics::config::{
     ResourceMetricsConfig, ResourceMetricsCpuConfig, ResourceMetricsCpuUnits,
     ResourceMetricsDiskConfig, ResourceMetricsDiskUnits, ResourceMetricsGpuConfig,
     ResourceMetricsGpuUnits, ResourceMetricsMeasurementScope, ResourceMetricsMemoryConfig,
@@ -31,8 +31,8 @@ pub use crate::plugins::resource_metrics::config::{
     ResourceMetricsUnits,
 };
 #[doc(hidden)]
-pub use crate::resource_metrics::manager::CliResourceMetricsLaunchGuard;
-pub use crate::resource_metrics::manager::ResourceMetricsTargetGuard;
+pub use nemo_relay_resource_metrics::manager::CliResourceMetricsLaunchGuard;
+pub use nemo_relay_resource_metrics::manager::ResourceMetricsTargetGuard;
 
 use uuid::Uuid;
 
@@ -51,7 +51,7 @@ static AGENT_SCOPE_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 /// blocking worker. Dropping the future stops waiting; a query already running
 /// may still finish and update the on-demand sampling baseline.
 pub async fn collect() -> Result<ResourceMetricsSnapshot> {
-    crate::resource_metrics::manager::collect_on_demand().await
+    nemo_relay_resource_metrics::manager::collect_on_demand().await
 }
 
 /// Prepare a CLI launch before activating a process-tree resource metrics component.
@@ -60,7 +60,7 @@ pub async fn collect() -> Result<ResourceMetricsSnapshot> {
 /// the collection target. The CLI holds it until gateway shutdown.
 #[doc(hidden)]
 pub fn prepare_cli_resource_metrics_process_tree() -> Result<CliResourceMetricsLaunchGuard> {
-    crate::resource_metrics::manager::prepare_cli_owned_process_tree()
+    nemo_relay_resource_metrics::manager::prepare_cli_owned_process_tree()
 }
 
 /// Direct the active resource metrics plugin to a Relay-owned child process tree.
@@ -73,7 +73,7 @@ pub fn prepare_cli_resource_metrics_process_tree() -> Result<CliResourceMetricsL
 pub fn target_resource_metrics_to_owned_process_tree(
     process_id: u32,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {
-    crate::resource_metrics::manager::target_owned_process_tree(process_id)
+    nemo_relay_resource_metrics::manager::target_owned_process_tree(process_id)
 }
 
 /// Direct the active resource metrics plugin to a Relay-owned Windows Job Object.
@@ -87,7 +87,7 @@ pub unsafe fn target_resource_metrics_to_owned_process_tree(
     process_id: u32,
     job_handle: isize,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {
-    crate::resource_metrics::manager::target_owned_process_tree_with_job_handle(
+    nemo_relay_resource_metrics::manager::target_owned_process_tree_with_job_handle(
         process_id, job_handle,
     )
 }
@@ -111,6 +111,21 @@ pub(crate) fn unregister_agent_scope(uuid: &Uuid) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .remove(uuid);
+}
+
+/// Capture scope fallback without retaining an abandoned agent stack.
+pub(crate) fn polling_snapshot_sink()
+-> crate::error::Result<nemo_relay_resource_metrics::manager::SnapshotSink> {
+    let active_scope_stack = crate::api::runtime::current_scope_stack();
+    let fallback_root_stack =
+        crate::api::runtime::scope_stack::root_scope_stack_snapshot(&active_scope_stack)?;
+    let fallback_scope_stack = Arc::downgrade(&active_scope_stack);
+    Ok(Arc::new(move |snapshot| {
+        let fallback = fallback_scope_stack
+            .upgrade()
+            .unwrap_or_else(|| Arc::clone(&fallback_root_stack));
+        emit_resource_metrics_snapshot(snapshot, &fallback);
+    }))
 }
 
 pub(crate) fn emit_resource_metrics_snapshot(

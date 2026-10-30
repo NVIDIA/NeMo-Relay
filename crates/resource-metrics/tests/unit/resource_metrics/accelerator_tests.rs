@@ -198,7 +198,7 @@ fn drm_descriptor_filter_skips_regular_files_and_non_drm_devices() {
 }
 #[test]
 fn drm_device_files_normalize_amd_and_intel_memory_and_apply_selectors() {
-    use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
+    use crate::config::ResourceMetricsGpuConfig;
     use std::fs;
     let root = tempfile::tempdir().unwrap();
     for (card, vendor, memory, utilization) in [

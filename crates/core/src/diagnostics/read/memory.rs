@@ -496,7 +496,7 @@ pub(in crate::diagnostics) fn capture(
     drop(state);
     // Independent subsystem copy after releasing diagnostic state. Never collect here.
     metadata.resource =
-        crate::resource_metrics::manager::latest_memory_view(inner.source.process_id);
+        nemo_relay_resource_metrics::manager::latest_memory_view(inner.source.process_id);
     let max_bytes = query
         .max_response_bytes
         .map_or(inner.limits.max_snapshot_bytes, |n| n as usize);

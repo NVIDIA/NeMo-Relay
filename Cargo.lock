@@ -1931,6 +1931,7 @@ dependencies = [
  "log",
  "nemo-relay-model-pricing",
  "nemo-relay-plugin",
+ "nemo-relay-resource-metrics",
  "nemo-relay-types",
  "nemo-relay-worker-proto",
  "object_store",
@@ -2023,6 +2024,7 @@ dependencies = [
  "nemo-relay-adaptive",
  "nemo-relay-model-pricing",
  "nemo-relay-pii-redaction",
+ "nemo-relay-resource-metrics",
  "nemo-relay-types",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -2212,6 +2214,25 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nemo-relay-resource-metrics"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "libloading",
+ "log",
+ "nemo-relay-plugin",
+ "nemo-relay-types",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

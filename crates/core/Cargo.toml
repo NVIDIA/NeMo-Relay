@@ -53,6 +53,7 @@ worker-grpc = [
 [dependencies]
 # First-party crates.
 nemo-relay-model-pricing.workspace = true
+nemo-relay-resource-metrics.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }
@@ -92,7 +93,6 @@ sha2.workspace = true
 shell-words.workspace = true
 spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
 strum = { workspace = true, features = ["derive"] }
-sysinfo = { workspace = true, features = ["system", "network"] }
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
@@ -113,6 +113,7 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
+sysinfo = { workspace = true, features = ["system", "network"] }
 nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
 futures.workspace = true
 object_store = { workspace = true, features = ["aws"] }

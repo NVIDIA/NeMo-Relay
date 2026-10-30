@@ -320,7 +320,7 @@ pub(super) fn process_sample(
 pub(super) fn environment_sample(
     target: &CollectionTarget,
     _process_ids: &[u32],
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     use windows_sys::Win32::System::JobObjects::{
         JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
@@ -406,14 +406,14 @@ pub(super) fn environment_sample(
 }
 
 pub(super) fn global_environment_sample(
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    _config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     Ok(EnvironmentSample::default())
 }
 
 pub(super) fn accelerator_sample(
     process_ids: &[u32],
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig,
+    config: &crate::config::ResourceMetricsGpuConfig,
     sampling_state: &mut super::SamplingState,
 ) -> AcceleratorSample {
     accelerator::collect(process_ids, config, &mut sampling_state.accelerator)
@@ -556,5 +556,5 @@ fn filetime_value(value: FILETIME) -> u64 {
     (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
 }
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/windows_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/windows_tests.rs"]
 mod tests;

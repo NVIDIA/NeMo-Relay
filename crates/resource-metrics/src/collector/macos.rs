@@ -307,20 +307,20 @@ pub(super) fn process_sample(
 pub(super) fn environment_sample(
     _target: &CollectionTarget,
     _process_ids: &[u32],
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    _config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     Ok(EnvironmentSample::default())
 }
 
 pub(super) fn global_environment_sample(
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    _config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     Ok(EnvironmentSample::default())
 }
 
 pub(super) fn accelerator_sample(
     process_ids: &[u32],
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig,
+    config: &crate::config::ResourceMetricsGpuConfig,
     sampling_state: &mut super::SamplingState,
 ) -> AcceleratorSample {
     accelerator_macos::collect(process_ids, config, &mut sampling_state.accelerator_macos)
@@ -495,5 +495,5 @@ fn child_process_ids(parent_process_id: u32) -> io::Result<Vec<u32>> {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/macos_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/macos_tests.rs"]
 mod tests;

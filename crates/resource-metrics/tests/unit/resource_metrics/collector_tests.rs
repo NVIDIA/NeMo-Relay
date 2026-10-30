@@ -5,7 +5,7 @@ use super::{
     accelerator_device_is_selected, bytes_to_kibibytes, clock_ticks_to_milliseconds,
     filetime_intervals_to_milliseconds, microseconds_to_milliseconds, nanoseconds_to_milliseconds,
 };
-use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
+use crate::config::ResourceMetricsGpuConfig;
 
 #[test]
 fn time_conversions_truncate_submillisecond_precision_consistently() {
@@ -150,11 +150,8 @@ fn an_invalid_process_identity_returns_unavailable_categories_in_the_stable_shap
     let mut target =
         super::current_process_target(super::ResourceMeasurementScope::ApplicationProcess).unwrap();
     target.start_identity = target.start_identity.wrapping_add(1);
-    let snapshot = super::collect(
-        &target,
-        &crate::plugins::resource_metrics::config::ResourceMetricsConfig::default(),
-    )
-    .snapshot;
+    let snapshot =
+        super::collect(&target, &crate::config::ResourceMetricsConfig::default()).snapshot;
     assert_eq!(
         snapshot.measurement_scope,
         super::ResourceMeasurementScope::ApplicationProcess
@@ -193,7 +190,7 @@ fn global_cpu_sampler_requires_a_baseline_and_a_minimum_interval() {
 fn filesystem_capacity_failure_preserves_the_path_and_other_available_categories() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing");
-    let mut config = crate::plugins::resource_metrics::config::ResourceMetricsConfig::default();
+    let mut config = crate::config::ResourceMetricsConfig::default();
     config.gpu.enabled = false;
     config.disk.filesystem_paths = vec![missing.clone()];
     let target =

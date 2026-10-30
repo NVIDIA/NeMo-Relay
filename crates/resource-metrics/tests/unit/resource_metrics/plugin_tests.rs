@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use nemo_relay_plugin::component::DiagnosticLevel;
+use serde_json::Map;
 
 #[test]
 fn resource_metrics_plugin_rejects_multiple_components_and_reports_invalid_configuration() {
-    let plugin = ResourceMetricsPlugin;
+    let plugin =
+        ResourceMetricsPlugin::new(|| unreachable!("validation does not activate sampling"));
     assert!(!plugin.allows_multiple_components());
     for config in [
         serde_json::json!({"polling": {"interval_millis": 0}}),

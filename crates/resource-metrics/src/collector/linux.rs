@@ -172,7 +172,7 @@ pub(super) fn process_sample(
 pub(super) fn environment_sample(
     target: &CollectionTarget,
     process_ids: &[u32],
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     let Some((directory, mount_point)) =
         exclusive_cgroup_directory(target.process_id, process_ids)?
@@ -185,7 +185,7 @@ pub(super) fn environment_sample(
 fn environment_sample_from_cgroup(
     directory: &Path,
     mount_point: &Path,
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     let cpu_stat = config
         .cpu
@@ -298,7 +298,7 @@ fn environment_sample_from_cgroup(
 }
 
 pub(super) fn global_environment_sample(
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     let cpu_pressure = if config.cpu.enabled {
         pressure_totals(PathBuf::from("/proc/pressure/cpu"))
@@ -321,7 +321,7 @@ pub(super) fn global_environment_sample(
 
 pub(super) fn accelerator_sample(
     process_ids: &[u32],
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig,
+    config: &crate::config::ResourceMetricsGpuConfig,
     sampling_state: &mut super::SamplingState,
 ) -> AcceleratorSample {
     accelerator::collect(process_ids, config, &mut sampling_state.accelerator)
@@ -477,7 +477,7 @@ fn cgroup_members_match_owned(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/linux_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/linux_tests.rs"]
 mod tests;
 
 fn key_value_file(path: PathBuf) -> Option<BTreeMap<String, u64>> {

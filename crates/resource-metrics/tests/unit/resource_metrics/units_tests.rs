@@ -45,20 +45,24 @@ fn rate_cpu_and_utilization_conversions_use_their_own_dimensions() {
     convert_float(&mut gpu, UtilizationUnit::Fraction);
     assert_eq!(gpu.unwrap().value, 0.25);
 }
-use crate::resource_metrics::snapshot_fixture;
+use crate::snapshot_fixture;
 
 #[test]
 fn every_category_uses_its_selected_units_and_keeps_fixed_counts() {
     let mut snapshot = snapshot_fixture::full_snapshot();
     let mut units = ResourceMetricsUnits::default();
-    units.gpu.device_memory_used = crate::api::resource_metrics::CapacityUnit::Mebibytes;
-    units.gpu.process_memory_used = crate::api::resource_metrics::CapacityUnit::Bytes;
-    units.gpu.device_compute_utilization = crate::api::resource_metrics::UtilizationUnit::Fraction;
-    units.gpu.process_compute_utilization = crate::api::resource_metrics::UtilizationUnit::Fraction;
-    units.disk.filesystem_total_capacity = crate::api::resource_metrics::CapacityUnit::Kibibytes;
-    units.network.interface.received_data = crate::api::resource_metrics::DataUnit::Kibibytes;
+    units.gpu.device_memory_used = nemo_relay_types::api::resource_metrics::CapacityUnit::Mebibytes;
+    units.gpu.process_memory_used = nemo_relay_types::api::resource_metrics::CapacityUnit::Bytes;
+    units.gpu.device_compute_utilization =
+        nemo_relay_types::api::resource_metrics::UtilizationUnit::Fraction;
+    units.gpu.process_compute_utilization =
+        nemo_relay_types::api::resource_metrics::UtilizationUnit::Fraction;
+    units.disk.filesystem_total_capacity =
+        nemo_relay_types::api::resource_metrics::CapacityUnit::Kibibytes;
+    units.network.interface.received_data =
+        nemo_relay_types::api::resource_metrics::DataUnit::Kibibytes;
     units.network.interface.receive_throughput =
-        crate::api::resource_metrics::BandwidthUnit::BitsPerSecond;
+        nemo_relay_types::api::resource_metrics::BandwidthUnit::BitsPerSecond;
     convert_snapshot(&mut snapshot, &units);
     let gpu = snapshot.gpu.unwrap();
     let device = &gpu.device_metrics.unwrap()[0];
@@ -114,7 +118,9 @@ fn conversions_reject_noncanonical_values_and_nonfinite_measurements() {
 }
 #[test]
 fn all_configured_storage_time_and_throughput_units_match_canonical_units() {
-    use crate::api::resource_metrics::{BandwidthUnit, CapacityUnit, DataUnit, DurationUnit};
+    use nemo_relay_types::api::resource_metrics::{
+        BandwidthUnit, CapacityUnit, DataUnit, DurationUnit,
+    };
     for (name, factor) in [
         ("bytes", 1_u64),
         ("kilobytes", 1000),

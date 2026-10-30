@@ -15,8 +15,8 @@ use nemo_relay_types::api::resource_metrics::{
     ResourceMetricValue, ResourceMetricsSnapshot, ResourceUnit,
 };
 
-use crate::error::{FlowError, Result};
-use crate::plugins::resource_metrics::config::ResourceMetricsConfig;
+use crate::config::ResourceMetricsConfig;
+use crate::{Error as FlowError, Result};
 
 #[cfg(any(target_os = "linux", windows))]
 mod accelerator;
@@ -40,33 +40,33 @@ mod unsupported;
 use unsupported as platform;
 
 #[derive(Debug, Clone)]
-pub(crate) struct CollectionTarget {
-    pub(crate) process_id: u32,
-    pub(crate) start_identity: u64,
-    pub(crate) measurement_scope: ResourceMeasurementScope,
+pub struct CollectionTarget {
+    pub process_id: u32,
+    pub start_identity: u64,
+    pub measurement_scope: ResourceMeasurementScope,
     #[cfg(windows)]
     job_handle: Option<std::sync::Arc<platform::OwnedJobHandle>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ProcessSample {
-    pub(crate) process_id: u32,
-    pub(crate) start_identity: u64,
-    pub(crate) user_cpu_time: Option<u64>,
-    pub(crate) system_cpu_time: Option<u64>,
-    pub(crate) total_cpu_time: Option<u64>,
-    pub(crate) resident_memory: Option<u64>,
-    pub(crate) private_memory: Option<u64>,
-    pub(crate) physical_footprint: Option<u64>,
-    pub(crate) virtual_memory: Option<u64>,
-    pub(crate) peak_resident_memory: Option<u64>,
-    pub(crate) thread_count: Option<u64>,
-    pub(crate) open_file_descriptor_count: Option<u64>,
-    pub(crate) windows_handle_count: Option<u64>,
-    pub(crate) disk_read_bytes: Option<u64>,
-    pub(crate) disk_write_bytes: Option<u64>,
-    pub(crate) disk_read_operations: Option<u64>,
-    pub(crate) disk_write_operations: Option<u64>,
+pub struct ProcessSample {
+    pub process_id: u32,
+    pub start_identity: u64,
+    pub user_cpu_time: Option<u64>,
+    pub system_cpu_time: Option<u64>,
+    pub total_cpu_time: Option<u64>,
+    pub resident_memory: Option<u64>,
+    pub private_memory: Option<u64>,
+    pub physical_footprint: Option<u64>,
+    pub virtual_memory: Option<u64>,
+    pub peak_resident_memory: Option<u64>,
+    pub thread_count: Option<u64>,
+    pub open_file_descriptor_count: Option<u64>,
+    pub windows_handle_count: Option<u64>,
+    pub disk_read_bytes: Option<u64>,
+    pub disk_write_bytes: Option<u64>,
+    pub disk_read_operations: Option<u64>,
+    pub disk_write_operations: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,18 +84,18 @@ impl ProcessSampleConfig {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ProcessCpuSample {
-    pub(crate) process_id: u32,
-    pub(crate) start_identity: u64,
-    pub(crate) total_cpu_time_millis: u64,
+pub struct ProcessCpuSample {
+    pub process_id: u32,
+    pub start_identity: u64,
+    pub total_cpu_time_millis: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ProcessIoSample {
-    pub(crate) process_id: u32,
-    pub(crate) start_identity: u64,
-    pub(crate) read_bytes: Option<u64>,
-    pub(crate) write_bytes: Option<u64>,
+pub struct ProcessIoSample {
+    pub process_id: u32,
+    pub start_identity: u64,
+    pub read_bytes: Option<u64>,
+    pub write_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +139,7 @@ pub(super) struct AcceleratorSample {
 }
 
 #[derive(Default)]
-pub(crate) struct SamplingState {
+pub struct SamplingState {
     #[cfg(any(target_os = "linux", windows))]
     accelerator: accelerator::SamplingState,
     #[cfg(target_os = "macos")]
@@ -147,13 +147,13 @@ pub(crate) struct SamplingState {
 }
 
 #[derive(Debug)]
-pub(crate) struct CollectedSnapshot {
-    pub(crate) snapshot: ResourceMetricsSnapshot,
-    pub(crate) process_sampled_instant: Instant,
-    pub(crate) successful: bool,
-    pub(crate) root_verified: bool,
-    pub(crate) process_cpu_samples: Vec<ProcessCpuSample>,
-    pub(crate) process_io_samples: Vec<ProcessIoSample>,
+pub struct CollectedSnapshot {
+    pub snapshot: ResourceMetricsSnapshot,
+    pub process_sampled_instant: Instant,
+    pub successful: bool,
+    pub root_verified: bool,
+    pub process_cpu_samples: Vec<ProcessCpuSample>,
+    pub process_io_samples: Vec<ProcessIoSample>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -163,7 +163,7 @@ struct SystemMemorySample {
     available: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
 }
 
-pub(crate) struct GlobalCpuSampler {
+pub struct GlobalCpuSampler {
     system: sysinfo::System,
     last_sampled_at: Instant,
 }
@@ -176,7 +176,7 @@ static SYSTEM_MEMORY_SAMPLER: LazyLock<Mutex<sysinfo::System>> = LazyLock::new(|
 });
 
 impl GlobalCpuSampler {
-    pub(crate) fn sample(sampler: &mut Option<Self>) -> Option<ResourceMeasurement<f64, CpuUnit>> {
+    pub fn sample(sampler: &mut Option<Self>) -> Option<ResourceMeasurement<f64, CpuUnit>> {
         if sampler.is_none() {
             let system = sysinfo::System::new_with_specifics(
                 sysinfo::RefreshKind::nothing()
@@ -209,7 +209,7 @@ impl GlobalCpuSampler {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CollectionIssue {
+pub enum CollectionIssue {
     Unsupported,
     PermissionDenied,
     TargetTerminated,
@@ -217,7 +217,7 @@ pub(crate) enum CollectionIssue {
     SourceUnavailable,
 }
 
-pub(crate) fn current_process_target(
+pub fn current_process_target(
     measurement_scope: ResourceMeasurementScope,
 ) -> Result<CollectionTarget> {
     let process_id = std::process::id();
@@ -235,7 +235,7 @@ pub(crate) fn current_process_target(
     })
 }
 
-pub(crate) fn owned_process_tree_target(process_id: u32) -> Result<CollectionTarget> {
+pub fn owned_process_tree_target(process_id: u32) -> Result<CollectionTarget> {
     let current_process_id = std::process::id();
     let parent_process_id = platform::parent_process_id(process_id).map_err(platform_error)?;
     if parent_process_id != Some(current_process_id) {
@@ -253,7 +253,7 @@ pub(crate) fn owned_process_tree_target(process_id: u32) -> Result<CollectionTar
 }
 
 #[cfg(windows)]
-pub(crate) fn owned_process_tree_target_with_job_handle(
+pub fn owned_process_tree_target_with_job_handle(
     process_id: u32,
     job_handle: isize,
 ) -> Result<CollectionTarget> {
@@ -265,10 +265,7 @@ pub(crate) fn owned_process_tree_target_with_job_handle(
 }
 
 #[cfg(test)]
-pub(crate) fn collect(
-    target: &CollectionTarget,
-    config: &ResourceMetricsConfig,
-) -> CollectedSnapshot {
+pub fn collect(target: &CollectionTarget, config: &ResourceMetricsConfig) -> CollectedSnapshot {
     collect_with_state(target, config, &mut SamplingState::default())
 }
 
@@ -516,7 +513,7 @@ fn collect_accelerators(
     }
 }
 
-pub(crate) fn collect_with_state(
+pub fn collect_with_state(
     target: &CollectionTarget,
     config: &ResourceMetricsConfig,
     sampling_state: &mut SamplingState,
@@ -848,7 +845,7 @@ pub(crate) fn collect_with_state(
 
 #[cfg(any(target_os = "linux", windows, test))]
 pub(super) fn accelerator_device_is_selected(
-    config: &crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig,
+    config: &crate::config::ResourceMetricsGpuConfig,
     identifier: &str,
     index: u32,
 ) -> bool {
@@ -1027,17 +1024,13 @@ fn unavailable<T, U: ResourceUnit>() -> Option<ResourceMeasurement<T, U>> {
 
 /// Convert an integral number of nanoseconds to whole milliseconds (truncate).
 #[cfg(test)]
-pub(crate) const fn nanoseconds_to_milliseconds(value: u64) -> u64 {
+pub const fn nanoseconds_to_milliseconds(value: u64) -> u64 {
     value / 1_000_000
 }
 
 /// Convert Mach ticks to whole milliseconds using the platform timebase (truncate).
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn mach_ticks_to_milliseconds(
-    ticks: u64,
-    numerator: u32,
-    denominator: u32,
-) -> Option<u64> {
+pub fn mach_ticks_to_milliseconds(ticks: u64, numerator: u32, denominator: u32) -> Option<u64> {
     if numerator == 0 || denominator == 0 {
         return None;
     }
@@ -1048,31 +1041,31 @@ pub(crate) fn mach_ticks_to_milliseconds(
 
 /// Convert a Windows FILETIME value (100 ns intervals) to whole milliseconds (truncate).
 #[cfg(any(windows, test))]
-pub(crate) const fn filetime_intervals_to_milliseconds(value: u64) -> u64 {
+pub const fn filetime_intervals_to_milliseconds(value: u64) -> u64 {
     value / 10_000
 }
 
 /// Convert microseconds to whole milliseconds (truncate).
 #[cfg(test)]
-pub(crate) const fn microseconds_to_milliseconds(value: u64) -> u64 {
+pub const fn microseconds_to_milliseconds(value: u64) -> u64 {
     value / 1_000
 }
 
 /// Convert byte counts to whole KiB (truncate).
-pub(crate) const fn bytes_to_kibibytes(value: u64) -> u64 {
+pub const fn bytes_to_kibibytes(value: u64) -> u64 {
     value / 1_024
 }
 
 /// Convert process-accounting ticks to whole milliseconds using the runtime tick rate.
 #[cfg(any(target_os = "linux", test))]
-pub(crate) fn clock_ticks_to_milliseconds(value: u64, ticks_per_second: u64) -> Option<u64> {
+pub fn clock_ticks_to_milliseconds(value: u64, ticks_per_second: u64) -> Option<u64> {
     (ticks_per_second > 0)
         .then(|| (u128::from(value) * 1_000) / u128::from(ticks_per_second))
         .and_then(|milliseconds| u64::try_from(milliseconds).ok())
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/collector_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/collector_tests.rs"]
 mod conversion_tests;
 
 fn platform_error(error: io::Error) -> FlowError {

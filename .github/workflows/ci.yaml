@@ -431,6 +431,7 @@ jobs:
             nemo-relay-types
             nemo-relay-plugin
             nemo-relay-model-pricing
+            nemo-relay-resource-metrics
             nemo-relay-worker-proto
             nemo-relay-worker
             nemo-relay

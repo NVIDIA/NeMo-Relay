@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-resource-metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "System resource collection and unit conversion for NeMo Relay."
+
+[lints]
+workspace = true
+
+[dependencies]
+nemo-relay-plugin.workspace = true
+nemo-relay-types.workspace = true
+chrono = { workspace = true, features = ["std", "now"] }
+libloading.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+tokio = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v7", "serde"] }
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+sysinfo = { workspace = true, features = ["system", "network"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs", "param"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

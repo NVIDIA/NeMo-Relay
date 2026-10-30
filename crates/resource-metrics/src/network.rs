@@ -35,7 +35,7 @@ impl Counters {
     }
 }
 
-pub(crate) struct NetworkSampler {
+pub struct NetworkSampler {
     networks: Networks,
     previous: HashMap<String, Counters>,
 }
@@ -95,7 +95,7 @@ fn sum_rate(
 }
 
 impl NetworkSampler {
-    pub(crate) fn sample(&mut self, selectors: &[String]) -> NetworkMetrics {
+    pub fn sample(&mut self, selectors: &[String]) -> NetworkMetrics {
         self.networks.refresh(true);
         let now = Instant::now();
         let mut next = HashMap::new();
@@ -231,5 +231,5 @@ impl NetworkSampler {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/resource_metrics/network_tests.rs"]
+#[path = "../tests/unit/resource_metrics/network_tests.rs"]
 mod tests;

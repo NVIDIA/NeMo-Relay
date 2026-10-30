@@ -10,7 +10,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
-pub(super) struct Ticket {
+pub struct Ticket {
     pub collector: Uuid,
     pub runtime: u64,
     pub target: u64,
@@ -19,7 +19,7 @@ pub(super) struct Ticket {
     pub started: Instant,
     pub stream: SamplingSeries,
 }
-pub(super) struct LatestMemory {
+pub struct LatestMemory {
     pub sample: Option<ResourceMemorySample>,
     pub received: Option<Instant>,
     pub ordinal: u64,
@@ -137,7 +137,7 @@ impl LatestMemory {
         }
     }
 }
-fn measurement<U: ResourceUnit + Copy>(
+pub fn measurement<U: ResourceUnit + Copy>(
     v: &Option<ResourceMeasurement<ResourceMetricValue, U>>,
     unit: impl FnOnce(U) -> ResourceMemoryUnit,
     scope: MemoryFieldScope,
@@ -154,7 +154,7 @@ fn measurement<U: ResourceUnit + Copy>(
         sampled_processes: coverage,
     })
 }
-fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> {
+pub fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> {
     let m = snapshot.memory.as_ref()?;
     let pressure_scope = match snapshot.measurement_scope {
         ResourceMeasurementScope::Global => MemoryFieldScope::System,
@@ -286,11 +286,11 @@ fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> 
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
-    fn pressure_projection_preserves_system_and_environment_attribution() {
+    pub fn pressure_projection_preserves_system_and_environment_attribution() {
         let mut snapshot = super::super::snapshot_fixture::full_snapshot();
         for (scope, expected) in [
             (ResourceMeasurementScope::Global, MemoryFieldScope::System),
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn association_requires_verified_root_and_matching_process_incarnation() {
+    pub fn association_requires_verified_root_and_matching_process_incarnation() {
         let application =
             super::super::collector::current_process_target(ResourceMeasurementScope::ProcessTree)
                 .unwrap();
@@ -398,7 +398,7 @@ mod tests {
         }
     }
 
-    fn ticket(ordinal: u64) -> Ticket {
+    pub fn ticket(ordinal: u64) -> Ticket {
         Ticket {
             collector: Uuid::nil(),
             runtime: 3,
@@ -410,7 +410,7 @@ mod tests {
         }
     }
     #[test]
-    fn latest_projection_preserves_exact_values_scopes_units_and_start_order() {
+    pub fn latest_projection_preserves_exact_values_scopes_units_and_start_order() {
         let mut cache = LatestMemory::default();
         let target = super::super::collector::current_process_target(
             ResourceMeasurementScope::ApplicationProcess,
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(cache.sample.unwrap().ordinal.get(), 2);
     }
     #[test]
-    fn unverified_global_stale_and_nonfinite_values_remain_explicit() {
+    pub fn unverified_global_stale_and_nonfinite_values_remain_explicit() {
         let mut cache = LatestMemory::default();
         let target =
             super::super::collector::current_process_target(ResourceMeasurementScope::ProcessTree)

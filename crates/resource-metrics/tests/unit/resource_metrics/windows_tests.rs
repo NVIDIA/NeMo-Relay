@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::plugins::resource_metrics::config::ResourceMetricsConfig;
+use crate::config::ResourceMetricsConfig;
 use std::os::windows::io::AsRawHandle;
 use std::process::{Child, Command, Stdio};
 use windows_sys::Win32::System::JobObjects::{

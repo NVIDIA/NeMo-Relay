@@ -10,7 +10,7 @@ use nemo_relay_types::api::resource_metrics::{
     ResourceMeasurement, UtilizationUnit,
 };
 
-use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
+use crate::config::ResourceMetricsGpuConfig;
 
 use super::AcceleratorSample;
 
@@ -222,7 +222,7 @@ fn apple_processes_from_registry(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/accelerator_macos_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/accelerator_macos_tests.rs"]
 mod tests;
 
 fn registry_blocks(output: &str) -> impl Iterator<Item = &str> {

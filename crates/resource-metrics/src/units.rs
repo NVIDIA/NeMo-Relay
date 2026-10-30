@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::plugins::resource_metrics::config::ResourceMetricsUnits;
+use crate::config::ResourceMetricsUnits;
 use nemo_relay_types::api::resource_metrics::{
     BandwidthUnit, CapacityUnit, CpuUnit, DataUnit, DurationUnit, ResourceMeasurement,
     ResourceMetricValue, ResourceMetricsSnapshot, ResourceUnit, UtilizationUnit,
@@ -141,10 +141,7 @@ fn convert_float<U: FloatUnit>(measurement: &mut Option<ResourceMeasurement<f64,
     current.unit = target;
 }
 
-pub(crate) fn convert_snapshot(
-    snapshot: &mut ResourceMetricsSnapshot,
-    units: &ResourceMetricsUnits,
-) {
+pub fn convert_snapshot(snapshot: &mut ResourceMetricsSnapshot, units: &ResourceMetricsUnits) {
     if let Some(cpu) = snapshot.cpu.as_mut() {
         convert_integer(&mut cpu.user_time, units.cpu.user_time);
         convert_integer(&mut cpu.system_time, units.cpu.system_time);
@@ -259,5 +256,5 @@ pub(crate) fn convert_snapshot(
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/resource_metrics/units_tests.rs"]
+#[path = "../tests/unit/resource_metrics/units_tests.rs"]
 mod tests;

@@ -60,20 +60,20 @@ pub(super) fn process_sample(
 pub(super) fn environment_sample(
     _target: &CollectionTarget,
     _process_ids: &[u32],
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    _config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     Ok(EnvironmentSample::default())
 }
 
 pub(super) fn global_environment_sample(
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+    _config: &crate::config::ResourceMetricsConfig,
 ) -> io::Result<EnvironmentSample> {
     Ok(EnvironmentSample::default())
 }
 
 pub(super) fn accelerator_sample(
     _process_ids: &[u32],
-    _config: &crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig,
+    _config: &crate::config::ResourceMetricsGpuConfig,
     _sampling_state: &mut super::SamplingState,
 ) -> AcceleratorSample {
     AcceleratorSample::default()

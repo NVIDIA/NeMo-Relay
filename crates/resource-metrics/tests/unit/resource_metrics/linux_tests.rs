@@ -100,7 +100,7 @@ fn effective_limits_are_unavailable_for_invalid_or_unreadable_ancestors() {
 }
 #[test]
 fn cgroup_sample_reads_selected_categories_and_normalizes_units() {
-    use crate::plugins::resource_metrics::config::ResourceMetricsConfig;
+    use crate::config::ResourceMetricsConfig;
     use nemo_relay_types::api::resource_metrics::CapacityUnit;
     let directory = tempfile::tempdir().unwrap();
     for (name, value) in [

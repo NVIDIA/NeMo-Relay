@@ -13,7 +13,7 @@ use nemo_relay_types::api::resource_metrics::{
 };
 
 use super::{AcceleratorSample, accelerator_device_is_selected};
-use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
+use crate::config::ResourceMetricsGpuConfig;
 
 const NVML_SUCCESS: i32 = 0;
 const NVML_ERROR_INSUFFICIENT_SIZE: i32 = 7;
@@ -908,9 +908,9 @@ fn aggregate_drm_memory(clients: &[DrmClient]) -> Option<(u64, CapacityUnit)> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[path = "../../../tests/unit/resource_metrics/accelerator_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/accelerator_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../../../tests/unit/resource_metrics/nvml_tests.rs"]
+#[path = "../../tests/unit/resource_metrics/nvml_tests.rs"]
 mod nvml_tests;
