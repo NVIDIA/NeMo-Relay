@@ -1567,6 +1567,10 @@ test-python-plugin-e2e:
         exit 0
     fi
     tmp="$(mktemp -d)"
+    # Keep the worker lifecycle independent of ambient user and system plugins.
+    export XDG_CONFIG_HOME="$tmp/user-config"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$tmp/system-config"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     gateway_pid=""
     cleanup() {
         if [[ -n "$gateway_pid" ]]; then
@@ -1578,7 +1582,7 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
-    cargo build -p nemo-relay-cli
+    cargo build -p nemo-relay-cli --features __skip-implicit-config
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
     # Explicit --config paths must exist; plugin policy and state are sibling files.
@@ -1622,8 +1626,8 @@ test-python-plugin-e2e:
         exit 1
     fi
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo nextest run --locked -p nemo-relay \
-        --test worker_plugin_integration \
+        cargo nextest run --locked -p nemo-relay-plugin-host --features __skip-implicit-config \
+        --lib \
         -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs) + test(python_worker_message_limits_follow_plugin_defaults)' \
         --no-capture \
         --profile ci
