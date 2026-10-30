@@ -90,7 +90,7 @@ When consuming a local checkout, use path dependencies:
 
 ```toml
 [dependencies]
-nemo-relay = { path = "../NeMo-Relay/crates/core" }
+nemo-relay = { path = "../NeMo-Relay/crates/sdk" }
 nemo-relay-adaptive = { path = "../NeMo-Relay/crates/adaptive" }
 serde_json = "1"
 ```

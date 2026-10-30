@@ -3,7 +3,7 @@
 
 [workspace]
 members = [
-    "crates/core",
+    "crates/sdk",
     "crates/runtime",
     "crates/codecs",
     "crates/diagnostics",
@@ -32,7 +32,7 @@ members = [
     "scripts/latency_benchmark/daemon_transport",
 ]
 default-members = [
-    "crates/core",
+    "crates/sdk",
     "crates/types",
     "crates/model-pricing",
     "crates/resource-metrics",
@@ -62,7 +62,7 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 # Workspace crate versions are updated by `just set-version`.
 
 # First-party crates.
-nemo-relay = { version = "1.0.0", path = "crates/core" }
+nemo-relay = { version = "1.0.0", path = "crates/sdk" }
 nemo-relay-adaptive = { version = "1.0.0", path = "crates/adaptive" }
 nemo-relay-cli = { version = "1.0.0", path = "crates/cli" }
 nemo-relay-codecs = { version = "1.0.0", path = "crates/codecs" }

@@ -506,7 +506,7 @@ fn operational_log_calls_follow_the_stable_contract() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for src in [
         crate_root.join("src"),
-        crate_root.join("../core/src"),
+        crate_root.join("../sdk/src"),
         crate_root.join("../adaptive/src"),
         crate_root.join("../pii-redaction/src"),
     ] {
@@ -551,7 +551,7 @@ fn operational_direct_stderr_is_limited_to_emergency_and_ui_boundaries() {
             );
         }
     }
-    for path in rust_files(&crate_root.join("../core/src")) {
+    for path in rust_files(&crate_root.join("../sdk/src")) {
         let source = fs::read_to_string(&path).unwrap();
         assert!(
             !source.contains("eprintln!"),

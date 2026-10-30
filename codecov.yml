@@ -45,7 +45,7 @@ component_management:
     - component_id: rust_runtime
       name: Rust Runtime
       paths:
-        - "crates/core/src"
+        - "crates/sdk/src"
         - "crates/adaptive/src"
       statuses:
         - type: project

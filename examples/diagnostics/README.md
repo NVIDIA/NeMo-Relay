@@ -21,7 +21,7 @@ cargo run -p nemo-relay --example embedded_diagnostics
 ```
 
 The Rust source lives at
-[`crates/core/examples/embedded_diagnostics.rs`](../../crates/core/examples/embedded_diagnostics.rs)
+[`crates/sdk/examples/embedded_diagnostics.rs`](../../crates/sdk/examples/embedded_diagnostics.rs)
 so Cargo can build it with the core crate's existing dependencies. Python and Node
 example smoke tests run through their normal binding test suites.
 
