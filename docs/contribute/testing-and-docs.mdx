@@ -186,6 +186,13 @@ nonzero if any selected case fails. System-managed Relay plugin configuration
 still applies; use a clean host when testing the standalone Quick Starts.
 The runner records the system configuration's hash when present.
 
+GitHub credentials remain available to the asset resolver but are removed from
+case-command environments, including installation and package-version checks.
+Malformed case results are recorded as failures so remaining cases can run.
+Cancellation stops further cases after process cleanup and writes available
+diagnostic reports. Cleanup errors are recorded separately from an existing
+command failure.
+
 Results go below the ignored `artifacts/quickstarts/` directory, or a new
 directory supplied by `--output`. `results.json` records each case and failing
 block; `resolved-assets.json` records exact asset locations, versions, hashes,

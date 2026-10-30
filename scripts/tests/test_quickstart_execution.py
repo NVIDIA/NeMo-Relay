@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.util
 import io
@@ -233,6 +234,77 @@ class QuickstartExecutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed", result)
         self.assertTrue((self.root / "pass/workspace/project/logs/events.jsonl").is_file())
         self.assertFalse(list((self.root / "pass").rglob(".session-*")))
+
+    def test_case_commands_do_not_inherit_github_credentials(self):
+        keys = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ACTIONS_RUNTIME_TOKEN")
+        scenario = self.scenario()
+        program = (
+            f"import os; assert not set({keys!r}) & os.environ.keys(); "
+            "assert os.environ['QUICKSTART_TEST_VISIBLE'] == 'kept'; print('OK')"
+        )
+        scenario["blocks"][1]["content"] = shell.command(sys.executable, "-c", program)
+        with patch.dict(os.environ, {**dict.fromkeys(keys, "fake-test-credential"), "QUICKSTART_TEST_VISIBLE": "kept"}):
+            result = RUNNER.run_case("nodejs", scenario, self.assets(), {}, self.root / "credentials")
+        self.assertEqual(result["status"], "passed", result)
+
+    def test_malformed_rust_lock_is_a_recorded_case_failure(self):
+        for label, content, error in (
+            ("missing", "version = 4\n", "KeyError"),
+            ("empty", "version = 4\npackage = []\n", "StopIteration"),
+        ):
+            scenario = self.scenario()
+            scenario["blocks"][0]["content"] += "\n" + shell.command(
+                sys.executable, "-c", f"from pathlib import Path; Path('project/Cargo.lock').write_text({content!r})"
+            )
+            with self.subTest(label=label):
+                folder = self.root / label
+                result = RUNNER.run_case("rust", scenario, self.assets(), {"rust": {}}, folder)
+                self.assertEqual(result["status"], "failed", result)
+                self.assertIn(error, result["error"])
+                self.assertEqual(json.loads((folder / "result.json").read_text())["status"], "failed")
+
+    def test_sigterm_unwinds_case_and_stops_before_the_next_case(self):
+        def interrupt(*_args, **_kwargs):
+            RUNNER.interrupted(15, None)
+
+        folder = self.root / "interrupted-case"
+        with patch.object(RUNNER, "execute", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            RUNNER.run_case("nodejs", self.scenario(), self.assets(), {}, folder)
+        self.assertIn("interrupted", json.loads((folder / "result.json").read_text())["error"])
+        output = self.root / "interrupted-run"
+        arguments = [
+            "run-quickstarts",
+            "--version",
+            "0.11.0-rc.2",
+            "--asset-location",
+            str(self.catalog),
+            "--cases",
+            "nodejs,rust",
+            "--output",
+            str(output),
+        ]
+        with (
+            patch.object(sys, "argv", arguments),
+            patch.object(RUNNER, "inventory", return_value={name: self.scenario() for name in ("nodejs", "rust")}),
+            patch.object(ASSETS.Assets, "nodejs", return_value={}),
+            patch.object(ASSETS.Assets, "rust", return_value={}),
+            patch.object(RUNNER, "run_case", side_effect=interrupt) as run_case,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(RUNNER.main(), 1)
+        self.assertEqual(run_case.call_count, 1)
+        self.assertIn("interrupted", json.loads((output / "results.json").read_text())["error"])
+
+    def test_hermes_cleanup_keeps_the_primary_failure(self):
+        def fail(command, cwd, environment, *_args):
+            environment["HERMES_HOME"] = str(cwd / ".hermes")
+            raise ValueError("cleanup failure" if command == "hermes gateway stop" else "primary failure")
+
+        with patch.object(RUNNER, "execute", side_effect=fail):
+            result = RUNNER.run_case("hermes", self.scenario(), self.assets(), {}, self.root / "hermes-cleanup")
+        self.assertIn("primary failure", result["error"])
+        self.assertIn("cleanup failure", result["cleanup_error"])
 
     def test_unicode_agent_output_preserves_the_marker_checks(self):
         scenario = self.scenario()

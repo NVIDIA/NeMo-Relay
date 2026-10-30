@@ -130,8 +130,10 @@ def run_case(
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(
+        if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+        and not key.startswith(
             (
+                "ACTIONS_",
                 "NEMO_RELAY_",
                 "PYTHON",
                 "UV_PROJECT",
@@ -244,11 +246,14 @@ def run_case(
         if name in agents.PYTHON_CASES | {"hermes"}:
             python = shell.python(work / "hermes-venv" if name == "hermes" else project / ".venv")
             command = [str(python), "-c", "import importlib.metadata as m; print(m.version('nemo-relay'))"]
-            installed = subprocess.check_output(command, text=True, timeout=30).strip()
+            installed = subprocess.check_output(command, text=True, timeout=30, env=environment).strip()
             if Version(installed) != Version(assets.version):
                 raise ValueError(f"Installed Python version {installed} differs from requested {assets.version}")
             dependencies = subprocess.check_output(
-                ["uv", "pip", "list", "--python", str(python), "--format", "json"], text=True, timeout=60
+                ["uv", "pip", "list", "--python", str(python), "--format", "json"],
+                text=True,
+                timeout=60,
+                env=environment,
             )
             write_json(folder / "dependencies.json", json.loads(dependencies))
         elif name == "nodejs":
@@ -268,8 +273,11 @@ def run_case(
                 "sha256": sha256(lock),
             }
         result.update(status="passed", block="complete")
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
-        result["error"] = str(error)
+    except KeyboardInterrupt as error:
+        result["error"] = str(error) or "Quick Start run interrupted"
+        raise
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+        result["error"] = f"{type(error).__name__}: {error}"
     finally:
         if name == "hermes" and environment.get("HERMES_HOME") == str(work / ".hermes"):
             # Recent Hermes chat commands start a detached, profile-scoped gateway.
@@ -284,7 +292,8 @@ def run_case(
                     60,
                 )
             except (ValueError, OSError, subprocess.SubprocessError) as error:
-                result.update(status="failed", error=f"Hermes gateway cleanup failed: {error}")
+                result["status"] = "failed"
+                result["cleanup_error" if "error" in result else "error"] = f"Hermes gateway cleanup failed: {error}"
         if fixture:
             fixture.close()
             result["provider"] = {
@@ -420,6 +429,9 @@ def main() -> int:
             report["results"].append(result)
             print(f"{name}: {result['status']}" + (" — " + result["error"] if "error" in result else ""), flush=True)
         report["status"] = "passed" if all(result["status"] == "passed" for result in report["results"]) else "failed"
+    except KeyboardInterrupt as error:
+        report["error"] = str(error) or "Quick Start run interrupted"
+        print(report["error"], file=sys.stderr)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         report["error"] = str(error)
         print(f"Quick Start execution failed: {error}", file=sys.stderr)
@@ -437,10 +449,12 @@ def main() -> int:
     return 0 if report["status"] == "passed" else 1
 
 
+def interrupted(_signal: int, _frame: Any) -> None:
+    # KeyboardInterrupt unwinds shell/process cleanup and bypasses case-failure
+    # handlers, so SIGTERM cannot start provisioning the next case.
+    raise KeyboardInterrupt("Quick Start run interrupted")
+
+
 if __name__ == "__main__":
-
-    def interrupted(_signal: int, _frame: Any) -> None:
-        raise InterruptedError("Quick Start run interrupted")
-
     signal.signal(signal.SIGTERM, interrupted)
     sys.exit(main())
