@@ -34,9 +34,9 @@ use super::collector::{
 };
 use crate::config::{ResourceMetricsConfig, ResourceMetricsMeasurementScope};
 
-pub static GLOBAL_MANAGER: Mutex<Option<Arc<ResourceMetricsManager>>> = Mutex::new(None);
-pub static MANAGER_OWNER_PID: AtomicU32 = AtomicU32::new(0);
-pub static ACTIVE_OWNER_PID: AtomicU32 = AtomicU32::new(0);
+static GLOBAL_MANAGER: Mutex<Option<Arc<ResourceMetricsManager>>> = Mutex::new(None);
+static MANAGER_OWNER_PID: AtomicU32 = AtomicU32::new(0);
+static ACTIVE_OWNER_PID: AtomicU32 = AtomicU32::new(0);
 
 pub fn runtime_inherited_across_fork() -> bool {
     let owner = ACTIVE_OWNER_PID.load(Ordering::Acquire);
@@ -54,50 +54,50 @@ pub fn ensure_process_owner() -> Result<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum SamplingSeries {
+pub(crate) enum SamplingSeries {
     OnDemand,
     Polling,
 }
 
 #[derive(Debug, Clone)]
-pub struct SamplingBaseline {
-    pub sampled_at: Instant,
-    pub process_cpu_times: HashMap<(u32, u64), u64>,
-    pub target_generation: u64,
+pub(crate) struct SamplingBaseline {
+    pub(crate) sampled_at: Instant,
+    pub(crate) process_cpu_times: HashMap<(u32, u64), u64>,
+    pub(crate) target_generation: u64,
 }
 
-pub struct DiskBaseline {
-    pub sampled_at: Instant,
-    pub counters: HashMap<(u32, u64), (Option<u64>, Option<u64>)>,
-    pub target_generation: u64,
+pub(crate) struct DiskBaseline {
+    pub(crate) sampled_at: Instant,
+    pub(crate) counters: HashMap<(u32, u64), (Option<u64>, Option<u64>)>,
+    pub(crate) target_generation: u64,
 }
 
-pub struct ManagerState {
-    pub memory: super::memory::LatestMemory,
-    pub collection_ordinal: u64,
-    pub application_target: CollectionTarget,
-    pub target: CollectionTarget,
-    pub target_generation: u64,
-    pub active_runtime_generation: Option<u64>,
-    pub config: Option<ResourceMetricsConfig>,
-    pub on_demand_baseline: Option<SamplingBaseline>,
-    pub polling_baseline: Option<SamplingBaseline>,
-    pub on_demand_disk_baseline: Option<DiskBaseline>,
-    pub polling_disk_baseline: Option<DiskBaseline>,
-    pub on_demand_network_sampler: Option<NetworkSampler>,
-    pub polling_network_sampler: Option<NetworkSampler>,
-    pub on_demand_global_cpu_sampler: Option<GlobalCpuSampler>,
-    pub polling_global_cpu_sampler: Option<GlobalCpuSampler>,
-    pub on_demand_sampling_state: Arc<Mutex<collector::SamplingState>>,
-    pub polling_sampling_state: Arc<Mutex<collector::SamplingState>>,
-    pub cli_launch_prepared: bool,
-    pub awaiting_owned_target: bool,
+pub(crate) struct ManagerState {
+    pub(crate) memory: super::memory::LatestMemory,
+    pub(crate) collection_ordinal: u64,
+    pub(crate) application_target: CollectionTarget,
+    pub(crate) target: CollectionTarget,
+    pub(crate) target_generation: u64,
+    pub(crate) active_runtime_generation: Option<u64>,
+    pub(crate) config: Option<ResourceMetricsConfig>,
+    pub(crate) on_demand_baseline: Option<SamplingBaseline>,
+    pub(crate) polling_baseline: Option<SamplingBaseline>,
+    pub(crate) on_demand_disk_baseline: Option<DiskBaseline>,
+    pub(crate) polling_disk_baseline: Option<DiskBaseline>,
+    pub(crate) on_demand_network_sampler: Option<NetworkSampler>,
+    pub(crate) polling_network_sampler: Option<NetworkSampler>,
+    pub(crate) on_demand_global_cpu_sampler: Option<GlobalCpuSampler>,
+    pub(crate) polling_global_cpu_sampler: Option<GlobalCpuSampler>,
+    pub(crate) on_demand_sampling_state: Arc<Mutex<collector::SamplingState>>,
+    pub(crate) polling_sampling_state: Arc<Mutex<collector::SamplingState>>,
+    pub(crate) cli_launch_prepared: bool,
+    pub(crate) awaiting_owned_target: bool,
 }
 
-pub struct ResourceMetricsManager {
-    pub collector_id: uuid::Uuid,
-    pub owner_pid: u32,
-    pub state: Mutex<ManagerState>,
+pub(crate) struct ResourceMetricsManager {
+    pub(crate) collector_id: uuid::Uuid,
+    pub(crate) owner_pid: u32,
+    pub(crate) state: Mutex<ManagerState>,
 }
 
 impl ResourceMetricsManager {
@@ -467,7 +467,7 @@ pub fn invalidated_snapshot(mut snapshot: ResourceMetricsSnapshot) -> ResourceMe
     snapshot
 }
 
-pub fn derive_cpu_rate(
+fn derive_cpu_rate(
     snapshot: &mut ResourceMetricsSnapshot,
     sampled_at: Instant,
     process_cpu_samples: &[ProcessCpuSample],
@@ -538,7 +538,7 @@ pub fn derive_cpu_rate(
     cpu.consumption_rate = Some(ResourceMeasurement::new(value, CpuUnit::LogicalProcessors));
 }
 
-pub fn calculate_disk_rate(
+fn calculate_disk_rate(
     samples: &[ProcessIoSample],
     previous: &DiskBaseline,
     read: bool,
@@ -584,7 +584,7 @@ pub fn calculate_disk_rate(
     (rate, supplied)
 }
 
-pub fn derive_disk_rates(
+fn derive_disk_rates(
     snapshot: &mut ResourceMetricsSnapshot,
     sampled_at: Instant,
     samples: &[ProcessIoSample],
@@ -677,7 +677,7 @@ pub async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
         })?
 }
 
-pub fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
+pub(crate) fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
     ensure_process_owner()?;
     let pid = std::process::id();
     let owner = MANAGER_OWNER_PID
@@ -715,23 +715,23 @@ pub fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
 
 /// Owns the optional resource metrics polling thread for a built-in plugin activation.
 pub struct ResourceMetricsRuntime {
-    pub manager: Arc<ResourceMetricsManager>,
-    pub runtime_generation: u64,
-    pub stop: Option<Sender<()>>,
-    pub polling_thread: Option<JoinHandle<()>>,
+    pub(crate) manager: Arc<ResourceMetricsManager>,
+    pub(crate) runtime_generation: u64,
+    pub(crate) stop: Option<Sender<()>>,
+    pub(crate) polling_thread: Option<JoinHandle<()>>,
 }
 
 /// Temporarily directs collection to a CLI-owned process tree.
 #[doc(hidden)]
 pub struct ResourceMetricsTargetGuard {
-    pub manager: Arc<ResourceMetricsManager>,
-    pub generation: u64,
+    pub(crate) manager: Arc<ResourceMetricsManager>,
+    pub(crate) generation: u64,
 }
 
 /// Keeps a CLI launch's process-tree target pending until the launched child is selected.
 #[doc(hidden)]
 pub struct CliResourceMetricsLaunchGuard {
-    pub manager: Arc<ResourceMetricsManager>,
+    pub(crate) manager: Arc<ResourceMetricsManager>,
 }
 
 impl Drop for CliResourceMetricsLaunchGuard {
@@ -866,7 +866,7 @@ impl Drop for ResourceMetricsRuntime {
     }
 }
 
-pub fn polling_loop(
+fn polling_loop(
     manager: Arc<ResourceMetricsManager>,
     stop: mpsc::Receiver<()>,
     interval: Duration,

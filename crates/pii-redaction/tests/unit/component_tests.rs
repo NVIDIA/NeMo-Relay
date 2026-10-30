@@ -379,7 +379,6 @@ fn reset_runtime() {
     enable_operational_logs();
     let _ = test_close_plugin_host();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
-    crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
     register_pii_redaction_component().unwrap();

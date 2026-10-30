@@ -52,11 +52,5 @@ pub mod plugins {
 }
 
 #[cfg(test)]
-#[allow(missing_docs)]
-pub mod shared_runtime {
-    pub fn reset_runtime_owner_for_tests() {}
-}
-
-#[cfg(test)]
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod test_support;

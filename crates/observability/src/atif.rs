@@ -336,11 +336,11 @@ pub struct AtifTrajectory {
 // ---------------------------------------------------------------------------
 
 #[doc(hidden)]
-pub struct AtifExporterState {
-    pub session_id: String,
-    pub trajectory_id: String,
-    pub agent_info: AtifAgentInfo,
-    pub events: Vec<Event>,
+pub(crate) struct AtifExporterState {
+    pub(crate) session_id: String,
+    pub(crate) trajectory_id: String,
+    pub(crate) agent_info: AtifAgentInfo,
+    pub(crate) events: Vec<Event>,
 }
 
 /// Collects lifecycle events and exports them as ATIF trajectories.
@@ -349,8 +349,8 @@ pub struct AtifExporterState {
 /// then call [`AtifExporter::export`] to produce an [`AtifTrajectory`].
 #[derive(Clone)]
 pub struct AtifExporter {
-    pub host: crate::host::HostCell,
-    pub state: Arc<Mutex<AtifExporterState>>,
+    host: crate::host::HostCell,
+    pub(crate) state: Arc<Mutex<AtifExporterState>>,
 }
 
 impl AtifExporter {

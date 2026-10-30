@@ -2210,6 +2210,7 @@ dependencies = [
  "futures-util",
  "http",
  "log",
+ "nemo-relay-codecs",
  "nemo-relay-model-pricing",
  "nemo-relay-plugin",
  "nemo-relay-types",

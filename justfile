@@ -1928,6 +1928,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-observability)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')

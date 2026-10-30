@@ -29,7 +29,7 @@ mod snapshot_fixture;
 pub mod manager;
 #[doc(hidden)]
 #[allow(missing_docs)]
-pub mod memory;
+pub(crate) mod memory;
 /// Collect a fresh resource snapshot on a Tokio blocking worker.
 pub use manager::collect_on_demand as collect;
 
