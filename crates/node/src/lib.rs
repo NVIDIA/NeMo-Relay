@@ -12,13 +12,17 @@
 //! for ATIF trajectory correlation. The `AtifExporter` class collects lifecycle events
 //! and exports ATIF v1.7 trajectories.
 
-#![allow(dead_code)]
+// napi-derive registers exports only outside `cfg(test)`, so lib tests see `#[napi]` items
+// as unused.
+#![cfg_attr(test, allow(dead_code))]
 
 mod api;
 mod callable;
 mod callback_factory;
 mod convert;
 mod diagnostics;
+mod environment;
+mod error;
 mod promise_call;
 mod stream;
 mod types;

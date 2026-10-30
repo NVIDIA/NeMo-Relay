@@ -10,7 +10,10 @@
 mod resource_metrics;
 
 use napi::Env;
+use napi::bindgen_prelude::Unknown;
 use napi_derive::napi;
+
+use crate::error::{Error, Result};
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
@@ -288,6 +291,7 @@ impl From<CoreToolExecutionResult> for ToolExecutionResult {
 /// the managed tool call, or `null` when the call did not record one. It lets
 /// an intercept that completes execution without invoking the remaining chain
 /// associate its result with the originating tool call.
+#[allow(dead_code, reason = "declared for generated TypeScript only")]
 #[napi(object, use_nullable = true)]
 pub struct ToolExecutionContext {
     pub tool_name: String,
@@ -296,6 +300,7 @@ pub struct ToolExecutionContext {
 }
 
 /// A mark Relay materializes under a managed lifecycle.
+#[allow(dead_code, reason = "declared for generated TypeScript only")]
 #[napi(object)]
 pub struct PendingMarkSpec {
     pub name: String,
@@ -320,7 +325,7 @@ pub struct ScopeStack {
 #[napi]
 impl ScopeStack {
     /// Creates a new isolated scope stack with its own root scope.
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner: create_scope_stack(),
@@ -351,43 +356,43 @@ pub struct ScopeHandle {
 #[napi]
 impl ScopeHandle {
     /// The unique identifier for this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The human-readable name of this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// The type of this scope (Agent, Tool, Llm, etc.).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn scope_type(&self) -> ScopeType {
         self.inner.scope_type.into()
     }
 
     /// Bitfield of scope attributes (e.g., PARALLEL, RELOCATABLE).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of this scope's parent, or `null` if this is the root scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
 
     /// Optional user-defined data associated with this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn data(&self) -> Option<serde_json::Value> {
         self.inner.data.clone()
     }
 
     /// Optional metadata associated with this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn metadata(&self) -> Option<serde_json::Value> {
         self.inner.metadata.clone()
     }
@@ -410,25 +415,25 @@ pub struct ToolHandle {
 #[napi]
 impl ToolHandle {
     /// The unique identifier for this tool call.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The name of the tool being called.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// Bitfield of tool attributes (e.g., LOCAL).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of the parent scope that initiated this tool call, or `null`.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
@@ -451,25 +456,25 @@ pub struct LlmHandle {
 #[napi]
 impl LlmHandle {
     /// The unique identifier for this LLM call.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The name of the LLM provider being called.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// Bitfield of LLM attributes (e.g., STATELESS, STREAMING).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of the parent scope that initiated this LLM call, or `null`.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
@@ -496,7 +501,7 @@ pub struct LlmRequest {
 #[napi]
 impl LlmRequest {
     /// Create a new LLM request from headers and content.
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new(headers: serde_json::Value, content: serde_json::Value) -> Self {
         let headers = match headers {
             Json::Object(m) => m,
@@ -508,13 +513,13 @@ impl LlmRequest {
     }
 
     /// The metadata headers as a JSON object.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn headers(&self) -> serde_json::Value {
         Json::Object(self.inner.headers.clone())
     }
 
     /// The request payload as a JSON value.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn content(&self) -> serde_json::Value {
         self.inner.content.clone()
     }
@@ -591,7 +596,7 @@ pub struct OpenAIChatCodec {
 
 #[napi]
 impl OpenAIChatCodec {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
@@ -602,39 +607,33 @@ impl OpenAIChatCodec {
     }
 
     /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn decode(&self, request: Json) -> Result<Json> {
         let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self.inner_codec.decode(&llm_req).map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 
     /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
         let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+            .map_err(|e| Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {e}")))?;
         let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let result = self.inner_codec.encode(&ann, &orig).map_err(Error::from)?;
+        serde_json::to_value(&result).map_err(Error::from)
     }
 
     /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+    #[napi(js_name = "decodeResponse", catch_unwind)]
+    pub fn decode_response(&self, response: Json) -> Result<Json> {
         let annotated = self
             .inner_response_codec
             .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 }
 
@@ -650,7 +649,7 @@ pub struct OpenAIResponsesCodec {
 
 #[napi]
 impl OpenAIResponsesCodec {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(
@@ -663,39 +662,33 @@ impl OpenAIResponsesCodec {
     }
 
     /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn decode(&self, request: Json) -> Result<Json> {
         let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self.inner_codec.decode(&llm_req).map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 
     /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
         let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+            .map_err(|e| Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {e}")))?;
         let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let result = self.inner_codec.encode(&ann, &orig).map_err(Error::from)?;
+        serde_json::to_value(&result).map_err(Error::from)
     }
 
     /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+    #[napi(js_name = "decodeResponse", catch_unwind)]
+    pub fn decode_response(&self, response: Json) -> Result<Json> {
         let annotated = self
             .inner_response_codec
             .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 }
 
@@ -711,7 +704,7 @@ pub struct GeminiGenerateContentCodec {
 
 #[napi]
 impl GeminiGenerateContentCodec {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(
@@ -724,45 +717,39 @@ impl GeminiGenerateContentCodec {
     }
 
     /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn decode(&self, request: Json) -> Result<Json> {
         let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self.inner_codec.decode(&llm_req).map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 
     /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
         let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+            .map_err(|e| Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {e}")))?;
         let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let result = self.inner_codec.encode(&ann, &orig).map_err(Error::from)?;
+        serde_json::to_value(&result).map_err(Error::from)
     }
 
     /// Decode a raw LLM response into structured form.
     /// Throws a TypeError if the response contains a BigInt value.
-    #[napi(js_name = "decodeResponse")]
+    #[napi(js_name = "decodeResponse", catch_unwind)]
     pub fn decode_response(
         &self,
         env: Env,
-        #[napi(ts_arg_type = "any")] response: napi::JsUnknown,
-    ) -> napi::Result<Json> {
+        #[napi(ts_arg_type = "any")] response: Unknown,
+    ) -> Result<Json> {
         let response = crate::convert::checked_json(&env, response)?;
         let annotated = self
             .inner_response_codec
             .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 }
 
@@ -778,7 +765,7 @@ pub struct AnthropicMessagesCodec {
 
 #[napi]
 impl AnthropicMessagesCodec {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
@@ -789,39 +776,33 @@ impl AnthropicMessagesCodec {
     }
 
     /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn decode(&self, request: Json) -> Result<Json> {
         let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self.inner_codec.decode(&llm_req).map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 
     /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
         let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+            .map_err(|e| Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {e}")))?;
         let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let result = self.inner_codec.encode(&ann, &orig).map_err(Error::from)?;
+        serde_json::to_value(&result).map_err(Error::from)
     }
 
     /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+    #[napi(js_name = "decodeResponse", catch_unwind)]
+    pub fn decode_response(&self, response: Json) -> Result<Json> {
         let annotated = self
             .inner_response_codec
             .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 }
 
@@ -837,7 +818,7 @@ pub struct OCIGenAIChatCodec {
 
 #[napi]
 impl OCIGenAIChatCodec {
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
@@ -848,38 +829,32 @@ impl OCIGenAIChatCodec {
     }
 
     /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn decode(&self, request: Json) -> Result<Json> {
         let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self.inner_codec.decode(&llm_req).map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 
     /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+    #[napi(catch_unwind)]
+    pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
         let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+            .map_err(|e| Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {e}")))?;
         let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(|e| Error::invalid_argument(format!("invalid LlmRequest: {e}")))?;
+        let result = self.inner_codec.encode(&ann, &orig).map_err(Error::from)?;
+        serde_json::to_value(&result).map_err(Error::from)
     }
 
     /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+    #[napi(js_name = "decodeResponse", catch_unwind)]
+    pub fn decode_response(&self, response: Json) -> Result<Json> {
         let annotated = self
             .inner_response_codec
             .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+            .map_err(Error::from)?;
+        serde_json::to_value(&annotated).map_err(Error::from)
     }
 }

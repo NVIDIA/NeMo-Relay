@@ -62,8 +62,16 @@
     "node": ">=24.13.1"
   },
   "napi": {
-    "name": "nemo-relay",
-    "triples": {}
+    "binaryName": "nemo-relay",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
   },
   "scripts": {
     "build": "node scripts/build.mjs --release",
@@ -79,7 +87,7 @@
     "coverage": "c8 --reporter=text --reporter=json-summary --reporter=cobertura --reports-dir coverage node --test --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml tests/*.mjs"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2",
+    "@napi-rs/cli": "^3.10.9",
     "c8": "^11.0.0",
     "prettier": "^3.8.2",
     "typedoc": "^0.28.0",

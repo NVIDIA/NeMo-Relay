@@ -160,9 +160,9 @@ windows-sys = "0.61"
 
 # Language bindings and binding generation.
 cbindgen = "0.29.2"
-napi = "2"
+napi = "3.16"
 napi-build = "2"
-napi-derive = "2"
+napi-derive = "3.7"
 pyo3 = "0.29.0"
 pyo3-async-runtimes = "0.29.0"
 pythonize = "0.29.0"

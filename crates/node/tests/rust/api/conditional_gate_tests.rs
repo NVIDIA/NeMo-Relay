@@ -9,5 +9,9 @@ fn conditional_gate_result_wait_is_bounded() {
     let error = recv_conditional_gate_result(rx, std::time::Duration::from_millis(1))
         .expect_err("an unresponsive callback must time out");
 
-    assert!(error.reason.contains("conditional gate callback timed out"));
+    assert!(
+        error
+            .to_string()
+            .contains("conditional gate callback timed out")
+    );
 }

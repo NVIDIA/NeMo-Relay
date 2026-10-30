@@ -1451,6 +1451,168 @@ Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout.
 PI_TUI_WRITE_LOG=/tmp/tui-ansi.log npx tsx test/chat-simple.ts
 ``````
 
+## @emnapi/core - 1.11.2
+**Repository URL**: https://www.npmjs.com/package/@emnapi/core
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @emnapi/core - 1.9.2
+**Repository URL**: https://www.npmjs.com/package/@emnapi/core
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @emnapi/runtime - 1.11.2
+**Repository URL**: https://www.npmjs.com/package/@emnapi/runtime
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @emnapi/runtime - 1.9.2
+**Repository URL**: https://www.npmjs.com/package/@emnapi/runtime
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @emnapi/wasi-threads - 1.2.1
+**Repository URL**: https://www.npmjs.com/package/@emnapi/wasi-threads
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @emnapi/wasi-threads - 1.2.2
+**Repository URL**: https://www.npmjs.com/package/@emnapi/wasi-threads
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2021-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
 ## @gerrit0/mini-shiki - 3.23.0
 **Repository URL**: https://github.com/Gerrit0/mini-shiki
 **License Type(s)**: MIT
@@ -1819,6 +1981,454 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
+
+## @inquirer/ansi - 2.0.10
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/checkbox - 5.2.8
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/confirm - 6.3.5
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/core - 12.0.6
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/editor - 5.3.6
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/expand - 5.1.8
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/external-editor - 3.0.7
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/figures - 2.0.10
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/input - 5.1.9
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/number - 4.2.6
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/password - 5.2.5
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/prompts - 8.7.5
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/rawlist - 5.3.8
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/search - 4.3.6
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/select - 5.2.8
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
+
+## @inquirer/type - 4.2.1
+**Repository URL**: https://github.com/SBoudrias/Inquirer.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) 2025 Simon Boudrias
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.```
 
 ## @isaacs/fs-minipass - 4.0.1
 **Repository URL**: https://github.com/npm/fs-minipass
@@ -2795,7 +3405,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.```
 
-## @napi-rs/cli - 2.18.4
+## @napi-rs/cli - 3.10.9
 **Repository URL**: https://github.com/napi-rs/napi-rs
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -2821,6 +3431,937 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
+
+## @napi-rs/cross-toolchain - 1.0.3
+**Repository URL**: https://github.com/napi-rs/cross-toolchain
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2020-present NAPI-RS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @napi-rs/lzma-android-arm-eabi - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-android-arm-eabi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-android-arm-eabi; see npm metadata.)
+```
+
+## @napi-rs/lzma-android-arm64 - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-android-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-android-arm64; see npm metadata.)
+```
+
+## @napi-rs/lzma-darwin-arm64 - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-darwin-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-darwin-arm64; see npm metadata.)
+```
+
+## @napi-rs/lzma-darwin-x64 - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-darwin-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-darwin-x64; see npm metadata.)
+```
+
+## @napi-rs/lzma-freebsd-x64 - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-freebsd-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-freebsd-x64; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-arm-gnueabihf - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-arm-gnueabihf
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-arm-gnueabihf; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-arm64-gnu - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-arm64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-arm64-gnu; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-arm64-musl - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-arm64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-arm64-musl; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-ppc64-gnu - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-ppc64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-ppc64-gnu; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-riscv64-gnu - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-riscv64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-riscv64-gnu; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-s390x-gnu - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-s390x-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-s390x-gnu; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-x64-gnu - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-x64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-x64-gnu; see npm metadata.)
+```
+
+## @napi-rs/lzma-linux-x64-musl - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-linux-x64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-linux-x64-musl; see npm metadata.)
+```
+
+## @napi-rs/lzma-wasm32-wasi - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-wasm32-wasi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-wasm32-wasi; see npm metadata.)
+```
+
+## @napi-rs/lzma-win32-arm64-msvc - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-win32-arm64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-win32-arm64-msvc; see npm metadata.)
+```
+
+## @napi-rs/lzma-win32-ia32-msvc - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-win32-ia32-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-win32-ia32-msvc; see npm metadata.)
+```
+
+## @napi-rs/lzma-win32-x64-msvc - 1.5.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/lzma-win32-x64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/lzma-win32-x64-msvc; see npm metadata.)
+```
+
+## @napi-rs/lzma - 1.5.1
+**Repository URL**: https://github.com/Brooooooklyn/lzma
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+# `@napi-rs/lzma`
+
+![https://github.com/Brooooooklyn/lzma/actions](https://github.com/Brooooooklyn/lzma/workflows/CI/badge.svg)
+![](https://img.shields.io/npm/dm/@napi-rs/lzma.svg?sanitize=true)
+[![Install size](https://packagephobia.com/badge?p=@napi-rs/lzma)](https://packagephobia.com/result?p=@napi-rs/lzma)
+
+`lzma` / `lzma2` / `xz` compression for Node.js and the browser, backed by the pure-Rust [lzma-rust2](https://docs.rs/lzma-rust2) crate via [napi-rs](https://napi.rs).
+
+> 🚀 Help me to become a full-time open-source developer by [sponsoring me on Github](https://github.com/sponsors/Brooooooklyn)
+
+## Install
+
+```
+yarn add @napi-rs/lzma
+```
+
+## Support matrix
+
+<!-- Rendered live by the napi.rs support-matrix badge service — not committed SVGs.
+     The <img> src is a PNG on purpose: npm proxies <img src> through camo, which
+     mangles remote SVG but passes raster untouched, so the light PNG renders on
+     npm / npmx / editors / crates. GitHub keeps <picture>, so dark-OS readers get
+     the dark PNG via <source>. Commas in the URL are %2C-encoded so <source srcset>
+     does not mis-split them. The full matrix is reproduced as text below for search
+     and screen readers. To change the card, edit the query (see /support-matrix on
+     napi.rs) — no image to re-commit. -->
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://napi.rs/support-matrix.png?engines=%5E22.20%20%7C%7C%20%5E24.12%20%7C%7C%20%3E%3D25&nodeTested=22%2C24&nodeOmit=25&tested=x86_64-pc-windows-msvc%2Caarch64-pc-windows-msvc%2Ci686-pc-windows-msvc%2Cx86_64-apple-darwin%2Caarch64-apple-darwin%2Cx86_64-unknown-linux-gnu%2Cx86_64-unknown-linux-musl%2Caarch64-unknown-linux-gnu%2Caarch64-unknown-linux-musl%2Carmv7-unknown-linux-gnueabihf%2Cx86_64-unknown-freebsd&nonblocking=powerpc64le-unknown-linux-gnu%2Cs390x-unknown-linux-gnu&untested=riscv64gc-unknown-linux-gnu%2Caarch64-linux-android%2Carm-linux-androideabi%2Cwasm32-wasi-preview1-threads&theme=dark">
+  <img alt="@napi-rs/lzma support matrix. Node.js v22.20 to v26 — engines allow ^22.20, ^24.12 and 25+; Node 23 and 24.0–24.11 are excluded; CI tests 22 and 24. 16 prebuilt native targets across Windows, macOS, Linux, Android and FreeBSD: 11 CI-tested, 2 non-blocking, 3 built but untested. Browser via wasm32-wasi, requiring COOP + COEP cross-origin isolation." src="https://napi.rs/support-matrix.png?engines=%5E22.20%20%7C%7C%20%5E24.12%20%7C%7C%20%3E%3D25&nodeTested=22%2C24&nodeOmit=25&tested=x86_64-pc-windows-msvc%2Caarch64-pc-windows-msvc%2Ci686-pc-windows-msvc%2Cx86_64-apple-darwin%2Caarch64-apple-darwin%2Cx86_64-unknown-linux-gnu%2Cx86_64-unknown-linux-musl%2Caarch64-unknown-linux-gnu%2Caarch64-unknown-linux-musl%2Carmv7-unknown-linux-gnueabihf%2Cx86_64-unknown-freebsd&nonblocking=powerpc64le-unknown-linux-gnu%2Cs390x-unknown-linux-gnu&untested=riscv64gc-unknown-linux-gnu%2Caarch64-linux-android%2Carm-linux-androideabi%2Cwasm32-wasi-preview1-threads">
+</picture>
+
+<details>
+<summary>Full matrix as text</summary>
+
+### Node.js
+
+`engines.node` is `^22.20 || ^24.12 || >=25` — a deliberately non-contiguous range:
+
+| Range            | Supported | Note                                          |
+| ---------------- | --------- | --------------------------------------------- |
+| `< 22.20`        | no        |                                               |
+| `22.20` – `22.x` | yes       | tested in CI                                  |
+| `23.x`           | no        | reached end-of-life 2025-06-01                |
+| `24.0` – `24.11` | no        |                                               |
+| `24.12` – `24.x` | yes       | tested in CI                                  |
+| `25.x`           | yes       | permitted, but reached end-of-life 2026-06-01 |
+| `26` and later   | yes       | not in the CI matrix                          |
+
+Release-line status as of 2026-07-10: 22 is Maintenance LTS, 24 is Active LTS, 26 is Current.
+
+**Why these exact cutoffs?** They are a support policy, not a technical limit. The only hard
+floor in the shipped code is **Node 22.12**, where `require(esm)` became unflagged — `main.js`
+loads `stream-polyfill.mjs` with `require`. The native binding itself asks for nothing newer
+than Node-API 5. The `^22.20 || ^24.12 || >=25` range was inherited from the test toolchain
+(`ava` declares `^22.20 || ^24.12 || >=26`) and predates the `require(esm)` code by two months.
+Node 23 and 24.0–24.11 are dropped by policy; the code runs on them.
+
+### Targets
+
+| Rust triple                     | Platform             | CI                                 |
+| ------------------------------- | -------------------- | ---------------------------------- |
+| `x86_64-pc-windows-msvc`        | Windows x64          | tested — node 22, 24               |
+| `aarch64-pc-windows-msvc`       | Windows arm64        | tested — node 22, 24               |
+| `i686-pc-windows-msvc`          | Windows x32          | tested — node 22 (x86), `--serial` |
+| `x86_64-apple-darwin`           | macOS x64            | tested — node 22, 24               |
+| `aarch64-apple-darwin`          | macOS arm64          | tested — node 22, 24               |
+| `x86_64-unknown-linux-gnu`      | Linux x64 gnu        | tested — node 22, 24               |
+| `x86_64-unknown-linux-musl`     | Linux x64 musl       | tested — node 22, 24               |
+| `aarch64-unknown-linux-gnu`     | Linux arm64 gnu      | tested — node 22, 24               |
+| `aarch64-unknown-linux-musl`    | Linux arm64 musl     | tested — node 22, 24               |
+| `armv7-unknown-linux-gnueabihf` | Linux armv7 gnu      | tested — node 22 only, `--serial`  |
+| `x86_64-unknown-freebsd`        | FreeBSD x64          | tested — node version unpinned     |
+| `powerpc64le-unknown-linux-gnu` | Linux ppc64le        | non-blocking (`continue-on-error`) |
+| `s390x-unknown-linux-gnu`       | Linux s390x          | non-blocking (`continue-on-error`) |
+| `riscv64gc-unknown-linux-gnu`   | Linux riscv64        | built, not tested                  |
+| `aarch64-linux-android`         | Android arm64        | built, not tested                  |
+| `arm-linux-androideabi`         | Android armv7        | built, not tested                  |
+| `wasm32-wasi-preview1-threads`  | wasm32-wasi, browser | built, not tested                  |
+
+Seventeen targets: eleven CI-tested, two non-blocking, four built but not exercised.
+
+### Browser
+
+Bundlers resolve `@napi-rs/lzma-wasm32-wasi` through the `browser` export condition. The wasm
+build allocates shared memory and spawns worker threads, so `SharedArrayBuffer` must be
+available — the page has to be
+[cross-origin isolated](https://developer.mozilla.org/docs/Web/API/Window/crossOriginIsolated),
+served with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`.
+
+</details>
+
+## API
+
+### xz
+
+```js
+import { compress, decompress } from '@napi-rs/lzma/xz'
+
+const compressed = await compress('Hello napi-rs 🚀')
+
+const decompressed = await decompress(compressed)
+
+console.log(decompressed.toString('utf8')) // Hello napi-rs 🚀
+```
+
+### lzma
+
+```js
+import { compress, decompress } from '@napi-rs/lzma/lzma'
+
+const compressed = await compress('Hello napi-rs 🚀')
+
+const decompressed = await decompress(compressed)
+
+console.log(decompressed.toString('utf8')) // Hello napi-rs 🚀
+```
+
+### lzma2
+
+```js
+import { compress, decompress } from '@napi-rs/lzma/lzma2'
+
+const compressed = await compress('Hello napi-rs 🚀')
+
+const decompressed = await decompress(compressed)
+
+console.log(decompressed.toString('utf8')) // Hello napi-rs 🚀
+```
+
+## Streaming
+
+Every namespace (`xz`, `lzma`, `lzma2`) additionally exposes an incremental streaming API. The one-shot `compress` / `decompress` above are unchanged; streaming is purely additive.
+
+### Incremental classes
+
+Feed data chunk-by-chunk with `update()` and flush with `finish()`. The valid stream is the concatenation of every `update()` output plus the `finish()` tail.
+
+```js
+import { Compressor, Decompressor } from '@napi-rs/lzma/xz'
+
+const compressor = new Compressor({ preset: 6 })
+const parts = [compressor.update('Hello '), compressor.update('napi-rs 🚀'), await compressor.finish()]
+const compressed = Buffer.concat(parts)
+
+const decompressor = new Decompressor()
+const restored = Buffer.concat([decompressor.update(compressed), await decompressor.finish()])
+console.log(restored.toString('utf8')) // Hello napi-rs 🚀
+```
+
+The top-level entry re-exports the same classes with format-qualified names: `XzCompressor` / `XzDecompressor`, `LzmaCompressor` / `LzmaDecompressor`, `Lzma2Compressor` / `Lzma2Decompressor`.
+
+### Web Streams
+
+Each namespace exposes a WHATWG [Web Streams](https://developer.mozilla.org/docs/Web/API/Streams_API) API — `Uint8Array` in, compressed `Uint8Array` out:
+
+```js
+import { compressStream, decompressStream } from '@napi-rs/lzma/xz'
+
+const compressed = source.pipeThrough(new TransformStream()) // any ReadableStream<Uint8Array>
+const restored = decompressStream(compressStream(source))
+```
+
+`input` must be a WHATWG `ReadableStream`; wrap a Node `Readable` with `Readable.toWeb()`.
+
+### Node Duplex factories
+
+For ready-to-pipe Node streams, each namespace subpath exports `createCompressStream()` / `createDecompressStream()`, which return a Node [`Duplex`](https://nodejs.org/api/stream.html#class-streamduplex):
+
+```js
+import { createReadStream, createWriteStream } from 'node:fs'
+import { createCompressStream } from '@napi-rs/lzma/xz'
+
+createReadStream('input.txt').pipe(createCompressStream()).pipe(createWriteStream('input.txt.xz'))
+```
+
+### Backend & platform notes
+
+- **Backend:** compression is powered by the pure-Rust [`lzma-rust2`](https://docs.rs/lzma-rust2) crate (previously `lzma-rs`). The one-shot API behavior is unchanged and the output remains standard, liblzma-compatible `.xz` / `.lzma`.
+- **wasm / browser:** the incremental classes run natively on every target. The native tokio-backed `compressStream` / `decompressStream` transforms are compiled out of the wasm build, so under wasm the Web Streams API transparently falls back to a buffered polyfill (it drains the input, runs the class API, and emits a single chunk). The Node `Duplex` factories are Node-only and are not part of the browser entry.
+- **lzma2 dictionary:** raw LZMA2 carries no dictionary size in-band, so it uses a fixed **8 MiB** dictionary by default. Override it via a symmetric `{ dictSize }` on **both** the compressor and the decompressor — they must agree. A decoder configured with a smaller dictionary than the encoder fails cleanly with an `InvalidArg` error; it never silently corrupts the output.
+- **Trailing bytes:** as with the one-shot API, the `lzma` / `lzma2` stream decoders complete at the in-band end marker and ignore any trailing bytes after a complete frame; the `xz` decoder validates its framed trailer.
+
+### Known limitation
+
+Cancelling a Web `compressStream` / `decompressStream` **output** while a `read()` is still pending on a stalled or never-ending **input** can leak one worker thread until the process exits. Normal cancels — before reading, after data has flowed, or on any finite input — are unaffected. (Root cause: napi's stream cancel cannot interrupt a pull that is already in flight; a full fix needs an upstream napi cancel hook.)```
+
+## @napi-rs/tar-android-arm-eabi - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-android-arm-eabi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-android-arm-eabi; see npm metadata.)
+```
+
+## @napi-rs/tar-android-arm64 - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-android-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-android-arm64; see npm metadata.)
+```
+
+## @napi-rs/tar-darwin-arm64 - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-darwin-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-darwin-arm64; see npm metadata.)
+```
+
+## @napi-rs/tar-darwin-x64 - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-darwin-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-darwin-x64; see npm metadata.)
+```
+
+## @napi-rs/tar-freebsd-x64 - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-freebsd-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-freebsd-x64; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-arm-gnueabihf - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-arm-gnueabihf
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-arm-gnueabihf; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-arm64-gnu - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-arm64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-arm64-gnu; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-arm64-musl - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-arm64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-arm64-musl; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-ppc64-gnu - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-ppc64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-ppc64-gnu; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-s390x-gnu - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-s390x-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-s390x-gnu; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-x64-gnu - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-x64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-x64-gnu; see npm metadata.)
+```
+
+## @napi-rs/tar-linux-x64-musl - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-linux-x64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-linux-x64-musl; see npm metadata.)
+```
+
+## @napi-rs/tar-wasm32-wasi - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-wasm32-wasi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-wasm32-wasi; see npm metadata.)
+```
+
+## @napi-rs/tar-win32-arm64-msvc - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-win32-arm64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-win32-arm64-msvc; see npm metadata.)
+```
+
+## @napi-rs/tar-win32-ia32-msvc - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-win32-ia32-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-win32-ia32-msvc; see npm metadata.)
+```
+
+## @napi-rs/tar-win32-x64-msvc - 1.1.1
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/tar-win32-x64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/tar-win32-x64-msvc; see npm metadata.)
+```
+
+## @napi-rs/tar - 1.1.1
+**Repository URL**: https://github.com/napi-rs/tar
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2020-present NAPI-RS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @napi-rs/wasm-runtime - 1.2.6
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-runtime
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-runtime; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-android-arm-eabi - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-android-arm-eabi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-android-arm-eabi; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-android-arm64 - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-android-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-android-arm64; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-darwin-arm64 - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-darwin-arm64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-darwin-arm64; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-darwin-x64 - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-darwin-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-darwin-x64; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-freebsd-x64 - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-freebsd-x64
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-freebsd-x64; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-linux-arm64-gnu - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-linux-arm64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-linux-arm64-gnu; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-linux-arm64-musl - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-linux-arm64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-linux-arm64-musl; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-linux-x64-gnu - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-linux-x64-gnu
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-linux-x64-gnu; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-linux-x64-musl - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-linux-x64-musl
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-linux-x64-musl; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-wasm32-wasi - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-wasm32-wasi
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-wasm32-wasi; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-win32-arm64-msvc - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-win32-arm64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-win32-arm64-msvc; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-win32-ia32-msvc - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-win32-ia32-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-win32-ia32-msvc; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools-win32-x64-msvc - 1.1.0
+**Repository URL**: https://www.npmjs.com/package/@napi-rs/wasm-tools-win32-x64-msvc
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(No license file read from locked npm artifact for @napi-rs/wasm-tools-win32-x64-msvc; see npm metadata.)
+```
+
+## @napi-rs/wasm-tools - 1.1.0
+**Repository URL**: https://github.com/napi-rs/wasm-tools
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2020 N-API for Rust
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## @octokit/auth-token - 6.0.0
+**Repository URL**: https://github.com/octokit/auth-token.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/core - 7.0.8
+**Repository URL**: https://github.com/octokit/core.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/endpoint - 11.0.5
+**Repository URL**: https://github.com/octokit/endpoint.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2018 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/graphql - 9.0.5
+**Repository URL**: https://github.com/octokit/graphql.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2018 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/openapi-types - 27.0.0
+**Repository URL**: https://github.com/octokit/openapi-types.ts
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) GitHub 2025 - Licensed as MIT.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/openapi-types - 29.0.1
+**Repository URL**: https://github.com/octokit/openapi-types.ts
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (c) GitHub 2025 - Licensed as MIT.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/plugin-paginate-rest - 14.0.0
+**Repository URL**: https://github.com/octokit/plugin-paginate-rest.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/plugin-request-log - 6.0.0
+**Repository URL**: https://github.com/octokit/plugin-request-log.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License Copyright (c) 2020 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/plugin-rest-endpoint-methods - 17.0.0
+**Repository URL**: https://github.com/octokit/plugin-rest-endpoint-methods.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/request-error - 7.1.2
+**Repository URL**: https://github.com/octokit/request-error.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/request - 10.0.16
+**Repository URL**: https://github.com/octokit/request.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2018 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/rest - 22.0.1
+**Repository URL**: https://github.com/octokit/rest.js
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License
+
+Copyright (c) 2012 Cloud9 IDE, Inc. (Mike de Boer)
+Copyright (c) 2017-2018 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
+## @octokit/types - 16.0.0
+**Repository URL**: https://github.com/octokit/types.ts
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## @octokit/types - 18.0.0
+**Repository URL**: https://github.com/octokit/types.ts
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License Copyright (c) 2019 Octokit contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
 ## @openclaw/ai - 2026.9.3
 **Repository URL**: https://github.com/openclaw/openclaw
@@ -4368,6 +5909,33 @@ boundary before freeing Rust-owned return buffers. Regular Node and Electron
 therefore receive the same values; Electron hosts do not need to spawn or
 configure the private daemon themselves.```
 
+## @tybys/wasm-util - 0.10.4
+**Repository URL**: https://www.npmjs.com/package/@tybys/wasm-util
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2022-present Toyobayashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
 ## @types/hast - 3.0.4
 **Repository URL**: https://github.com/DefinitelyTyped/DefinitelyTyped
 **License Type(s)**: MIT
@@ -5186,6 +6754,59 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
 
+## argparse - 3.0.4
+**Repository URL**: https://github.com/nodeca/argparse
+**License Type(s)**: PSF-2.0
+### License: https://spdx.org/licenses/PSF-2.0.html
+```
+PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+
+1. This LICENSE AGREEMENT is between the Python Software Foundation
+("PSF"), and the Individual or Organization ("Licensee") accessing and
+otherwise using this software ("Python") in source or binary form and
+its associated documentation.
+
+2. Subject to the terms and conditions of this License Agreement, PSF hereby
+grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+analyze, test, perform and/or display publicly, prepare derivative works,
+distribute, and otherwise use Python alone or in any derivative version,
+provided, however, that PSF's License Agreement and PSF's notice of copyright,
+i.e., "Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019 Python Software Foundation;
+All Rights Reserved" are retained in Python alone or in any derivative version
+prepared by Licensee.
+
+3. In the event Licensee prepares a derivative work that is based on
+or incorporates Python or any part thereof, and wants to make
+the derivative work available to others as provided herein, then
+Licensee hereby agrees to include in any such work a brief summary of
+the changes made to Python.
+
+4. PSF is making Python available to Licensee on an "AS IS"
+basis.  PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND
+DISCLAIMS ANY REPRESENTATION OR WARRANTY OF MERCHANTABILITY OR FITNESS
+FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF PYTHON WILL NOT
+INFRINGE ANY THIRD PARTY RIGHTS.
+
+5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS
+A RESULT OF MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON,
+OR ANY DERIVATIVE THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+
+6. This License Agreement will automatically terminate upon a material
+breach of its terms and conditions.
+
+7. Nothing in this License Agreement shall be deemed to create any
+relationship of agency, partnership, or joint venture between PSF and
+Licensee.  This License Agreement does not grant permission to use PSF
+trademarks or trade name in a trademark sense to endorse or promote
+products or services of Licensee, or any third party.
+
+8. By copying, installing or otherwise using Python, Licensee
+agrees to be bound by the terms and conditions of this License
+Agreement.```
+
 ## asn1.js - 5.4.1
 **Repository URL**: https://github.com/indutny/asn1.js
 **License Type(s)**: MIT
@@ -5268,6 +6889,213 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.```
+
+## before-after-hook - 4.0.0
+**Repository URL**: https://github.com/gr2m/before-after-hook
+**License Type(s)**: Apache-2.0
+### License: https://spdx.org/licenses/Apache-2.0.html
+```
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "{}"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright 2018 Gregor Martynus and other contributors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.```
 
 ## bignumber.js - 9.3.1
 **Repository URL**: https://github.com/MikeMcl/bignumber.js
@@ -5606,6 +7434,31 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
+## chardet - 2.2.0
+**Repository URL**: https://github.com/runk/node-chardet
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright (C) 2024 Dmitry Shirokov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
 ## chokidar - 5.0.0
 **Repository URL**: https://github.com/paulmillr/chokidar
 **License Type(s)**: MIT
@@ -5729,6 +7582,129 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
+## cli-width - 4.1.0
+**Repository URL**: https://github.com/knownasilya/cli-width
+**License Type(s)**: ISC
+### License: https://spdx.org/licenses/ISC.html
+```
+Copyright (c) 2015, Ilya Radchenko <knownasilya@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
+
+## clipanion - 4.0.0-rc.4
+**Repository URL**: https://github.com/arcanis/clipanion
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+# <img src="./logo.svg" height="25" /> Clipanion
+
+> Type-safe CLI library with no runtime dependencies
+
+[![npm version](https://img.shields.io/npm/v/clipanion.svg)](https://yarnpkg.com/package/clipanion) [![Licence](https://img.shields.io/npm/l/clipanion.svg)](https://github.com/arcanis/clipanion#license-mit) [![Yarn](https://img.shields.io/github/package-json/packageManager/arcanis/clipanion)](https://github.com/yarnpkg/berry)
+
+## Installation
+
+```sh
+yarn add clipanion
+```
+
+## Why
+
+- Clipanion supports advanced typing mechanisms
+- Clipanion supports nested commands (`yarn workspaces list`)
+- Clipanion supports transparent option proxying without `--` (for example `yarn dlx eslint --fix`)
+- Clipanion supports all option types you could think of (including negations, batches, ...)
+- Clipanion offers a [Typanion](https://github.com/arcanis/typanion) integration for increased validation capabilities
+- Clipanion generates an optimized state machine out of your commands
+- Clipanion generates good-looking help pages out of the box
+- Clipanion offers common optional command entries out-of-the-box (e.g. version command, help command)
+
+Clipanion is used in [Yarn](https://github.com/yarnpkg/berry) with great success.
+
+## Documentation
+
+Check the website for our documentation: [mael.dev/clipanion](https://mael.dev/clipanion/).
+
+## Migration
+
+You can use [`clipanion-v3-codemod`](https://github.com/paul-soporan/clipanion-v3-codemod) to migrate a Clipanion v2 codebase to v3.
+
+## Overview
+
+Commands are declared by extending from the `Command` abstract base class, and more specifically by implementing its `execute` method which will then be called by Clipanion. Whatever exit code it returns will then be set as the exit code for the process:
+
+```ts
+class SuccessCommand extends Command {
+    async execute() {
+        return 0;
+    }
+}
+```
+
+Commands can also be exposed via one or many arbitrary paths using the `paths` static property:
+
+```ts
+class FooCommand extends Command {
+    static paths = [[`foo`]];
+    async execute() {
+        this.context.stdout.write(`Foo\n`);
+    }
+}
+
+class BarCommand extends Command {
+    static paths = [[`bar`]];
+    async execute() {
+        this.context.stdout.write(`Bar\n`);
+    }
+}
+```
+
+Options are defined as regular class properties, annotated by the helpers provided in the `Option` namespace. If you use TypeScript, all property types will then be properly inferred with no extra work required:
+
+```ts
+class HelloCommand extends Command {
+    // Positional option
+    name = Option.String();
+
+    async execute() {
+        this.context.stdout.write(`Hello ${this.name}!\n`);
+    }
+}
+```
+
+Option arguments can be validated and coerced using the [Typanion](https://mael.dev/typanion/) library:
+
+```ts
+class AddCommand extends Command {
+    a = Option.String({required: true, validator: t.isNumber()});
+    b = Option.String({required: true, validator: t.isNumber()});
+
+    async execute() {
+        this.context.stdout.write(`${this.a + this.b}\n`);
+    }
+}
+```
+
+## License (MIT)
+
+> **Copyright © 2019 Mael Nison**
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
 ## cliui - 6.0.0
 **Repository URL**: https://github.com/yargs/cliui
 **License Type(s)**: ISC
@@ -5808,6 +7784,19 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## colorette - 2.0.20
+**Repository URL**: https://github.com/jorgebucaran/colorette
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+Copyright © Jorge Bucaran <<https://jorgebucaran.com>>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the 'Software'), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
 ## commander - 15.0.0
 **Repository URL**: https://github.com/tj/commander.js
@@ -5894,6 +7883,34 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
 ## content-type - 2.1.0
+**Repository URL**: https://github.com/jshttp/content-type
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(The MIT License)
+
+Copyright (c) 2015 Douglas Christopher Wilson
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## content-type - 3.1.1
 **Repository URL**: https://github.com/jshttp/content-type
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -7014,6 +9031,33 @@ SOFTWARE.```
 MIT License
 
 Copyright (c) 2024 Jordan Harband
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## es-toolkit - 1.53.0
+**Repository URL**: https://github.com/toss/es-toolkit
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2024 Viva Republica, Inc.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9965,6 +12009,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
+## js-yaml - 5.5.0
+**Repository URL**: https://github.com/nodeca/js-yaml
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+(The MIT License)
+
+Copyright (C) 2011-2015 by Vitaly Puzrin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.```
+
 ## json-bigint - 1.0.0
 **Repository URL**: https://github.com/sidorares/json-bigint
 **License Type(s)**: MIT
@@ -10107,6 +12178,33 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
 ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.```
+
+## json-with-bigint - 3.5.12
+**Repository URL**: https://github.com/Ivan-Korolenko/json-with-bigint
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+MIT License
+
+Copyright (c) 2023 Ivan Korolenko
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
 
 ## json5 - 2.2.3
 **Repository URL**: https://github.com/json5/json5
@@ -11839,6 +13937,27 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
+## mute-stream - 3.0.0
+**Repository URL**: https://github.com/npm/mute-stream
+**License Type(s)**: ISC
+### License: https://spdx.org/licenses/ISC.html
+```
+The ISC License
+
+Copyright (c) Isaac Z. Schlueter and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
+
 ## negotiator - 1.1.0
 **Repository URL**: https://github.com/jshttp/negotiator
 **License Type(s)**: MIT
@@ -12086,6 +14205,35 @@ THE SOFTWARE.```
 MIT License
 
 Copyright (c) 2013 James Halliday
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.```
+
+## obug - 3.0.0
+**Repository URL**: https://github.com/sxzz/obug
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+The MIT License (MIT)
+
+Copyright © 2025-PRESENT Kevin Deng (https://github.com/sxzz)
+Copyright (c) 2014-2017 TJ Holowaychuk <tj@vision-media.ca>
+Copyright (c) 2018-2021 Josh Junon
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -15305,6 +17453,129 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
+## typanion - 3.14.0
+**Repository URL**: https://github.com/arcanis/typanion
+**License Type(s)**: MIT
+### License: https://spdx.org/licenses/MIT.html
+```
+# Typanion
+
+> Static and runtime type assertion library with no dependencies
+
+[![](https://img.shields.io/npm/v/typanion.svg)]() [![](https://img.shields.io/npm/l/typanion.svg)]() [![](https://img.shields.io/badge/developed%20with-Yarn%202-blue)](https://github.com/yarnpkg/berry)
+
+## Installation
+
+```
+yarn add typanion
+```
+
+## Why
+
+- Typanion can validate nested arbitrary data structures
+- Typanion is type-safe; it uses [type predicates](https://www.typescriptlang.org/docs/handbook/2/narrowing.html#using-type-predicates)
+- Typanion allows you to derive types from your schemas
+- Typanion can report detailed error reports
+
+Compared to [yup](https://github.com/jquense/yup), Typanion has a better inference support for TypeScript + supports `isOneOf`. Its functional API makes it very easy to tree shake, which is another bonus (although the library isn't very large in itself).
+
+## Documentation
+
+Check the website for our documentation: [mael.dev/typanion](https://mael.dev/typanion/).
+
+## Usage
+
+First define a schema using the builtin operators:
+
+```ts
+import * as t from 'typanion';
+
+const isMovie = t.isObject({
+    title: t.isString(),
+    description: t.isString(),
+});
+```
+
+Then just call the schema to validate any `unknown` value:
+
+```ts
+const userData = JSON.parse(input);
+
+if (isMovie(userData)) {
+    console.log(userData.title);
+}
+```
+
+Passing a second parameter allows you to retrieve detailed errors:
+
+```ts
+const userData = JSON.parse(input);
+const errors: string[] = [];
+
+if (!isMovie(userData, {errors})) {
+    console.log(errors);
+}
+```
+
+You can also apply coercion over the user input:
+
+```ts
+const userData = JSON.parse(input);
+const coercions: Coercion[] = [];
+
+if (isMovie(userData, {coercions})) {
+    // Coercions aren't flushed by default
+    for (const [p, op] of coercions) op();
+
+    // All relevant fields have now been coerced
+    // ...
+}
+```
+
+You can derive the type from the schema and use it in other functions:
+
+```ts
+import * as t from 'typanion';
+
+const isMovie = t.isObject({
+    title: t.isString(),
+    description: t.isString(),
+});
+
+type Movie = t.InferType<typeof isMovie>;
+
+// Then just use your alias:
+const printMovie = (movie: Movie) => {
+    // ...
+};
+```
+
+Schemas can be stored in multiple variables if needed:
+
+```ts
+import * as t from 'typanion';
+
+const isActor = t.isObject({
+    name: t.isString();
+});
+
+const isMovie = t.isObject({
+    title: t.isString(),
+    description: t.isString(),
+    actors: t.isArray(isActor),
+});
+```
+
+## License (MIT)
+
+> **Copyright © 2020 Mael Nison**
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
 ## type-is - 2.1.0
 **Repository URL**: https://github.com/jshttp/type-is
 **License Type(s)**: MIT
@@ -15822,6 +18093,19 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
+
+## universal-user-agent - 7.0.3
+**Repository URL**: https://github.com/gr2m/universal-user-agent
+**License Type(s)**: ISC
+### License: https://spdx.org/licenses/ISC.html
+```
+# [ISC License](https://spdx.org/licenses/ISC)
+
+Copyright (c) 2018-2021, Gregor Martynus (https://github.com/gr2m)
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.```
 
 ## unpipe - 1.0.0
 **Repository URL**: https://github.com/stream-utils/unpipe

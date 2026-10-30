@@ -30,10 +30,14 @@ async fn close_result_is_published_before_a_retry_can_reset_completion() {
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
     let finish_state = Arc::clone(&state);
     let finish = std::thread::spawn(move || {
-        finish_state.finish_with_hook(Some(activation), Err("first close failed".into()), || {
-            entered_tx.send(()).expect("test must observe publication");
-            release_rx.recv().expect("test must release publication");
-        });
+        finish_state.finish_with_hook(
+            Some(activation),
+            Err(Arc::new(Error::generic_failure("first close failed"))),
+            || {
+                entered_tx.send(()).expect("test must observe publication");
+                release_rx.recv().expect("test must release publication");
+            },
+        );
     });
 
     entered_rx

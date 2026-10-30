@@ -1650,7 +1650,7 @@ describe('Tool intercepts', () => {
           null,
           null,
         ),
-      /internal error: 42/i,
+      (value) => value === 42,
     );
   });
 
