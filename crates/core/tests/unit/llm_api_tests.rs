@@ -2481,6 +2481,7 @@ fn manual_llm_call_end_preserves_explicit_error_metadata() {
         LlmCallParams::builder()
             .name("manual-error")
             .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
             .build(),
     )
     .unwrap();
@@ -2524,6 +2525,7 @@ fn manual_llm_call_end_defaults_to_ok_without_an_error_status() {
         LlmCallParams::builder()
             .name("manual-ok")
             .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
             .build(),
     )
     .unwrap();
@@ -2543,6 +2545,46 @@ fn manual_llm_call_end_defaults_to_ok_without_an_error_status() {
     assert_eq!(
         end.metadata(),
         Some(&json!({"request_id": "request-123", "otel.status_code": "OK"}))
+    );
+    assert_eq!(end.output(), Some(&json!({"text": "hello"})));
+}
+
+#[test]
+fn manual_llm_call_end_preserves_unset_for_cancelled_observations() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "manual-llm-unset-status",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("manual-cancelled")
+            .request(&request())
+            .metadata(json!({"otel.status_description": "stale at call start"}))
+            .build(),
+    )
+    .unwrap();
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(json!({"text": "hello"}))
+            .metadata(json!({"request_id": "request-123", "otel.status_code": "UNSET", "otel.status_description": "stale"}))
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber("manual-llm-unset-status").unwrap();
+
+    let events = events.lock().unwrap();
+    let end = events.last().unwrap();
+    assert_eq!(
+        end.metadata(),
+        Some(&json!({"request_id": "request-123", "otel.status_code": "UNSET"}))
     );
     assert_eq!(end.output(), Some(&json!({"text": "hello"})));
 }
