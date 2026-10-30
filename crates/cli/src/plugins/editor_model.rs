@@ -5,11 +5,11 @@
 
 use std::path::Path;
 
-use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_observability::plugin::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_plugin_host::resource_metrics::ResourceMetricsConfig;
 use nemo_relay_resource_metrics::plugin::RESOURCE_METRICS_PLUGIN_KIND;
 use nemo_relay_runtime::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use serde::Serialize;

@@ -15,7 +15,7 @@ pub(crate) fn lock_test_logging() -> std::sync::MutexGuard<'static, ()> {
 pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
     "OpenTelemetry runtime delivery failures";
 pub(crate) fn pricing_test_mutex() -> &'static std::sync::Mutex<()> {
-    crate::test_composition::ensure_runtime_services();
+    crate::initialize_runtime();
     static MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
     &MUTEX
 }

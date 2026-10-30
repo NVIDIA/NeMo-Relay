@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use nemo_relay::api::registry::RuntimeRegistrationKind;
+use nemo_relay_runtime::api::registry::RuntimeRegistrationKind;
 
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};

@@ -139,8 +139,10 @@ impl DaemonErrorClassifier {
             CliError::Io(_) => FailureClass::Io,
             CliError::Http(_) => FailureClass::InvalidInput,
             CliError::ProviderFailure(failure) => match failure.class {
-                nemo_relay::error::UpstreamFailureClass::Timeout => FailureClass::Timeout,
-                nemo_relay::error::UpstreamFailureClass::Connection => FailureClass::Unavailable,
+                nemo_relay_types::error::UpstreamFailureClass::Timeout => FailureClass::Timeout,
+                nemo_relay_types::error::UpstreamFailureClass::Connection => {
+                    FailureClass::Unavailable
+                }
                 _ => FailureClass::Unknown,
             },
             CliError::InvalidPayload(_) => FailureClass::InvalidInput,

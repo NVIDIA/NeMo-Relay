@@ -6,16 +6,16 @@
 use super::*;
 use std::ffi::CString;
 
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, LogSeverity, MarkEvent, MetricKind,
     MetricValueType, ScopeCategory, ScopeEvent, llm_attributes_to_strings,
     scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
-use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
-use nemo_relay::api::scope::{PushScopeParams, pop_scope, push_scope};
-use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
-use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay_runtime::api::llm::{LlmCallParams, llm_call, llm_call_end};
+use nemo_relay_runtime::api::scope::{PushScopeParams, pop_scope, push_scope};
+use nemo_relay_runtime::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use nemo_relay_runtime::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
@@ -425,7 +425,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         )
         .unwrap();
         llm_call_end(
-            nemo_relay::api::llm::LlmCallEndParams::builder()
+            nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
                 .handle(&handle)
                 .response(json!({"content": "world"}))
                 .build(),
@@ -450,7 +450,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         assert_eq!(cleared["steps"], json!([]));
 
         pop_scope(
-            nemo_relay::api::scope::PopScopeParams::builder()
+            nemo_relay_runtime::api::scope::PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .build(),
         )
@@ -1025,7 +1025,7 @@ async def next_item(stream):
 
                 let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
                 tx_err
-                    .blocking_send(Err(nemo_relay::error::FlowError::Internal(
+                    .blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
                         "stream boom".into(),
                     )))
                     .unwrap();
@@ -1912,7 +1912,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_openai_chat_codec(py: Python<'_>) {
             let chat_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "gpt-4o-mini",
@@ -1950,7 +1950,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_openai_responses_codec(py: Python<'_>) {
             let responses_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "gpt-4o-mini",
@@ -1997,7 +1997,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_anthropic_messages_codec(py: Python<'_>) {
             let anthropic_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "claude-sonnet-4-20250514",

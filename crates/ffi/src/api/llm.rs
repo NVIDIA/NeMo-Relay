@@ -399,7 +399,7 @@ pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCode
 struct ParsedExecuteInputs {
     name: String,
     request: LlmRequest,
-    parent_handle: Option<nemo_relay::api::scope::ScopeHandle>,
+    parent_handle: Option<nemo_relay_runtime::api::scope::ScopeHandle>,
     attrs: LlmAttributes,
     data: Option<serde_json::Value>,
     metadata: Option<serde_json::Value>,

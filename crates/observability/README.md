@@ -9,8 +9,8 @@ Built-in ATOF, ATIF, and OpenTelemetry exporters and their GenAI and OpenInferen
 projections. This crate owns export formats, delivery, TLS, and file confinement.
 
 Import configuration and exporter types from `nemo-relay-observability`. For the
-core runtime, use constructors such as `nemo_relay::api::exporter::atof(config)`
-and `nemo_relay::api::exporter::opentelemetry(config)`. They supply core's host
+core runtime, use constructors such as `nemo_relay::exporter::atof(config)`
+and `nemo_relay::exporter::opentelemetry(config)`. They supply core's host
 internally, including subscriber registration, delivery barriers, trace-context
 policy, diagnostic reporting, and provider normalization. Standalone exporters
 can also be constructed directly; custom runtimes can bind their own host with

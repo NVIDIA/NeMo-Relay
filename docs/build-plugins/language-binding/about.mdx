@@ -134,7 +134,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
+use nemo_relay::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
     PluginRegistrar, Result as PluginResult, deregister_plugin, register_plugin,

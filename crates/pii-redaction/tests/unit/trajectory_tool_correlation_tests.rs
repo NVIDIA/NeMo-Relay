@@ -24,7 +24,7 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
             }); profile_count]}))
         };
         test_initialize_plugin_host_exact(config).await.unwrap();
-        let atif = nemo_relay::api::exporter::atif(
+        let atif = nemo_relay_plugin_host::exporter::atif(
             "tool-correlation".into(),
             AtifAgentInfo {
                 name: "test-agent".into(),
@@ -49,9 +49,10 @@ async fn trajectory_preserves_distinct_tool_calls_and_observations() {
             let provider = SdkTracerProvider::builder()
                 .with_simple_exporter(memory.clone())
                 .build();
-            let subscriber = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
-                provider, "test", projection,
-            );
+            let subscriber =
+                nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
+                    provider, "test", projection,
+                );
             subscriber.register(name).unwrap();
             (name, subscriber, memory)
         })

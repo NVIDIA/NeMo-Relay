@@ -546,7 +546,7 @@ const response = await typedLlmExecute(
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_types::codec::traits::LlmResponseCodec;
 use serde_json::json;
@@ -706,7 +706,7 @@ JSON chunk without copying the whole chunk. Built-in streaming codecs provide
 this callback through `StreamingCodec::borrowed_collector()`:
 
 ```rust
-use nemo_relay::api::llm::LlmStreamCallExecuteParams;
+use nemo_relay::llm::LlmStreamCallExecuteParams;
 use nemo_relay_codecs::openai_chat::OpenAIChatStreamingCodec;
 use nemo_relay_types::codec::streaming::StreamingCodec;
 

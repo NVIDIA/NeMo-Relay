@@ -989,7 +989,7 @@ metric("tokenomics", [{
 </Tab>
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::{
+use nemo_relay::{
     event::{LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
     scope::{self, EmitMarkEventParams, EmitMetricEventParams},
 };
@@ -1470,7 +1470,7 @@ let config = OpenTelemetryConfig::new(
 )
 .with_service_name("agent-service")
 .with_header_env("authorization", "OTEL_AUTHORIZATION");
-let subscriber = nemo_relay::api::exporter::opentelemetry(config)?;
+let subscriber = nemo_relay::exporter::opentelemetry(config)?;
 ```
 </Tab>
 </Tabs>
@@ -1587,10 +1587,10 @@ use nemo_relay_observability::{
     otel_metrics::OpenTelemetryMetricConfig,
 };
 
-let logs = nemo_relay::api::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+let logs = nemo_relay::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
     "http://localhost:4318/v1/logs",
 ))?;
-let metrics = nemo_relay::api::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
+let metrics = nemo_relay::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
     "http://localhost:4318/v1/metrics",
 ))?;
 logs.register("otlp-logs")?;

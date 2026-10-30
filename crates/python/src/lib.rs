@@ -47,7 +47,7 @@ mod test_support;
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    nemo_relay::initialize_runtime();
+    nemo_relay_plugin_host::initialize_runtime();
     initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Relay runtime ownership: {e}"

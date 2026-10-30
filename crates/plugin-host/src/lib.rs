@@ -68,8 +68,17 @@ pub use nemo_relay_plugin::component::{
     apply_global_config_policy,
 };
 
+mod builtins;
+pub use builtins::initialize_runtime;
+mod initialization;
+pub use initialization::{initialize_exact, initialize_with_verified_specs};
 pub mod composition;
 pub mod dynamic;
+/// Exporter constructors bound to the shared execution runtime.
+pub mod exporter;
+mod observability_runtime;
+/// Resource collection and supervised-process integration.
+pub mod resource_metrics;
 pub use dynamic::*;
 
 type PluginMap = HashMap<String, RegisteredPlugin>;
@@ -1065,11 +1074,10 @@ fn register_plugin_with_owner(
 
 /// Register built-in plugin kinds supplied by the embedding host.
 ///
-/// An uncomposed runtime has no built-ins. The public SDK installs its default
-/// component services before validation and initialization.
+/// Shared defaults are composed lazily; explicitly installed host services
+/// retain control over the component set.
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
-    #[cfg(test)]
-    crate::test_composition::ensure_runtime_services();
+    crate::initialize_runtime();
     (crate::composition::services().register_builtin_plugins)()
 }
 
@@ -3129,12 +3137,6 @@ impl PluginRegistrar for PluginRegistrationContext {
 mod test_support;
 
 #[cfg(test)]
-#[path = "../tests/support/exporter.rs"]
-mod exporter;
-#[cfg(test)]
-#[path = "../tests/support/observability_runtime.rs"]
-mod observability_runtime;
-#[cfg(test)]
 #[path = "../tests/support/observability/mod.rs"]
 mod observability_test_support;
 #[cfg(test)]
@@ -3143,9 +3145,6 @@ mod pricing_tests;
 #[cfg(test)]
 #[path = "../tests/unit/resource_plugin_tests.rs"]
 mod resource_plugin_tests;
-#[cfg(test)]
-#[path = "../tests/support/composition.rs"]
-mod test_composition;
 
 #[cfg(test)]
 #[path = "../tests/integration/native_plugin_tests.rs"]

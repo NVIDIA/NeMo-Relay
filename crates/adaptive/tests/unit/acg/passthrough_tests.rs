@@ -19,7 +19,7 @@ use crate::acg::types::{
     ModelClass, ModelRoutingIntent, OptimizationIntent, OptimizationIntentBundle, ReasonCode,
     SharingScope, TranslationStatus,
 };
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 
 use super::PassthroughPlugin;
 

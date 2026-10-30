@@ -14,27 +14,29 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
-};
-use nemo_relay::api::registry::{
-    deregister_tool_execution_intercept, register_tool_execution_intercept,
-};
-use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
-use nemo_relay::error::FlowError;
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, ResponseCacheKeyStrategy,
     StateConfig, ToolCacheConfig, ToolClass, ToolOverride,
 };
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
+use nemo_relay_runtime::api::registry::{
+    deregister_tool_execution_intercept, register_tool_execution_intercept,
+};
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
     NemoRelayContextState, ToolExecutionNextFn, global_context,
 };
+use nemo_relay_runtime::api::scope::ScopeType;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay_types::error::FlowError;
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::{Stream, StreamExt};
@@ -3589,7 +3591,7 @@ async fn default_cache_keeps_policy_execution_outside_hits() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     let policy_runs = Arc::new(AtomicUsize::new(0));
-    nemo_relay::api::registry::register_llm_execution_intercept(
+    nemo_relay_runtime::api::registry::register_llm_execution_intercept(
         "cache_policy_test",
         100, // Policy check priority
         Arc::new({
@@ -3615,7 +3617,8 @@ async fn default_cache_keeps_policy_execution_outside_hits() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
     assert_eq!(first["policy_run"], json!(1));
     assert_eq!(second["policy_run"], json!(2));
-    nemo_relay::api::registry::deregister_llm_execution_intercept("cache_policy_test").unwrap();
+    nemo_relay_runtime::api::registry::deregister_llm_execution_intercept("cache_policy_test")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -3623,7 +3626,7 @@ async fn default_stream_cache_keeps_policy_execution_outside_hits() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     let policy_runs = Arc::new(AtomicUsize::new(0));
-    nemo_relay::api::registry::register_llm_stream_execution_intercept(
+    nemo_relay_runtime::api::registry::register_llm_stream_execution_intercept(
         "stream_cache_policy_test",
         100,
         Arc::new({
@@ -3645,7 +3648,7 @@ async fn default_stream_cache_keeps_policy_execution_outside_hits() {
     stream_call(&provider, chat_request("stream policy hit")).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
     assert_eq!(policy_runs.load(Ordering::SeqCst), 2);
-    nemo_relay::api::registry::deregister_llm_stream_execution_intercept(
+    nemo_relay_runtime::api::registry::deregister_llm_stream_execution_intercept(
         "stream_cache_policy_test",
     )
     .unwrap();

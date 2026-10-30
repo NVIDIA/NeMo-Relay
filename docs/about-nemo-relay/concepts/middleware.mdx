@@ -508,7 +508,7 @@ relay.registerLlmSanitizeRequestGuardrail(
 ```rust
 use std::sync::Arc;
 use nemo_relay_runtime::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use nemo_relay::api::registry::register_llm_sanitize_request_guardrail;
+use nemo_relay::registry::register_llm_sanitize_request_guardrail;
 
 register_llm_sanitize_request_guardrail(
     "redact-openai-chat",

@@ -97,7 +97,7 @@ let config = OpenTelemetryConfig::new(
 )
 .with_service_name("agent-service")
 .with_header_env("authorization", "OTEL_AUTHORIZATION");
-let subscriber = nemo_relay::api::exporter::opentelemetry(config)?;
+let subscriber = nemo_relay::exporter::opentelemetry(config)?;
 ```
 </Tab>
 </Tabs>

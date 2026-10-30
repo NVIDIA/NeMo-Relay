@@ -33,17 +33,17 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory,
     EventSanitizeFields as CoreEventSanitizeFields, LogSeverity, PendingMarkSpec,
 };
-use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use nemo_relay::error::{FlowError, Result};
+use nemo_relay_runtime::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_runtime::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::error::{FlowError, Result};
 
 use crate::api::PersistentJsFunction;
 use crate::callback_factory;

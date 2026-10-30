@@ -5,8 +5,8 @@
 
 use super::*;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::llm::llm_request_intercepts;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::llm_request_intercepts;
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use serde_json::json;

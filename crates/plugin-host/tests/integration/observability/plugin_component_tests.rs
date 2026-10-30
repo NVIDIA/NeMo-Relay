@@ -623,19 +623,19 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(
                 PlaintextPolicy::default(),
             )
-            .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+            .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
             .err()
             .unwrap(),
             OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
                 PlaintextPolicy::default(),
             )
-            .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+            .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
             .err()
             .unwrap(),
             OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
                 PlaintextPolicy::default(),
             )
-            .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+            .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
             .err()
             .unwrap(),
         ];
@@ -1845,7 +1845,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
         &PlaintextPolicy::default(),
         &mut context,
         false,
-        &crate::observability_runtime::core_host(),
+        &crate::observability_runtime::runtime_host(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("at least one endpoint"));
@@ -3013,7 +3013,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             output_directory: Some(dir.clone()),
             ..AtifSectionConfig::default()
         },
-        crate::observability_runtime::core_host(),
+        crate::observability_runtime::runtime_host(),
     )));
     let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
 
@@ -3213,7 +3213,7 @@ fn atif_writes_openclaw_child_only_fallback_without_mark_steps() {
             output_directory: Some(dir.clone()),
             ..AtifSectionConfig::default()
         },
-        crate::observability_runtime::core_host(),
+        crate::observability_runtime::runtime_host(),
     )));
     let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
 
@@ -3329,7 +3329,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
             output_directory: Some(dir.clone()),
             ..AtifSectionConfig::default()
         },
-        crate::observability_runtime::core_host(),
+        crate::observability_runtime::runtime_host(),
     )));
 
     let start_event = Event::Scope(ScopeEvent::new(
@@ -3414,7 +3414,7 @@ fn atif_dispatcher_records_failed_agent_writes() {
             output_directory: Some(dir),
             ..AtifSectionConfig::default()
         },
-        crate::observability_runtime::core_host(),
+        crate::observability_runtime::runtime_host(),
     )));
 
     let start_event = Event::Scope(ScopeEvent::new(
@@ -3872,7 +3872,7 @@ fn opentelemetry_shutdown_helper_attempts_every_constructed_endpoint() {
                         provider,
                         format!("rollback-{index}"),
                     )
-                    .with_host(crate::observability_runtime::core_host()),
+                    .with_host(crate::observability_runtime::runtime_host()),
                 ),
                 exporter,
             )
@@ -3882,7 +3882,7 @@ fn opentelemetry_shutdown_helper_attempts_every_constructed_endpoint() {
     assert!(
         shutdown_opentelemetry_subscribers(
             &subscribers,
-            crate::observability_runtime::core_host().as_ref()
+            crate::observability_runtime::runtime_host().as_ref()
         )
         .is_none()
     );
@@ -3927,14 +3927,14 @@ fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
                 provider,
                 format!("shutdown-failure-{index}"),
             )
-            .with_host(crate::observability_runtime::core_host()),
+            .with_host(crate::observability_runtime::runtime_host()),
         )
     })
     .collect::<Vec<_>>();
 
     let OpenTelemetryShutdownFailure::Other(error) = shutdown_opentelemetry_subscribers(
         &subscribers,
-        crate::observability_runtime::core_host().as_ref(),
+        crate::observability_runtime::runtime_host().as_ref(),
     )
     .expect("mixed endpoint shutdown failures should be reported") else {
         panic!("mixed endpoint shutdown failures must retain the registration failure outcome");
@@ -4393,7 +4393,7 @@ fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
         &PlaintextPolicy::default(),
         &mut context,
         false,
-        &crate::observability_runtime::core_host(),
+        &crate::observability_runtime::runtime_host(),
     )
     .unwrap();
 
@@ -4430,7 +4430,7 @@ fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
         &PlaintextPolicy::default(),
         &mut context,
         false,
-        &crate::observability_runtime::core_host(),
+        &crate::observability_runtime::runtime_host(),
     )
     .unwrap_err();
 
@@ -4453,7 +4453,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
         &PlaintextPolicy::default(),
         &mut context,
         false,
-        &crate::observability_runtime::core_host(),
+        &crate::observability_runtime::runtime_host(),
     )
     .unwrap_err();
 
@@ -4485,7 +4485,7 @@ fn an_invalid_file_sink_is_skipped_while_the_others_register() {
         &PlaintextPolicy::default(),
         &mut context,
         false,
-        &crate::observability_runtime::core_host(),
+        &crate::observability_runtime::runtime_host(),
     )
     .unwrap();
 
@@ -4512,7 +4512,7 @@ fn file_sinks_register_even_when_the_environment_configures_automatic_signals() 
             &PlaintextPolicy::default(),
             &mut context,
             false,
-            &crate::observability_runtime::core_host(),
+            &crate::observability_runtime::runtime_host(),
         )
         .unwrap();
         // A section carrying only file sinks is not empty, so an automatic
@@ -4666,8 +4666,12 @@ fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once()
             })
             .unwrap();
         let config = serde_json::from_value(json!({"version": 4})).unwrap();
-        register_observability(config, &mut ctx, &crate::observability_runtime::core_host())
-            .unwrap();
+        register_observability(
+            config,
+            &mut ctx,
+            &crate::observability_runtime::runtime_host(),
+        )
+        .unwrap();
         let reports = ctx.activation_diagnostics();
         assert_eq!(reports.len(), 3);
         for report in reports {

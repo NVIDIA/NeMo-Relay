@@ -10,15 +10,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, Once, RwLock};
 
 use chrono::Utc;
-use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
-    llm_stream_call_execute,
-};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::tool_call_execute;
-use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
 use nemo_relay_adaptive::acg_learner::AcgLearner;
 use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
@@ -33,14 +24,25 @@ use nemo_relay_adaptive::plugin_component::{
 use nemo_relay_adaptive::types::cache::HotCache;
 use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 use nemo_relay_adaptive::{InMemoryBackend, StorageBackendDyn};
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::{
+    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
+    llm_stream_call_execute,
+};
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::tool_call_execute;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::LlmResponseCodec;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -418,8 +420,9 @@ async fn runtime_integration_response_codec_decode_failure_keeps_annotations_opt
         .unwrap()
         .iter()
         .find(|event| {
-            event.scope_type() == Some(nemo_relay::api::scope::ScopeType::Llm)
-                && event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+            event.scope_type() == Some(nemo_relay_runtime::api::scope::ScopeType::Llm)
+                && event.scope_category()
+                    == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
         })
         .cloned()
         .expect("llm end event should still emit");
@@ -627,7 +630,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let tool_result = tool_call_execute(
-        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "test"}))
             .func(tool_func)
@@ -740,9 +743,11 @@ impl Plugin for HeaderPlugin {
                 Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
                     Box::pin(async move {
-                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                            request, annotated,
-                        ))
+                        Ok(
+                            nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                                request, annotated,
+                            ),
+                        )
                     })
                 }),
             )?;
@@ -816,10 +821,10 @@ async fn test_adaptive_hints_follow_configured_header_and_body_path() {
     .await
     .unwrap();
 
-    let agent_scope = nemo_relay::api::scope::push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+    let agent_scope = nemo_relay_runtime::api::scope::push_scope(
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("hinted-agent")
-            .scope_type(nemo_relay::api::scope::ScopeType::Agent)
+            .scope_type(nemo_relay_runtime::api::scope::ScopeType::Agent)
             .build(),
     )
     .unwrap();
@@ -836,8 +841,8 @@ async fn test_adaptive_hints_follow_configured_header_and_body_path() {
     .unwrap()
     .request;
 
-    nemo_relay::api::scope::pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+    nemo_relay_runtime::api::scope::pop_scope(
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&agent_scope.uuid)
             .build(),
     )
@@ -896,7 +901,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let tool_result = tool_call_execute(
-        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "test"}))
             .func(tool_func)

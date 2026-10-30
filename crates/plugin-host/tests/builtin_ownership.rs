@@ -7,8 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::plugin::validate_static_plugin_config;
 use nemo_relay_plugin_host::dynamic::{DynamicPluginKind, VerifiedDynamicPluginSpec};
+use nemo_relay_plugin_host::validate_static_plugin_config;
 use nemo_relay_plugin_host::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, Result,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
@@ -68,7 +68,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
         environment_ref: None,
         config: Map::new(),
     };
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match nemo_relay_plugin_host::initialize_with_verified_specs(
         PluginConfig::default(),
         [missing_dynamic_plugin.clone()],
     )
@@ -99,7 +99,7 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
             .any(|kind| kind == "observability")
     );
 
-    let error = nemo_relay::plugin::initialize_with_verified_specs(
+    let error = nemo_relay_plugin_host::initialize_with_verified_specs(
         PluginConfig::default(),
         [missing_dynamic_plugin],
     )

@@ -35,8 +35,9 @@ pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
         nemo_relay_runtime::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
             snapshot
                 .map(|snapshot| {
-                    serde_json::to_string(&snapshot)
-                        .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+                    serde_json::to_string(&snapshot).map_err(|error| {
+                        nemo_relay_types::error::FlowError::Internal(error.to_string())
+                    })
                 })
                 .transpose()
         });
@@ -105,7 +106,7 @@ pub unsafe extern "C" fn nemo_relay_capture_propagation_context_json(
     }
     match capture_propagation_context().and_then(|context| {
         serde_json::to_value(context)
-            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
     }) {
         Ok(context) => {
             unsafe { *out = json_to_c_string(&context) };
@@ -135,7 +136,7 @@ pub unsafe extern "C" fn nemo_relay_capture_rootless_propagation_context_json(
     }
     match capture_rootless_propagation_context().and_then(|context| {
         serde_json::to_value(context)
-            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
     }) {
         Ok(context) => {
             unsafe { *out = json_to_c_string(&context) };
@@ -180,7 +181,7 @@ pub unsafe extern "C" fn nemo_relay_capture_propagation_context_with_root_json(
     };
     match capture_propagation_context_with_root(root_uuid).and_then(|context| {
         serde_json::to_value(context)
-            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
     }) {
         Ok(context) => {
             unsafe { *out = json_to_c_string(&context) };
@@ -275,7 +276,7 @@ pub unsafe extern "C" fn nemo_relay_propagation_context_normalize_json(
     };
     match PropagationContext::from_json(&value).and_then(|context| {
         serde_json::to_value(context)
-            .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
     }) {
         Ok(context) => {
             unsafe { *out = json_to_c_string(&context) };

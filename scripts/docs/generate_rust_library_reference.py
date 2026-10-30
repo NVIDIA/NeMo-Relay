@@ -22,8 +22,8 @@ from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
     ("nemo-relay-codecs", "nemo_relay_codecs", "Provider request, response, and streaming implementations."),
-    ("nemo-relay", "nemo_relay", "Public Rust SDK and default component composition for NeMo Relay."),
-    ("nemo-relay-runtime", "nemo_relay_runtime", "Execution engine, registries, diagnostics, and plugin hosting."),
+    ("nemo-relay", "nemo_relay", "Public Rust SDK with flat instrumentation APIs and shared contracts."),
+    ("nemo-relay-runtime", "nemo_relay_runtime", "Execution engine, scope context, and middleware registries."),
     ("nemo-relay-model-pricing", "nemo_relay_model_pricing", "Model pricing catalogs and cost estimation."),
     (
         "nemo-relay-resource-metrics",

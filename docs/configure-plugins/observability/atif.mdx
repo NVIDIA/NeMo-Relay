@@ -631,11 +631,11 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay_observability::atif::{AtifAgentInfo};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let exporter = nemo_relay::api::exporter::atif(
+    let exporter = nemo_relay::exporter::atif(
         "session-1".to_string(),
         AtifAgentInfo {
             name: "agent".to_string(),

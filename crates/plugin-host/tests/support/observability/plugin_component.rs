@@ -142,7 +142,7 @@ use uuid::Uuid;
 
 pub(crate) fn register_observability_component() -> nemo_relay_plugin_host::Result<()> {
     nemo_relay_plugin_host::register_builtin_plugin(std::sync::Arc::new(ObservabilityPlugin::new(
-        crate::observability_runtime::core_host(),
+        crate::observability_runtime::runtime_host(),
     )))
 }
 #[cfg(test)]

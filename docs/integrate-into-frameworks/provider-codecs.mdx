@@ -316,7 +316,7 @@ const response = await typedLlmExecute(
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::json;

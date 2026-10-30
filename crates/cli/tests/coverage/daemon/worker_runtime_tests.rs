@@ -1062,7 +1062,7 @@ async fn websocket_drain_cancels_a_pending_upstream_handshake() {
 
 #[test]
 fn managed_provider_transport_failures_preserve_operational_reasons() {
-    use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
+    use nemo_relay_types::error::{UpstreamFailure, UpstreamFailureClass};
     for (class, reason) in [
         (UpstreamFailureClass::Connection, Some("transport_error")),
         (UpstreamFailureClass::Timeout, Some("response_head_timeout")),

@@ -6,7 +6,7 @@ use nemo_relay_diagnostics::{DiagnosticSnapshot, Diagnostics, embedded};
 use nemo_relay_logging::{LoggingConfig, LoggingRuntime};
 use nemo_relay_plugin_host::dynamic::PluginHostConfig;
 
-use nemo_relay::plugin::{initialize, validate};
+use nemo_relay_plugin_host::{initialize, validate};
 
 #[tokio::test]
 async fn explicit_logging_does_not_select_embedded_diagnostics() {

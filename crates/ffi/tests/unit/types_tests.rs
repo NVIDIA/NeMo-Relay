@@ -7,7 +7,7 @@ use super::*;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     BaseEvent, CategoryProfile, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
@@ -341,16 +341,18 @@ fn test_valid_free_functions_and_none_backed_accessors() {
     let stack_ptr = Box::into_raw(Box::new(FfiScopeStack(create_scope_stack())));
     unsafe { nemo_relay_scope_stack_free(stack_ptr) };
 
-    let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(nemo_relay::api::exporter::atif(
-        "session".into(),
-        nemo_relay_observability::atif::AtifAgentInfo {
-            name: "ffi-agent".into(),
-            version: "1.0.0".into(),
-            model_name: None,
-            tool_definitions: None,
-            extra: None,
-        },
-    ))));
+    let exporter_ptr = Box::into_raw(Box::new(FfiAtifExporter(
+        nemo_relay_plugin_host::exporter::atif(
+            "session".into(),
+            nemo_relay_observability::atif::AtifAgentInfo {
+                name: "ffi-agent".into(),
+                version: "1.0.0".into(),
+                model_name: None,
+                tool_definitions: None,
+                extra: None,
+            },
+        ),
+    )));
     unsafe { nemo_relay_atif_exporter_free(exporter_ptr) };
 
     let adaptive_ptr = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(None))));

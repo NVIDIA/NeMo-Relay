@@ -15,18 +15,18 @@ use nemo_relay_plugin_host::PluginRegistrar;
 use nemo_relay_runtime::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
-#[cfg(test)]
-use nemo_relay::api::llm::LlmAttributes;
-use nemo_relay::api::llm::{LlmHandle, LlmRequest};
-#[cfg(test)]
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::scope::{ScopeHandle, ScopeType};
-#[cfg(test)]
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::api::tool::ToolHandle;
 use nemo_relay_adaptive::AdaptiveRuntime;
 use nemo_relay_plugin_host::dynamic::PluginHostActivation;
+use nemo_relay_runtime::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
+#[cfg(test)]
+use nemo_relay_runtime::api::llm::LlmAttributes;
+use nemo_relay_runtime::api::llm::{LlmHandle, LlmRequest};
+#[cfg(test)]
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::scope::{ScopeHandle, ScopeType};
+#[cfg(test)]
+use nemo_relay_runtime::api::tool::ToolAttributes;
+use nemo_relay_runtime::api::tool::ToolHandle;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_c_string, str_to_c_string};
@@ -78,8 +78,9 @@ pub struct FfiOpenTelemetryMetricSubscriber(
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
 /// Opaque handle for an asynchronous resource metrics collection.
 pub struct FfiResourceMetricsCollection {
-    pub(crate) receiver:
-        std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<nemo_relay::error::Result<String>>>>,
+    pub(crate) receiver: std::sync::Mutex<
+        Option<tokio::sync::oneshot::Receiver<nemo_relay_types::error::Result<String>>>,
+    >,
     pub(crate) task: tokio::task::AbortHandle,
 }
 
@@ -857,8 +858,8 @@ pub unsafe extern "C" fn nemo_relay_event_scope_category(ptr: *const FfiEvent) -
         return std::ptr::null_mut();
     }
     match unsafe { &*ptr }.0.scope_category() {
-        Some(nemo_relay::api::event::ScopeCategory::Start) => str_to_c_string("start"),
-        Some(nemo_relay::api::event::ScopeCategory::End) => str_to_c_string("end"),
+        Some(nemo_relay_runtime::api::event::ScopeCategory::Start) => str_to_c_string("start"),
+        Some(nemo_relay_runtime::api::event::ScopeCategory::End) => str_to_c_string("end"),
         None => std::ptr::null_mut(),
     }
 }

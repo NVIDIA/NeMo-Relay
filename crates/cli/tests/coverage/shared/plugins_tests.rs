@@ -4,13 +4,13 @@
 use super::*;
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::plugins::ConfigurationScope;
-use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_observability::plugin::{
     AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_plugin_host::resource_metrics::ResourceMetricsConfig;
 use nemo_relay_runtime::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
@@ -2762,7 +2762,7 @@ struct TaggedUnionHarness {
     backend: Value,
 }
 
-nemo_relay::editor_config! {
+nemo_relay_types::editor_config! {
     impl TaggedUnionHarness {
         backend => { label: "Backend", kind: TaggedUnion, tagged_union: &TAGGED_UNION },
     }

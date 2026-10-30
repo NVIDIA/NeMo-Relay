@@ -5263,12 +5263,12 @@ async fn diagnostic_activation_deadline_revokes_expired_route_and_is_idempotent(
 
 #[tokio::test]
 async fn worker_stream_application_errors_preserve_the_route_and_next_request() {
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::registry::{
         deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
         register_llm_execution_intercept, register_llm_stream_execution_intercept,
     };
-    use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
     use nemo_relay_runtime::api::runtime::LlmJsonStream;
+    use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
     use serde_json::json;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;

@@ -3,11 +3,11 @@
 
 //! Core runtime services supplied to observability exporters.
 
-struct CoreObservabilityHost;
-impl nemo_relay_types::codec::normalization::LlmNormalizer for CoreObservabilityHost {
+struct RuntimeObservabilityHost;
+impl nemo_relay_types::codec::normalization::LlmNormalizer for RuntimeObservabilityHost {
     fn normalize_request(
         &self,
-        request: &crate::api::llm::LlmRequest,
+        request: &nemo_relay_runtime::api::llm::LlmRequest,
         provider_hint: Option<&str>,
     ) -> Option<nemo_relay_types::codec::request::AnnotatedLlmRequest> {
         nemo_relay_codecs::resolve::normalize_request_with_hint(request, provider_hint)
@@ -19,19 +19,19 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for CoreObservability
         nemo_relay_runtime::codec::RuntimeLlmNormalizer.normalize_response(response)
     }
 }
-impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost {
+impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityHost {
     fn register_subscriber(
         &self,
         name: &str,
         callback: nemo_relay_runtime::api::runtime::EventSubscriberFn,
-    ) -> crate::error::Result<()> {
-        crate::api::subscriber::register_subscriber(name, callback)
+    ) -> nemo_relay_types::error::Result<()> {
+        nemo_relay_runtime::api::subscriber::register_subscriber(name, callback)
     }
-    fn deregister_subscriber(&self, name: &str) -> crate::error::Result<bool> {
-        crate::api::subscriber::deregister_subscriber(name)
+    fn deregister_subscriber(&self, name: &str) -> nemo_relay_types::error::Result<bool> {
+        nemo_relay_runtime::api::subscriber::deregister_subscriber(name)
     }
-    fn flush_subscribers(&self) -> crate::error::Result<()> {
-        crate::api::subscriber::flush_subscribers()
+    fn flush_subscribers(&self) -> nemo_relay_types::error::Result<()> {
+        nemo_relay_runtime::api::subscriber::flush_subscribers()
     }
     fn w3c_span_context(
         &self,
@@ -49,10 +49,10 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
     ) {
         record_plugin_runtime_diagnostic(code, field, message, count);
     }
-    fn set_full_payloads_enabled(&self, enabled: bool) -> crate::error::Result<()> {
+    fn set_full_payloads_enabled(&self, enabled: bool) -> nemo_relay_types::error::Result<()> {
         nemo_relay_runtime::api::runtime::global_context()
             .write()
-            .map_err(|error| crate::error::FlowError::Internal(error.to_string()))?
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
             .set_observability_full_payloads_enabled(enabled);
         Ok(())
     }
@@ -61,22 +61,22 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         scope: &uuid::Uuid,
         name: &str,
         callback: nemo_relay_runtime::api::runtime::EventSubscriberFn,
-    ) -> crate::error::Result<()> {
-        crate::api::subscriber::try_scope_register_subscriber(scope, name, callback)
+    ) -> nemo_relay_types::error::Result<()> {
+        nemo_relay_runtime::api::subscriber::try_scope_register_subscriber(scope, name, callback)
     }
     fn try_scope_deregister_subscriber(
         &self,
         scope: &uuid::Uuid,
         name: &str,
-    ) -> crate::error::Result<bool> {
-        crate::api::subscriber::try_scope_deregister_subscriber(scope, name)
+    ) -> nemo_relay_types::error::Result<bool> {
+        nemo_relay_runtime::api::subscriber::try_scope_deregister_subscriber(scope, name)
     }
     fn scope_deregister_subscriber(
         &self,
         scope: &uuid::Uuid,
         name: &str,
-    ) -> crate::error::Result<bool> {
-        crate::api::subscriber::scope_deregister_subscriber(scope, name)
+    ) -> nemo_relay_types::error::Result<bool> {
+        nemo_relay_runtime::api::subscriber::scope_deregister_subscriber(scope, name)
     }
     fn is_trajectory_parent(&self, parent: uuid::Uuid) -> bool {
         nemo_relay_runtime::api::runtime::current_scope_stack()
@@ -88,11 +88,12 @@ impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost
         &self,
         diagnostic: nemo_relay_plugin::component::RuntimeDiagnostic,
     ) {
-        nemo_relay_plugin_host::record_active_plugin_runtime_diagnostic(diagnostic);
+        crate::record_active_plugin_runtime_diagnostic(diagnostic);
     }
 }
-pub(crate) fn core_host() -> std::sync::Arc<dyn nemo_relay_observability::host::ObservabilityHost> {
-    std::sync::Arc::new(CoreObservabilityHost)
+pub(crate) fn runtime_host() -> std::sync::Arc<dyn nemo_relay_observability::host::ObservabilityHost>
+{
+    std::sync::Arc::new(RuntimeObservabilityHost)
 }
 
 pub(crate) fn record_plugin_runtime_diagnostic(
@@ -101,14 +102,20 @@ pub(crate) fn record_plugin_runtime_diagnostic(
     message: String,
     count: u64,
 ) {
-    nemo_relay_plugin_host::record_active_plugin_runtime_diagnostic(
-        nemo_relay_plugin_host::RuntimeDiagnostic {
-            code: code.to_string(),
-            component: "observability".to_string(),
-            field,
-            message,
-            session_id: None,
-            count,
-        },
-    );
+    crate::record_active_plugin_runtime_diagnostic(crate::RuntimeDiagnostic {
+        code: code.to_string(),
+        component: "observability".to_string(),
+        field,
+        message,
+        session_id: None,
+        count,
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn event_view(
+    event: &nemo_relay_types::api::event::Event,
+) -> nemo_relay_observability::normalization::EventView<'_> {
+    crate::initialize_runtime();
+    nemo_relay_observability::normalization::EventView::new(event, &RuntimeObservabilityHost)
 }

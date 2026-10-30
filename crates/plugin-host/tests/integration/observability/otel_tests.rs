@@ -154,7 +154,7 @@ fn slow_trace_flush_does_not_block_other_subscribers_or_lifecycle_barriers() {
         .with_span_processor(processor)
         .build();
     let trace_subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "trace")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let trace_name = format!("slow-trace-{}", Uuid::now_v7().simple());
     trace_subscriber.register(&trace_name).unwrap();
 
@@ -426,7 +426,7 @@ fn managed_llm_traceparent_matches_exported_span_directly() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "direct-llm")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("direct_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
 
@@ -486,7 +486,7 @@ fn explicit_capture_root_controls_receiver_trace_from_local_senders() {
     }
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "explicit-root")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("explicit_root_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     for context in &contexts {
@@ -520,7 +520,7 @@ fn explicit_popped_parent_traceparent_matches_exported_span() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "popped-parent")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("popped_parent_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let agent = push_scope(
@@ -574,7 +574,7 @@ fn stacked_child_of_popped_parent_preserves_trace_for_early_and_late_exporters()
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "popped-ancestor")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("popped_ancestor_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let agent = push_scope(
@@ -601,7 +601,7 @@ fn stacked_child_of_popped_parent_preserves_trace_for_early_and_late_exporters()
     let (late_provider, late_exporter) = make_provider();
     let late_subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(late_provider, "late-popped-ancestor")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let late_name = format!("late_popped_ancestor_{}", Uuid::now_v7().simple());
     late_subscriber.register(&late_name).unwrap();
     let child = push_scope(
@@ -661,7 +661,7 @@ fn top_level_callback_context_preserves_relay_root_and_exported_trace() {
     let (upstream_provider, upstream_exporter) = make_provider();
     let upstream_subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(upstream_provider, "top-level-capture")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let upstream_name = format!("top_level_capture_{}", Uuid::now_v7().simple());
     upstream_subscriber.register(&upstream_name).unwrap();
     let observed = Arc::new(Mutex::new(None));
@@ -709,7 +709,7 @@ fn top_level_callback_context_preserves_relay_root_and_exported_trace() {
     let (downstream_provider, downstream_exporter) = make_provider();
     let downstream_subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(downstream_provider, "captured-child")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let downstream_name = format!("captured_child_{}", Uuid::now_v7().simple());
     downstream_subscriber.register(&downstream_name).unwrap();
     let downstream_traceparent = runtime.block_on(TASK_SCOPE_STACK.scope(
@@ -747,7 +747,7 @@ fn forked_llm_traceparent_matches_exported_span() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "forked-llm")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("forked_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
 
@@ -792,7 +792,7 @@ fn nested_agent_fork_llm_traceparent_matches_exported_span() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "agent-fork-llm")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("agent_fork_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
 
@@ -848,7 +848,7 @@ fn rooted_import_llm_traceparent_matches_exported_span() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "rooted-import-llm")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("rooted_import_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let root_uuid = Uuid::now_v7();
@@ -893,7 +893,7 @@ fn invalid_imported_tracestate_is_absent_from_provider_and_exported_span() {
     let (provider, exporter) = make_provider();
     let subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(provider, "invalid-tracestate-llm")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("invalid_tracestate_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let root_uuid = Uuid::now_v7();
@@ -938,7 +938,7 @@ fn imported_w3c_parent_survives_an_additional_fork() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "reforked-import")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("reforked_import_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let original_traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -992,7 +992,7 @@ fn rootless_capture_from_local_agent_starts_a_separate_trace() {
     let (sender_provider, sender_exporter) = make_provider();
     let sender_subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(sender_provider, "rootless-sender")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let sender_name = format!("rootless_sender_{}", Uuid::now_v7().simple());
     sender_subscriber.register(&sender_name).unwrap();
 
@@ -1023,7 +1023,7 @@ fn rootless_capture_from_local_agent_starts_a_separate_trace() {
     let (receiver_provider, receiver_exporter) = make_provider();
     let receiver_subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(receiver_provider, "rootless-receiver")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let receiver_name = format!("rootless_receiver_{}", Uuid::now_v7().simple());
     receiver_subscriber.register(&receiver_name).unwrap();
     let imported = create_scope_stack_from_propagation(&context).unwrap();
@@ -1057,7 +1057,7 @@ fn legacy_rootless_import_starts_its_first_local_scope_as_a_trace_root() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "legacy-rootless")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("legacy_rootless_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let propagated_parent = Uuid::now_v7();
@@ -1112,7 +1112,7 @@ fn propagation_context_traceparent_agrees_with_active_trace_capture() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "capture-agreement")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("capture_agreement_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
 
@@ -1161,7 +1161,7 @@ fn late_subscriber_llm_traceparent_matches_exported_span() {
 
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "late-subscriber-llm")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("late_subscriber_llm_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
     let traceparent = runtime.block_on(execute_llm_and_capture_traceparent("late-subscriber-llm"));
@@ -1198,7 +1198,7 @@ fn subscriber_registered_inside_managed_llm_preserves_parent_context() {
     let (provider, exporter) = make_provider();
     let subscriber =
         OpenTelemetrySubscriber::from_tracer_provider(provider, "callback-late-subscriber")
-            .with_host(crate::observability_runtime::core_host());
+            .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("callback_late_subscriber_{}", Uuid::now_v7().simple());
     let subscriber_for_callback = subscriber.clone();
     let subscriber_name_for_callback = subscriber_name.clone();
@@ -1287,7 +1287,7 @@ fn invalid_parent_span_id_does_not_split_llm_or_disable_later_exports() {
     let _runtime_guard = runtime.enter();
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "invalid-parent")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let subscriber_name = format!("invalid_parent_{}", Uuid::now_v7().simple());
     subscriber.register(&subscriber_name).unwrap();
 
@@ -1734,7 +1734,7 @@ fn subscriber_registration_and_provider_lifecycle_methods_work() {
 
     let (provider, _exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "test-scope")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let name = format!("otel_test_{}", Uuid::now_v7().simple());
 
     subscriber.register(&name).unwrap();
@@ -1753,7 +1753,7 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let (provider, exporter) = make_provider();
     let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "e2e-scope")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let name = format!("otel_e2e_{}", Uuid::now_v7().simple());
 
     subscriber.register(&name).unwrap();
@@ -1838,7 +1838,7 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
         .with_endpoint(endpoint)
         .with_header_env("authorization", &variable);
     let subscriber = OpenTelemetrySubscriber::new(config)
-        .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+        .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
         .unwrap();
     unsafe { std::env::set_var(&variable, "Bearer changed-secret") };
     let name = format!("otel_http_{}", Uuid::now_v7().simple());
@@ -1923,10 +1923,10 @@ fn exported_logs_join_trace_spans_with_unobserved_local_parents_and_late_marks()
                 OpenTelemetryConfig::new(projection, trace_endpoint)
                     .with_scheduled_delay(Duration::from_secs(60)),
             )
-            .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+            .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
             .unwrap();
             let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(log_endpoint))
-                .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+                .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
                 .unwrap();
             let trace_callback = traces.subscriber();
             let log_callback = logs.subscriber();
@@ -2030,7 +2030,7 @@ fn http_trace_exports_do_not_follow_redirects() {
                 .with_timeout(Duration::from_secs(1))
                 .with_header("x-collector-key", "test-secret");
             let subscriber = OpenTelemetrySubscriber::new(config)
-                .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+                .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
                 .unwrap();
             let callback = subscriber.subscriber();
             let uuid = Uuid::now_v7();
@@ -2081,7 +2081,7 @@ fn http_trace_subscriber_drains_accepted_events_on_drop() {
         OpenTelemetryConfig::new(OpenTelemetryType::Full, endpoint)
             .with_scheduled_delay(Duration::from_secs(60)),
     )
-    .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+    .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
     .unwrap();
     let name = format!("drop-drain-{}", Uuid::now_v7().simple());
     subscriber.register(&name).unwrap();
@@ -2128,7 +2128,7 @@ fn direct_gen_ai_and_openinference_configs_export_typed_otlp_payloads() {
                 .with_service_name("typed-direct-service")
                 .with_instrumentation_scope("typed-direct-scope"),
         )
-        .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+        .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
         .unwrap();
         let callback = subscriber.subscriber();
         let uuid = Uuid::now_v7();
@@ -2243,7 +2243,7 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
         OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces"),
         2,
     )
-    .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+    .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
     .unwrap();
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()

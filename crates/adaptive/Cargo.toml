@@ -42,7 +42,6 @@ __skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true }
 nemo-relay-logging.workspace = true
 
 # Third-party dependencies.

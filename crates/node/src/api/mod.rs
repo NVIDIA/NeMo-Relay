@@ -26,11 +26,15 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 
-use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
-use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::resource_metrics as core_resource_metrics_api;
-use nemo_relay::api::resource_metrics::{
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_plugin_host::resource_metrics as core_resource_metrics_api;
+use nemo_relay_plugin_host::resource_metrics::{
     AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
     CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics,
     GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics,
@@ -40,19 +44,9 @@ use nemo_relay::api::resource_metrics::{
     ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
     UtilizationUnit,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay_adaptive::acg::{
-    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
-};
-use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_runtime::api::llm as core_llm_api;
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_runtime::api::registry as core_registry_api;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -71,24 +65,30 @@ use nemo_relay_runtime::api::runtime::{
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
     with_scope_stack as with_scope_stack_handle,
 };
+use nemo_relay_runtime::api::scope as core_scope_api;
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::subscriber as core_subscriber_api;
+use nemo_relay_runtime::api::tool as core_tool_api;
+use nemo_relay_runtime::api::tool::ToolAttributes;
 use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::Usage;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use {
-    nemo_relay::plugin::initialize as initialize_impl,
-    nemo_relay::plugin::validate as validate_impl,
-    nemo_relay::plugin::validate_exact as validate_exact_impl,
-    nemo_relay_plugin_host::dynamic::PluginHostActivation as CorePluginHostActivation,
-    nemo_relay_plugin_host::dynamic::PluginHostReport,
-};
-use {
-    nemo_relay::plugin::list_plugin_kinds as list_plugin_kinds_impl,
     nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
     nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
     nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::PluginRegistration,
     nemo_relay_plugin_host::deregister_plugin as deregister_plugin_impl,
+    nemo_relay_plugin_host::list_plugin_kinds as list_plugin_kinds_impl,
     nemo_relay_plugin_host::register_plugin as register_plugin_impl,
     nemo_relay_plugin_host::rollback_registrations,
+};
+use {
+    nemo_relay_plugin_host::dynamic::PluginHostActivation as CorePluginHostActivation,
+    nemo_relay_plugin_host::dynamic::PluginHostReport,
+    nemo_relay_plugin_host::initialize as initialize_impl,
+    nemo_relay_plugin_host::validate as validate_impl,
+    nemo_relay_plugin_host::validate_exact as validate_exact_impl,
 };
 
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
@@ -263,7 +263,7 @@ impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorDeviceMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
@@ -285,7 +285,7 @@ impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorProcessMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     process_id: u32,
@@ -608,13 +608,13 @@ fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> nap
 
 fn effective_scope_top(
     scope_stack: &nemo_relay_runtime::api::runtime::ScopeStackHandle,
-) -> nemo_relay::api::scope::ScopeHandle {
+) -> nemo_relay_runtime::api::scope::ScopeHandle {
     with_scope_stack_handle(scope_stack.clone(), task_scope_top)
 }
 
 #[napi::module_init]
 fn init() {
-    nemo_relay::initialize_runtime();
+    nemo_relay_plugin_host::initialize_runtime();
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
     register_adaptive_component()
@@ -5520,7 +5520,7 @@ impl AtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nemo_relay::api::exporter::atif(session_id, agent_info),
+            inner: nemo_relay_plugin_host::exporter::atif(session_id, agent_info),
         })
     }
 
@@ -5602,7 +5602,7 @@ impl AtofExporter {
     /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
-        let inner = nemo_relay::api::exporter::atof(build_atof_config(config)?)
+        let inner = nemo_relay_plugin_host::exporter::atof(build_atof_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -5840,7 +5840,7 @@ impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::api::exporter::opentelemetry(build_otel_config(config)?)
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry(build_otel_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -5848,9 +5848,10 @@ impl OpenTelemetrySubscriber {
     /// Create a subscriber that writes OTLP to a local file.
     #[napi(factory)]
     pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
-        let inner =
-            nemo_relay::api::exporter::opentelemetry_file(build_otel_file_sink_config(config)?)
-                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_file(
+            build_otel_file_sink_config(config)?,
+        )
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -5950,8 +5951,9 @@ impl OpenTelemetryLogSubscriber {
     /// Create a log subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryLogConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::api::exporter::opentelemetry_logs(build_otel_log_config(config)?)
-            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner =
+            nemo_relay_plugin_host::exporter::opentelemetry_logs(build_otel_log_config(config)?)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -6049,9 +6051,10 @@ impl OpenTelemetryMetricSubscriber {
     /// Create a metric subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryMetricConfig) -> napi::Result<Self> {
-        let inner =
-            nemo_relay::api::exporter::opentelemetry_metrics(build_otel_metric_config(config)?)
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_metrics(
+            build_otel_metric_config(config)?,
+        )
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 

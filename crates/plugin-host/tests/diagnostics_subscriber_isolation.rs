@@ -62,11 +62,11 @@ fn internal(message: &str) -> Observation<'_> {
 
 #[test]
 fn diagnostic_reads_and_recording_do_not_feed_observability_subscribers() {
-    use nemo_relay::api::scope::{EmitMarkEventParams, event};
-    use nemo_relay::api::subscriber::{
+    use nemo_relay_diagnostics::{ComponentOwnership, DiagnosticCorrelation};
+    use nemo_relay_runtime::api::scope::{EmitMarkEventParams, event};
+    use nemo_relay_runtime::api::subscriber::{
         deregister_subscriber, flush_subscribers, register_subscriber,
     };
-    use nemo_relay_diagnostics::{ComponentOwnership, DiagnosticCorrelation};
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     let observed = Arc::new(Mutex::new(Vec::new()));
     let output = observed.clone();

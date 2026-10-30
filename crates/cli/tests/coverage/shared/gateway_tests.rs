@@ -2927,10 +2927,10 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
     let captured_output = Arc::new(Mutex::new(None::<Value>));
     let captured = captured_output.clone();
     let subscriber = "inline-response-completion-once";
-    nemo_relay::api::subscriber::register_subscriber(
+    nemo_relay_runtime::api::subscriber::register_subscriber(
         subscriber,
         Arc::new(move |event| {
-            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+            if event.scope_category() == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
                 && event.name() == "codex-turn"
                 && event
                     .metadata()
@@ -2991,9 +2991,9 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
         )
         .await;
     manager.close_all("test_shutdown").await.unwrap();
-    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(newer_response));
-    nemo_relay::api::subscriber::deregister_subscriber(subscriber).unwrap();
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber).unwrap();
 }
 
 #[tokio::test]
@@ -3059,13 +3059,13 @@ async fn managed_final_response_stream(
 #[test]
 fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
     let subscriber_name = "gateway-no-runtime-drop-test";
-    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let _ = nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name);
     let captured_output = Arc::new(Mutex::new(None::<Value>));
     let captured = captured_output.clone();
-    nemo_relay::api::subscriber::register_subscriber(
+    nemo_relay_runtime::api::subscriber::register_subscriber(
         subscriber_name,
         Arc::new(move |event| {
-            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+            if event.scope_category() == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
                 && event.name() == "codex-turn"
                 && event
                     .metadata()
@@ -3139,21 +3139,21 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
         ))
         .unwrap();
     assert_eq!(closed, 1);
-    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
-    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
 async fn streaming_body_records_final_response_for_turn_output() {
     let subscriber_name = "gateway-stream-final-response-turn-output-test";
-    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let _ = nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name);
     let captured_output = Arc::new(Mutex::new(None::<Value>));
     let captured = captured_output.clone();
-    nemo_relay::api::subscriber::register_subscriber(
+    nemo_relay_runtime::api::subscriber::register_subscriber(
         subscriber_name,
         Arc::new(move |event| {
-            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+            if event.scope_category() == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
                 && event.name() == "codex-turn"
                 && event
                     .metadata()
@@ -3220,9 +3220,9 @@ async fn streaming_body_records_final_response_for_turn_output() {
         .await
         .unwrap();
 
-    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
-    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }
 
 // `stream_response_records_preview_and_truncation` was removed when the gateway moved to

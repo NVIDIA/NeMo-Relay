@@ -15,9 +15,10 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
-use nemo_relay::api::event::ScopeCategory;
-use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::registry::{
+use nemo_relay_plugin_host::dynamic::DynamicPluginKind;
+use nemo_relay_runtime::api::event::ScopeCategory;
+use nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay_runtime::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_scope_sanitize_end_guardrail,
     deregister_tool_conditional_execution_guardrail, deregister_tool_request_intercept,
@@ -25,8 +26,9 @@ use nemo_relay::api::registry::{
     register_llm_stream_execution_intercept, register_scope_sanitize_end_guardrail,
     register_tool_conditional_execution_guardrail, register_tool_request_intercept,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay_plugin_host::dynamic::DynamicPluginKind;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -34,10 +36,11 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
 use {
-    nemo_relay::plugin::ensure_builtin_plugins_registered,
     nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::Plugin,
     nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginRegistration,
-    nemo_relay_plugin_host::deregister_plugin, nemo_relay_plugin_host::register_plugin,
+    nemo_relay_plugin_host::deregister_plugin,
+    nemo_relay_plugin_host::ensure_builtin_plugins_registered,
+    nemo_relay_plugin_host::register_plugin,
 };
 
 use super::*;
@@ -130,7 +133,7 @@ static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 async fn assert_plugin_host_lease_available() {
     let mut probe =
-        nemo_relay::plugin::initialize_exact(nemo_relay_plugin_host::PluginConfig::default())
+        nemo_relay_plugin_host::initialize_exact(nemo_relay_plugin_host::PluginConfig::default())
             .await
             .expect("server should leave the plugin-host lease available");
     assert!(probe.is_active());
@@ -2899,7 +2902,7 @@ async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plug
     register_plugin(Arc::new(PreclaimedBuiltinPlugin))
         .expect("fixture must claim the builtin kind");
 
-    let error = match nemo_relay::plugin::initialize_with_verified_specs(
+    let error = match nemo_relay_plugin_host::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture.missing".into(),
@@ -5821,7 +5824,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
                 let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
                 let response = next(request).await?;
                 if marked {
-                    return Err(nemo_relay::error::FlowError::Internal(
+                    return Err(nemo_relay_types::error::FlowError::Internal(
                         "response rejected by policy".to_string(),
                     ));
                 }
@@ -6470,7 +6473,7 @@ async fn model_call_policy_still_applies_on_a_named_upstream() {
         Arc::new(move |_name, request, _context, next| {
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() == Some("blocked by policy") {
-                    return Err(nemo_relay::error::FlowError::GuardrailRejected(
+                    return Err(nemo_relay_types::error::FlowError::GuardrailRejected(
                         "model calls are refused by test policy".to_string(),
                     ));
                 }

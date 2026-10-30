@@ -12,10 +12,10 @@ use crate::types::cache::HotCache;
 use crate::types::metadata::MetadataEnvelope;
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
 };
-use nemo_relay::api::scope::ScopeType;
+use nemo_relay_runtime::api::scope::ScopeType;
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -817,7 +817,7 @@ fn make_llm_end_with_annotated(
         Vec::new(),
         EventCategory::llm(),
         Some(
-            nemo_relay::api::event::CategoryProfile::builder()
+            nemo_relay_runtime::api::event::CategoryProfile::builder()
                 .annotated_response(std::sync::Arc::new(annotated))
                 .build(),
         ),

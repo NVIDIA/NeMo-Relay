@@ -4,7 +4,7 @@
 //! Python-facing API functions for the NeMo Relay runtime.
 //!
 //! Each `#[pyfunction]` here is registered into the `_native` module and
-//! delegates to the corresponding function in [`nemo_relay::api`].
+//! delegates to the corresponding function in [`nemo_relay_runtime::api`].
 //! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
@@ -13,17 +13,11 @@ use std::future::Future;
 use std::panic::resume_unwind;
 use std::sync::Arc;
 
-use nemo_relay::api::event::DataSchema;
-use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::LlmAttributes;
-use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::resource_metrics as core_resource_metrics_api;
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_plugin_host::resource_metrics as core_resource_metrics_api;
+use nemo_relay_runtime::api::event::DataSchema;
+use nemo_relay_runtime::api::llm as core_llm_api;
+use nemo_relay_runtime::api::llm::LlmAttributes;
+use nemo_relay_runtime::api::registry as core_registry_api;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
     with_task_nested_publication_buffer, with_task_publication_context,
@@ -44,8 +38,14 @@ use nemo_relay_runtime::api::runtime::{
     scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
+use nemo_relay_runtime::api::scope as core_scope_api;
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::subscriber as core_subscriber_api;
+use nemo_relay_runtime::api::tool as core_tool_api;
+use nemo_relay_runtime::api::tool::ToolAttributes;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::PySet;

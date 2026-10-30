@@ -11,8 +11,8 @@ use console::style;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use {
-    nemo_relay::plugin::validate_static_plugin_config, nemo_relay_plugin_host::ConfigPolicy,
-    nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::validate_static_plugin_config,
 };
 
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};

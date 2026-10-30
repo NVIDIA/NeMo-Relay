@@ -16,14 +16,14 @@ use nemo_relay_runtime::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     DataSchema as CoreDataSchema, Event, LogSeverity as CoreLogSeverity,
     MetricKind as CoreMetricKind, MetricMeasurement as CoreMetricMeasurement,
     MetricValueType as CoreMetricValueType,
 };
-use nemo_relay::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
-use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
-use nemo_relay::api::tool::{
+use nemo_relay_runtime::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
+use nemo_relay_runtime::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay_runtime::api::tool::{
     ToolExecutionResult as CoreToolExecutionResult, ToolHandle as CoreToolHandle,
 };
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;

@@ -57,18 +57,20 @@ Node.js bindings mirror the semantics exposed by this crate.
 
 ## Crate boundaries
 
-`nemo-relay` assembles the default pricing, resource metrics, and observability
-plugins over `nemo-relay-runtime`. Plugin implementations depend on runtime
-internals directly; shared contracts live in `nemo-relay-types` and
-`nemo-relay-plugin`. There is one runtime state shared by all consumers.
+`nemo-relay` is a declarative Rust SDK over `nemo-relay-runtime`. Its flat
+modules include `scope`, `llm`, `tool`, `registry`, `subscriber`, and `exporter`.
+Shared request, response, error, and codec contracts are re-exported from
+`nemo-relay-types`; applications do not need an `api` module prefix.
 
-Imports from `nemo_relay::codec`, `diagnostics`, `logging`, and
-`api::runtime` have moved to their owning crates: `nemo_relay_types`,
-`nemo_relay_codecs`, `nemo_relay_diagnostics`, `nemo_relay_logging`, and
-`nemo_relay_runtime`. Initialize SDK composition
-with `nemo_relay::initialize_runtime()` before calling runtime APIs directly
-when default pricing and component services are needed. SDK plugin
-initialization and exporter constructors install composition automatically.
+`nemo-relay-plugin-host` owns default pricing, resource metrics, and
+observability composition, runtime adapters, and dynamic plugin loading.
+Bindings and component implementations depend on their owning crates and
+`nemo-relay-runtime` directly. All consumers share one runtime state.
+
+Call `nemo_relay::initialize_runtime()` before execution when default pricing
+services are needed. Plugin initialization and exporter constructors install
+these services automatically. Logging and diagnostic internals live in
+`nemo-relay-logging` and `nemo-relay-diagnostics`.
 
 ## Installation
 
@@ -99,7 +101,7 @@ The smallest useful workflow is to create a scope, emit a mark event, and close
 the scope:
 
 ```rust
-use nemo_relay::api::scope::{
+use nemo_relay::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
 use serde_json::json;
@@ -161,7 +163,7 @@ Emit a schema-tagged log mark with `event` and an atomically validated metric
 group with `metric`:
 
 ```rust
-use nemo_relay::api::{
+use nemo_relay::{
     event::{DataSchema, LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
     scope::{self, EmitMarkEventParams, EmitMetricEventParams},
 };
@@ -195,16 +197,16 @@ marks, then deregister, force-flush, and shut them down during graceful
 teardown. The metric subscriber has the same lifecycle:
 
 ```rust
-use nemo_relay_observability::{
+use nemo_relay::exporter::{
     otel_logs::OpenTelemetryLogConfig,
     otel_metrics::OpenTelemetryMetricConfig,
 };
 
 // Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
-let logs = nemo_relay::api::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+let logs = nemo_relay::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
     "http://localhost:4318",
 ))?;
-let metrics = nemo_relay::api::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
+let metrics = nemo_relay::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
     "http://localhost:4318",
 ))?;
 logs.register("otlp-logs")?;

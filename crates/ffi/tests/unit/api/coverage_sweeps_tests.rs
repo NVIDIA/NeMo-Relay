@@ -1863,7 +1863,7 @@ fn test_ffi_stream_next_reports_error_items() {
     reset_globals();
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tx.blocking_send(Err(nemo_relay::error::FlowError::Internal(
+    tx.blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
         "ffi stream failed".to_string(),
     )))
     .expect("expected error payload to be queued");
@@ -4221,7 +4221,7 @@ fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<Str
 #[test]
 fn stream_close_reports_undelivered_error_once() {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
-    tx.blocking_send(Err(nemo_relay::error::FlowError::Internal(
+    tx.blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
         "undelivered ffi stream failure".to_string(),
     )))
     .expect("expected error payload to be queued");

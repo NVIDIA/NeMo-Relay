@@ -6,10 +6,10 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_relay::api::event::{Event, EventSanitizeFields};
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
-use nemo_relay::api::tool::ToolExecutionResult;
+use nemo_relay_runtime::api::event::{Event, EventSanitizeFields};
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle};
 use nemo_relay_runtime::api::runtime::ToolExecutionContext;
+use nemo_relay_runtime::api::tool::ToolExecutionResult;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -301,7 +301,8 @@ impl nemo_relay_types::codec::traits::LlmCodec for OpaqueExecutionCodec {
     fn decode(
         &self,
         request: &LlmRequest,
-    ) -> nemo_relay::error::Result<nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::request::AnnotatedLlmRequest>
+    {
         Ok(nemo_relay_types::codec::request::AnnotatedLlmRequest {
             model: request.content["model"].as_str().map(str::to_owned),
             ..Default::default()
@@ -312,7 +313,7 @@ impl nemo_relay_types::codec::traits::LlmCodec for OpaqueExecutionCodec {
         &self,
         annotated: &nemo_relay_types::codec::request::AnnotatedLlmRequest,
         original: &LlmRequest,
-    ) -> nemo_relay::error::Result<LlmRequest> {
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
         let mut request = original.clone();
         request.content["model"] = json!(annotated.model);
         request.content["encoded"] = json!(true);
@@ -324,7 +325,8 @@ impl nemo_relay_types::codec::traits::LlmResponseCodec for OpaqueExecutionCodec 
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
         Ok(nemo_relay_types::codec::response::AnnotatedLlmResponse {
             model: response["model"].as_str().map(str::to_owned),
             ..Default::default()
@@ -947,15 +949,15 @@ fn assert_collector_and_finalizer_callbacks() {
 fn assert_event_callbacks() {
     let (user_data, seen) = user_data_counter();
     let subscriber = wrap_event_subscriber(subscriber_cb, user_data, Some(free_arc_counter));
-    let event = Event::Scope(nemo_relay::api::event::ScopeEvent::new(
-        nemo_relay::api::event::BaseEvent::builder()
+    let event = Event::Scope(nemo_relay_runtime::api::event::ScopeEvent::new(
+        nemo_relay_runtime::api::event::BaseEvent::builder()
             .name("ffi-event")
             .build(),
-        nemo_relay::api::event::ScopeCategory::Start,
+        nemo_relay_runtime::api::event::ScopeCategory::Start,
         Vec::new(),
-        nemo_relay::api::event::EventCategory::llm(),
+        nemo_relay_runtime::api::event::EventCategory::llm(),
         Some(
-            nemo_relay::api::event::CategoryProfile::builder()
+            nemo_relay_runtime::api::event::CategoryProfile::builder()
                 .model_name("test-model")
                 .build(),
         ),

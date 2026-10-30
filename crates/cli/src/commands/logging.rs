@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use nemo_relay::error::FlowError;
 use nemo_relay_logging::{LogFormat, LogLevel, LoggingConfig};
+use nemo_relay_types::error::FlowError;
 
 use crate::error::CliError;
 

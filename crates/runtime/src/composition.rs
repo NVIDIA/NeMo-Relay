@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Component services supplied by an SDK or embedding host.
+//! Component services supplied by plugin-host or an embedding application.
 
 use nemo_relay_types::{
     api::resource_metrics::ResourceMetricsSnapshot,
@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 /// Callback receiving a resource snapshot without owning a collection implementation.
 pub type SnapshotSink = Arc<dyn Fn(&ResourceMetricsSnapshot) + Send + Sync>;
 
-/// Composition callbacks owned by the SDK, independent from the runtime engine.
+/// Composition callbacks owned by the embedding host, independent from the runtime engine.
 #[derive(Clone, Copy)]
 pub struct RuntimeServices {
     /// Capture the current immutable pricing resolver.
@@ -51,7 +51,7 @@ static SERVICES: OnceLock<RuntimeServices> = OnceLock::new();
 static UNCOMPOSED: std::sync::LazyLock<RuntimeServices> =
     std::sync::LazyLock::new(RuntimeServices::default);
 
-/// Install composition once; subsequent SDK entry points preserve the chosen host.
+/// Install composition once; subsequent initialization entry points preserve the chosen host.
 pub fn install_runtime_services(
     factory: impl FnOnce() -> RuntimeServices,
 ) -> &'static RuntimeServices {

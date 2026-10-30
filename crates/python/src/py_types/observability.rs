@@ -163,14 +163,14 @@ impl PyAtifExporter {
             extra: extra_json,
         };
         Ok(Self {
-            inner: nemo_relay::api::exporter::atif(session_id, agent_info),
+            inner: nemo_relay_plugin_host::exporter::atif(session_id, agent_info),
         })
     }
 
     /// Register this exporter as an event subscriber with the given name.
     pub(crate) fn register(&self, name: String) -> PyResult<()> {
         let subscriber = self.inner.subscriber();
-        nemo_relay::api::subscriber::register_subscriber(&name, subscriber)
+        nemo_relay_runtime::api::subscriber::register_subscriber(&name, subscriber)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -178,7 +178,7 @@ impl PyAtifExporter {
     ///
     /// Returns ``True`` if a subscriber with that name was found and removed.
     pub(crate) fn deregister(&self, name: String) -> PyResult<bool> {
-        nemo_relay::api::subscriber::deregister_subscriber(&name)
+        nemo_relay_runtime::api::subscriber::deregister_subscriber(&name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -451,7 +451,7 @@ pub struct PyAtofExporter {
 impl PyAtofExporter {
     #[new]
     pub(crate) fn new(config: PyRef<'_, PyAtofExporterConfig>) -> PyResult<Self> {
-        let inner = nemo_relay::api::exporter::atof(config.to_rust_config()?)
+        let inner = nemo_relay_plugin_host::exporter::atof(config.to_rust_config()?)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -944,7 +944,7 @@ impl PyOpenTelemetrySubscriber {
     pub(crate) fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
         if let Ok(file_sink) = config.extract::<PyRef<'_, PyOtlpFileSink>>() {
             let rust_config = file_sink.to_rust_config()?;
-            let inner = nemo_relay::api::exporter::opentelemetry_file(rust_config)
+            let inner = nemo_relay_plugin_host::exporter::opentelemetry_file(rust_config)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             return Ok(Self {
                 inner,
@@ -966,14 +966,14 @@ impl PyOpenTelemetrySubscriber {
                 .build()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             let _guard = runtime.enter();
-            let inner = nemo_relay::api::exporter::opentelemetry(rust_config)
+            let inner = nemo_relay_plugin_host::exporter::opentelemetry(rust_config)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,
                 owned_runtime: Some(runtime),
             })
         } else {
-            let inner = nemo_relay::api::exporter::opentelemetry(rust_config)
+            let inner = nemo_relay_plugin_host::exporter::opentelemetry(rust_config)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,
@@ -1230,7 +1230,7 @@ pub struct PyOpenTelemetryLogSubscriber {
 impl PyOpenTelemetryLogSubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenTelemetryLogConfig>) -> PyResult<Self> {
-        let inner = nemo_relay::api::exporter::opentelemetry_logs(config.to_rust_config()?)
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_logs(config.to_rust_config()?)
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
         Ok(Self { inner })
     }
@@ -1457,8 +1457,9 @@ pub struct PyOpenTelemetryMetricSubscriber {
 impl PyOpenTelemetryMetricSubscriber {
     #[new]
     fn new(config: PyRef<'_, PyOpenTelemetryMetricConfig>) -> PyResult<Self> {
-        let inner = nemo_relay::api::exporter::opentelemetry_metrics(config.to_rust_config()?)
-            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        let inner =
+            nemo_relay_plugin_host::exporter::opentelemetry_metrics(config.to_rust_config()?)
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
         Ok(Self { inner })
     }
 

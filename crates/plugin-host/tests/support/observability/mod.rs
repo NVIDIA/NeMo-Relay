@@ -4,7 +4,7 @@
 //! Core-specific integration views and fixtures for observability.
 
 #![allow(unused_imports)]
-pub(crate) use crate::observability_runtime::{core_host, event_view};
+pub(crate) use crate::observability_runtime::{event_view, runtime_host as core_host};
 pub(crate) use nemo_relay_observability::*;
 
 pub(crate) mod atif;

@@ -192,7 +192,7 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nemo_relay::api::exporter::atif(session_id, agent_info);
+    let exporter = nemo_relay_plugin_host::exporter::atif(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
     NemoRelayStatus::Ok
 }
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
         config = config.with_filename(filename);
     }
 
-    match nemo_relay::api::exporter::atof(config) {
+    match nemo_relay_plugin_host::exporter::atof(config) {
         Ok(exporter) => {
             unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
             NemoRelayStatus::Ok
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create_from_json(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match nemo_relay::api::exporter::atof(config) {
+    match nemo_relay_plugin_host::exporter::atof(config) {
         Ok(exporter) => {
             unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
             NemoRelayStatus::Ok
@@ -748,7 +748,7 @@ fn create_otel_file_sink_subscriber(
     config: OpenTelemetryFileSinkConfig,
 ) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
-    nemo_relay::api::exporter::opentelemetry_file(config).map_err(|error| {
+    nemo_relay_plugin_host::exporter::opentelemetry_file(config).map_err(|error| {
         set_last_error(&error.to_string());
         NemoRelayStatus::Internal
     })
@@ -758,7 +758,7 @@ fn create_otel_subscriber(
     config: OpenTelemetryConfig,
 ) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
-    nemo_relay::api::exporter::opentelemetry(config).map_err(|error| {
+    nemo_relay_plugin_host::exporter::opentelemetry(config).map_err(|error| {
         set_last_error(&error.to_string());
         NemoRelayStatus::Internal
     })
@@ -1475,13 +1475,12 @@ fn build_ffi_otel_log_config(
         config = config.with_timeout(Duration::from_millis(timeout_millis));
     }
     if let Some(value) = parse_optional_string(minimum_severity)? {
-        let severity =
-            value
-                .parse()
-                .map_err(|error: nemo_relay::api::event::ParseLogSeverityError| {
-                    set_last_error(&error.to_string());
-                    NemoRelayStatus::InvalidArg
-                })?;
+        let severity = value.parse().map_err(
+            |error: nemo_relay_runtime::api::event::ParseLogSeverityError| {
+                set_last_error(&error.to_string());
+                NemoRelayStatus::InvalidArg
+            },
+        )?;
         config = config.with_minimum_severity(severity);
     }
     if max_queue_size != 0 {
@@ -2172,7 +2171,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_with_tls(
         Err(status) => return status,
     };
     let _runtime_guard = tokio_runtime().enter();
-    match nemo_relay::api::exporter::opentelemetry_logs(config) {
+    match nemo_relay_plugin_host::exporter::opentelemetry_logs(config) {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetryLogSubscriber(subscriber))) };
             NemoRelayStatus::Ok
@@ -2242,7 +2241,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_with_tls(
         Err(status) => return status,
     };
     let _runtime_guard = tokio_runtime().enter();
-    match nemo_relay::api::exporter::opentelemetry_metrics(config) {
+    match nemo_relay_plugin_host::exporter::opentelemetry_metrics(config) {
         Ok(subscriber) => {
             unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetryMetricSubscriber(subscriber))) };
             NemoRelayStatus::Ok

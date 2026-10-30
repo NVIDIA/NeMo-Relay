@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use nemo_relay::error::{FlowError, UpstreamFailure};
+use nemo_relay_types::error::{FlowError, UpstreamFailure};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use strum::Display;
@@ -150,7 +150,7 @@ pub(crate) enum CliError {
         message: String,
     },
     #[error("NeMo Relay runtime error: {0}")]
-    Flow(#[from] nemo_relay::error::FlowError),
+    Flow(#[from] nemo_relay_types::error::FlowError),
 }
 
 impl CliError {

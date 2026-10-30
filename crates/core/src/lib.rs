@@ -1,24 +1,141 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public Rust SDK composition for NeMo Relay.
+#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
+
+//! The public Rust SDK for NeMo Relay.
 //!
-//! Use `nemo-relay-codecs` for provider implementations and
-//! `nemo-relay-runtime` for execution internals, `nemo-relay-plugin-host` for
-//! plugin hosting, `nemo-relay-logging` for logging setup, and
-//! `nemo-relay-diagnostics` for bounded evidence and inspection.
-//! This crate assembles the default components and provides
-//! high-level lifecycle APIs and exporter constructors.
+//! Instrument through [`scope`], [`tool`], and [`llm`], register middleware through
+//! [`registry`], and observe events through [`subscriber`] or [`exporter`].
+//! Shared request, response, error, and codec contracts are re-exported directly.
+//! Bindings and component implementations use their owning crates and the execution
+//! engine in `nemo-relay-runtime` instead of depending on this SDK.
 
-pub mod api;
-mod composition;
-mod observability_runtime;
-pub mod plugin;
-pub use nemo_relay_types::{Json, editor_config, error};
+pub use nemo_relay_plugin_host::initialize_runtime;
 
-/// Install default component services before using the runtime directly.
-///
-/// This does not activate configured plugins or start resource sampling.
-pub fn initialize_runtime() {
-    composition::ensure_runtime_services();
+/// Runtime-bound exporter constructors and their configuration contracts.
+pub mod exporter {
+    pub use nemo_relay_observability::{
+        MarkProjection, OpenTelemetryTlsConfig, OpenTelemetryType, OtlpAttributeMapping,
+    };
+    pub use nemo_relay_observability::{atif, atof, otel, otel_file, otel_logs, otel_metrics};
+    pub use nemo_relay_plugin_host::exporter::*;
+}
+pub use nemo_relay_types::api::event::Event;
+pub use nemo_relay_types::api::llm::LlmRequest;
+pub use nemo_relay_types::codec::{
+    normalization::LlmNormalizer,
+    request::AnnotatedLlmRequest,
+    response::{AnnotatedLlmResponse, Usage},
+    streaming::{NormalizedStreamEvent, StreamingCodec},
+    traits::{LlmCodec, LlmResponseCodec},
+};
+pub use nemo_relay_types::error::{FlowError, Result};
+pub use nemo_relay_types::{Json, codec, editor_config, error};
+
+/// Canonical lifecycle events and normalized LLM accessors.
+pub mod event {
+    pub use nemo_relay_runtime::api::event::EventNormalizationExt;
+    pub use nemo_relay_types::api::event::*;
+}
+/// Scope lifecycle and event emission.
+pub mod scope {
+    pub use nemo_relay_runtime::api::scope::{
+        COMPACTION_EVENT_NAME, EmitMarkEventParams, EmitMetricEventParams, PopScopeParams,
+        PushScopeParams, ScopeHandle, event, get_handle, metric, pop_scope, push_scope,
+    };
+    pub use nemo_relay_types::api::scope::*;
+}
+/// Managed and manual LLM calls.
+pub mod llm {
+    pub use nemo_relay_runtime::api::llm::{
+        LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
+        LlmStreamCallExecuteParams, llm_call, llm_call_end, llm_call_execute,
+        llm_conditional_execution, llm_request_intercepts, llm_stream_call_execute,
+    };
+    pub use nemo_relay_types::api::llm::*;
+}
+/// Managed and manual tool calls.
+pub mod tool {
+    pub use nemo_relay_runtime::api::tool::{
+        ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolHandle, tool_call,
+        tool_call_end, tool_call_execute, tool_conditional_execution, tool_request_intercepts,
+    };
+    pub use nemo_relay_types::api::tool::*;
+}
+/// Shared middleware callback, stream, and invocation-context contracts.
+pub mod middleware {
+    pub use nemo_relay_types::api::runtime::*;
+}
+/// Global and scope-local middleware registration.
+pub mod registry {
+    pub use nemo_relay_runtime::api::registry::{
+        deregister_conditional_middleware_guardrail, deregister_event_metadata_injector,
+        deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
+        deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
+        deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
+        deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+        deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+        deregister_tool_execution_intercept, deregister_tool_request_intercept,
+        deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+        list_runtime_registrations, register_conditional_middleware_guardrail,
+        register_event_metadata_injector, register_llm_conditional_execution_guardrail,
+        register_llm_execution_intercept, register_llm_request_intercept,
+        register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+        register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+        register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
+        register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+        register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+        register_tool_sanitize_response_guardrail, scope_deregister_event_metadata_injector,
+        scope_deregister_llm_conditional_execution_guardrail,
+        scope_deregister_llm_execution_intercept, scope_deregister_llm_request_intercept,
+        scope_deregister_llm_sanitize_request_guardrail,
+        scope_deregister_llm_sanitize_response_guardrail,
+        scope_deregister_llm_stream_execution_intercept, scope_deregister_mark_sanitize_guardrail,
+        scope_deregister_scope_sanitize_end_guardrail,
+        scope_deregister_scope_sanitize_start_guardrail,
+        scope_deregister_tool_conditional_execution_guardrail,
+        scope_deregister_tool_execution_intercept, scope_deregister_tool_request_intercept,
+        scope_deregister_tool_sanitize_request_guardrail,
+        scope_deregister_tool_sanitize_response_guardrail, scope_register_event_metadata_injector,
+        scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
+        scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
+        scope_register_llm_sanitize_response_guardrail,
+        scope_register_llm_stream_execution_intercept, scope_register_mark_sanitize_guardrail,
+        scope_register_scope_sanitize_end_guardrail, scope_register_scope_sanitize_start_guardrail,
+        scope_register_tool_conditional_execution_guardrail,
+        scope_register_tool_execution_intercept, scope_register_tool_request_intercept,
+        scope_register_tool_sanitize_request_guardrail,
+        scope_register_tool_sanitize_response_guardrail,
+    };
+    pub use nemo_relay_types::api::registry::*;
+}
+/// Lifecycle event subscriptions and delivery barriers.
+pub mod subscriber {
+    pub use nemo_relay_runtime::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
+        scope_register_subscriber,
+    };
+    pub use nemo_relay_types::api::runtime::EventSubscriberFn;
+}
+/// Adaptive contribution recording for Rust integrations.
+pub use nemo_relay_runtime::api::optimization;
+/// Plugin contracts, configuration, and activation.
+pub mod plugin {
+    pub use nemo_relay_plugin::component::{
+        ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginRegistrar,
+    };
+    pub use nemo_relay_plugin_host::{
+        ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
+        PluginHostReport, deregister_plugin, ensure_builtin_plugins_registered, initialize,
+        initialize_exact, initialize_with_diagnostics, initialize_with_verified_specs,
+        list_plugin_kinds, lookup_plugin, plugin_config_schema, register_plugin, validate,
+        validate_exact, validate_static_plugin_config,
+    };
+}
+/// Structured resource measurements and on-demand collection.
+pub mod resource_metrics {
+    pub use nemo_relay_plugin_host::resource_metrics::{RESOURCE_METRICS_EVENT_NAME, collect};
+    pub use nemo_relay_resource_metrics::config::*;
+    pub use nemo_relay_types::api::resource_metrics::*;
 }

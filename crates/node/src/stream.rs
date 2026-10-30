@@ -17,9 +17,9 @@ use std::task::{Context, Poll, Wake, Waker};
 use napi::bindgen_prelude::*;
 use napi::{Env, JsDeferred, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
-use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay_runtime::api::runtime::LlmJsonStream;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 

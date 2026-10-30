@@ -13,7 +13,6 @@ pub use nemo_relay_types::api::resource_metrics::{
     UtilizationUnit,
 };
 
-use crate::error::Result;
 pub use nemo_relay_resource_metrics::config::{
     ResourceMetricsConfig, ResourceMetricsCpuConfig, ResourceMetricsCpuUnits,
     ResourceMetricsDiskConfig, ResourceMetricsDiskUnits, ResourceMetricsGpuConfig,
@@ -25,6 +24,7 @@ pub use nemo_relay_resource_metrics::config::{
 #[doc(hidden)]
 pub use nemo_relay_resource_metrics::manager::CliResourceMetricsLaunchGuard;
 pub use nemo_relay_resource_metrics::manager::ResourceMetricsTargetGuard;
+use nemo_relay_types::error::Result;
 
 /// Canonical event name for resource metric marks.
 pub use nemo_relay_runtime::api::resource_metrics::RESOURCE_METRICS_EVENT_NAME;
@@ -35,7 +35,7 @@ pub use nemo_relay_runtime::api::resource_metrics::RESOURCE_METRICS_EVENT_NAME;
 /// blocking worker. Dropping the future stops waiting; a query already running
 /// may still finish and update the on-demand sampling baseline.
 pub async fn collect() -> Result<ResourceMetricsSnapshot> {
-    crate::composition::ensure_runtime_services();
+    crate::initialize_runtime();
     nemo_relay_resource_metrics::manager::collect_on_demand().await
 }
 
@@ -45,7 +45,7 @@ pub async fn collect() -> Result<ResourceMetricsSnapshot> {
 /// the collection target. The CLI holds it until gateway shutdown.
 #[doc(hidden)]
 pub fn prepare_cli_resource_metrics_process_tree() -> Result<CliResourceMetricsLaunchGuard> {
-    crate::composition::ensure_runtime_services();
+    crate::initialize_runtime();
     nemo_relay_resource_metrics::manager::prepare_cli_owned_process_tree()
 }
 
@@ -59,7 +59,7 @@ pub fn prepare_cli_resource_metrics_process_tree() -> Result<CliResourceMetricsL
 pub fn target_resource_metrics_to_owned_process_tree(
     process_id: u32,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {
-    crate::composition::ensure_runtime_services();
+    crate::initialize_runtime();
     nemo_relay_resource_metrics::manager::target_owned_process_tree(process_id)
 }
 
@@ -74,7 +74,7 @@ pub unsafe fn target_resource_metrics_to_owned_process_tree(
     process_id: u32,
     job_handle: isize,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {
-    crate::composition::ensure_runtime_services();
+    crate::initialize_runtime();
     nemo_relay_resource_metrics::manager::target_owned_process_tree_with_job_handle(
         process_id, job_handle,
     )

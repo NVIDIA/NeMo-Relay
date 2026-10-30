@@ -3,7 +3,7 @@
 
 //! Python-facing type wrappers for NeMo Relay core types.
 //!
-//! Each type wraps its corresponding `nemo_relay::types` struct and exposes
+//! Each type wraps its corresponding `nemo_relay_types` struct and exposes
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
@@ -13,18 +13,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use nemo_relay::api::event::{MarkEvent, ScopeEvent};
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
-use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay::error::Result as FlowResult;
+use nemo_relay_runtime::api::event::{MarkEvent, ScopeEvent};
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay_runtime::api::runtime::{LlmCodecIdentity, ScopeStackHandle};
+use nemo_relay_runtime::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay_runtime::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, ApiSpecificRequest, GenerationParams, Message,
     MessageContent, ToolChoice, ToolDefinition,
 };
 use nemo_relay_types::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::error::Result as FlowResult;
 use pyo3::prelude::*;
 use serde::Serialize;
 

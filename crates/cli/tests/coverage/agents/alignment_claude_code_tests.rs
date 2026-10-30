@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderValue;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use super::*;

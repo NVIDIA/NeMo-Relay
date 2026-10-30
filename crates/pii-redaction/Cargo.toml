@@ -32,7 +32,6 @@ sha2.workspace = true
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true }
 nemo-relay-logging.workspace = true
 
 # Third-party dependencies.

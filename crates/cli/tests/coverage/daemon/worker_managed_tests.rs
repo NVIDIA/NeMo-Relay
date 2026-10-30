@@ -12,8 +12,8 @@ use axum::Router;
 use axum::extract::State;
 use axum::routing::post;
 use http_body_util::{BodyExt as _, Full, StreamBody};
-use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::registry::{
+use nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay_runtime::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, register_llm_execution_intercept,
     register_llm_request_intercept, register_llm_stream_execution_intercept,
@@ -446,7 +446,7 @@ async fn daemon_hop_cannot_supply_worker_local_dispatch_overrides() {
 #[tokio::test]
 async fn worker_requirements_follow_registration_and_removal_without_running_gates() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::registry::{
         deregister_conditional_middleware_guardrail, deregister_llm_sanitize_request_guardrail,
         register_conditional_middleware_guardrail, register_llm_sanitize_request_guardrail,
     };
@@ -1694,18 +1694,18 @@ struct LlmGuardrailRegistration(&'static str);
 
 impl Drop for LlmGuardrailRegistration {
     fn drop(&mut self) {
-        use nemo_relay::api::registry::*;
+        use nemo_relay_runtime::api::registry::*;
         let _ = deregister_llm_conditional_execution_guardrail(self.0);
         let _ = deregister_llm_sanitize_request_guardrail(self.0);
         let _ = deregister_llm_sanitize_response_guardrail(self.0);
-        let _ = nemo_relay::api::subscriber::deregister_subscriber(self.0);
+        let _ = nemo_relay_runtime::api::subscriber::deregister_subscriber(self.0);
     }
 }
 
 #[tokio::test]
 async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fallback_codec() {
-    use nemo_relay::api::event::{Event, ScopeCategory};
-    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+    use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+    use nemo_relay_runtime::api::subscriber::{flush_subscribers, register_subscriber};
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const SUBSCRIBER: &str = "daemon-worker-responses-pii";
@@ -1915,13 +1915,13 @@ async fn managed_runtime_accepts_execution_middleware_and_replaces_response() {
 #[tokio::test]
 async fn managed_runtime_executes_unary_and_stream_middleware_before_delivery() {
     use futures_util::StreamExt;
-    use nemo_relay::api::event::PendingMarkSpec;
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::event::PendingMarkSpec;
+    use nemo_relay_runtime::api::registry::{
         register_llm_conditional_execution_guardrail, register_llm_sanitize_request_guardrail,
         register_llm_sanitize_response_guardrail,
     };
-    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
     use nemo_relay_runtime::api::runtime::LlmJsonStream;
+    use nemo_relay_runtime::api::subscriber::{flush_subscribers, register_subscriber};
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-execution-transform";
@@ -2131,7 +2131,7 @@ async fn managed_runtime_executes_unary_and_stream_middleware_before_delivery() 
 
 #[tokio::test]
 async fn managed_runtime_conditional_execution_blocks_before_intercepts_or_provider() {
-    use nemo_relay::api::registry::register_llm_conditional_execution_guardrail;
+    use nemo_relay_runtime::api::registry::register_llm_conditional_execution_guardrail;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const GUARDRAIL: &str = "daemon-worker-conditional-block";
@@ -3040,7 +3040,7 @@ async fn unmanaged_routes_forward_only_client_credentials() {
 
 #[tokio::test]
 async fn managed_pre_tool_hooks_reject_when_conditional_guardrail_blocks() {
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::registry::{
         deregister_tool_conditional_execution_guardrail,
         register_tool_conditional_execution_guardrail,
     };

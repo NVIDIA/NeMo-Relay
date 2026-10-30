@@ -21,12 +21,12 @@ use crate::py_callable::{
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
-use nemo_relay::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::error::FlowError;
+use nemo_relay_runtime::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
+use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionContext, LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
+use nemo_relay_types::error::FlowError;
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -844,7 +844,7 @@ async def llm_intercept(name, request, context, next):
                 let tool_exec = wrap_py_tool_exec_fn(tool_exec_py);
                 assert_eq!(
                     tool_exec(json!({"x": 2})).await.unwrap(),
-                    nemo_relay::api::tool::ToolExecutionResult::annotated(
+                    nemo_relay_runtime::api::tool::ToolExecutionResult::annotated(
                         json!({"tool": 3}),
                         json!({"source": "python-exec"})
                     )
@@ -853,10 +853,12 @@ async def llm_intercept(name, request, context, next):
                 let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_py);
                 let tool_next: ToolExecutionNextFn = Arc::new(|args| {
                     Box::pin(async move {
-                        Ok(nemo_relay::api::tool::ToolExecutionResult::annotated(
-                            json!({"next": args["x"]}),
-                            json!({"source": "python-next"}),
-                        ))
+                        Ok(
+                            nemo_relay_runtime::api::tool::ToolExecutionResult::annotated(
+                                json!({"next": args["x"]}),
+                                json!({"source": "python-next"}),
+                            ),
+                        )
                     })
                 });
                 assert_eq!(
@@ -869,7 +871,7 @@ async def llm_intercept(name, request, context, next):
                     )
                     .await
                     .unwrap(),
-                    nemo_relay::api::tool::ToolExecutionInterceptOutcome::annotated(
+                    nemo_relay_runtime::api::tool::ToolExecutionInterceptOutcome::annotated(
                         json!({"next": 3, "wrapped": true}),
                         json!({"source": "python-next"})
                     )

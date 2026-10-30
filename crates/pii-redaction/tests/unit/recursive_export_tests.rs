@@ -26,7 +26,7 @@ async fn recursive_selectors_reach_atif_and_otlp_without_changing_execution() {
                 .clone(),
         });
         test_initialize_plugin_host_exact(config).await.unwrap();
-        let atif = nemo_relay::api::exporter::atif(
+        let atif = nemo_relay_plugin_host::exporter::atif(
             "recursive-export".into(),
             AtifAgentInfo {
                 name: "test-agent".into(),
@@ -59,9 +59,9 @@ async fn recursive_selectors_reach_atif_and_otlp_without_changing_execution() {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let endpoint = format!("http://{}", listener.local_addr().unwrap());
             let receiver = capture_one_otlp_request(listener);
-            let subscriber = nemo_relay::api::exporter::opentelemetry(OpenTelemetryConfig::new(
-                projection, endpoint,
-            ))
+            let subscriber = nemo_relay_plugin_host::exporter::opentelemetry(
+                OpenTelemetryConfig::new(projection, endpoint),
+            )
             .unwrap();
             subscriber.register(name).unwrap();
             (name, id_key, subscriber, receiver)

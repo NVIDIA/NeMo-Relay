@@ -764,22 +764,25 @@ struct PanickingFfiSanitizerCodec;
 impl LlmCodec for PanickingFfiSanitizerCodec {
     fn decode(
         &self,
-        _request: &nemo_relay::api::llm::LlmRequest,
-    ) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        _request: &nemo_relay_runtime::api::llm::LlmRequest,
+    ) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         panic!("request decode panic")
     }
 
     fn encode(
         &self,
         _annotated: &AnnotatedLlmRequest,
-        _original: &nemo_relay::api::llm::LlmRequest,
-    ) -> nemo_relay::error::Result<nemo_relay::api::llm::LlmRequest> {
+        _original: &nemo_relay_runtime::api::llm::LlmRequest,
+    ) -> nemo_relay_types::error::Result<nemo_relay_runtime::api::llm::LlmRequest> {
         panic!("request encode panic")
     }
 }
 
 impl LlmResponseCodec for PanickingFfiSanitizerCodec {
-    fn decode_response(&self, _response: &Json) -> nemo_relay::error::Result<AnnotatedLlmResponse> {
+    fn decode_response(
+        &self,
+        _response: &Json,
+    ) -> nemo_relay_types::error::Result<AnnotatedLlmResponse> {
         panic!("response decode panic")
     }
 }
@@ -791,7 +794,7 @@ fn ffi_sanitizer_codec_entrypoints_contain_codec_panics() {
     let response_codec = FfiLlmSanitizeResponseCodec(
         Arc::new(PanickingFfiSanitizerCodec) as Arc<dyn LlmResponseCodec>
     );
-    let request = FfiLLMRequest(nemo_relay::api::llm::LlmRequest {
+    let request = FfiLLMRequest(nemo_relay_runtime::api::llm::LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"model": "gpt-test", "messages": []}),
     });

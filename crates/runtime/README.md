@@ -6,14 +6,15 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo Relay Runtime
 
 Execution, scopes, middleware registries, continuations, and priced codec adapters.
-The SDK supplies built-in component composition through explicit runtime services.
+Plugin-host supplies built-in component composition through explicit runtime services.
 This crate participates in the unified NeMo Relay release.
 
 This crate has no production dependency on the public SDK or concrete component
 crates. Applications may use it alone without built-in plugins, or install
-`composition::RuntimeServices` before starting execution. The public SDK installs
-its default services through `nemo_relay::initialize_runtime()` and its plugin
-initialization and exporter constructors.
+`composition::RuntimeServices` before starting execution. Plugin-host installs
+its default services through `nemo_relay_plugin_host::initialize_runtime()` and
+its plugin initialization and exporter constructors. The Rust SDK re-exports
+these entry points.
 
 Use `nemo-relay-types` for codec and middleware contracts, `nemo-relay-plugin`
 for the non-generic `Plugin` trait and `PluginRegistrar`, and this crate for

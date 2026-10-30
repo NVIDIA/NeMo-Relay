@@ -322,7 +322,7 @@ fn subscriber_registration_and_provider_lifecycle_methods_work() {
             "test-scope",
             crate::observability_test_support::OpenTelemetryType::OpenInference,
         )
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let name = format!("otel_test_{}", Uuid::now_v7().simple());
 
     subscriber.register(&name).unwrap();
@@ -346,7 +346,7 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
             "e2e-scope",
             crate::observability_test_support::OpenTelemetryType::OpenInference,
         )
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let name = format!("otel_e2e_{}", Uuid::now_v7().simple());
 
     subscriber.register(&name).unwrap();
@@ -458,7 +458,7 @@ fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     )
     .with_service_name("demo-agent");
     let subscriber = crate::observability_test_support::otel::OpenTelemetrySubscriber::new(config)
-        .map(|exporter| exporter.with_host(crate::observability_runtime::core_host()))
+        .map(|exporter| exporter.with_host(crate::observability_runtime::runtime_host()))
         .unwrap();
     let name = format!("otel_http_{}", Uuid::now_v7().simple());
 

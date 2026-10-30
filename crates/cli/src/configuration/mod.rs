@@ -329,7 +329,7 @@ fn resolve_logging_from_document(
         CliError::Config(format!("failed to resolve logging configuration: {error}"))
     })?;
     LoggingConfig::from_toml_document(&document).map_err(|error| match error {
-        nemo_relay::error::FlowError::InvalidArgument(message) => CliError::Config(message),
+        nemo_relay_types::error::FlowError::InvalidArgument(message) => CliError::Config(message),
         other => CliError::Flow(other),
     })
 }

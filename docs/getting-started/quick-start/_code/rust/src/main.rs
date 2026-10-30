@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::api::scope::{
+use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::flush_subscribers;
-use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
+use nemo_relay::subscriber::flush_subscribers;
+use nemo_relay::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
 use nemo_relay::plugin::initialize;
 use nemo_relay::plugin::PluginConfig;
 use serde_json::json;

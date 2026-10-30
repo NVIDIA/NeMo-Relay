@@ -17,11 +17,10 @@ workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dependencies]
 # First-party crates.
-nemo-relay = { workspace = true }
 nemo-relay-adaptive = { workspace = true }
 nemo-relay-codecs.workspace = true
 nemo-relay-diagnostics.workspace = true

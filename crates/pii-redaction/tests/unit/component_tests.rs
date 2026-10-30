@@ -375,7 +375,7 @@ fn top_level_policy_controls_component_diagnostics() {
 }
 
 fn reset_runtime() {
-    nemo_relay::initialize_runtime();
+    nemo_relay_plugin_host::initialize_runtime();
     enable_operational_logs();
     let _ = test_close_plugin_host();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
@@ -1048,7 +1048,7 @@ impl LlmCodec for IdentifiedRequestCodec {
         self.identity.clone()
     }
 
-    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         self.inner.decode(request)
     }
 
@@ -1056,7 +1056,7 @@ impl LlmCodec for IdentifiedRequestCodec {
         &self,
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
-    ) -> nemo_relay::error::Result<LlmRequest> {
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
         self.inner.encode(annotated, original)
     }
 }
@@ -1069,7 +1069,8 @@ impl LlmResponseCodec for IdentifiedRequestCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
         self.inner.decode_response(response)
     }
 }
@@ -1081,7 +1082,7 @@ impl LlmCodec for WrappedResponsesCodec {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
 
-    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         let Some(payload) = request.content.get("payload") else {
             return OpenAIResponsesCodec.decode(request);
         };
@@ -1095,7 +1096,7 @@ impl LlmCodec for WrappedResponsesCodec {
         &self,
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
-    ) -> nemo_relay::error::Result<LlmRequest> {
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
         let Some(payload) = original.content.get("payload") else {
             return OpenAIResponsesCodec.encode(annotated, original);
         };
@@ -1121,7 +1122,8 @@ impl LlmResponseCodec for WrappedResponsesCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
         OpenAIResponsesCodec.decode_response(response.get("payload").unwrap_or(response))
     }
 }
@@ -2534,10 +2536,9 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("trace capture listener should bind");
     let trace_endpoint = format!("http://{}", trace_listener.local_addr().unwrap());
     let trace_request = capture_one_otlp_request(trace_listener);
-    let trace_subscriber = nemo_relay::api::exporter::opentelemetry(OpenTelemetryConfig::new(
-        OpenTelemetryType::Full,
-        trace_endpoint,
-    ))
+    let trace_subscriber = nemo_relay_plugin_host::exporter::opentelemetry(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, trace_endpoint),
+    )
     .unwrap();
     trace_subscriber
         .register("pii-target-glob-e2e-traces")
@@ -2547,7 +2548,7 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
     let metric_request = capture_otlp_requests(metric_listener, 2);
-    let metric_subscriber = nemo_relay::api::exporter::opentelemetry_metrics(
+    let metric_subscriber = nemo_relay_plugin_host::exporter::opentelemetry_metrics(
         OpenTelemetryMetricConfig::new(metric_endpoint),
     )
     .unwrap();
@@ -4165,14 +4166,14 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
 
     let captured = capture_events("pii-regression-subscriber");
     let output = tempfile::tempdir().unwrap();
-    let atof = nemo_relay::api::exporter::atof(
+    let atof = nemo_relay_plugin_host::exporter::atof(
         AtofExporterConfig::new()
             .with_output_directory(output.path())
             .with_filename("events.jsonl"),
     )
     .unwrap();
     atof.register("pii-regression-atof").unwrap();
-    let atif = nemo_relay::api::exporter::atif(
+    let atif = nemo_relay_plugin_host::exporter::atif(
         "pii-regression".into(),
         AtifAgentInfo {
             name: "test-agent".into(),
@@ -4188,15 +4189,17 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel =
-        nemo_relay::api::exporter::opentelemetry_from_provider(otel_provider, "pii-regression");
+    let otel = nemo_relay_plugin_host::exporter::opentelemetry_from_provider(
+        otel_provider,
+        "pii-regression",
+    );
     otel.register("pii-regression-otel").unwrap();
 
     let genai_exporter = InMemorySpanExporterBuilder::new().build();
     let genai_provider = SdkTracerProvider::builder()
         .with_simple_exporter(genai_exporter.clone())
         .build();
-    let genai = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
+    let genai = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         genai_provider,
         "pii-regression",
         OpenTelemetryType::GenAi,
@@ -4207,7 +4210,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference = nemo_relay::api::exporter::opentelemetry_from_provider_with_type(
+    let openinference = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         openinference_provider,
         "pii-regression",
         OpenTelemetryType::OpenInference,

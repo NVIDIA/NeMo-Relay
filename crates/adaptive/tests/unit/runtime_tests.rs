@@ -3,10 +3,12 @@
 
 //! Unit tests for runtime in the NeMo Relay adaptive crate.
 
-use nemo_relay::api::llm::{LlmRequest, llm_request_intercepts};
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay_runtime::api::llm::{LlmRequest, llm_request_intercepts};
 use nemo_relay_runtime::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
+};
+use nemo_relay_runtime::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
 };
 use serde_json::{Map, Value as Json};
 

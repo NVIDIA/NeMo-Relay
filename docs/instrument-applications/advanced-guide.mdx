@@ -146,12 +146,12 @@ registerToolExecutionIntercept("search.measure", 30, async (context, next) => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::registry::{
+use nemo_relay::registry::{
     register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept,
     register_tool_sanitize_request_guardrail,
 };
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::tool::ToolExecutionInterceptOutcome;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;

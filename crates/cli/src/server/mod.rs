@@ -1424,7 +1424,7 @@ async fn activate_server_plugins(
         return Err(CliError::Config(error.to_string()));
     }
     if dynamic_plugins.is_empty() {
-        let host = nemo_relay::plugin::initialize_exact(plugin_config)
+        let host = nemo_relay_plugin_host::initialize_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         return Ok(Some(ServerPluginActivation {
@@ -1468,7 +1468,7 @@ async fn activate_server_plugins(
             })
         })
         .collect::<Result<Vec<_>, CliError>>()?;
-    let (host, _) = nemo_relay::plugin::initialize_with_verified_specs(plugin_config, specs)
+    let (host, _) = nemo_relay_plugin_host::initialize_with_verified_specs(plugin_config, specs)
         .await
         .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
     Ok(Some(ServerPluginActivation {

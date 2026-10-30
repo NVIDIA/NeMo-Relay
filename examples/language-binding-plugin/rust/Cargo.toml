@@ -10,9 +10,9 @@ publish = false
 
 [dependencies]
 # First-party crates.
-nemo-relay = { workspace = true }
 nemo-relay-plugin-host.workspace = true
 nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 futures.workspace = true

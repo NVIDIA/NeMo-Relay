@@ -509,7 +509,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "http://localhost:8080/events",
         AtofEndpointTransport::HttpPost,
     ));
-    let exporter = nemo_relay::api::exporter::atof(config)?;
+    let exporter = nemo_relay::exporter::atof(config)?;
     exporter.register("atof-exporter")?;
 
     // Run instrumented application work here.

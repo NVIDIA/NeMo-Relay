@@ -234,12 +234,12 @@ fn span_attrs(spans: &[SpanData], span_name: &str) -> HashMap<String, String> {
 // Feed the same events to all three exporters and collect their outputs.
 fn export_through_all_exporters(events: &[Event]) -> ParityExports {
     let atif = AtifExporter::new("parity-session".to_string(), make_agent_info())
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let atif_record = atif.subscriber();
 
     let (otel_provider, otel_exporter) = make_provider();
     let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "parity-otel")
-        .with_host(crate::observability_runtime::core_host());
+        .with_host(crate::observability_runtime::runtime_host());
     let otel_record = otel.subscriber();
 
     let (openinference_provider, openinference_exporter) = make_provider();
@@ -248,7 +248,7 @@ fn export_through_all_exporters(events: &[Event]) -> ParityExports {
         "parity-openinference",
         OpenTelemetryType::OpenInference,
     )
-    .with_host(crate::observability_runtime::core_host());
+    .with_host(crate::observability_runtime::runtime_host());
     let openinference_record = openinference.subscriber();
 
     for event in events {

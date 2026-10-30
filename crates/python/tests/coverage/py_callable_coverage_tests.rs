@@ -192,7 +192,7 @@ class RaisingResponseCodec:
             let tool_exec = wrap_py_tool_exec_fn(tool_exec_py);
             assert_eq!(
                 tool_exec(json!({"x": 2})).await.unwrap(),
-                nemo_relay::api::tool::ToolExecutionResult::new(json!({"sync_tool": 3}))
+                nemo_relay_runtime::api::tool::ToolExecutionResult::new(json!({"sync_tool": 3}))
             );
 
             let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_py);
@@ -630,10 +630,12 @@ async def collect_stream(awaitable):
                 let tool_next = PyToolNextFn {
                     inner: Arc::new(|args| {
                         Box::pin(async move {
-                            Ok(nemo_relay::api::tool::ToolExecutionResult::annotated(
-                                json!({"echo": args["x"]}),
-                                json!({"source": "next"}),
-                            ))
+                            Ok(
+                                nemo_relay_runtime::api::tool::ToolExecutionResult::annotated(
+                                    json!({"echo": args["x"]}),
+                                    json!({"source": "next"}),
+                                ),
+                            )
                         })
                     }),
                     context: continuation_context.clone(),
@@ -821,7 +823,7 @@ async def collect_stream(awaitable):
 
 #[test]
 fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
-    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+    use nemo_relay_runtime::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
     let (_context_module, sanitized_fn, async_sanitizer, raises_fn, invalid_fn) =
@@ -901,7 +903,7 @@ def invalid(event, fields):
 
 #[test]
 fn event_metadata_injector_wrapper_covers_sync_async_and_invalid_results() {
-    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+    use nemo_relay_runtime::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
     let (_context_module, sync_injector, async_injector, invalid_injector) = Python::attach(|py| {

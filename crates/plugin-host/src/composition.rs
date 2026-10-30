@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Optional built-in plugin composition supplied by the SDK.
+//! Built-in plugin composition supplied by the host or embedding application.
 use crate::{ConfigDiagnostic, PluginConfig, Result};
-use std::sync::{LazyLock, OnceLock};
-/// Services supplied by the embedding SDK or application.
+use std::sync::OnceLock;
+/// Services supplied by plugin-host or the embedding application.
 #[derive(Clone, Copy)]
 pub struct HostServices {
     /// Register the embedding application's built-in plugin implementations.
@@ -21,13 +21,11 @@ impl Default for HostServices {
     }
 }
 static SERVICES: OnceLock<HostServices> = OnceLock::new();
-static UNCOMPOSED: LazyLock<HostServices> = LazyLock::new(HostServices::default);
 /// Install host composition once, preserving the chosen application.
 pub fn install_host_services(factory: impl FnOnce() -> HostServices) -> &'static HostServices {
     SERVICES.get_or_init(factory)
 }
 pub(crate) fn services() -> &'static HostServices {
-    #[cfg(test)]
-    crate::test_composition::ensure_runtime_services();
-    SERVICES.get().unwrap_or(&UNCOMPOSED)
+    crate::initialize_runtime();
+    SERVICES.get().expect("host services initialized")
 }
