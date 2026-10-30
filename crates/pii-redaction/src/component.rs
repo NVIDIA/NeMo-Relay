@@ -13,7 +13,6 @@ use nemo_relay_diagnostics::{ComponentRegistration, DiagnosticOutcome, Extension
 use nemo_relay_plugin_host::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
-    register_plugin,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -455,13 +454,7 @@ impl Plugin for PiiRedactionPlugin {
 
 /// Registers the `pii_redaction` component kind in the plugin registry.
 pub fn register_pii_redaction_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(PiiRedactionPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    nemo_relay_plugin_host::register_builtin_plugin(Arc::new(PiiRedactionPlugin))
 }
 
 /// Deregisters the `pii_redaction` component kind from the plugin registry.

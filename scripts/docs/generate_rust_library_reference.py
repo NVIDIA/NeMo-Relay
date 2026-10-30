@@ -20,6 +20,10 @@ from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
+    ("nemo-relay-builtins", "nemo_relay_builtins", "Default plugin composition for SDKs and the CLI."),
+    ("nemo-relay-diagnostics", "nemo_relay_diagnostics", "Runtime diagnostics and failure aggregation."),
+    ("nemo-relay-logging", "nemo_relay_logging", "Operational logging setup and lifecycle."),
+    ("nemo-relay-plugin-host", "nemo_relay_plugin_host", "Plugin loading, validation, verification, and activation."),
     ("nemo-relay-codecs", "nemo_relay_codecs", "Provider request, response, and streaming implementations."),
     ("nemo-relay", "nemo_relay", "Public Rust SDK with flat instrumentation APIs and shared contracts."),
     ("nemo-relay-runtime", "nemo_relay_runtime", "Execution engine, scope context, and middleware registries."),

@@ -20,8 +20,8 @@ use super::{
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use {
-    nemo_relay_plugin_host::initialize, nemo_relay_plugin_host::validate,
-    nemo_relay_plugin_host::validate_exact,
+    nemo_relay_builtins::plugin::initialize, nemo_relay_builtins::plugin::validate,
+    nemo_relay_builtins::plugin::validate_exact,
 };
 
 struct FfiHostedPluginUserData {

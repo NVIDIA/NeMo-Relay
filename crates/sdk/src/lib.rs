@@ -9,15 +9,15 @@
 //! Bindings and component implementations use their owning crates and the execution
 //! engine in `nemo-relay-runtime` instead of depending on this SDK.
 
-pub use nemo_relay_plugin_host::initialize_runtime;
+pub use nemo_relay_builtins::initialize_runtime;
 
 /// Runtime-bound exporter constructors and their configuration contracts.
 pub mod exporter {
+    pub use nemo_relay_builtins::exporter::*;
     pub use nemo_relay_observability::{
         MarkProjection, OpenTelemetryTlsConfig, OpenTelemetryType, OtlpAttributeMapping,
     };
     pub use nemo_relay_observability::{atif, atof, otel, otel_file, otel_logs, otel_metrics};
-    pub use nemo_relay_plugin_host::exporter::*;
 }
 pub use nemo_relay_types::api::event::Event;
 pub use nemo_relay_types::api::llm::LlmRequest;
@@ -132,20 +132,20 @@ pub mod subscriber {
 pub use nemo_relay_runtime::api::optimization;
 /// Plugin contracts, configuration, and activation.
 pub mod plugin {
-    pub use nemo_relay_plugin::component::{
-        ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginRegistrar,
-    };
-    pub use nemo_relay_plugin_host::{
+    pub use nemo_relay_builtins::plugin::{
         ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
         PluginHostReport, deregister_plugin, ensure_builtin_plugins_registered, initialize,
         initialize_exact, initialize_with_diagnostics, initialize_with_verified_specs,
         list_plugin_kinds, lookup_plugin, plugin_config_schema, register_plugin, validate,
         validate_exact, validate_static_plugin_config,
     };
+    pub use nemo_relay_plugin::component::{
+        ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginRegistrar,
+    };
 }
 /// Structured resource measurements and on-demand collection.
 pub mod resource_metrics {
-    pub use nemo_relay_plugin_host::resource_metrics::{RESOURCE_METRICS_EVENT_NAME, collect};
+    pub use nemo_relay_builtins::resource_metrics::{RESOURCE_METRICS_EVENT_NAME, collect};
     pub use nemo_relay_resource_metrics::config::*;
     pub use nemo_relay_types::api::resource_metrics::*;
 }

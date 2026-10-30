@@ -4,6 +4,7 @@
 [workspace]
 members = [
     "crates/sdk",
+    "crates/builtins",
     "crates/runtime",
     "crates/codecs",
     "crates/diagnostics",
@@ -33,6 +34,12 @@ members = [
 ]
 default-members = [
     "crates/sdk",
+    "crates/builtins",
+    "crates/runtime",
+    "crates/codecs",
+    "crates/diagnostics",
+    "crates/logging",
+    "crates/plugin-host",
     "crates/types",
     "crates/model-pricing",
     "crates/resource-metrics",
@@ -63,6 +70,7 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 # First-party crates.
 nemo-relay = { version = "1.0.0", path = "crates/sdk" }
+nemo-relay-builtins = { version = "1.0.0", path = "crates/builtins" }
 nemo-relay-adaptive = { version = "1.0.0", path = "crates/adaptive" }
 nemo-relay-cli = { version = "1.0.0", path = "crates/cli" }
 nemo-relay-codecs = { version = "1.0.0", path = "crates/codecs" }

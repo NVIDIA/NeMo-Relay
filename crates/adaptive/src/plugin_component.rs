@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use nemo_relay_plugin_host::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, Result, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
-    lookup_plugin, register_plugin,
 };
 use serde_json::{Map, Value as Json};
 
@@ -115,31 +114,18 @@ impl Plugin for AdaptivePlugin {
 
 /// Registers the adaptive component kind in the core plugin registry.
 ///
-/// Call this during startup before validating or initializing plugin configs
-/// that contain adaptive components.
+/// SDKs and the CLI register this automatically. Custom embeddings may call
+/// this before validating or initializing adaptive components.
 ///
 /// # Returns
 /// A core plugin [`Result`] that is `Ok(())` when the adaptive component kind
 /// is available in the registry.
 ///
 /// # Errors
-/// Returns an error when registration fails for a reason other than an already
-/// registered adaptive component.
-///
-/// # Notes
-/// Re-registering the adaptive component is treated as success when the
-/// existing registration already resolves to the adaptive plugin kind.
+/// Returns an error if an external plugin already owns the reserved kind.
+/// Re-registering a built-in component is idempotent.
 pub fn register_adaptive_component() -> Result<()> {
-    match register_plugin(Arc::new(AdaptivePlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message))
-            if message.contains("already registered")
-                && lookup_plugin(ADAPTIVE_PLUGIN_KIND).is_some() =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    nemo_relay_plugin_host::register_builtin_plugin(Arc::new(AdaptivePlugin))
 }
 
 /// Deregisters the adaptive component kind from the core plugin registry.

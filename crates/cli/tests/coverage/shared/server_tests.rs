@@ -2802,23 +2802,15 @@ fn register_and_validate_plugin_components_rejects_legacy_switchyard_components(
 
 #[test]
 fn plugin_component_setup_errors_render_every_diagnostic_variant() {
-    let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
-    assert_eq!(adaptive.check_name(), "Adaptive plugin");
+    let builtins = PluginComponentSetupError::Builtins("registration failure".into());
+    assert_eq!(builtins.check_name(), "Built-in plugins");
     assert_eq!(
-        adaptive.diagnostic_details(),
-        "registration failed: adaptive failure"
+        builtins.diagnostic_details(),
+        "registration failed: registration failure"
     );
     assert_eq!(
-        adaptive.to_string(),
-        "adaptive plugin registration failed: adaptive failure"
-    );
-
-    let pii = PluginComponentSetupError::PiiRedaction("pii failure".into());
-    assert_eq!(pii.check_name(), "PII redaction plugin");
-    assert_eq!(pii.diagnostic_details(), "registration failed: pii failure");
-    assert_eq!(
-        pii.to_string(),
-        "PII redaction plugin registration failed: pii failure"
+        builtins.to_string(),
+        "built-in plugin registration failed: registration failure"
     );
 
     let switchyard = PluginComponentSetupError::RemovedSwitchyard;

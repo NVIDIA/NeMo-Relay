@@ -49,7 +49,7 @@ use clap::Parser;
 /// This is an executable entrypoint, not a supported library API.
 #[doc(hidden)]
 pub fn run_cli() -> ExitCode {
-    nemo_relay_plugin_host::initialize_runtime();
+    nemo_relay_builtins::initialize_runtime();
     mcp_environment::remove_unresolved_mcp_placeholders();
     let bootstrap_shutdown_token = take_bootstrap_shutdown_token();
     let cli = commands::root::Cli::parse();

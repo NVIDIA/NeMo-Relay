@@ -30,9 +30,7 @@ use nemo_relay_adaptive::acg::{
     AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
 };
 use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use nemo_relay_plugin_host::resource_metrics as core_resource_metrics_api;
 use nemo_relay_plugin_host::resource_metrics::{
     AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
@@ -614,13 +612,11 @@ fn effective_scope_top(
 
 #[napi::module_init]
 fn init() {
-    nemo_relay_plugin_host::initialize_runtime();
+    nemo_relay_builtins::initialize_runtime();
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
-    register_adaptive_component()
-        .expect("node adaptive plugin component registration should succeed");
-    register_pii_redaction_component()
-        .expect("node pii redaction plugin component registration should succeed");
+    nemo_relay_builtins::plugin::ensure_builtin_plugins_registered()
+        .expect("node built-in plugin registration should succeed");
 }
 
 // Core publication executors and registry state live for the whole process.

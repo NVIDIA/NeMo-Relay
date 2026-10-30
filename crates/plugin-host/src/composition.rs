@@ -29,3 +29,15 @@ pub(crate) fn services() -> &'static HostServices {
     crate::initialize_runtime();
     SERVICES.get().expect("host services initialized")
 }
+
+static BUILTIN_EXTENSIONS: OnceLock<fn() -> Result<()>> = OnceLock::new();
+
+/// Install additional default components before querying the default host.
+/// The first composition selected by the embedding application is preserved.
+pub fn install_builtin_extensions(factory: fn() -> Result<()>) {
+    BUILTIN_EXTENSIONS.get_or_init(|| factory);
+}
+
+pub(crate) fn register_builtin_extensions() -> Result<()> {
+    BUILTIN_EXTENSIONS.get().map_or(Ok(()), |factory| factory())
+}

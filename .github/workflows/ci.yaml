@@ -443,6 +443,7 @@ jobs:
             nemo-relay-plugin-host
             nemo-relay-adaptive
             nemo-relay-pii-redaction
+            nemo-relay-builtins
             nemo-relay-ffi
             nemo-relay-cli
             nemo-relay

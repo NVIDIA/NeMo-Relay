@@ -31,7 +31,13 @@ fn sdk_and_runtime_share_state_and_builtin_registrations() {
         .expect("SDK scope should close");
     let sdk_plugins = nemo_relay::plugin::list_plugin_kinds();
     assert_eq!(sdk_plugins, nemo_relay_plugin_host::list_plugin_kinds());
-    for kind in ["observability", "pricing", "resource_metrics"] {
+    for kind in [
+        "observability",
+        "pricing",
+        "resource_metrics",
+        "adaptive",
+        "pii_redaction",
+    ] {
         assert!(sdk_plugins.iter().any(|registered| registered == kind));
     }
 }

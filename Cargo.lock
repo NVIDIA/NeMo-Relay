@@ -1914,6 +1914,7 @@ dependencies = [
 name = "nemo-relay"
 version = "1.0.0"
 dependencies = [
+ "nemo-relay-builtins",
  "nemo-relay-diagnostics",
  "nemo-relay-observability",
  "nemo-relay-plugin",
@@ -1952,6 +1953,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-builtins"
+version = "1.0.0"
+dependencies = [
+ "nemo-relay-adaptive",
+ "nemo-relay-diagnostics",
+ "nemo-relay-observability",
+ "nemo-relay-pii-redaction",
+ "nemo-relay-plugin",
+ "nemo-relay-plugin-host",
+ "nemo-relay-types",
+ "opentelemetry_sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "nemo-relay-cli"
 version = "1.0.0"
 dependencies = [
@@ -1977,6 +1993,7 @@ dependencies = [
  "listeners",
  "log",
  "nemo-relay-adaptive",
+ "nemo-relay-builtins",
  "nemo-relay-codecs",
  "nemo-relay-diagnostics",
  "nemo-relay-logging",
@@ -2088,6 +2105,7 @@ dependencies = [
  "chrono",
  "libc",
  "nemo-relay-adaptive",
+ "nemo-relay-builtins",
  "nemo-relay-codecs",
  "nemo-relay-diagnostics",
  "nemo-relay-logging",
@@ -2163,6 +2181,7 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "nemo-relay-adaptive",
+ "nemo-relay-builtins",
  "nemo-relay-codecs",
  "nemo-relay-diagnostics",
  "nemo-relay-logging",
@@ -2337,6 +2356,7 @@ dependencies = [
  "chrono",
  "libc",
  "nemo-relay-adaptive",
+ "nemo-relay-builtins",
  "nemo-relay-codecs",
  "nemo-relay-diagnostics",
  "nemo-relay-logging",

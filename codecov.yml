@@ -46,6 +46,14 @@ component_management:
       name: Rust Runtime
       paths:
         - "crates/sdk/src"
+        - "crates/runtime/src"
+        - "crates/codecs/src"
+        - "crates/diagnostics/src"
+        - "crates/logging/src"
+        - "crates/builtins/src"
+        - "crates/model-pricing/src"
+        - "crates/resource-metrics/src"
+        - "crates/observability/src"
         - "crates/adaptive/src"
       statuses:
         - type: project
@@ -110,6 +118,7 @@ component_management:
       paths:
         - "crates/types/src"
         - "crates/plugin/src"
+        - "crates/plugin-host/src"
         - "crates/worker-proto/src"
         - "crates/worker/src"
         - "python/plugin/src/nemo_relay_plugin"

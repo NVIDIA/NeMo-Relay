@@ -92,7 +92,7 @@ async fn register_adaptive_component_is_idempotent_and_deregisters_cleanly() {
 
     register_adaptive_component().unwrap();
     register_adaptive_component().unwrap();
-    assert!(lookup_plugin(ADAPTIVE_PLUGIN_KIND).is_some());
+    assert!(nemo_relay_plugin_host::lookup_plugin(ADAPTIVE_PLUGIN_KIND).is_some());
 
     assert!(deregister_adaptive_component());
     assert!(!deregister_adaptive_component());

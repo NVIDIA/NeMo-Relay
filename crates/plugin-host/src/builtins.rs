@@ -34,7 +34,8 @@ fn register_builtin_plugins() -> crate::Result<()> {
             rt::api::resource_metrics::polling_snapshot_sink()
                 .map_err(|error| crate::PluginError::RegistrationFailed(error.to_string()))
         }),
-    ))
+    ))?;
+    crate::composition::register_builtin_extensions()
 }
 
 fn preflight(config: &crate::PluginConfig) -> Vec<crate::ConfigDiagnostic> {

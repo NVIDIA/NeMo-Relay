@@ -177,10 +177,10 @@ use nemo_relay_runtime::api::tool::ToolAttributes;
 use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use tokio::runtime::Runtime;
 use {
-    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
-    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
-    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::deregister_plugin,
-    nemo_relay_plugin_host::list_plugin_kinds, nemo_relay_plugin_host::register_plugin,
+    nemo_relay_builtins::plugin::deregister_plugin, nemo_relay_builtins::plugin::list_plugin_kinds,
+    nemo_relay_builtins::plugin::register_plugin, nemo_relay_plugin_host::ConfigDiagnostic,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginError,
 };
 
 mod adaptive;
@@ -291,7 +291,12 @@ fn ignore_sigpipe() {}
 pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     clear_last_error();
     ignore_sigpipe();
-    nemo_relay_plugin_host::initialize_runtime();
+    nemo_relay_builtins::initialize_runtime();
+    if let Err(error) = nemo_relay_builtins::plugin::ensure_builtin_plugins_registered() {
+        return status_from_error(&nemo_relay_types::error::FlowError::Internal(
+            error.to_string(),
+        ));
+    }
     let result = nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding("go")
         .and_then(|()| nemo_relay_logging::initialize_default_logging());
     match result {

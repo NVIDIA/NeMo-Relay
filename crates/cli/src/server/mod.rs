@@ -24,8 +24,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(test)]
 use nemo_relay_plugin_host::PluginComponentSpec;
 use nemo_relay_plugin_host::PluginConfig;
@@ -1343,23 +1341,21 @@ impl ServerPluginActivation {
 
 #[derive(Debug)]
 pub(crate) enum PluginComponentSetupError {
-    Adaptive(String),
-    PiiRedaction(String),
+    Builtins(String),
     RemovedSwitchyard,
 }
 
 impl PluginComponentSetupError {
     pub(crate) const fn check_name(&self) -> &'static str {
         match self {
-            Self::Adaptive(_) => "Adaptive plugin",
-            Self::PiiRedaction(_) => "PII redaction plugin",
+            Self::Builtins(_) => "Built-in plugins",
             Self::RemovedSwitchyard => "Switchyard migration",
         }
     }
 
     pub(crate) fn diagnostic_details(&self) -> String {
         match self {
-            Self::Adaptive(error) | Self::PiiRedaction(error) => {
+            Self::Builtins(error) => {
                 format!("registration failed: {error}")
             }
             Self::RemovedSwitchyard => REMOVED_SWITCHYARD_MESSAGE.into(),
@@ -1370,14 +1366,8 @@ impl PluginComponentSetupError {
 impl std::fmt::Display for PluginComponentSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Adaptive(error) => {
-                write!(formatter, "adaptive plugin registration failed: {error}")
-            }
-            Self::PiiRedaction(error) => {
-                write!(
-                    formatter,
-                    "PII redaction plugin registration failed: {error}"
-                )
+            Self::Builtins(error) => {
+                write!(formatter, "built-in plugin registration failed: {error}")
             }
             Self::RemovedSwitchyard => formatter.write_str(REMOVED_SWITCHYARD_MESSAGE),
         }
@@ -1388,11 +1378,8 @@ pub(crate) fn register_and_validate_plugin_components(
     plugin_config: &PluginConfig,
 ) -> Vec<PluginComponentSetupError> {
     let mut errors = Vec::new();
-    if let Err(error) = register_adaptive_component() {
-        errors.push(PluginComponentSetupError::Adaptive(error.to_string()));
-    }
-    if let Err(error) = register_pii_redaction_component() {
-        errors.push(PluginComponentSetupError::PiiRedaction(error.to_string()));
+    if let Err(error) = nemo_relay_builtins::plugin::ensure_builtin_plugins_registered() {
+        errors.push(PluginComponentSetupError::Builtins(error.to_string()));
     }
     if plugin_config
         .components

@@ -80,7 +80,8 @@ Install the published crate in a Rust application:
 cargo add nemo-relay serde_json
 ```
 
-To add adaptive runtime behavior, install the companion crate too:
+Adaptive and PII redaction are registered by default. To use typed adaptive
+configuration and imperative helpers, install the companion crate too:
 
 ```bash
 cargo add nemo-relay-adaptive

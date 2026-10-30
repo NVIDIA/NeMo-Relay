@@ -14,9 +14,9 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+nemo-relay-builtins.workspace = true
 # First-party crates.
 nemo-relay-observability.workspace = true
-nemo-relay-plugin-host.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-resource-metrics.workspace = true
 nemo-relay-runtime.workspace = true
@@ -25,6 +25,7 @@ nemo-relay-types.workspace = true
 [dev-dependencies]
 # First-party crates.
 nemo-relay-diagnostics.workspace = true
+nemo-relay-plugin-host.workspace = true
 
 # Third-party dependencies.
 serde_json.workspace = true

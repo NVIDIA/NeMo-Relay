@@ -91,12 +91,9 @@ let config = AdaptiveConfig {
 };
 ```
 
-Register the adaptive plugin component before validating or initializing plugin
-configuration that includes an `adaptive` component:
-
-```rust
-nemo_relay_adaptive::plugin_component::register_adaptive_component()?;
-```
+All SDKs and the CLI register `adaptive` automatically. Plugin configuration
+controls activation. Custom embeddings using `nemo-relay-plugin-host` directly
+can call this crate's component registration helper to choose their component set.
 
 ## Documentation
 
