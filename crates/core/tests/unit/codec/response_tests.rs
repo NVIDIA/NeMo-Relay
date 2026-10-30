@@ -620,6 +620,62 @@ fn test_model_pricing_omits_total_when_nonzero_usage_lacks_a_rate() {
 }
 
 #[test]
+fn test_model_pricing_rejects_one_hour_writes_above_combined_writes() {
+    let catalog = pricing_catalog(json!([{
+        "provider": "future-ai",
+        "model_id": "future-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/pricing",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_write_per_million": 1.5,
+            "cache_write_1h_per_million": 2.4
+        },
+        "prompt_cache": {"read_accounting": "separate"}
+    }]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_write_tokens: Some(1_000),
+        cache_write_1h_tokens: Some(1_001),
+        ..Usage::default()
+    };
+
+    assert!(estimate_cost_with_catalog(&catalog, "future-model", &usage).is_none());
+}
+
+#[test]
+fn test_model_pricing_omits_cache_write_component_when_one_hour_rate_is_missing() {
+    let catalog = pricing_catalog(json!([{
+        "provider": "future-ai",
+        "model_id": "future-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/pricing",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_write_per_million": 1.5
+        },
+        "prompt_cache": {"read_accounting": "separate"}
+    }]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_write_tokens: Some(4_000),
+        cache_write_1h_tokens: Some(1_000),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "future-model", &usage).unwrap();
+
+    assert_eq!(cost.total, None);
+    assert_eq!(cost.input, Some(0.001));
+    assert_eq!(cost.output, Some(0.004));
+    assert_eq!(cost.cache_write, None);
+}
+
+#[test]
 fn test_model_pricing_omits_total_when_nonzero_cache_read_usage_lacks_a_rate() {
     let catalog = pricing_catalog(json!([
         {

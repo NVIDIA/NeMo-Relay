@@ -361,16 +361,20 @@ impl ModelPricing {
         let cache_write_1h_cost = rates
             .cache_write_1h_per_million
             .and_then(|price| cost_component_if_nonzero(cache_write_1h_tokens, price));
-        let cache_write_cost = match (cache_write_5m_cost, cache_write_1h_cost) {
-            (Some(short), Some(long)) => Some(short + long),
-            (Some(cost), None) | (None, Some(cost)) => Some(cost),
-            (None, None) => None,
-        };
-
         let has_unpriced_nonzero_usage = (cache_read_tokens > 0
             && rates.cache_read_per_million.is_none())
             || (cache_write_5m_tokens > 0 && rates.cache_write_per_million.is_none())
             || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
+        let has_unpriced_cache_write = (cache_write_5m_tokens > 0
+            && rates.cache_write_per_million.is_none())
+            || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
+        let cache_write_cost = (!has_unpriced_cache_write)
+            .then(|| match (cache_write_5m_cost, cache_write_1h_cost) {
+                (Some(short), Some(long)) => Some(short + long),
+                (Some(cost), None) | (None, Some(cost)) => Some(cost),
+                (None, None) => None,
+            })
+            .flatten();
         let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()
@@ -493,6 +497,9 @@ pub struct TokenPricingRates {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_per_million: Option<f64>,
     /// One-hour prompt cache write price.
+    ///
+    /// Rust callers using exhaustive struct literals must set this to `None`
+    /// when no distinct one-hour rate is available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_1h_per_million: Option<f64>,
 }

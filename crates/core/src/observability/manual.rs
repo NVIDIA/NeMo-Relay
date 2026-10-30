@@ -103,7 +103,15 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
             "cacheWrite1hTokens",
             "cacheCreation1hInputTokens",
         ],
-    );
+    )
+    .or_else(|| {
+        first_nested_u64_from_manual_usage(
+            usage,
+            token_usage,
+            "cache_creation",
+            "ephemeral_1h_input_tokens",
+        )
+    });
     let uncached_input_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,

@@ -113,6 +113,7 @@ struct RawAnthropicIterationUsage {
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
+    cache_creation: Option<RawAnthropicCacheCreation>,
 }
 
 /// The subset of an Anthropic response needed to decide whether aggregate usage can be priced.
@@ -953,9 +954,22 @@ fn anthropic_usage(
                 sum_iteration_field(values, |value| value.cache_creation_input_tokens)
             })
             .or(u.cache_creation_input_tokens);
-        let cache_write_1h_tokens = u
-            .cache_creation
-            .and_then(|cache| cache.ephemeral_1h_input_tokens);
+        let cache_write_1h_tokens = iterations
+            .map(|values| {
+                values.iter().fold(0_u64, |total, value| {
+                    total.saturating_add(
+                        value
+                            .cache_creation
+                            .as_ref()
+                            .and_then(|cache| cache.ephemeral_1h_input_tokens)
+                            .unwrap_or_default(),
+                    )
+                })
+            })
+            .or_else(|| {
+                u.cache_creation
+                    .and_then(|cache| cache.ephemeral_1h_input_tokens)
+            });
         let mut usage = Usage {
             prompt_tokens: prompt,
             completion_tokens: completion,

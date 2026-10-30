@@ -129,14 +129,16 @@ fn test_decode_response_usage_prefers_iteration_totals() {
                     "input_tokens": 144,
                     "output_tokens": 276,
                     "cache_read_input_tokens": 20,
-                    "cache_creation_input_tokens": 30
+                    "cache_creation_input_tokens": 30,
+                    "cache_creation": {"ephemeral_1h_input_tokens": 20}
                 },
                 {
                     "type": "message",
                     "input_tokens": 11,
                     "output_tokens": 7,
                     "cache_read_input_tokens": 3,
-                    "cache_creation_input_tokens": 5
+                    "cache_creation_input_tokens": 5,
+                    "cache_creation": {"ephemeral_1h_input_tokens": 2}
                 }
             ]
         }
@@ -153,6 +155,7 @@ fn test_decode_response_usage_prefers_iteration_totals() {
     assert_eq!(usage.total_tokens, Some(438));
     assert_eq!(usage.cache_read_tokens, Some(23));
     assert_eq!(usage.cache_write_tokens, Some(35));
+    assert_eq!(usage.cache_write_1h_tokens, Some(22));
 }
 
 #[test]
