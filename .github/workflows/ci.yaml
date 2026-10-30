@@ -430,6 +430,7 @@ jobs:
           packages=(
             nemo-relay-types
             nemo-relay-plugin
+            nemo-relay-model-pricing
             nemo-relay-worker-proto
             nemo-relay-worker
             nemo-relay

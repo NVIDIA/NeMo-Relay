@@ -13,11 +13,11 @@ use crate::api::event::DataSchema;
 use crate::codec::optimization::{
     LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
 };
-use crate::codec::response::{
-    ApiSpecificResponse, CostEstimate, CostSource, PricingCatalog, PricingCatalogError,
-    PricingSource, Usage,
-};
+use crate::codec::response::{ApiSpecificResponse, CostEstimate, CostSource, Usage};
+
 use crate::json::Json;
+use nemo_relay_model_pricing::PricingSource;
+use nemo_relay_model_pricing::{PricingCatalog, PricingCatalogError};
 
 fn resolver() -> PricingResolver {
     resolver_with_rates(2.0, 1.0)

@@ -44,11 +44,12 @@ use crate::api::shared::{
     snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
-use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
+use crate::codec::response::AnnotatedLlmResponse;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::{LlmStreamWrapper, ManagedLlmStreamTelemetry};
+use nemo_relay_model_pricing::attach_estimated_cost_for_provider;
 
 pub use nemo_relay_types::api::llm::{
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
@@ -1061,7 +1062,7 @@ async fn build_llm_end_payload(
             &handle.name,
         )
     };
-    let pricing = crate::codec::response::active_pricing_resolver();
+    let pricing = nemo_relay_model_pricing::active_pricing_resolver();
     let summary = finalize_optimization_summary(
         &handle.optimization_recorder,
         annotated_response.as_mut(),
@@ -1456,7 +1457,7 @@ async fn emit_llm_end_without_output(
                 };
                 let annotation_omitted = (had_fallback_data && data.is_none())
                     || data.as_ref().is_some_and(Json::is_null);
-                let pricing = crate::codec::response::active_pricing_resolver();
+                let pricing = nemo_relay_model_pricing::active_pricing_resolver();
                 let annotated_response = (!annotation_omitted)
                     .then(|| {
                         finalize_optimization_summary(
@@ -1590,7 +1591,7 @@ impl Drop for ManagedLlmCompletion {
                     let annotation_omitted = data.as_ref().is_none_or(Json::is_null);
                     let annotated_response = (!annotation_omitted)
                         .then(|| {
-                            let pricing = crate::codec::response::active_pricing_resolver();
+                            let pricing = nemo_relay_model_pricing::active_pricing_resolver();
                             finalize_optimization_summary(
                                 &handle.optimization_recorder,
                                 None,

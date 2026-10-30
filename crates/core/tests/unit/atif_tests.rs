@@ -13,16 +13,16 @@ use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
-use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::oci_genai::OCIGenAIChatCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
-use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
-    reset_active_pricing_resolver, set_active_pricing_resolver,
-};
+use crate::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;

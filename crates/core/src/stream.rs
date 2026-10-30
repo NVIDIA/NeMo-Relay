@@ -56,12 +56,12 @@ use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
-use crate::codec::response::{
-    AnnotatedLlmResponse, FinishReason, attach_estimated_cost_for_provider,
-};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason};
+
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
+use nemo_relay_model_pricing::attach_estimated_cost_for_provider;
 use serde_json::Map;
 
 /// Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
@@ -440,7 +440,7 @@ impl LlmStreamWrapper {
                 .optimization_recorder
                 .close_for_finalization(interruption);
             emit_reserved_optimization_marks(&handle, &subscribers).await;
-            let pricing = crate::codec::response::active_pricing_resolver();
+            let pricing = nemo_relay_model_pricing::active_pricing_resolver();
             let summary = finalize_optimization_summary(
                 &handle.optimization_recorder,
                 annotated_response.as_mut(),

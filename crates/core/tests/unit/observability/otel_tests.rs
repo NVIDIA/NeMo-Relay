@@ -19,12 +19,10 @@ use crate::api::runtime::{
 use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
-    PricingCatalog, PricingResolver, ResponseToolCall, Usage, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
+    ResponseToolCall, Usage,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -33,6 +31,10 @@ use crate::observability::otel_metrics::{
     OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
 };
 use crate::observability::{relay_span_id, relay_trace_id};
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{KeyValue as OtlpKeyValue, any_value};

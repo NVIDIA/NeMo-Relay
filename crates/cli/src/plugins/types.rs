@@ -52,27 +52,3 @@ pub(crate) struct PluginsDisableRequest {
 pub(crate) struct PluginsRemoveRequest {
     pub(crate) id: String,
 }
-
-#[derive(Debug, Clone)]
-pub(crate) struct PricingValidateRequest {
-    pub(crate) path: PathBuf,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingInitRequest {
-    pub(crate) scope: ConfigurationScope,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingAddSourceRequest {
-    pub(crate) scope: ConfigurationScope,
-    pub(crate) path: PathBuf,
-    pub(crate) append: bool,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingResolveRequest {
-    pub(crate) model: String,
-    pub(crate) provider: Option<String>,
-    pub(crate) prompt_tokens: Option<u64>,
-    pub(crate) completion_tokens: Option<u64>,
-    pub(crate) cache_read_tokens: Option<u64>,
-    pub(crate) cache_write_tokens: Option<u64>,
-}

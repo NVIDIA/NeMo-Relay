@@ -1,30 +1,32 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Model pricing catalog CLI helpers.
+//! CLI configuration-file access and presentation for model-pricing commands.
 
 use std::path::Path;
 
-use nemo_relay::codec::model_pricing::{
-    ModelPricing, PricingCatalog, PricingConfig, PricingSourceConfig,
-};
 use nemo_relay::codec::response::Usage;
-use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
-use serde_json::Value;
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay_model_pricing::catalog::{
+    PricingCatalogSource, pricing_catalog_sources_from_config, resolve_pricing,
+};
+use nemo_relay_model_pricing::plugin::{
+    PRICING_PLUGIN_KIND, ensure_pricing_component, pricing_config_from_component,
+    store_pricing_config,
+};
+use nemo_relay_model_pricing::{PricingCatalog, PricingSourceConfig};
 
 use crate::configuration::resolve_server_config;
 use crate::server::GatewayOverrides;
 
 use super::{
-    ConfigurationScope, PricingAddSourceRequest, PricingInitRequest, PricingResolveRequest,
-    PricingValidateRequest,
+    PricingAddSourceCommand, PricingInitCommand, PricingResolveCommand, PricingValidateCommand,
 };
 use crate::error::CliError;
+use crate::plugins::ConfigurationScope;
 use crate::plugins::config_io::{PluginConfigDocument, TargetScope, target_path, validate_config};
 
-const PRICING_PLUGIN_KIND: &str = "pricing";
-
-pub(crate) fn validate(command: PricingValidateRequest) -> Result<(), CliError> {
+pub(crate) fn validate(command: PricingValidateCommand) -> Result<(), CliError> {
     let catalog = read_pricing_catalog(&command.path)?;
     let entries = catalog.entries.len();
     println!(
@@ -35,13 +37,16 @@ pub(crate) fn validate(command: PricingValidateRequest) -> Result<(), CliError> 
     Ok(())
 }
 
-pub(crate) fn init(command: PricingInitRequest) -> Result<(), CliError> {
-    let scope = target_pricing_scope(&command.scope)?;
+pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
+    let scope = target_pricing_scope(&command.scope.clone().into())?;
     let path = target_path(scope)?;
     update_plugin_config_document(&path, |plugin_config| {
-        let index = ensure_pricing_component(plugin_config)?;
-        let pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
-        store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
+        let index = ensure_pricing_component(&mut plugin_config.components)
+            .map_err(pricing_config_error)?;
+        let pricing_config = pricing_config_from_component(&plugin_config.components[index])
+            .map_err(pricing_config_error)?;
+        store_pricing_config(&mut plugin_config.components[index], &pricing_config)
+            .map_err(pricing_config_error)?;
         plugin_config.components[index].enabled = true;
         Ok(())
     })?;
@@ -49,7 +54,7 @@ pub(crate) fn init(command: PricingInitRequest) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(crate) fn add_source(command: PricingAddSourceRequest) -> Result<(), CliError> {
+pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliError> {
     let source_path = std::fs::canonicalize(&command.path).map_err(|source| {
         CliError::Config(format!(
             "could not canonicalize model pricing catalog '{}': {source}",
@@ -57,13 +62,15 @@ pub(crate) fn add_source(command: PricingAddSourceRequest) -> Result<(), CliErro
         ))
     })?;
     read_pricing_catalog(&source_path)?;
-    let scope = target_pricing_scope(&command.scope)?;
+    let scope = target_pricing_scope(&command.scope.clone().into())?;
     let path = target_path(scope)?;
     let source = PricingSourceConfig::File { path: source_path };
 
     update_plugin_config_document(&path, |plugin_config| {
-        let index = ensure_pricing_component(plugin_config)?;
-        let mut pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
+        let index = ensure_pricing_component(&mut plugin_config.components)
+            .map_err(pricing_config_error)?;
+        let mut pricing_config = pricing_config_from_component(&plugin_config.components[index])
+            .map_err(pricing_config_error)?;
         if !pricing_config.sources.contains(&source) {
             if command.append {
                 pricing_config.sources.push(source);
@@ -71,7 +78,8 @@ pub(crate) fn add_source(command: PricingAddSourceRequest) -> Result<(), CliErro
                 pricing_config.sources.insert(0, source);
             }
         }
-        store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
+        store_pricing_config(&mut plugin_config.components[index], &pricing_config)
+            .map_err(pricing_config_error)?;
         plugin_config.components[index].enabled = true;
         Ok(())
     })?;
@@ -93,7 +101,7 @@ fn update_plugin_config_document(
     document.write()
 }
 
-pub(crate) fn resolve(command: PricingResolveRequest) -> Result<(), CliError> {
+pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
     let sources = pricing_catalog_sources_from_current_config()?;
     if sources.is_empty() {
         return Err(CliError::Config(
@@ -164,18 +172,6 @@ fn read_pricing_catalog(path: &Path) -> Result<PricingCatalog, CliError> {
     })
 }
 
-#[derive(Debug, Clone)]
-struct PricingCatalogSource {
-    label: String,
-    catalog: PricingCatalog,
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedPricing {
-    source: String,
-    pricing: ModelPricing,
-}
-
 fn pricing_catalog_sources_from_current_config() -> Result<Vec<PricingCatalogSource>, CliError> {
     let resolved = resolve_server_config(&GatewayOverrides::default())?;
     let Some(plugin_config) = resolved.gateway.plugin_config else {
@@ -190,43 +186,8 @@ fn pricing_catalog_sources_from_current_config() -> Result<Vec<PricingCatalogSou
     else {
         return Ok(vec![]);
     };
-    let pricing_config = pricing_config_from_component(component)?;
-    pricing_catalog_sources_from_config(&pricing_config)
-}
-
-fn pricing_catalog_sources_from_config(
-    config: &PricingConfig,
-) -> Result<Vec<PricingCatalogSource>, CliError> {
-    let mut sources = Vec::new();
-    for (index, source) in config.sources.iter().enumerate() {
-        match source {
-            PricingSourceConfig::Inline { catalog } => sources.push(PricingCatalogSource {
-                label: format!("inline:{index}"),
-                catalog: catalog.clone(),
-            }),
-            PricingSourceConfig::File { path } => sources.push(PricingCatalogSource {
-                label: format!("file:{}", path.display()),
-                catalog: read_pricing_catalog(path)?,
-            }),
-        }
-    }
-    Ok(sources)
-}
-
-fn resolve_pricing(
-    sources: &[PricingCatalogSource],
-    provider: Option<&str>,
-    model: &str,
-) -> Option<ResolvedPricing> {
-    sources.iter().find_map(|source| {
-        source
-            .catalog
-            .pricing_for(provider, model)
-            .map(|pricing| ResolvedPricing {
-                source: source.label.clone(),
-                pricing,
-            })
-    })
+    let pricing_config = pricing_config_from_component(component).map_err(pricing_config_error)?;
+    pricing_catalog_sources_from_config(&pricing_config, read_pricing_catalog)
 }
 
 fn target_pricing_scope(scope: &ConfigurationScope) -> Result<TargetScope, CliError> {
@@ -237,43 +198,6 @@ fn target_pricing_scope(scope: &ConfigurationScope) -> Result<TargetScope, CliEr
             "choose only one of --user or --global".into(),
         )),
     }
-}
-
-fn ensure_pricing_component(config: &mut PluginConfig) -> Result<usize, CliError> {
-    if let Some(index) = config
-        .components
-        .iter()
-        .position(|component| component.kind == PRICING_PLUGIN_KIND)
-    {
-        return Ok(index);
-    }
-    let mut component = PluginComponentSpec::new(PRICING_PLUGIN_KIND);
-    store_pricing_config(&mut component, &PricingConfig::default())?;
-    config.components.push(component);
-    Ok(config.components.len() - 1)
-}
-
-fn pricing_config_from_component(
-    component: &PluginComponentSpec,
-) -> Result<PricingConfig, CliError> {
-    serde_json::from_value(Value::Object(component.config.clone()))
-        .map_err(|error| CliError::Config(format!("invalid model pricing config: {error}")))
-}
-
-fn store_pricing_config(
-    component: &mut PluginComponentSpec,
-    config: &PricingConfig,
-) -> Result<(), CliError> {
-    let value = serde_json::to_value(config).map_err(|error| {
-        CliError::Config(format!("could not serialize model pricing config: {error}"))
-    })?;
-    let Value::Object(object) = value else {
-        return Err(CliError::Config(
-            "could not serialize model pricing config as an object".into(),
-        ));
-    };
-    component.config = object;
-    Ok(())
 }
 
 fn usage_has_tokens(usage: &Usage) -> bool {
@@ -288,5 +212,9 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/commands/model_pricing_tests.rs"]
+#[path = "../../../tests/coverage/commands/model_pricing_tests.rs"]
 mod tests;
+
+fn pricing_config_error(error: nemo_relay::plugin::PluginError) -> CliError {
+    CliError::Config(error.to_string())
+}

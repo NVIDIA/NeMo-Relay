@@ -15,16 +15,17 @@
 
 use serde_json::json;
 
-use super::model_pricing::pricing_test_mutex;
 use super::request::{GenerationParams, Message, MessageContent};
 use super::resolve::{normalize_request, normalize_request_with_hint, normalize_response};
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
-    PricingCatalog, PricingResolver, Usage, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
+    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason, Usage,
 };
 use crate::api::llm::LlmRequest;
 use crate::json::Json;
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 
 // -------------------------------------------------------------------
 // Helpers

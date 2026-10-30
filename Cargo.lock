@@ -1929,6 +1929,7 @@ dependencies = [
  "jsonschema",
  "libloading",
  "log",
+ "nemo-relay-model-pricing",
  "nemo-relay-plugin",
  "nemo-relay-types",
  "nemo-relay-worker-proto",
@@ -1978,6 +1979,7 @@ dependencies = [
  "chrono",
  "log",
  "nemo-relay",
+ "nemo-relay-model-pricing",
  "redis",
  "regex",
  "serde",
@@ -2019,6 +2021,7 @@ dependencies = [
  "log",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-model-pricing",
  "nemo-relay-pii-redaction",
  "nemo-relay-types",
  "opentelemetry",
@@ -2110,6 +2113,20 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "nemo-relay-model-pricing"
+version = "1.0.0"
+dependencies = [
+ "log",
+ "nemo-relay-plugin",
+ "nemo-relay-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

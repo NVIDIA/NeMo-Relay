@@ -6,13 +6,13 @@
 use super::*;
 use serde_json::json;
 
-use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{ContentPart, Message, MessageContent, ToolDefinition};
-use super::super::response::{
-    FinishReason, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
-};
+use super::super::response::FinishReason;
 use super::super::streaming::StreamingCodec;
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 
 use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};

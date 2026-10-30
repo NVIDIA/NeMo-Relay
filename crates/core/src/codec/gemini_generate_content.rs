@@ -20,19 +20,18 @@ use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
-use super::model_pricing::{
-    GeminiBilling, SeparateUsageCounts, ToolUsePromptBilling, billed_usage,
-    estimate_billed_cost_for_provider,
-};
 use super::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message,
     MessageContent, ToolCall, ToolDefinition,
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
-use super::response::{
-    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, infer_model_provider,
-};
+use super::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use super::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_model_pricing::infer_model_provider;
+use nemo_relay_model_pricing::{
+    GeminiBilling, SeparateUsageCounts, ToolUsePromptBilling, billed_usage,
+    estimate_billed_cost_for_provider,
+};
 
 const GEMINI_PROVIDER: &str = "gemini";
 

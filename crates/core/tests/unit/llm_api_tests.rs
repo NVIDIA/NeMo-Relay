@@ -47,9 +47,9 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::FlowError;
 use crate::json::Json;
 use crate::{
-    codec::optimization::LlmOptimizationContribution,
-    codec::response::{AnnotatedLlmResponse, PricingResolver},
+    codec::optimization::LlmOptimizationContribution, codec::response::AnnotatedLlmResponse,
 };
+use nemo_relay_model_pricing::PricingResolver;
 
 fn reset_global() {
     let _ = spdlog::init_log_crate_proxy();

@@ -19,7 +19,6 @@ mod dynamic_editor;
 mod editor_model;
 pub(crate) mod lifecycle;
 pub(crate) mod policy;
-pub(crate) mod pricing;
 mod prompt;
 pub(crate) mod schema;
 mod types;

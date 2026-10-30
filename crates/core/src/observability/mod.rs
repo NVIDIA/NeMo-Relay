@@ -5,6 +5,7 @@
 
 use crate::api::event::{EventNormalizationExt, is_valid_event_metadata_attribute_key};
 use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, Usage};
+
 use serde::{Deserialize, Serialize};
 
 /// Copies a projected OTLP attribute to a second attribute name.
@@ -854,7 +855,7 @@ pub(crate) fn estimate_cost_for_response_or_model(
     // when pricing does not recognize the echoed model alias.
     if let Some(model_name) = response_model
         && let Some(cost) =
-            crate::codec::response::estimate_cost_for_provider(provider, model_name, usage)
+            nemo_relay_model_pricing::estimate_cost_for_provider(provider, model_name, usage)
     {
         return Some(cost);
     }
@@ -863,7 +864,7 @@ pub(crate) fn estimate_cost_for_response_or_model(
     if response_model == Some(requested_model) {
         return None;
     }
-    crate::codec::response::estimate_cost_for_provider(provider, requested_model, usage)
+    nemo_relay_model_pricing::estimate_cost_for_provider(provider, requested_model, usage)
 }
 
 pub(crate) fn merge_usage(

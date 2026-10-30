@@ -5,32 +5,26 @@
 //!
 //! Model pricing is deliberately separate from response normalization so adding
 //! providers, aliases, or cache-accounting rules does not require editing
-//! [`AnnotatedLlmResponse`](super::response::AnnotatedLlmResponse).
+//! [`AnnotatedLlmResponse`].
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::Mutex;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::request::{ContentPart, MessageContent};
-use super::response::{AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::codec::request::{ContentPart, MessageContent};
+use nemo_relay_types::codec::response::{
+    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage,
+};
 
 const PRICING_CATALOG_VERSION: u32 = 1;
 
 static ACTIVE_PRICING_RESOLVER: LazyLock<RwLock<Arc<PricingResolver>>> =
     LazyLock::new(|| RwLock::new(Arc::new(PricingResolver::default())));
-
-#[cfg(test)]
-pub(crate) fn pricing_test_mutex() -> &'static Mutex<()> {
-    static PRICING_TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    &PRICING_TEST_MUTEX
-}
 
 /// Errors produced while parsing or validating a model pricing catalog.
 #[derive(Debug, Error)]
@@ -263,7 +257,7 @@ impl PricingResolver {
             .and_then(|pricing| pricing.estimate_cost(usage))
     }
 
-    pub(crate) fn estimate_billed_cost(
+    fn estimate_billed_cost(
         &self,
         provider: Option<&str>,
         model: &str,
@@ -659,7 +653,9 @@ pub fn estimate_cost_for_provider(
     active_pricing_resolver().estimate_cost_for_provider(provider, model, usage)
 }
 
-pub(crate) fn estimate_billed_cost_for_provider(
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub fn estimate_billed_cost_for_provider(
     provider: Option<&str>,
     model: &str,
     billed: &BilledUsage<'_>,
@@ -772,20 +768,26 @@ pub fn attach_estimated_cost_for_provider(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SeparateUsageCounts {
-    pub(crate) thoughts_tokens: Option<u64>,
-    pub(crate) tool_use_prompt_tokens: Option<u64>,
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub struct SeparateUsageCounts {
+    pub thoughts_tokens: Option<u64>,
+    pub tool_use_prompt_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolUsePromptBilling {
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub enum ToolUsePromptBilling {
     InputTokens,
     GroundingRequests,
     Undetermined,
 }
 
 impl ToolUsePromptBilling {
-    pub(crate) fn from_tool_evidence(
+    #[doc(hidden)]
+    #[allow(missing_docs)]
+    pub fn from_tool_evidence(
         grounding_metadata: Option<&Json>,
         candidate_extra: &serde_json::Map<String, Json>,
         message: Option<&MessageContent>,
@@ -860,31 +862,41 @@ fn has_code_execution(message: Option<&MessageContent>) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GeminiBilling {
-    pub(crate) separate: SeparateUsageCounts,
-    pub(crate) tool_use_billing: ToolUsePromptBilling,
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub struct GeminiBilling {
+    pub separate: SeparateUsageCounts,
+    pub tool_use_billing: ToolUsePromptBilling,
 }
 
-pub(crate) struct BilledUsage<'a> {
-    pub(crate) usage: Cow<'a, Usage>,
-    pub(crate) reported: &'a Usage,
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub struct BilledUsage<'a> {
+    pub usage: Cow<'a, Usage>,
+    pub reported: &'a Usage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UnbillableUsage {
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub enum UnbillableUsage {
     TokenOverflow,
     UndeterminedToolUsePromptTokens,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InputSplit {
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub enum InputSplit {
     Separate,
     Inclusive,
     Either,
 }
 
 impl InputSplit {
-    pub(crate) fn of_api(api: &ApiSpecificResponse) -> Option<Self> {
+    #[doc(hidden)]
+    #[allow(missing_docs)]
+    pub fn of_api(api: &ApiSpecificResponse) -> Option<Self> {
         match api {
             ApiSpecificResponse::AnthropicMessages { .. } => Some(Self::Separate),
             ApiSpecificResponse::OpenAIChat { .. }
@@ -896,7 +908,9 @@ impl InputSplit {
     }
 }
 
-pub(crate) fn input_split(usage: &Usage) -> Option<InputSplit> {
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub fn input_split(usage: &Usage) -> Option<InputSplit> {
     let uncached = usage.uncached_input_tokens?;
     let with_cache = input_tokens_with_cache(usage, uncached)?;
     let Some(prompt) = usage.prompt_tokens else {
@@ -917,7 +931,9 @@ fn input_tokens_with_cache(usage: &Usage, uncached: u64) -> Option<u64> {
         .try_fold(uncached, u64::checked_add)
 }
 
-pub(crate) fn billed_usage<'a>(
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub fn billed_usage<'a>(
     usage: &'a Usage,
     gemini: Option<GeminiBilling>,
 ) -> Result<BilledUsage<'a>, UnbillableUsage> {
@@ -1106,3 +1122,21 @@ fn round_cost_amount(cost: f64) -> f64 {
     const SCALE: f64 = 1_000_000_000_000.0;
     (cost * SCALE).round() / SCALE
 }
+
+#[cfg(any(test, feature = "__test-support"))]
+#[doc(hidden)]
+pub fn pricing_test_mutex() -> &'static std::sync::Mutex<()> {
+    static PRICING_TEST_MUTEX: std::sync::LazyLock<std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+    &PRICING_TEST_MUTEX
+}
+
+/// Built-in component implementation.
+pub mod plugin;
+
+#[cfg(test)]
+#[path = "../tests/unit/pricing_tests.rs"]
+mod pricing_tests;
+
+/// Catalog loading and source-aware resolution.
+pub mod catalog;

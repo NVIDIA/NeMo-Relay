@@ -13,19 +13,21 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, FunctionDefinition, GenerationParams, Message,
     MessageContent, ToolDefinition,
 };
 use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
-    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, ResponseToolCall, Usage,
 };
 use crate::json::Json;
 use crate::observability::MarkProjection;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use crate::observability::otel::RelayIdGenerator;
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use opentelemetry::trace::SpanContext;
 use opentelemetry::trace::Status;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;

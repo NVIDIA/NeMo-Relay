@@ -24,7 +24,7 @@ atof-streaming = [
     "tokio/rt-multi-thread",
     "tokio/time",
 ]
-schema = ["nemo-relay-plugin/schema", "dep:schemars", "nemo-relay-types/schema"]
+schema = ["nemo-relay-plugin/schema", "dep:schemars", "nemo-relay-types/schema", "nemo-relay-model-pricing/schema"]
 # Internal CLI gateway support; no compatibility guarantee.
 __internal-gateway = []
 # Private test hook for suppressing implicit user/system plugin discovery.
@@ -52,6 +52,7 @@ worker-grpc = [
 
 [dependencies]
 # First-party crates.
+nemo-relay-model-pricing.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }
@@ -112,6 +113,7 @@ rustix = { workspace = true, features = ["fs", "param"] }
 windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
+nemo-relay-model-pricing = { workspace = true, features = ["__test-support"] }
 futures.workspace = true
 object_store = { workspace = true, features = ["aws"] }
 opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }

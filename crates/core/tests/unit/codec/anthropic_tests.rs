@@ -6,14 +6,14 @@
 use super::*;
 use serde_json::json;
 
-use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{
     ContentPart, FunctionDefinition, Message, MessageContent, ProviderNativeComponent, ToolChoice,
     ToolChoiceFunction, ToolChoiceFunctionName,
 };
-use super::super::response::{
-    ApiSpecificResponse, FinishReason, PricingCatalog, PricingResolver,
-    reset_active_pricing_resolver, set_active_pricing_resolver,
+use super::super::response::{ApiSpecificResponse, FinishReason};
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 
 // -------------------------------------------------------------------

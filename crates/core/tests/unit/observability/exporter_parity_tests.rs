@@ -22,17 +22,17 @@ use crate::api::event::{
     ScopeEvent,
 };
 use crate::api::runtime::{create_scope_stack, with_scope_stack};
-use crate::codec::model_pricing::pricing_test_mutex;
-use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
-    reset_active_pricing_resolver, set_active_pricing_resolver,
-};
+use crate::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
 use crate::json::Json;
 use crate::observability::OpenTelemetryType;
 use crate::observability::atif::{
     AtifAgentInfo, AtifExporter, AtifStep, AtifStepExtra, AtifTrajectory,
 };
 use crate::observability::otel::{OpenTelemetrySubscriber, RelayIdGenerator};
+use nemo_relay_model_pricing::pricing_test_mutex;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 
 // -------------------------------------------------------------------
 // Helpers

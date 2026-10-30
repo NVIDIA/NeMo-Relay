@@ -43,13 +43,13 @@ use nemo_relay::codec::optimization::{
 };
 use nemo_relay::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay::codec::response::FinishReason;
-use nemo_relay::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
-    reset_active_pricing_resolver, set_active_pricing_resolver,
-};
+use nemo_relay::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
+use nemo_relay_model_pricing::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 
 // ---------------------------------------------------------------------------
 // Test isolation
