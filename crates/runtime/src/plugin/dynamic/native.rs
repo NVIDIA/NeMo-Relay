@@ -211,13 +211,16 @@ pub fn load_native_plugins<I>(specs: I) -> crate::plugin::Result<NativePluginAct
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
-    load_native_plugins_with_diagnostics(specs, crate::diagnostics::Diagnostics::process_default())
+    load_native_plugins_with_diagnostics(
+        specs,
+        nemo_relay_diagnostics::Diagnostics::process_default(),
+    )
 }
 
 /// Load native plugins with the runtime owner's diagnostics service.
 pub fn load_native_plugins_with_diagnostics<I>(
     specs: I,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<NativePluginActivation>
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
@@ -236,7 +239,7 @@ pub(super) fn load_native_plugins_with_trust<I>(
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
     artifacts: Vec<PreparedNativePlugin>,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<NativePluginActivation>
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
@@ -269,7 +272,7 @@ where
         let observer = super::diagnostics::PluginDiagnostics::new(
             diagnostics,
             &spec.plugin_id,
-            crate::diagnostics::PluginExecution::NativeAbi,
+            nemo_relay_diagnostics::PluginExecution::NativeAbi,
             uuid::Uuid::now_v7(),
         );
         let instance = load_one_native_plugin(
@@ -283,15 +286,15 @@ where
         )
         .inspect_err(|_| {
             observer.failure(
-                crate::diagnostics::PluginOperationFailureCode::NativeLoad,
-                crate::diagnostics::FailureClass::Unknown,
-                crate::diagnostics::PluginPhase::Activation,
+                nemo_relay_diagnostics::PluginOperationFailureCode::NativeLoad,
+                nemo_relay_diagnostics::FailureClass::Unknown,
+                nemo_relay_diagnostics::PluginPhase::Activation,
             );
         })?;
         let plugin_kind = instance.plugin_kind.clone();
         observer.success(
-            crate::diagnostics::SuccessCode::PluginNativeLoaded,
-            crate::diagnostics::PluginPhase::Activation,
+            nemo_relay_diagnostics::SuccessCode::PluginNativeLoaded,
+            nemo_relay_diagnostics::PluginPhase::Activation,
         );
         let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -342,9 +345,9 @@ impl Plugin for NativePluginAdapter {
         let mut out = ptr::null_mut();
         let status = unsafe { validate(plugin.user_data, config_json, &mut out) };
         self.instance.diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeValidation,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeValidation,
             status,
-            crate::diagnostics::PluginPhase::Validation,
+            nemo_relay_diagnostics::PluginPhase::Validation,
         );
         unsafe { native_string_free(config_json) };
         if status != NemoRelayStatus::Ok {
@@ -361,8 +364,8 @@ impl Plugin for NativePluginAdapter {
         }
         if out.is_null() {
             self.instance.diagnostics.success(
-                crate::diagnostics::SuccessCode::PluginNativeValidated,
-                crate::diagnostics::PluginPhase::Validation,
+                nemo_relay_diagnostics::SuccessCode::PluginNativeValidated,
+                nemo_relay_diagnostics::PluginPhase::Validation,
             );
             return vec![];
         }
@@ -382,14 +385,14 @@ impl Plugin for NativePluginAdapter {
             .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
         {
             self.instance.diagnostics.failure(
-                crate::diagnostics::PluginOperationFailureCode::NativeValidation,
-                crate::diagnostics::FailureClass::Unknown,
-                crate::diagnostics::PluginPhase::Validation,
+                nemo_relay_diagnostics::PluginOperationFailureCode::NativeValidation,
+                nemo_relay_diagnostics::FailureClass::Unknown,
+                nemo_relay_diagnostics::PluginPhase::Validation,
             );
         } else {
             self.instance.diagnostics.success(
-                crate::diagnostics::SuccessCode::PluginNativeValidated,
-                crate::diagnostics::PluginPhase::Validation,
+                nemo_relay_diagnostics::SuccessCode::PluginNativeValidated,
+                nemo_relay_diagnostics::PluginPhase::Validation,
             );
         }
         diagnostics
@@ -440,14 +443,14 @@ impl Plugin for NativePluginAdapter {
                 diagnostics.revoke();
             }
             self.instance.diagnostics.native_status(
-                crate::diagnostics::PluginOperationFailureCode::NativeRegistration,
+                nemo_relay_diagnostics::PluginOperationFailureCode::NativeRegistration,
                 status,
-                crate::diagnostics::PluginPhase::Activation,
+                nemo_relay_diagnostics::PluginPhase::Activation,
             );
             if status == NemoRelayStatus::Ok {
                 self.instance.diagnostics.success(
-                    crate::diagnostics::SuccessCode::PluginNativeRegistered,
-                    crate::diagnostics::PluginPhase::Activation,
+                    nemo_relay_diagnostics::SuccessCode::PluginNativeRegistered,
+                    nemo_relay_diagnostics::PluginPhase::Activation,
                 );
                 Ok(())
             } else {
@@ -471,7 +474,7 @@ fn native_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
 
 struct NativePluginInstance {
     diagnostics: super::diagnostics::PluginDiagnostics,
-    diagnostic_context: crate::diagnostics::Diagnostics,
+    diagnostic_context: nemo_relay_diagnostics::Diagnostics,
     diagnostic_read_context: bool,
     plugin_kind: String,
     relay_compat: String,
@@ -524,7 +527,7 @@ fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
     artifact: Option<PreparedNativePlugin>,
     diagnostics: super::diagnostics::PluginDiagnostics,
-    diagnostic_context: crate::diagnostics::Diagnostics,
+    diagnostic_context: nemo_relay_diagnostics::Diagnostics,
     diagnostic_read_context: bool,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
     let snapshot_required = artifact.is_some();
@@ -2126,9 +2129,9 @@ fn report_native_http_error(
 fn observe_native_callback_failure(user_data: Option<&NativeCallbackUserData>) {
     if let Some(instance) = user_data.and_then(|data| data._instance.as_ref()) {
         instance.diagnostics.failure(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
-            crate::diagnostics::FailureClass::Unknown,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::FailureClass::Unknown,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
 }
@@ -2140,9 +2143,9 @@ fn flow_error_from_plugin_status(
 ) -> FlowError {
     if let Some(instance) = &user_data._instance {
         instance.diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
             status,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
     report_native_http_error(flow_error_from_status(status, fallback), Some(user_data))
@@ -5708,9 +5711,9 @@ fn wrap_conditional_middleware_guardrail_callback(
         }
         if let Some(instance) = &user_data._instance {
             instance.diagnostics.native_status(
-                crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+                nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
                 status,
-                crate::diagnostics::PluginPhase::Runtime,
+                nemo_relay_diagnostics::PluginPhase::Runtime,
             );
         }
         if status != NemoRelayStatus::Ok {
@@ -5759,9 +5762,9 @@ fn wrap_event_subscriber(
             let status = unsafe { cb(user_data.ptr, event_string) };
             if let Some(instance) = &user_data._instance {
                 instance.diagnostics.native_status(
-                    crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+                    nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
                     status,
-                    crate::diagnostics::PluginPhase::Runtime,
+                    nemo_relay_diagnostics::PluginPhase::Runtime,
                 );
             }
             if status != NemoRelayStatus::Ok {
@@ -5829,9 +5832,9 @@ fn call_event_sanitize_callback(
     }
     if let Some(diagnostics) = diagnostics {
         diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
             status,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
     if status != NemoRelayStatus::Ok {
@@ -5918,9 +5921,9 @@ fn call_tool_json_callback(
     }
     if let Some(diagnostics) = diagnostics {
         diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
             status,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
     if status != NemoRelayStatus::Ok {
@@ -6234,9 +6237,9 @@ fn call_llm_sanitize_request_callback(
     let status = unsafe { cb(user_data, request_string, context, &mut out) };
     if let Some(diagnostics) = diagnostics {
         diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
             status,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
     if status != NemoRelayStatus::Ok {
@@ -6291,9 +6294,9 @@ fn call_llm_sanitize_response_callback(
     let status = unsafe { cb(user_data, payload_string, context, &mut out) };
     if let Some(diagnostics) = diagnostics {
         diagnostics.native_status(
-            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
             status,
-            crate::diagnostics::PluginPhase::Runtime,
+            nemo_relay_diagnostics::PluginPhase::Runtime,
         );
     }
     if status != NemoRelayStatus::Ok {

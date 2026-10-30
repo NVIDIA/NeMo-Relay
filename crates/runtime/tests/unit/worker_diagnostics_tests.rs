@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings, SourceIdentity};
+use nemo_relay_diagnostics::{
+    DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings, SourceIdentity,
+};
 use wire::diagnostic_submission::Operation;
 use wire::relay_diagnostics_server::RelayDiagnostics;
 
@@ -66,7 +68,7 @@ fn observation(count: u64) -> wire::DiagnosticObservation {
         ..Default::default()
     }
 }
-fn snapshot(host: &WorkerDiagnostics) -> crate::diagnostics::DiagnosticSnapshot {
+fn snapshot(host: &WorkerDiagnostics) -> nemo_relay_diagnostics::DiagnosticSnapshot {
     host.context
         .snapshot(&DiagnosticQuery::default())
         .unwrap()
@@ -129,7 +131,7 @@ fn replay_preserves_counts_provenance_and_restricted_projection_boundary() {
 fn assert_remote_provenance(
     host: &WorkerDiagnostics,
     session: &[u8],
-    snapshot: &crate::diagnostics::DiagnosticSnapshot,
+    snapshot: &nemo_relay_diagnostics::DiagnosticSnapshot,
 ) {
     for event in &snapshot.events {
         let remote = event.remote.unwrap();

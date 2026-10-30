@@ -21,8 +21,8 @@ use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 
 use self::diagnostics::{LoggingDiagnostics, LoggingProjection};
-use crate::diagnostics::Diagnostics;
 use crate::error::{FlowError, Result};
+use nemo_relay_diagnostics::Diagnostics;
 
 pub use config::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
@@ -160,6 +160,14 @@ impl LoggingRuntime {
     }
 
     fn configure_with_lifecycle_lock(config: LoggingConfig, context: &Diagnostics) -> Result<Self> {
+        nemo_relay_diagnostics::integration::install_logging(
+            nemo_relay_diagnostics::integration::LoggingIntegration {
+                attach: |context| {
+                    let _ = attach_default_diagnostics(context);
+                },
+                coverage: default_diagnostics_coverage,
+            },
+        );
         let diagnostics = LoggingDiagnostics::new(context, &config);
         let root_relay_id = context.source().instance_id.to_string();
         let built =
@@ -213,7 +221,7 @@ impl LoggingRuntime {
             projection,
             config,
             diagnostic_source: (context.reader().availability()
-                == crate::diagnostics::DiagnosticAvailability::Available)
+                == nemo_relay_diagnostics::DiagnosticAvailability::Available)
                 .then_some(context.source().instance_id),
         })
     }
@@ -343,7 +351,8 @@ pub fn attach_default_diagnostics(context: &Diagnostics) -> Result<()> {
     let _lifecycle = lock_logger_lifecycle();
     if !is_active_relay_logger(&runtime.logger)
         || runtime.diagnostic_source.is_some()
-        || context.reader().availability() != crate::diagnostics::DiagnosticAvailability::Available
+        || context.reader().availability()
+            != nemo_relay_diagnostics::DiagnosticAvailability::Available
     {
         return Ok(());
     }

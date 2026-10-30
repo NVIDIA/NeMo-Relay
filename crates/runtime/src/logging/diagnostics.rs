@@ -9,11 +9,11 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use spdlog::Logger;
 
-use crate::diagnostics::{
+use crate::error::{FlowError, Result};
+use nemo_relay_diagnostics::{
     ComponentRecorder, ComponentRegistration, Diagnostics, Observation, ProjectionError,
     ProjectionGuard,
 };
-use crate::error::{FlowError, Result};
 use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, DiagnosticClassifier, DiagnosticOutputSummary,
     DiagnosticSeverity, FailureClass, FailureCode, LoggingFailureCode, SuccessCode,
@@ -58,7 +58,7 @@ impl LoggingDiagnostics {
                 recorder: Arc::new(OnceLock::new()),
             };
             if diagnostics.reader().availability()
-                == crate::diagnostics::DiagnosticAvailability::Available
+                == nemo_relay_diagnostics::DiagnosticAvailability::Available
                 && let Ok(recorder) =
                     diagnostics.register_component(ComponentRegistration::new(key, SINK_CODES))
             {
@@ -505,7 +505,7 @@ mod tests {
         log::set_max_level(log::LevelFilter::Trace);
         let diagnostics = Diagnostics::from_settings(
             Diagnostics::default().source().clone(),
-            crate::diagnostics::DiagnosticsSettings {
+            nemo_relay_diagnostics::DiagnosticsSettings {
                 enabled: true,
                 ..Default::default()
             },

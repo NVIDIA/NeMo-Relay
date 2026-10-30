@@ -4,7 +4,7 @@
 //! Native diagnostic bridge: borrowed bounded inputs, one core recording boundary.
 
 use super::{NativeHostPluginRuntime, NemoRelayNativePluginRuntime, native_runtime_ref};
-use crate::diagnostics::*;
+use nemo_relay_diagnostics::*;
 use nemo_relay_plugin::diagnostics::{DiagnosticError as Error, abi};
 use std::num::NonZeroU64;
 use std::sync::{

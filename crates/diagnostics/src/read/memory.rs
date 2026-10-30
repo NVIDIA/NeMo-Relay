@@ -4,7 +4,7 @@
 //! Derive occupancy during capture. Scratch and rows share the existing query lease.
 
 use super::*;
-use crate::diagnostics::{
+use crate::{
     ComponentMemoryFootprint, DIAGNOSTIC_MEMORY_VERSION, DiagnosticMemoryPage,
     DiagnosticMemoryUsage, EntryMemoryFootprint, MemorySelectionTotals, ResourceMemoryView,
 };
@@ -369,7 +369,7 @@ impl Serialize for View<'_> {
     }
 }
 
-pub(in crate::diagnostics) fn capture(
+pub(crate) fn capture(
     inner: &Inner,
     query: &DiagnosticQuery,
 ) -> Result<MemoryInspectionLease, DiagnosticError> {
@@ -495,7 +495,7 @@ pub(in crate::diagnostics) fn capture(
     };
     drop(state);
     // Independent subsystem copy after releasing diagnostic state. Never collect here.
-    metadata.resource = (crate::composition::services().resource_memory)(inner.source.process_id);
+    metadata.resource = crate::integration::resource_memory(inner.source.process_id);
     let max_bytes = query
         .max_response_bytes
         .map_or(inner.limits.max_snapshot_bytes, |n| n as usize);

@@ -2880,7 +2880,7 @@ fn fixture_library_name() -> &'static str {
 
 #[tokio::test]
 async fn sdk_cdylib_native_diagnostics_records_reads_and_closes_selected_context() {
-    use nemo_relay_runtime::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest = write_manifest_with_integrity(&fixture, &sha256(&fixture.library_path));

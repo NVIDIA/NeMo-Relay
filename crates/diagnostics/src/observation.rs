@@ -121,7 +121,7 @@ pub(super) enum ObservationCode {
 /// One observation. Its count is a positive input delta, never a cumulative total.
 ///
 /// ```compile_fail
-/// use nemo_relay_runtime::diagnostics::{Classification, Observation, SuccessCode};
+/// use nemo_relay_diagnostics::{Classification, Observation, SuccessCode};
 /// // Constructors require NonZeroU64, so a zero integer is not a valid input.
 /// let observation = Observation::new(
 ///     Classification::success(SuccessCode::SinkInitialized), "initialized", 0,
@@ -234,6 +234,15 @@ impl<'a> Observation<'a> {
             correlation: DiagnosticCorrelation::default(),
             context: PluginObservationContext::default(),
         }
+    }
+    /// Associate an authenticated remote producer. The transport must validate
+    /// the remote identity before attaching it to an observation.
+    pub fn with_remote_origin(
+        mut self,
+        origin: nemo_relay_types::diagnostics::RemoteDiagnosticOrigin,
+    ) -> Self {
+        self.remote = Some(origin);
+        self
     }
     /// Attach known plugin execution and lifecycle facts without another series.
     pub fn with_plugin_context(mut self, context: PluginObservationContext) -> Self {

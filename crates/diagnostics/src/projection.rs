@@ -34,7 +34,7 @@ pub(super) struct Projections {
 ///
 /// ```compile_fail
 /// #![deny(unused_must_use)]
-/// use nemo_relay_runtime::diagnostics::{DiagnosticError, Diagnostics};
+/// use nemo_relay_diagnostics::{DiagnosticError, Diagnostics};
 /// fn subscribe(diagnostics: &Diagnostics) -> Result<(), DiagnosticError> {
 ///     diagnostics.subscribe_projection(|_| {})?; // Immediately unsubscribes.
 ///     Ok(())
@@ -227,7 +227,7 @@ pub(super) fn publish(inner: &Inner, workspace: &mut PublicationWorkspace) {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    use crate::{Diagnostics, DiagnosticsSettings};
 
     #[test]
     fn publication_lease_restores_payload_and_permit_after_unwind() {

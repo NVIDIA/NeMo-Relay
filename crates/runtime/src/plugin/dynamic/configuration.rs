@@ -17,10 +17,10 @@ use super::{
     DynamicPluginValidationStatus, EvaluatedDynamicPluginHostPolicy, FileDynamicPluginHostPolicy,
     evaluate_dynamic_plugin_host_policy, validate_dynamic_plugin_config_schema,
 };
-use crate::diagnostics::Diagnostics;
 use crate::plugin::{
     PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_documents,
 };
+use nemo_relay_diagnostics::Diagnostics;
 
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
@@ -366,8 +366,8 @@ impl PreparedPluginHostConfig {
     }
     pub(super) fn diagnostic_settings(
         &self,
-        programmatic: Option<crate::diagnostics::DiagnosticsSettings>,
-    ) -> Result<crate::diagnostics::DiagnosticsSettings> {
+        programmatic: Option<nemo_relay_diagnostics::DiagnosticsSettings>,
+    ) -> Result<nemo_relay_diagnostics::DiagnosticsSettings> {
         // The existing resolver owns file order. Merge service fields independently
         // so they never enter plugin config reports, fingerprints, or callbacks.
         let settings = if let Some(settings) = programmatic {
@@ -692,7 +692,7 @@ fn validate_declaration_with_artifact(
     let has_diagnostic_failure =
         evaluated_policy.failure().is_some() || trust.failure.is_some() || schema_failure.is_some();
     if let Some(context) = diagnostic_context.filter(|_| has_diagnostic_failure) {
-        use crate::diagnostics::{
+        use nemo_relay_diagnostics::{
             DiagnosticClassifier, FailureClass, PluginOperationFailureCode as Operation,
             PluginPhase,
         };

@@ -61,7 +61,7 @@ pub async fn initialize(
 pub async fn initialize_with_diagnostics(
     config: PluginConfig,
     additional_plugins_toml: Option<PathBuf>,
-    diagnostics: &nemo_relay_runtime::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> Result<PluginHostActivation> {
     crate::initialize_runtime();
     host::initialize_with_diagnostics(config, additional_plugins_toml, diagnostics).await

@@ -48,8 +48,8 @@ const MESSAGE_LIMIT_CHILD_ENV: &str = "NEMO_RELAY_TEST_LARGE_MESSAGE_CHILD";
 const MESSAGE_LIMIT_DEFAULT_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_MESSAGE_BYTES";
 const MESSAGE_LIMIT_NAMED_ENV: &str = "NEMO_RELAY_TEST_PLUGIN_NAMED_MESSAGE_BYTES";
 
-fn enabled_worker_diagnostics() -> nemo_relay_runtime::diagnostics::Diagnostics {
-    use nemo_relay_runtime::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+fn enabled_worker_diagnostics() -> nemo_relay_diagnostics::Diagnostics {
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
     Diagnostics::from_settings(
         SourceIdentity {
             instance_id: Uuid::now_v7(),
@@ -66,17 +66,17 @@ fn enabled_worker_diagnostics() -> nemo_relay_runtime::diagnostics::Diagnostics 
 }
 
 fn worker_diagnostic_snapshot(
-    context: &nemo_relay_runtime::diagnostics::Diagnostics,
-) -> nemo_relay_runtime::diagnostics::DiagnosticSnapshot {
+    context: &nemo_relay_diagnostics::Diagnostics,
+) -> nemo_relay_diagnostics::DiagnosticSnapshot {
     context
-        .snapshot(&nemo_relay_runtime::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap()
 }
 
 fn assert_worker_stage_failure(
-    diagnostics: &nemo_relay_runtime::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
     plugin_id: &str,
     code: &str,
     class: &str,
@@ -200,7 +200,7 @@ fn worker_activation_with_no_specs_is_empty() {
 
 #[tokio::test]
 async fn worker_sdk_records_into_selected_host_context_and_survives_plugin_cleanup() {
-    use nemo_relay_runtime::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     use nemo_relay_runtime::plugin::dynamic::load_worker_plugins_with_diagnostics;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;

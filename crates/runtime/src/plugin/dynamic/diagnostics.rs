@@ -3,7 +3,7 @@
 
 //! Producer-owned classification and state-only operation observations.
 
-use crate::diagnostics::{
+use nemo_relay_diagnostics::{
     BuiltinDiagnosticCode, Classification, ComponentRecorder, ComponentRegistration,
     DiagnosticClassifier, Diagnostics, FailureClass, FailureCode, Observation, PluginExecution,
     PluginFailureCode, PluginObservationContext, PluginOperationFailureCode as Operation,
@@ -33,7 +33,8 @@ impl PluginDiagnostics {
         execution: PluginExecution,
         instance: Uuid,
     ) -> Self {
-        if context.reader().availability() != crate::diagnostics::DiagnosticAvailability::Available
+        if context.reader().availability()
+            != nemo_relay_diagnostics::DiagnosticAvailability::Available
         {
             return Self {
                 recorder: None,

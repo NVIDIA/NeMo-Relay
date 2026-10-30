@@ -21,7 +21,7 @@
 //! Neither path requires logging to initialize first.
 //!
 //! ```
-//! use nemo_relay_runtime::diagnostics::*;
+//! use nemo_relay_diagnostics::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let diagnostics = Diagnostics::from_settings(
@@ -126,3 +126,6 @@ pub use nemo_relay_types::diagnostics::{
 pub use read::{ComponentMemoryView, EntryMemoryView, MemoryInspectionLease};
 
 pub use read::{ComponentView, EventView};
+
+/// Optional backend integrations.
+pub mod integration;

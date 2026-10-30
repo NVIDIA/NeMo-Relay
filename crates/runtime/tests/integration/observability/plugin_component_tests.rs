@@ -4558,10 +4558,10 @@ fn file_sinks_register_even_when_the_environment_configures_automatic_signals() 
 }
 
 fn assert_automatic_exporter_signal_counter(
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
     component_key: &str,
 ) {
-    use crate::diagnostics::DiagnosticQuery;
+    use nemo_relay_diagnostics::DiagnosticQuery;
     let selected = diagnostics
         .snapshot(&DiagnosticQuery {
             component_key: Some(component_key.to_string()),
@@ -4581,10 +4581,10 @@ fn assert_automatic_exporter_signal_counter(
 }
 
 fn assert_automatic_exporter_observations(
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
     reports: &[ConfigDiagnostic],
 ) {
-    use crate::diagnostics::{DiagnosticQuery, PluginPhase};
+    use nemo_relay_diagnostics::{DiagnosticQuery, PluginPhase};
     let snapshot = diagnostics
         .snapshot(&DiagnosticQuery::default())
         .unwrap()
@@ -4604,7 +4604,7 @@ fn assert_automatic_exporter_observations(
         assert_eq!(event.context.phase, Some(PluginPhase::Activation.into()));
         assert_eq!(
             event.severity,
-            crate::diagnostics::DiagnosticSeverity::Warning
+            nemo_relay_diagnostics::DiagnosticSeverity::Warning
         );
         assert_eq!(event.detail.as_ref().unwrap().message, report.message);
     }
@@ -4616,7 +4616,7 @@ fn assert_automatic_exporter_observations(
 
 #[test]
 fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once() {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
         .unwrap();
@@ -4686,7 +4686,7 @@ fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once()
 
 #[test]
 fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchanged() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
         .unwrap();
@@ -4788,8 +4788,8 @@ fn automatic_host_diagnostics_environment() -> EnvironmentGuard {
 }
 
 #[cfg(feature = "__skip-implicit-config")]
-fn automatic_host_failure_query(signal: &str) -> crate::diagnostics::DiagnosticQuery {
-    crate::diagnostics::DiagnosticQuery {
+fn automatic_host_failure_query(signal: &str) -> nemo_relay_diagnostics::DiagnosticQuery {
+    nemo_relay_diagnostics::DiagnosticQuery {
         component_key: Some(format!("opentelemetry.automatic.{signal}")),
         code: Some("plugin.exporter_initialization_failed".into()),
         ..Default::default()
@@ -4836,10 +4836,10 @@ fn assert_automatic_host_rejection_report(diagnostics: &[ConfigDiagnostic]) -> &
 
 #[cfg(feature = "__skip-implicit-config")]
 fn assert_automatic_host_rejection_evidence(
-    service: &crate::diagnostics::Diagnostics,
+    service: &nemo_relay_diagnostics::Diagnostics,
     legacy: &ConfigDiagnostic,
 ) {
-    use crate::diagnostics::{DiagnosticSeverity, PluginPhase};
+    use nemo_relay_diagnostics::{DiagnosticSeverity, PluginPhase};
     // The production registration context has already been dropped here.
     let snapshot = service
         .snapshot(&automatic_host_failure_query("traces"))
@@ -4870,7 +4870,7 @@ fn assert_automatic_host_rejection_evidence(
 }
 
 #[cfg(feature = "__skip-implicit-config")]
-fn assert_automatic_host_healthy_metrics(service: &crate::diagnostics::Diagnostics) {
+fn assert_automatic_host_healthy_metrics(service: &nemo_relay_diagnostics::Diagnostics) {
     let healthy = service
         .snapshot(&automatic_host_failure_query("metrics"))
         .unwrap()
@@ -4888,7 +4888,7 @@ fn assert_automatic_host_healthy_metrics(service: &crate::diagnostics::Diagnosti
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn automatic_exporter_host_retains_rejection_after_activation_and_preserves_healthy_signal() {
-    use crate::diagnostics::{DiagnosticError, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticError, Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
         .unwrap();
@@ -4956,7 +4956,7 @@ fn automatic_exporter_host_retains_rejection_after_activation_and_preserves_heal
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn automatic_exporter_host_signal_counters_survive_without_recent_evidence() {
-    use crate::diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
         .unwrap();
@@ -5009,7 +5009,7 @@ fn automatic_exporter_host_signal_counters_survive_without_recent_evidence() {
 
 #[cfg(feature = "__skip-implicit-config")]
 fn assert_automatic_host_counter_without_evidence(
-    service: &crate::diagnostics::Diagnostics,
+    service: &nemo_relay_diagnostics::Diagnostics,
     signal: &str,
 ) {
     let query = automatic_host_failure_query(signal);
@@ -5041,7 +5041,7 @@ fn assert_automatic_host_counter_without_evidence(
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn automatic_exporter_host_classifies_endpoint_and_tls_failures_without_secrets() {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings};
     let _guard = crate::observability_test_support::test_mutex()
         .lock()
         .unwrap();
@@ -5140,7 +5140,7 @@ fn automatic_exporter_host_classifies_endpoint_and_tls_failures_without_secrets(
 
 #[cfg(feature = "__skip-implicit-config")]
 fn assert_automatic_host_source_failure(
-    service: &crate::diagnostics::Diagnostics,
+    service: &nemo_relay_diagnostics::Diagnostics,
     legacy: &ConfigDiagnostic,
     signal: &str,
     expected_class: &str,

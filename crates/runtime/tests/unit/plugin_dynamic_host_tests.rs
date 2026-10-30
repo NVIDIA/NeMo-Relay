@@ -338,7 +338,7 @@ manifest = {manifest_ref:?}
             resolved.diagnostics,
             resolved.load_trust,
             resolved.native_artifacts,
-            crate::diagnostics::Diagnostics::process_default().clone(),
+            nemo_relay_diagnostics::Diagnostics::process_default().clone(),
         )
         .await
         .expect("activation must load the verified fixture, without reopening source paths");
@@ -424,7 +424,7 @@ sha256 = "sha256:000000000000000000000000000000000000000000000000000000000000000
             Vec::new(),
             HashMap::from([("fixture.skipped".into(), context)]),
             Vec::new(),
-            crate::diagnostics::Diagnostics::process_default().clone(),
+            nemo_relay_diagnostics::Diagnostics::process_default().clone(),
         )
         .await
         .unwrap();

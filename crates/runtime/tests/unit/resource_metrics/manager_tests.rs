@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::api::resource_metrics::{CpuMetrics, DataUnit, DurationUnit};
-use crate::diagnostics::{DiagnosticMemoryPage, DiagnosticQuery, Diagnostics};
+use nemo_relay_diagnostics::{DiagnosticMemoryPage, DiagnosticQuery, Diagnostics};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn isolated_resource_manager_test() -> bool {
@@ -103,7 +103,7 @@ fn manager_installation_reconciles_inherited_inspection_ownership() {
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn resource_memory_pages_preserve_budgets_and_samples() {
-    use crate::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     if !isolated_resource_manager_test() {
         return;
     }
@@ -223,7 +223,7 @@ fn assert_bounded_memory_page(
     budget: usize,
     full_page: &DiagnosticMemoryPage,
 ) {
-    use crate::diagnostics::ResourceMemoryAvailability;
+    use nemo_relay_diagnostics::ResourceMemoryAvailability;
     let limited = diagnostics
         .reader()
         .inspect_memory(&DiagnosticQuery {
@@ -257,7 +257,7 @@ fn assert_bounded_memory_page(
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn resource_memory_pages_respect_inspection_policy_and_pending_targets() {
-    use crate::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     if !isolated_resource_manager_test() {
         return;
     }

@@ -10,7 +10,6 @@ use nemo_relay_types::{
         pricing::CostEstimator,
         response::{AnnotatedLlmResponse, CostEstimate},
     },
-    diagnostics::ResourceMemoryView,
 };
 use std::sync::{Arc, OnceLock};
 
@@ -30,8 +29,6 @@ pub struct RuntimeServices {
     pub infer_model_provider: fn(&str, Option<&str>) -> Option<String>,
     /// Attach estimates without replacing provider-reported costs.
     pub attach_estimated_cost: fn(&mut AnnotatedLlmResponse, Option<&str>),
-    /// Read an existing resource memory sample without initiating collection.
-    pub resource_memory: fn(Option<u32>) -> ResourceMemoryView,
 }
 
 struct NoPricing;
@@ -53,7 +50,6 @@ impl Default for RuntimeServices {
             pricing_snapshot: || Arc::new(NoPricing),
             infer_model_provider: |provider, _| Some(provider.to_string()),
             attach_estimated_cost: |_, _| {},
-            resource_memory: |_| ResourceMemoryView::disabled(),
         }
     }
 }

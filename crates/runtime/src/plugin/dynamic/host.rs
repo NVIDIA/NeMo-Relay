@@ -17,13 +17,13 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::diagnostics::Diagnostics;
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
     ensure_builtin_plugins_registered, initialize_plugins_exact_for_host,
     plugin_configuration_report_for_host, run_owned_plugin_mutation,
 };
+use nemo_relay_diagnostics::Diagnostics;
 
 use super::native::load_native_plugins_with_trust;
 use super::trust::DynamicPluginLoadTrust;
@@ -44,7 +44,7 @@ pub struct PluginHostConfig {
     pub plugins: PluginConfig,
     /// Highest-precedence complete service settings; omitted uses file layers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<crate::diagnostics::DiagnosticsSettings>,
+    pub diagnostics: Option<nemo_relay_diagnostics::DiagnosticsSettings>,
 }
 impl From<PluginConfig> for PluginHostConfig {
     fn from(plugins: PluginConfig) -> Self {
@@ -71,7 +71,7 @@ pub async fn initialize(
     let prepared =
         super::configuration::PreparedPluginHostConfig::load(additional_plugins_toml.as_deref())?;
     let settings = prepared.diagnostic_settings(config.diagnostics)?;
-    let context = crate::diagnostics::embedded::start(settings).map_err(|error| {
+    let context = nemo_relay_diagnostics::embedded::start(settings).map_err(|error| {
         crate::plugin::PluginError::InvalidConfig(format!("diagnostics: {}", error.reason()))
     })?;
     let resolved = prepared.resolve(

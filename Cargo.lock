@@ -1930,6 +1930,7 @@ dependencies = [
  "libloading",
  "log",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-plugin",
@@ -2028,6 +2029,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
@@ -2110,6 +2112,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-diagnostics"
+version = "1.0.0"
+dependencies = [
+ "arrayvec",
+ "chrono",
+ "circular-buffer",
+ "enumset",
+ "log",
+ "nemo-relay-plugin",
+ "nemo-relay-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "nemo-relay-ffi"
 version = "1.0.0"
 dependencies = [
@@ -2119,6 +2140,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
@@ -2170,6 +2192,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
@@ -2235,6 +2258,7 @@ dependencies = [
  "log",
  "nemo-relay",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-observability",
  "nemo-relay-runtime",
  "nemo-relay-types",
@@ -2284,6 +2308,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
@@ -2338,6 +2363,7 @@ dependencies = [
  "libloading",
  "log",
  "nemo-relay-codecs",
+ "nemo-relay-diagnostics",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-plugin",

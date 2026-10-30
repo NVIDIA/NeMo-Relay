@@ -4,9 +4,7 @@
 //! Embedded diagnostics readers. No language object retains a core query lease.
 use napi::{Env, JsString, JsUnknown};
 use napi_derive::napi;
-use nemo_relay_runtime::diagnostics::embedded::{
-    self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader,
-};
+use nemo_relay_diagnostics::embedded::{self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader};
 use serde_json::Value as Json;
 
 fn error(error: EmbeddedDiagnosticError) -> napi::Error {

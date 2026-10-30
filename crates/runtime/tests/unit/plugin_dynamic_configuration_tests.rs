@@ -877,7 +877,7 @@ artifact = "artifact.bin"
 }
 
 fn assert_trust_failure_evidence(
-    context: &crate::diagnostics::Diagnostics,
+    context: &nemo_relay_diagnostics::Diagnostics,
     kind: &str,
     startup: &str,
     failure: &str,
@@ -885,7 +885,7 @@ fn assert_trust_failure_evidence(
     // Required failures return early, but their evidence must survive
     // in the process-owned context just as optional exclusions do.
     let snapshot = context
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -926,8 +926,10 @@ fn assert_trust_failure_evidence(
 
 #[test]
 fn configuration_observations_preserve_validation_reports_and_isolate_projections() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
     use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+    use nemo_relay_diagnostics::{
+        DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity,
+    };
     use sha2::{Digest, Sha256};
     use std::sync::{
         Arc,
@@ -1037,8 +1039,8 @@ fn configuration_observations_preserve_validation_reports_and_isolate_projection
     }
 }
 
-fn configuration_diagnostic_context() -> crate::diagnostics::Diagnostics {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+fn configuration_diagnostic_context() -> nemo_relay_diagnostics::Diagnostics {
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
 
     Diagnostics::from_settings(
         SourceIdentity {
@@ -1057,8 +1059,8 @@ fn configuration_diagnostic_context() -> crate::diagnostics::Diagnostics {
 
 #[test]
 fn multiple_validation_failures_preserve_report_precedence_and_skipped_checks() {
-    use crate::diagnostics::DiagnosticQuery;
     use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+    use nemo_relay_diagnostics::DiagnosticQuery;
 
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("artifact.bin"), b"fixture").unwrap();
@@ -1144,7 +1146,7 @@ fn multiple_validation_failures_preserve_report_precedence_and_skipped_checks() 
 }
 
 fn assert_validation_failure_attribution(
-    snapshot: &crate::diagnostics::DiagnosticSnapshot,
+    snapshot: &nemo_relay_diagnostics::DiagnosticSnapshot,
     expected: &[(&str, &str, &str)],
 ) {
     let instance = snapshot.events[0]

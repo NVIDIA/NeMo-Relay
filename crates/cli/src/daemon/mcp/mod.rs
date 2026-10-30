@@ -589,8 +589,8 @@ async fn supervise_worker_launch(
     {
         crate::runtime_diagnostics::record(
             crate::runtime_diagnostics::Operation::Child,
-            nemo_relay_runtime::diagnostics::Classification::notice(
-                nemo_relay_runtime::diagnostics::NoticeCode::CliChildExited,
+            nemo_relay_diagnostics::Classification::notice(
+                nemo_relay_diagnostics::NoticeCode::CliChildExited,
             ),
         );
         let error = CliError::Launch(format!(
@@ -715,12 +715,12 @@ async fn launch_worker(
     match &spawn {
         Ok(_) => crate::runtime_diagnostics::success(
             crate::runtime_diagnostics::Operation::Child,
-            nemo_relay_runtime::diagnostics::SuccessCode::CliChildSpawned,
+            nemo_relay_diagnostics::SuccessCode::CliChildSpawned,
         ),
         Err(_) => crate::runtime_diagnostics::failure(
             crate::runtime_diagnostics::Operation::Child,
-            nemo_relay_runtime::diagnostics::CliFailureCode::ChildSpawn,
-            nemo_relay_runtime::diagnostics::FailureClass::Io,
+            nemo_relay_diagnostics::CliFailureCode::ChildSpawn,
+            nemo_relay_diagnostics::FailureClass::Io,
         ),
     }
     let child = spawn

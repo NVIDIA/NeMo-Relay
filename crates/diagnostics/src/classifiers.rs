@@ -12,7 +12,7 @@ use nemo_relay_types::diagnostics::{
     PluginFailureCode,
 };
 
-use crate::plugin::PluginError;
+use nemo_relay_plugin::component::PluginError;
 
 fn failure(code: FailureCode, class: FailureClass) -> Classification {
     // Every pair below is an explicit entry in the shared catalogue. This is a

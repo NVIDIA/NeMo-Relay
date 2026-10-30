@@ -11,7 +11,7 @@ pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay_runtime::diagnostics::CliFailureCode;
+use nemo_relay_diagnostics::CliFailureCode;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;

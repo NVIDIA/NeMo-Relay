@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::diagnostics::{DiagnosticQuery, DiagnosticsSettings, SourceIdentity};
+use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticsSettings, SourceIdentity};
 
 #[test]
 fn native_control_statuses_are_not_diagnostic_failures() {
@@ -296,7 +296,7 @@ fn plugin_observers_remain_inert_when_collection_or_registration_is_unavailable(
         if mode == "disabled" {
             assert!(matches!(
                 context.snapshot(&DiagnosticQuery::default()),
-                Err(crate::diagnostics::DiagnosticError::Disabled)
+                Err(nemo_relay_diagnostics::DiagnosticError::Disabled)
             ));
             assert_eq!(after.reserved_bytes, 0);
             continue;
@@ -390,9 +390,9 @@ fn replacement_plugin_observers_preserve_separate_instance_attribution() {
 }
 
 fn assert_replacement_plugin_events(
-    view: &crate::diagnostics::DiagnosticSnapshot,
-    old_component: &crate::diagnostics::ComponentSnapshot,
-    new_component: &crate::diagnostics::ComponentSnapshot,
+    view: &nemo_relay_diagnostics::DiagnosticSnapshot,
+    old_component: &nemo_relay_diagnostics::ComponentSnapshot,
+    new_component: &nemo_relay_diagnostics::ComponentSnapshot,
     instances: (Uuid, Uuid),
     execution: PluginExecution,
     success: SuccessCode,

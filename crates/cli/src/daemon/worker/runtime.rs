@@ -49,7 +49,7 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 use crate::daemon::diagnostics as diag;
-use nemo_relay_runtime::diagnostics::{DaemonFailureCode, FailureClass};
+use nemo_relay_diagnostics::{DaemonFailureCode, FailureClass};
 
 pub(super) struct RuntimeOptions {
     pub(super) daemon_origin: String,

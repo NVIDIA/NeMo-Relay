@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use nemo_relay_runtime::diagnostics::*;
+use nemo_relay_diagnostics::*;
 use nemo_relay_types::diagnostics::{DiagnosticHttpError, DiagnosticHttpReason as HttpReason};
 use std::sync::{Arc, Mutex};
 

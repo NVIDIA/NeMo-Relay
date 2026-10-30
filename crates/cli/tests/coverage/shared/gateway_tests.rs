@@ -167,7 +167,7 @@ async fn raw_passthrough_stream_records_body_outcomes_without_counting_cancellat
             expected_failures += usize::from(matches!(outcome, Outcome::Truncated));
             let snapshot = runtime
                 .context
-                .snapshot(&nemo_relay_runtime::diagnostics::DiagnosticQuery {
+                .snapshot(&nemo_relay_diagnostics::DiagnosticQuery {
                     component_key: Some("cli.upstream".into()),
                     ..Default::default()
                 })

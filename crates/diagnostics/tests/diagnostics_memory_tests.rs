@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Conservation, bounded allocation, mutation, and public read contracts.
-use nemo_relay_runtime::diagnostics::*;
+use nemo_relay_diagnostics::*;
 use std::num::NonZeroU64;
 #[path = "support/diagnostic_allocations.rs"]
 mod diagnostic_allocations;

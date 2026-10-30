@@ -9,9 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay_codecs::resolve::{ProviderSurface, supported_codec_names};
-use nemo_relay_runtime::diagnostics::{
-    ComponentRegistration, DiagnosticOutcome, ExtensionRegistration,
-};
+use nemo_relay_diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
 use nemo_relay_runtime::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
@@ -1362,9 +1360,9 @@ fn with_selector_diagnostics(
         |name| format!("pii_redaction.selector.{name}"),
     );
     if !compiled.is_trajectory()
-        && let Some(diagnostics) = ctx.diagnostics_context().and_then(|context| {
-            context.downcast_ref::<nemo_relay_runtime::diagnostics::Diagnostics>()
-        })
+        && let Some(diagnostics) = ctx
+            .diagnostics_context()
+            .and_then(|context| context.downcast_ref::<nemo_relay_diagnostics::Diagnostics>())
         && let Ok(recorder) =
             diagnostics.register_component(ComponentRegistration::new(&component_key, &[]))
         && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {

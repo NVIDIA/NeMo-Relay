@@ -253,7 +253,7 @@ async fn dispatch(
     }
     if diagnostic_setup {
         use crate::runtime_diagnostics::{self as diag, CliErrorClassifier, Operation};
-        use nemo_relay_runtime::diagnostics::*;
+        use nemo_relay_diagnostics::*;
         let classification = match &result {
             Ok(code) if *code == ExitCode::SUCCESS => {
                 Classification::success(SuccessCode::CliCommandCompleted)

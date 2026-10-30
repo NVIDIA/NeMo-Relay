@@ -1486,8 +1486,8 @@ fn capture_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::lock;
-    use crate::diagnostics::{
+    use crate::lock;
+    use crate::{
         Classification, ComponentRegistration, Diagnostics, DiagnosticsSettings, Observation,
         SuccessCode, WindowSettings,
     };

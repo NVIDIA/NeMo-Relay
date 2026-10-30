@@ -3,9 +3,7 @@
 
 //! Experimental read-only diagnostics ABI. Successful strings are caller-owned.
 use crate::error::{NemoRelayStatus, clear_last_error, set_last_error};
-use nemo_relay_runtime::diagnostics::embedded::{
-    self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader,
-};
+use nemo_relay_diagnostics::embedded::{self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader};
 use std::ffi::{CString, c_char};
 
 /// Opaque inspection authority. Caller must not copy, free, or forge the allocation.

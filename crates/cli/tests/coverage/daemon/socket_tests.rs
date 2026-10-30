@@ -276,7 +276,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let diagnostic_offer = Some(crate::daemon::diagnostics::DiagnosticOffer {
         source: uuid::Uuid::now_v7(),
-        schema_version: nemo_relay_runtime::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+        schema_version: nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
         enabled: false,
         query_available: false,
         whole_context_read: false,

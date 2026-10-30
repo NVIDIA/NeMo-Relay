@@ -5,15 +5,15 @@
 
 use super::*;
 
-fn native_test_diagnostic_context() -> crate::diagnostics::Diagnostics {
-    crate::diagnostics::Diagnostics::from_settings(
-        crate::diagnostics::SourceIdentity {
+fn native_test_diagnostic_context() -> nemo_relay_diagnostics::Diagnostics {
+    nemo_relay_diagnostics::Diagnostics::from_settings(
+        nemo_relay_diagnostics::SourceIdentity {
             instance_id: Uuid::now_v7(),
             process_id: None,
             process_role: "native-test".into(),
             relay_version: "test".into(),
         },
-        crate::diagnostics::DiagnosticsSettings::default(),
+        nemo_relay_diagnostics::DiagnosticsSettings::default(),
     )
     .unwrap()
 }
@@ -7895,7 +7895,9 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
 #[cfg(unix)]
 #[tokio::test]
 async fn native_callback_diagnostics_exclude_propagated_next_failures() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+    use nemo_relay_diagnostics::{
+        DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity,
+    };
 
     let context = Diagnostics::from_settings(
         SourceIdentity {
@@ -7913,7 +7915,7 @@ async fn native_callback_diagnostics_exclude_propagated_next_failures() {
     let diagnostics = super::super::diagnostics::PluginDiagnostics::new(
         &context,
         "test.native.provenance",
-        crate::diagnostics::PluginExecution::NativeAbi,
+        nemo_relay_diagnostics::PluginExecution::NativeAbi,
         Uuid::now_v7(),
     );
     let instance = Arc::new(NativePluginInstance {
@@ -9236,7 +9238,7 @@ symbol = "never_call"
         &trust,
         &mut Vec::new(),
         Vec::new(),
-        &crate::diagnostics::Diagnostics::default(),
+        &nemo_relay_diagnostics::Diagnostics::default(),
     ) {
         Ok(_) => panic!("replacement artifact must be rejected before loading native code"),
         Err(error) => error,
@@ -9256,7 +9258,7 @@ symbol = "never_call"
         &trust,
         &mut skipped,
         Vec::new(),
-        &crate::diagnostics::Diagnostics::default(),
+        &nemo_relay_diagnostics::Diagnostics::default(),
     )
     .unwrap();
     assert!(activation.is_empty());
@@ -9356,7 +9358,9 @@ async fn native_async_stream_http_error_rejection_preserves_status() {
 #[cfg(unix)]
 #[tokio::test]
 async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+    use nemo_relay_diagnostics::{
+        DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     let context = Diagnostics::from_settings(
         SourceIdentity {
@@ -9384,7 +9388,7 @@ async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details()
         diagnostics: super::super::diagnostics::PluginDiagnostics::new(
             &context,
             "test.native.sanitizers",
-            crate::diagnostics::PluginExecution::NativeAbi,
+            nemo_relay_diagnostics::PluginExecution::NativeAbi,
             Uuid::now_v7(),
         ),
         plugin_kind: "test.native.sanitizers".into(),
@@ -9498,8 +9502,11 @@ async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details()
 #[cfg(unix)]
 fn enabled_native_diagnostics_fixture(
     plugin: NemoRelayNativePluginV1,
-) -> (crate::diagnostics::Diagnostics, Arc<NativePluginInstance>) {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+) -> (
+    nemo_relay_diagnostics::Diagnostics,
+    Arc<NativePluginInstance>,
+) {
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
 
     let context = Diagnostics::from_settings(
         SourceIdentity {
@@ -9520,7 +9527,7 @@ fn enabled_native_diagnostics_fixture(
         diagnostics: super::super::diagnostics::PluginDiagnostics::new(
             &context,
             "test.native.accounting",
-            crate::diagnostics::PluginExecution::NativeAbi,
+            nemo_relay_diagnostics::PluginExecution::NativeAbi,
             Uuid::now_v7(),
         ),
         plugin_kind: "test.native.accounting".into(),
@@ -9535,11 +9542,11 @@ fn enabled_native_diagnostics_fixture(
 
 #[cfg(unix)]
 fn assert_native_diagnostic_observations(
-    context: &crate::diagnostics::Diagnostics,
+    context: &nemo_relay_diagnostics::Diagnostics,
     expected: &[(&str, Option<&str>, &str)],
 ) {
     let snapshot = context
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();

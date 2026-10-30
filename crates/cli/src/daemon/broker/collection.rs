@@ -168,12 +168,12 @@ pub(super) fn validate_page(bytes: &[u8], source: uuid::Uuid) -> Result<(), ()> 
     struct Header {
         schema_version: u32,
         source: Source,
-        sequence: nemo_relay_runtime::diagnostics::DiagnosticNumber,
-        captured_at: nemo_relay_runtime::diagnostics::ObservationTime,
+        sequence: nemo_relay_diagnostics::DiagnosticNumber,
+        captured_at: nemo_relay_diagnostics::ObservationTime,
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|_| ())?;
     let _ = (header.sequence, header.captured_at);
-    if header.schema_version != nemo_relay_runtime::diagnostics::DIAGNOSTIC_SCHEMA_VERSION
+    if header.schema_version != nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION
         || header.source.instance_id != source
     {
         return Err(());
@@ -245,7 +245,7 @@ impl<'de> Visitor<'de> for Walk<'_> {
 }
 
 use super::super::common::identity::TokenDigest;
-use nemo_relay_runtime::diagnostics::DiagnosticNumber;
+use nemo_relay_diagnostics::DiagnosticNumber;
 use serde::Serialize;
 use tokio::time::Instant;
 

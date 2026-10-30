@@ -5116,7 +5116,7 @@ async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error()
     let mut state = test_daemon_state(false, "route-token", GatewayConfig::default());
     Arc::get_mut(&mut state).unwrap().diagnostics_http = Some(
         crate::diagnostics_http::DiagnosticsHttp::new(
-            nemo_relay_runtime::diagnostics::Diagnostics::default().reader(),
+            nemo_relay_diagnostics::Diagnostics::default().reader(),
             crate::configuration::BootstrapChallengeKey::from_bytes(b"transport-error"),
             vec![],
         )
@@ -5149,7 +5149,7 @@ async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error()
 
 #[tokio::test]
 async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_mutate_state() {
-    use nemo_relay_runtime::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     let context = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {

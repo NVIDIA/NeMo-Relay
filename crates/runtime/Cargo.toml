@@ -17,6 +17,7 @@ workspace = true
 # Private test hook for suppressing implicit user/system plugin discovery.
 __skip-implicit-config = []
 [dependencies]
+nemo-relay-diagnostics.workspace = true
 nemo-relay-codecs.workspace = true
 # First-party crates.
 nemo-relay-plugin.workspace = true

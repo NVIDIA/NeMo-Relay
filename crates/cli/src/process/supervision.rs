@@ -4,7 +4,7 @@
 //! Ownership and cleanup for coding-agent wrapper process trees.
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay_runtime::diagnostics::{
+use nemo_relay_diagnostics::{
     Classification, CliFailureCode, FailureClass, NoticeCode, SuccessCode,
 };
 

@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::diagnostics::{
-    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentRegistration,
-    DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics,
-    DiagnosticsSettings, FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
-};
 use crate::logging::{
     FileLogRotationConfig, FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel,
     LogSinkConfig, LoggingConfig, LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES,
     MAX_FILE_SINK_RETAINED_FILES, build_logger, format_event_for_test, init_logging,
     initialize_default_logging, shutdown_default_logging,
+};
+use nemo_relay_diagnostics::{
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentRegistration,
+    DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics,
+    DiagnosticsSettings, FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
 };
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_sdk::error::OTelSdkResult;

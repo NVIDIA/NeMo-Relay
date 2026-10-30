@@ -47,7 +47,7 @@ use crate::api::runtime::{
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
-use crate::diagnostics::{
+use nemo_relay_diagnostics::{
     ComponentRecorder, ComponentRegistration, DiagnosticDetailRef, DiagnosticObservation,
     Diagnostics, PluginErrorClassifier,
 };

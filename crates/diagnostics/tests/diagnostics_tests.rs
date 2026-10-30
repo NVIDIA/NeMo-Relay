@@ -13,7 +13,7 @@ use std::sync::{
 };
 use std::thread;
 
-use nemo_relay_runtime::diagnostics::*;
+use nemo_relay_diagnostics::*;
 use uuid::Uuid;
 
 #[path = "support/diagnostic_allocations.rs"]

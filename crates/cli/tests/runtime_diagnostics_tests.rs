@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Public executable behavior: diagnostics must preserve ordinary command output and results.
-use nemo_relay_runtime::diagnostics::DiagnosticSnapshot;
+use nemo_relay_diagnostics::DiagnosticSnapshot;
 use std::process::Command;
 
 fn command(directory: &std::path::Path) -> Command {

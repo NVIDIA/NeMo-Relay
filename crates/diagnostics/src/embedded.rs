@@ -114,7 +114,7 @@ impl EmbeddedService {
 
 /// Resolve once before plugin validation/activation. Equivalent settings reuse
 /// the service; a conflicting request leaves all existing state untouched.
-pub(crate) fn start(settings: DiagnosticsSettings) -> Result<&'static Diagnostics> {
+pub fn start(settings: DiagnosticsSettings) -> Result<&'static Diagnostics> {
     check_process(OWNER_PID.load(Ordering::Acquire))?;
     // Publish before acquiring any service lock, including concurrent first startup.
     OWNER_PID
@@ -163,7 +163,7 @@ pub(crate) fn start(settings: DiagnosticsSettings) -> Result<&'static Diagnostic
         .map_err(|_| EmbeddedDiagnosticError::ConfigurationConflict)?;
     let service = SERVICE.get().expect("service installed under startup lock");
     // Optional attachment cannot disable startup or replace the embedding logger.
-    let _ = crate::logging::attach_default_diagnostics(&service.context);
+    crate::integration::attach_logging(&service.context);
     Ok(&service.context)
 }
 
@@ -230,7 +230,7 @@ impl EmbeddedDiagnosticsReader {
             } else {
                 0
             },
-            logging_coverage: crate::logging::default_diagnostics_coverage(),
+            logging_coverage: crate::integration::logging_coverage(),
             limits,
         })
     }
@@ -414,5 +414,5 @@ pub fn binding_query_contract_json() -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/diagnostics_embedded_tests.rs"]
+#[path = "../tests/coverage/diagnostics_embedded_tests.rs"]
 mod tests;

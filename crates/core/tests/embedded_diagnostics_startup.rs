@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Public embedded startup contract. Each test requires process isolation (nextest).
+use nemo_relay_diagnostics::{DiagnosticSnapshot, Diagnostics, embedded};
 use nemo_relay_runtime::{
-    diagnostics::{DiagnosticSnapshot, Diagnostics, embedded},
     logging::{LoggingConfig, LoggingRuntime},
     plugin::dynamic::PluginHostConfig,
 };
@@ -21,7 +21,7 @@ async fn explicit_logging_does_not_select_embedded_diagnostics() {
     assert_eq!(embedded::reader().unwrap_err().reason(), "not_initialized");
 
     let config = PluginHostConfig {
-        diagnostics: Some(nemo_relay_runtime::diagnostics::DiagnosticsSettings {
+        diagnostics: Some(nemo_relay_diagnostics::DiagnosticsSettings {
             enabled: true,
             ..Default::default()
         }),
@@ -100,7 +100,7 @@ async fn programmatic_service_profile_replaces_invalid_file_settings() {
             .is_err()
     );
 
-    let mut settings = nemo_relay_runtime::diagnostics::DiagnosticsSettings {
+    let mut settings = nemo_relay_diagnostics::DiagnosticsSettings {
         enabled: true,
         ..Default::default()
     };
@@ -152,7 +152,7 @@ async fn application_owned_logger_does_not_block_diagnostics() {
     static LOGGER: ApplicationLogger = ApplicationLogger;
     log::set_logger(&LOGGER).unwrap();
     let config = PluginHostConfig {
-        diagnostics: Some(nemo_relay_runtime::diagnostics::DiagnosticsSettings {
+        diagnostics: Some(nemo_relay_diagnostics::DiagnosticsSettings {
             enabled: true,
             ..Default::default()
         }),

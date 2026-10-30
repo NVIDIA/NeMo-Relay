@@ -16,12 +16,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::diagnostics::{
+use chrono::{DateTime, Utc};
+use futures_util::FutureExt;
+use nemo_relay_diagnostics::{
     FailureClass as DiagnosticFailureClass, PluginOperationFailureCode as DiagnosticOperation,
     PluginPhase as DiagnosticPhase,
 };
-use chrono::{DateTime, Utc};
-use futures_util::FutureExt;
 use nemo_relay_worker_proto::DOWNSTREAM_CONTINUATION_METADATA;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -208,14 +208,17 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_with_diagnostics(specs, crate::diagnostics::Diagnostics::process_default())
+    load_worker_plugins_with_diagnostics(
+        specs,
+        nemo_relay_diagnostics::Diagnostics::process_default(),
+    )
 }
 
 /// Load plugin workers using the runtime owner's selected diagnostic context.
 /// Diagnostic admission never controls whether an execution activation succeeds.
 pub fn load_worker_plugins_with_diagnostics<I>(
     specs: I,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -228,7 +231,7 @@ pub(super) fn prepare_worker_plugins_with_trust<I>(
     specs: I,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -241,7 +244,7 @@ fn load_worker_plugins_inner<I>(
     defer_registration: bool,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -441,7 +444,7 @@ impl WorkerPluginInstance {
             );
         } else {
             self.host_state.observer.success(
-                crate::diagnostics::SuccessCode::PluginWorkerProcessCleaned,
+                nemo_relay_diagnostics::SuccessCode::PluginWorkerProcessCleaned,
                 DiagnosticPhase::Shutdown,
             );
         }
@@ -553,9 +556,9 @@ fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
     verified_manifest: Option<DynamicPluginManifest>,
-    diagnostics: &crate::diagnostics::Diagnostics,
+    diagnostics: &nemo_relay_diagnostics::Diagnostics,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
-    use crate::diagnostics::{
+    use nemo_relay_diagnostics::{
         FailureClass, PluginExecution, PluginOperationFailureCode as Operation, PluginPhase,
     };
     let activation_uuid = Uuid::now_v7();
@@ -734,7 +737,7 @@ fn load_one_worker_plugin(
         })?,
     );
     observer.success(
-        crate::diagnostics::SuccessCode::PluginWorkerStarted,
+        nemo_relay_diagnostics::SuccessCode::PluginWorkerStarted,
         PluginPhase::Activation,
     );
     log::info!(
@@ -814,7 +817,7 @@ fn load_one_worker_plugin(
         );
     })?;
     observer.success(
-        crate::diagnostics::SuccessCode::PluginWorkerHandshakeCompleted,
+        nemo_relay_diagnostics::SuccessCode::PluginWorkerHandshakeCompleted,
         PluginPhase::Activation,
     );
     host_state.set_gate_callback(WorkerGateCallback {
@@ -865,7 +868,7 @@ fn load_one_worker_plugin(
         );
     } else {
         observer.success(
-            crate::diagnostics::SuccessCode::PluginWorkerValidated,
+            nemo_relay_diagnostics::SuccessCode::PluginWorkerValidated,
             PluginPhase::Validation,
         );
     }
@@ -1373,7 +1376,7 @@ impl WorkerPluginInstance {
                 let result = self.request_registration_plan().await;
                 match &result {
                     Ok(_) => self.host_state.observer.success(
-                        crate::diagnostics::SuccessCode::PluginWorkerRegistered,
+                        nemo_relay_diagnostics::SuccessCode::PluginWorkerRegistered,
                         DiagnosticPhase::Activation,
                     ),
                     Err(_) => self.host_state.observer.failure(

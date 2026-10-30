@@ -3,7 +3,7 @@
 
 //! Producer classification preserves structured evidence without changing execution.
 
-use nemo_relay_runtime::diagnostics::{
+use nemo_relay_diagnostics::{
     BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, DiagnosticClassifier,
     FailureClass, FailureCode, PluginErrorClassifier, PluginFailureCode,
 };

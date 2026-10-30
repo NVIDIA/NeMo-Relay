@@ -3,7 +3,7 @@
 
 //! Startup staging within the existing shared configuration resolver.
 use super::*;
-use nemo_relay_runtime::diagnostics::{DiagnosticLimits, DiagnosticsSettings};
+use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticsSettings};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]

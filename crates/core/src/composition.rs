@@ -10,13 +10,15 @@ pub(crate) fn ensure_runtime_services() {
 }
 
 pub(crate) fn services() -> rt::composition::RuntimeServices {
+    nemo_relay_diagnostics::integration::install_resource_memory(
+        nemo_relay_resource_metrics::manager::latest_memory_view,
+    );
     rt::composition::RuntimeServices {
         register_builtin_plugins,
         preflight,
         pricing_snapshot: || nemo_relay_model_pricing::active_pricing_resolver(),
         infer_model_provider: nemo_relay_model_pricing::infer_model_provider,
         attach_estimated_cost: nemo_relay_model_pricing::attach_estimated_cost_for_provider,
-        resource_memory: nemo_relay_resource_metrics::manager::latest_memory_view,
     }
 }
 

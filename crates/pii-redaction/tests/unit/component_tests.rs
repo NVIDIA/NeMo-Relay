@@ -38,14 +38,12 @@ use crate::plugin::{
 use futures::StreamExt;
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
+use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
 use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::atif::AtifAgentInfo;
 use nemo_relay_observability::atof::AtofExporterConfig;
 use nemo_relay_observability::otel::OpenTelemetryConfig;
 use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
-use nemo_relay_runtime::diagnostics::{
-    DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
-};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;

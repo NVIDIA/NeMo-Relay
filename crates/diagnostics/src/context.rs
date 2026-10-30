@@ -108,9 +108,9 @@ pub struct ComponentOwner {
     pub(super) handle: Option<ComponentHandle>,
 }
 impl ComponentOwner {
-    // Roll back an unpublished transport registration. No observer may have
-    // recorded through this owner; retained/public registrations use close().
-    pub(crate) fn discard_unpublished(&self) {
+    /// Roll back an unpublished transport registration. No observer may have
+    /// recorded through this owner; retained/public registrations use close().
+    pub fn discard_unpublished(&self) {
         if let (Some(inner), Some(handle)) = (self.inner.upgrade(), self.handle)
             && let Some(backend) = &inner.backend
         {

@@ -20,8 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-fn enabled_diagnostics() -> crate::diagnostics::Diagnostics {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+fn enabled_diagnostics() -> nemo_relay_diagnostics::Diagnostics {
+    use nemo_relay_diagnostics::{Diagnostics, DiagnosticsSettings};
     Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -33,9 +33,9 @@ fn enabled_diagnostics() -> crate::diagnostics::Diagnostics {
 }
 
 fn diagnostic_test_producer(
-    service: &crate::diagnostics::Diagnostics,
-) -> crate::diagnostics::ComponentRecorder {
-    use crate::diagnostics::{
+    service: &nemo_relay_diagnostics::Diagnostics,
+) -> nemo_relay_diagnostics::ComponentRecorder {
+    use nemo_relay_diagnostics::{
         BuiltinDiagnosticCode, CommonPluginFailureCode, ComponentRegistration, FailureCode,
         PluginFailureCode,
     };
@@ -47,8 +47,8 @@ fn diagnostic_test_producer(
         .unwrap()
 }
 
-fn record_test_failure(recorder: &crate::diagnostics::ComponentRecorder, message: &str) {
-    use crate::diagnostics::{
+fn record_test_failure(recorder: &nemo_relay_diagnostics::ComponentRecorder, message: &str) {
+    use nemo_relay_diagnostics::{
         Classification, CommonPluginFailureCode, FailureClass, FailureCode, Observation,
         PluginFailureCode,
     };
@@ -401,8 +401,8 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
 
 #[test]
 fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::diagnostics::LoggingDiagnostics;
+    use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     let diagnostics = enabled_diagnostics();
     let config = LoggingConfig {
@@ -498,11 +498,11 @@ impl Sink for FailingRecordSink {
 
 #[test]
 fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failure() {
-    use crate::diagnostics::DiagnosticQuery;
     use crate::logging::{
         LoggingRuntime,
         diagnostics::{LoggingDiagnostics, attach_projection},
     };
+    use nemo_relay_diagnostics::DiagnosticQuery;
 
     let _guard = crate::logging::lock_test_logging();
     struct RestoreMaxLevel(log::LevelFilter);
@@ -580,8 +580,8 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
 
 #[test]
 fn logging_shutdown_records_final_flush_failures_before_closing_component_handles() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::{LoggingRuntime, diagnostics::LoggingDiagnostics};
+    use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     let _guard = crate::logging::lock_test_logging();
     let diagnostics = enabled_diagnostics();
@@ -647,8 +647,8 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
 
 #[test]
 fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::diagnostics::LoggingDiagnostics;
+    use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     let diagnostics = enabled_diagnostics();
     let logging = LoggingDiagnostics::new(&diagnostics, &LoggingConfig::default());
@@ -720,8 +720,8 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
 
 #[test]
 fn stderr_backend_failures_record_once_without_projection_recursion() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::LoggingRuntime;
+    use nemo_relay_diagnostics::{DiagnosticOutcome, DiagnosticQuery};
 
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_STDERR_DIAGNOSTICS_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
@@ -816,7 +816,7 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
 #[test]
 fn late_diagnostic_attachment_reaches_existing_sink_error_handlers() {
     use crate::logging::diagnostics::LoggingDiagnostics;
-    let disabled = crate::diagnostics::Diagnostics::default();
+    let disabled = nemo_relay_diagnostics::Diagnostics::default();
     let config = LoggingConfig::default();
     let mut adapter = LoggingDiagnostics::new(&disabled, &config);
     // This clone is what the logger's existing handler captures at import.
@@ -827,7 +827,7 @@ fn late_diagnostic_attachment_reaches_existing_sink_error_handlers() {
         "restricted backend detail",
     )));
     let snapshot = enabled
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();

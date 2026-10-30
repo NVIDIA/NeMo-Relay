@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::diagnostics::*;
+use crate::*;
 use std::num::NonZeroU64;
 
 fn service() -> EmbeddedService {
@@ -227,52 +227,6 @@ fn canonical_copy_keeps_large_counts_restricted_text_and_closed_evidence() {
     assert!(snapshot.lifetime.totals.occurrences_total.saturated);
     assert!(snapshot.components[0].closed_at.is_some());
     assert_eq!(snapshot.events[0].message(), Some("18446744073709551615"));
-}
-
-#[tokio::test]
-async fn embedded_host_selects_service_before_plugin_failure_and_reuses_it() {
-    // nextest runs this process-global scenario in its own process.
-    assert!(matches!(
-        reader(),
-        Err(EmbeddedDiagnosticError::NotInitialized)
-    ));
-    crate::logging::initialize_default_logging().unwrap();
-    assert!(Diagnostics::selected_process_default().is_none());
-    let config: crate::plugin::dynamic::PluginHostConfig =
-        serde_json::from_value(serde_json::json!({
-            "diagnostics": {"enabled": true},
-            "components": [{"kind": "missing.phase4.component"}],
-            "policy": {"unknown_component": "error"}
-        }))
-        .unwrap();
-    assert!(
-        crate::plugin::dynamic::initialize(config, None)
-            .await
-            .is_err()
-    );
-    let retained = reader().unwrap();
-    assert!(retained.info().unwrap().discovery.collection_enabled);
-    let source = retained.info().unwrap().discovery.source.instance_id;
-    let config: crate::plugin::dynamic::PluginHostConfig =
-        serde_json::from_value(serde_json::json!({"diagnostics":{"enabled":true}})).unwrap();
-    let mut activation = crate::plugin::dynamic::initialize(config, None)
-        .await
-        .unwrap();
-    activation.close().unwrap();
-    assert_eq!(
-        reader()
-            .unwrap()
-            .info()
-            .unwrap()
-            .discovery
-            .source
-            .instance_id,
-        source
-    );
-    assert!(start(DiagnosticsSettings::default()).is_err());
-    assert!(retained.snapshot_json("{}").is_ok());
-    crate::logging::shutdown_default_logging().unwrap();
-    assert!(retained.snapshot_json("{}").is_ok());
 }
 
 #[test]

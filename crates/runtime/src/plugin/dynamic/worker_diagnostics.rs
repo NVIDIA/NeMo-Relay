@@ -15,7 +15,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::diagnostics::{
+use nemo_relay_diagnostics::{
     BuiltinDiagnosticCode, Classification, ComponentOwner, ComponentRecorder,
     ComponentRegistration, DiagnosticCorrelation, DiagnosticDetailRef, DiagnosticOutcome,
     DiagnosticSeverity, Diagnostics, EvidenceDisposition, ExtensionHandle, ExtensionRegistration,
@@ -102,11 +102,11 @@ impl WorkerDiagnostics {
     fn capabilities_for(context: &Diagnostics) -> wire::DiagnosticCapabilities {
         wire::DiagnosticCapabilities {
             protocol_version: 1,
-            snapshot_version: crate::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
-            catalogue_version: crate::diagnostics::DIAGNOSTIC_CATALOGUE_VERSION,
+            snapshot_version: nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            catalogue_version: nemo_relay_diagnostics::DIAGNOSTIC_CATALOGUE_VERSION,
             provenance_version: 1,
             enabled: context.reader().availability()
-                == crate::diagnostics::DiagnosticAvailability::Available,
+                == nemo_relay_diagnostics::DiagnosticAvailability::Available,
             can_read_context: false,
             max_components: COMPONENTS as u32,
             max_extensions: EXTENSIONS as u32,
@@ -131,7 +131,7 @@ impl WorkerDiagnostics {
     ) -> Result<wire::DiagnosticSession, Status> {
         if request.protocol_version != 1
             || request.provenance_version != 1
-            || request.snapshot_version != crate::diagnostics::DIAGNOSTIC_SCHEMA_VERSION
+            || request.snapshot_version != nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION
         {
             return Err(Status::failed_precondition(
                 "unsupported diagnostic contract",
@@ -274,7 +274,7 @@ impl WorkerDiagnostics {
     ) -> Result<(), &'static str> {
         use wire::diagnostic_submission::Operation;
         if self.context.reader().availability()
-            == crate::diagnostics::DiagnosticAvailability::Disabled
+            == nemo_relay_diagnostics::DiagnosticAvailability::Disabled
         {
             receipt.status = wire::DiagnosticReceiptStatus::Disabled as i32;
             return Ok(());
@@ -337,9 +337,11 @@ impl WorkerDiagnostics {
                     // use common failures or extensions for internal operations.
                     if !matches!(
                         code,
-                        BuiltinDiagnosticCode::Failure(crate::diagnostics::FailureCode::Plugin(
-                            crate::diagnostics::PluginFailureCode::Common(_)
-                        ))
+                        BuiltinDiagnosticCode::Failure(
+                            nemo_relay_diagnostics::FailureCode::Plugin(
+                                nemo_relay_diagnostics::PluginFailureCode::Common(_)
+                            )
+                        )
                     ) || builtins.contains(&code)
                     {
                         return Err("diagnostic code outside producer vocabulary");
@@ -506,7 +508,7 @@ impl WorkerDiagnostics {
             session_id: value.session_id.as_deref().map(Into::into),
             request_id: value.request_id.as_deref().map(Into::into),
         };
-        observation.remote = Some(RemoteDiagnosticOrigin {
+        observation = observation.with_remote_origin(RemoteDiagnosticOrigin {
             source_instance_id: session.id,
             activation_instance_id: self.activation,
             submission_sequence: sequence.into(),

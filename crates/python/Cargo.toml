@@ -21,6 +21,7 @@ crate-type = ["cdylib", "rlib"]
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-diagnostics.workspace = true
 nemo-relay-codecs.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-runtime.workspace = true

@@ -1955,7 +1955,7 @@ fn legacy_runtime_diagnostic_before_activation_does_not_initialize_canonical_col
         count: 2,
     });
     assert!(active_runtime_diagnostics_snapshot().is_empty());
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
     let service = Diagnostics::install_process_default(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -3114,7 +3114,7 @@ fn test_resolved_plugin_config_reports_every_contributing_file() {
 
 #[test]
 fn configuration_inheritance_records_once_per_ambient_source_in_selected_context() {
-    use crate::diagnostics::{DiagnosticQuery, DiagnosticSeverity, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticSeverity, DiagnosticsSettings};
 
     let service = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
@@ -3193,7 +3193,7 @@ fn configuration_inheritance_records_once_per_ambient_source_in_selected_context
 
 #[test]
 fn configuration_inheritance_recording_is_best_effort_and_preserves_legacy_results() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
 
     let blocked = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
@@ -3240,7 +3240,7 @@ fn configuration_inheritance_recording_is_best_effort_and_preserves_legacy_resul
 
 #[test]
 fn configuration_inheritance_and_activation_use_the_same_selected_context() {
-    use crate::diagnostics::{DiagnosticQuery, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticsSettings};
 
     let _guard = lock_runtime_owner();
     reset_global();
@@ -3759,7 +3759,7 @@ fn plugin_host_lease_rejects_an_active_static_configuration() {
 
 #[test]
 fn typed_activation_failure_records_once_through_its_scoped_context() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
     let service = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -3822,7 +3822,7 @@ fn typed_activation_failure_records_once_through_its_scoped_context() {
 
 #[test]
 fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
     let service = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -3884,7 +3884,9 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
 #[cfg(feature = "__skip-implicit-config")]
 #[test]
 fn plugin_attribution_uses_selected_context_limit_through_public_initialization() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{
+        DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+    };
     let _guard = lock_runtime_owner();
     let _config = TestConfigEnvironment::set(Some(OsStr::new("1")));
     reset_global();
@@ -3941,7 +3943,9 @@ fn plugin_attribution_uses_selected_context_limit_through_public_initialization(
 
 #[test]
 fn plugin_attribution_truncation_preserves_utf8_boundaries() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{
+        DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
+    };
     let service = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -3973,7 +3977,7 @@ fn plugin_attribution_truncation_preserves_utf8_boundaries() {
 
 #[test]
 fn nonfatal_exporter_signal_counters_keep_child_owner_without_event_history() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
     let service = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -4069,7 +4073,7 @@ fn nonfatal_exporter_signal_counters_keep_child_owner_without_event_history() {
 
 #[test]
 fn nonfatal_exporter_admission_is_best_effort_and_preserves_legacy_warning() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+    use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
     let blocked = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {

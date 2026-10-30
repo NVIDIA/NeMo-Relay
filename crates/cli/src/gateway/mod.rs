@@ -32,12 +32,12 @@ use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use nemo_relay_codecs::resolve::{
     ProviderSurface, request_codec as build_request_codec, streaming_codec as build_streaming_codec,
 };
+use nemo_relay_diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use nemo_relay_runtime::api::runtime::{
     LlmCodecIdentity, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
     TASK_SCOPE_STACK,
 };
 use nemo_relay_runtime::codec::response_codec as build_response_codec;
-use nemo_relay_runtime::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::streaming::StreamingCodec;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};

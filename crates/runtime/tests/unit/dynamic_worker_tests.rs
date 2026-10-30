@@ -2104,7 +2104,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     assert!(callback.host_state.continuations.lock().unwrap().is_empty());
     assert!(callback.host_state.codecs.lock().unwrap().is_empty());
     let snapshot = diagnostics
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -5081,7 +5081,7 @@ async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
         "a disconnected worker must still release its activation directory"
     );
     let view = diagnostics
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -5104,7 +5104,7 @@ async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
     assert!(instance.shutdown_checked().errors.is_empty());
     assert_eq!(
         diagnostics
-            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
             .unwrap()
             .to_snapshot()
             .unwrap()
@@ -5722,8 +5722,10 @@ async fn short_callbacks_keep_their_rpc_deadline() {
 
 fn enable_test_diagnostics(
     state: &mut Arc<WorkerHostRuntimeState>,
-) -> crate::diagnostics::Diagnostics {
-    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity};
+) -> nemo_relay_diagnostics::Diagnostics {
+    use nemo_relay_diagnostics::{
+        Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity,
+    };
     let diagnostics = Diagnostics::from_settings(
         SourceIdentity {
             instance_id: Uuid::now_v7(),
@@ -5746,9 +5748,9 @@ fn enable_test_diagnostics(
     diagnostics
 }
 
-fn provenance_failure_total(diagnostics: &crate::diagnostics::Diagnostics) -> u64 {
+fn provenance_failure_total(diagnostics: &nemo_relay_diagnostics::Diagnostics) -> u64 {
     diagnostics
-        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap()
@@ -5902,7 +5904,7 @@ async fn worker_stream_opening_failures_preserve_provenance_and_release_invocati
         assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
         assert!(callback.host_state.codecs.lock().unwrap().is_empty());
         let snapshot = diagnostics
-            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
             .unwrap()
             .to_snapshot()
             .unwrap();
@@ -6072,7 +6074,7 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
         .await
         .unwrap();
         let view = diagnostics
-            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .snapshot(&nemo_relay_diagnostics::DiagnosticQuery::default())
             .unwrap()
             .to_snapshot()
             .unwrap();

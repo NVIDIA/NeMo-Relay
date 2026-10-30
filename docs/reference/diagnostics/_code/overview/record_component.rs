@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay_runtime::diagnostics::{
+use nemo_relay_diagnostics::{
     BuiltinDiagnosticCode, Classification, ComponentRegistration, DiagnosticQuery, Diagnostics,
     DiagnosticsSettings, FailureClass, FailureCode, LoggingFailureCode, Observation,
     SourceIdentity, SuccessCode,

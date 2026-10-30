@@ -6,7 +6,7 @@ mod types;
 pub(crate) use types::GatewayOverrides;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay_runtime::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+use nemo_relay_diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 
 use std::future::Future;
 use std::net::SocketAddr;
