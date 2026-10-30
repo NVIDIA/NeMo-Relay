@@ -72,7 +72,7 @@ const auditPlugin = {
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrar,
     Result as PluginResult,
 };
 use serde_json::{Map, Value as Json};
@@ -100,7 +100,7 @@ impl Plugin for AuditPlugin {
     fn register<'a>(
         &'a self,
         _config: &Map<String, Json>,
-        context: &'a mut PluginRegistrationContext,
+        context: &'a mut dyn PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
             context.register_subscriber(

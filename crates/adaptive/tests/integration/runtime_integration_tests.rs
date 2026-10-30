@@ -26,8 +26,8 @@ use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, deregister_plugin, register_plugin, test_close_plugin_host,
-    test_initialize_plugin_host_exact, test_validate_static_plugin_config,
+    deregister_plugin, register_plugin, test_close_plugin_host, test_initialize_plugin_host_exact,
+    test_validate_static_plugin_config,
 };
 use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
@@ -717,7 +717,7 @@ impl Plugin for HeaderPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         let plugin_config = plugin_config.clone();
@@ -973,7 +973,7 @@ impl Plugin for FailingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         Box::pin(async move {

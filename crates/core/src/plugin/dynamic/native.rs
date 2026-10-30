@@ -7,6 +7,8 @@
 mod native_diagnostics;
 
 #[cfg(test)]
+use crate::plugin::PluginRegistrationContext;
+#[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
 #[cfg(test)]
@@ -56,8 +58,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
-    PluginRegistrationContext, active_runtime_diagnostics_snapshot,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
@@ -396,7 +398,7 @@ impl Plugin for NativePluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = crate::plugin::Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -781,9 +783,9 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 }
 
 #[repr(C)]
-struct NativeHostPluginContext {
+struct NativeHostPluginContext<'a> {
     diagnostics: Arc<native_diagnostics::NativeDiagnostics>,
-    ctx: *mut PluginRegistrationContext,
+    ctx: *mut (dyn crate::plugin::PluginRegistrar + 'a),
     instance: Arc<NativePluginInstance>,
 }
 
@@ -4805,12 +4807,12 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
 
 fn host_ctx_mut<'a>(
     ctx: *mut NemoRelayNativePluginContext,
-) -> Result<&'a mut NativeHostPluginContext, NemoRelayStatus> {
+) -> Result<&'a mut NativeHostPluginContext<'a>, NemoRelayStatus> {
     if ctx.is_null() {
         set_native_last_error("plugin context is null");
         return Err(NemoRelayStatus::NullPointer);
     }
-    let ctx = unsafe { &mut *(ctx as *mut NativeHostPluginContext) };
+    let ctx = unsafe { &mut *(ctx as *mut NativeHostPluginContext<'a>) };
     if ctx.ctx.is_null() {
         set_native_last_error("plugin context inner pointer is null");
         return Err(NemoRelayStatus::NullPointer);

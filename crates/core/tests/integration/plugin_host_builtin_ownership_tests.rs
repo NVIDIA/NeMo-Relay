@@ -11,9 +11,9 @@ use nemo_relay::plugin::dynamic::{
     DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec,
 };
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
-    PluginRegistrationContext, Result, deregister_plugin, list_plugin_kinds, lookup_plugin,
-    register_plugin, validate_static_plugin_config,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, Result,
+    deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
+    validate_static_plugin_config,
 };
 use serde_json::{Map, Value as Json};
 
@@ -31,7 +31,7 @@ impl Plugin for PreclaimedObservabilityPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }

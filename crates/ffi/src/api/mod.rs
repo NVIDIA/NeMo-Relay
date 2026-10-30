@@ -173,8 +173,8 @@ use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::dynamic::PluginHostActivation;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
-    PluginRegistrationContext, deregister_plugin, list_plugin_kinds, register_plugin,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, deregister_plugin,
+    list_plugin_kinds, register_plugin,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;

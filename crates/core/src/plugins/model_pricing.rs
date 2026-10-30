@@ -13,8 +13,8 @@ use crate::codec::response::{
     PricingConfig, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
-    PluginRegistrationContext, Result, register_builtin_plugin,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration, Result,
+    register_builtin_plugin,
 };
 
 /// Plugin kind used by the model pricing component.
@@ -65,7 +65,7 @@ impl Plugin for PricingPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {

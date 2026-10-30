@@ -17,6 +17,7 @@ use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::{EditorConfig, EditorFieldKind, EditorSchema};
 use crate::observability::otel::ExporterInitializationError;
+use crate::plugin::PluginRegistrationContext;
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{

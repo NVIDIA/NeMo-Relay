@@ -3967,7 +3967,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
     register_local_backend_provider(Arc::new(
-        move |config, _ctx: &mut PluginRegistrationContext| {
+        move |config, _ctx: &mut dyn nemo_relay::plugin::PluginRegistrar| {
             called_inner.store(true, Ordering::SeqCst);
             assert_eq!(config.mode, "local_model");
             Ok(())

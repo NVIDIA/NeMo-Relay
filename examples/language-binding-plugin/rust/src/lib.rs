@@ -27,8 +27,7 @@ use nemo_relay::api::tool::{
 use nemo_relay::plugin::dynamic::{initialize, validate};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, Plugin, PluginComponentSpec, PluginConfig,
-    PluginRegistrationContext, Result as PluginResult, deregister_plugin, list_plugin_kinds,
-    register_plugin,
+    Result as PluginResult, deregister_plugin, list_plugin_kinds, register_plugin,
 };
 use serde_json::{Map, Value as Json, json};
 
@@ -57,7 +56,7 @@ impl Plugin for DocumentationPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        context: &'a mut PluginRegistrationContext,
+        context: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {

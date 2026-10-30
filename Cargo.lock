@@ -2159,8 +2159,10 @@ version = "1.0.0"
 dependencies = [
  "futures",
  "nemo-relay-types",
+ "schemars",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-util",
 ]
@@ -2238,6 +2240,8 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+ "thiserror",
+ "tokio-stream",
  "typed-builder",
  "uuid",
 ]

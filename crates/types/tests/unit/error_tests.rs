@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for error in the NeMo Relay core crate.
+//! Shared runtime error contracts.
 
 use super::*;
 

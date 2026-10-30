@@ -24,6 +24,12 @@ Native plugins run in the Relay process and are not sandboxed. They should
 depend on this crate rather than the host `nemo-relay` runtime crate, keeping
 the dynamic-library boundary on the stable C-compatible ABI.
 
+The `component` module owns the non-generic `Plugin` contract, the object-safe
+`PluginRegistrar` interface, configuration policy, errors, and registration
+cleanup. Middleware callback and codec contracts live in `nemo-relay-types`.
+Core implements the registrar and retains registry mutation and rollback.
+
+
 ## Authoring Surface
 
 | Surface | Role |

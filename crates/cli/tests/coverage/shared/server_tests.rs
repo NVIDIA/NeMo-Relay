@@ -28,8 +28,8 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginConfig, PluginRegistration, PluginRegistrationContext,
-    deregister_plugin, ensure_builtin_plugins_registered, register_plugin,
+    ConfigDiagnostic, Plugin, PluginConfig, PluginRegistration, deregister_plugin,
+    ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -283,7 +283,7 @@ impl Plugin for PreclaimedBuiltinPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -301,7 +301,7 @@ impl Plugin for GenericTestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);

@@ -3,7 +3,7 @@
 
 //! Normalized LLM response types produced by response codecs.
 //!
-//! This module defines [`AnnotatedLlmResponse`] and its supporting types
+//! This module defines [`AnnotatedLlmResponse`](crate::codec::response::AnnotatedLlmResponse) and its supporting types
 //! for structured, API-agnostic access to LLM response data.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -458,3 +458,7 @@ impl AnnotatedLlmResponse {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "../../tests/unit/codec/response_tests.rs"]
+mod tests;

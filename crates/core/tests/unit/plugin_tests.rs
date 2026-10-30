@@ -198,7 +198,7 @@ impl Plugin for TestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             ctx.register_llm_request_intercept(
@@ -228,7 +228,7 @@ impl Plugin for EventMetadataPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let configured = plugin_config
             .get("metadata")
@@ -286,7 +286,7 @@ impl Plugin for PolicyAwarePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -308,7 +308,7 @@ impl Plugin for SingletonPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -326,7 +326,7 @@ impl Plugin for RecordingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let qualified = ctx.qualify_name("subscriber");
         recorded_names().lock().unwrap().push(qualified.clone());
@@ -353,7 +353,7 @@ impl Plugin for DiscoverablePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { ctx.register_subscriber("subscriber", Arc::new(|_| {})) })
     }
@@ -371,7 +371,7 @@ impl Plugin for PartialFailPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             ctx.add_registration(PluginRegistration::new(
@@ -402,7 +402,7 @@ impl Plugin for VanishingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -426,7 +426,7 @@ impl Plugin for BlockingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let started = Arc::clone(&self.started);
         let release = Arc::clone(&self.release);
@@ -457,7 +457,7 @@ impl Plugin for BackgroundTaskPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let release = Arc::clone(&self.release);
         let completed = Arc::clone(&self.completed);
@@ -1158,10 +1158,16 @@ fn test_plugin_helper_defaults_and_policy_diagnostics() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    assert_eq!(default_warn(), UnsupportedBehavior::Warn);
-    assert_eq!(default_error(), UnsupportedBehavior::Error);
+    assert_eq!(
+        ConfigPolicy::default().unknown_component,
+        UnsupportedBehavior::Warn
+    );
+    assert_eq!(
+        ConfigPolicy::default().unsupported_value,
+        UnsupportedBehavior::Error
+    );
     assert_eq!(default_plugin_config_version(), 1);
-    assert!(default_enabled());
+    assert!(PluginComponentSpec::new("test").enabled);
     assert_eq!(UnsupportedBehavior::default(), UnsupportedBehavior::Warn);
 
     let mut diagnostics = Vec::new();
@@ -2699,7 +2705,7 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
 
     set_conflicting_runtime_owner_for_tests();
     for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
-        match (registration.deregister)() {
+        match registration.cleanup() {
             PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
                 message,
             )) => {

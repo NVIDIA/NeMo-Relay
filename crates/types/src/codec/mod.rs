@@ -11,3 +11,12 @@ pub mod optimization;
 pub mod request;
 /// Normalized LLM response data types.
 pub mod response;
+
+/// Runtime-supplied provider normalization.
+pub mod normalization;
+
+/// Tool-result wire schema inspection.
+pub mod tool;
+
+/// Bidirectional request and response codec contracts.
+pub mod traits;

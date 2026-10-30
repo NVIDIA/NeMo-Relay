@@ -34,8 +34,8 @@ use nemo_relay::plugin::dynamic::{
     initialize, load_native_plugins,
 };
 use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
-    Result as PluginResult, deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
+    ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, Result as PluginResult,
+    deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use serde_json::{Map, Value as Json, json};
@@ -74,7 +74,7 @@ impl Plugin for StaticBasePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
             STATIC_BASE_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
@@ -103,7 +103,7 @@ impl Plugin for BlockingHostBasePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         let started = Arc::clone(&self.started);
         let release = Arc::clone(&self.release);
@@ -134,7 +134,7 @@ impl Plugin for ReplacementRegistryPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut PluginRegistrationContext,
+        _ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }

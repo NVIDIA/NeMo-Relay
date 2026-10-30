@@ -137,7 +137,7 @@ use std::sync::Arc;
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
-    PluginRegistrationContext, Result as PluginResult, deregister_plugin, register_plugin,
+    PluginRegistrar, Result as PluginResult, deregister_plugin, register_plugin,
 };
 use nemo_relay::plugin::dynamic::initialize;
 use serde_json::{Map, Value as Json, json};
@@ -165,7 +165,7 @@ impl Plugin for AddTagPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        context: &'a mut PluginRegistrationContext,
+        context: &'a mut dyn PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let tag = config["tag"].as_str().expect("validated tag").to_owned();
         Box::pin(async move {

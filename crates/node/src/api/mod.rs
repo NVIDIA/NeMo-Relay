@@ -73,9 +73,8 @@ use nemo_relay::plugin::dynamic::{
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    PluginRegistrationContext, deregister_plugin as deregister_plugin_impl,
-    list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
-    rollback_registrations,
+    deregister_plugin as deregister_plugin_impl, list_plugin_kinds as list_plugin_kinds_impl,
+    register_plugin as register_plugin_impl, rollback_registrations,
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::acg::{
@@ -2490,7 +2489,7 @@ impl Plugin for NodePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();

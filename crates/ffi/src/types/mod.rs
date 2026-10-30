@@ -12,7 +12,7 @@
 
 use libc::c_char;
 use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
-use nemo_relay::plugin::PluginRegistrationContext;
+use nemo_relay::plugin::PluginRegistrar;
 use serde_json::Value as Json;
 
 use nemo_relay::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
@@ -96,14 +96,14 @@ pub struct FfiPluginHostActivation(pub std::sync::Mutex<Option<PluginHostActivat
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_relay::plugin::PluginRegistrationContext`, not an owned heap allocation.
+/// `nemo_relay::plugin::PluginRegistrar`, not an owned heap allocation.
 /// It is only valid for the duration of the plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
 /// There is intentionally no `nemo_relay_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
-pub struct FfiPluginContext(pub *mut PluginRegistrationContext);
+pub struct FfiPluginContext<'a>(pub *mut (dyn PluginRegistrar + 'a));
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///

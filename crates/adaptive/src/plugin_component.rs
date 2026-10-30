@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationContext, Result, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, lookup_plugin, register_plugin,
+    PluginRegistration, Result, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
+    lookup_plugin, register_plugin,
 };
 use serde_json::{Map, Value as Json};
 
@@ -82,7 +82,7 @@ impl Plugin for AdaptivePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {

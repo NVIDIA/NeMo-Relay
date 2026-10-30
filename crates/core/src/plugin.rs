@@ -11,7 +11,6 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt;
 use std::future::Future;
 use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -21,7 +20,6 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
-use thiserror::Error;
 
 use crate::api::registry::{
     RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
@@ -59,6 +57,13 @@ use nemo_relay_types::diagnostics::{
     PluginFailureCode, PluginObservationContext, PluginPhase,
 };
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+
+pub use nemo_relay_plugin::component::PluginRegistrar;
+pub use nemo_relay_plugin::component::{
+    ConfigPolicy, Plugin, PluginComponentSpec, PluginError, PluginRegistration,
+    PluginRegistrationCleanupOutcome, RuntimeDiagnostic, UnsupportedBehavior,
+    apply_global_config_policy,
+};
 
 pub mod dynamic;
 pub use dynamic::*;
@@ -108,34 +113,6 @@ enum PluginMutationOwner {
     Host(u64),
 }
 
-/// Error type for generic plugin operations.
-#[derive(Debug, Error)]
-pub enum PluginError {
-    /// Configuration validation failed.
-    #[error("invalid config: {0}")]
-    InvalidConfig(String),
-
-    /// The requested mutation conflicts with current plugin state.
-    #[error("conflict: {0}")]
-    Conflict(String),
-
-    /// The requested plugin resource was not found.
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    /// A serialization or deserialization operation failed.
-    #[error("serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-
-    /// An internal plugin-system error occurred.
-    #[error("internal error: {0}")]
-    Internal(String),
-
-    /// A runtime middleware/subscriber registration failed.
-    #[error("registration failed: {0}")]
-    RegistrationFailed(String),
-}
-
 /// Specialized [`Result`](std::result::Result) type for plugin operations.
 pub type Result<T> = std::result::Result<T, PluginError>;
 
@@ -172,34 +149,6 @@ impl Default for PluginConfig {
     }
 }
 
-/// One configured plugin component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct PluginComponentSpec {
-    /// Registered plugin kind string.
-    pub kind: String,
-    /// Whether the component should be activated.
-    ///
-    /// Disabled components are still validated but skipped during runtime
-    /// registration.
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-    /// Component-local JSON config object passed to the plugin.
-    #[serde(default)]
-    pub config: Map<String, Json>,
-}
-
-impl PluginComponentSpec {
-    /// Creates a new enabled component spec with empty config.
-    pub fn new(kind: impl Into<String>) -> Self {
-        Self {
-            kind: kind.into(),
-            enabled: true,
-            config: Map::new(),
-        }
-    }
-}
-
 /// Structured configuration and activation report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -210,26 +159,6 @@ pub struct ConfigReport {
     /// Runtime delivery diagnostics recorded after activation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_diagnostics: Vec<RuntimeDiagnostic>,
-}
-
-/// Bounded aggregate for a runtime failure observed by an active plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct RuntimeDiagnostic {
-    /// Stable failure classification.
-    pub code: String,
-    /// Plugin component that reported the failure.
-    pub component: String,
-    /// Optional configuration field associated with the failure.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// Latest human-readable failure detail.
-    pub message: String,
-    /// Latest affected trajectory session identifier.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    /// Number of failures aggregated into this entry.
-    pub count: u64,
 }
 
 /// Read-only projection of runtime diagnostics exposed to dynamic plugins.
@@ -251,161 +180,8 @@ impl ConfigReport {
     }
 }
 
-/// Policy for how unsupported plugin/runtime config is handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct ConfigPolicy {
-    /// Policy applied when a component kind is unknown to the plugin registry.
-    #[serde(default = "default_warn")]
-    pub unknown_component: UnsupportedBehavior,
-    /// Policy applied when a known component contains an unknown field.
-    #[serde(default = "default_warn")]
-    pub unknown_field: UnsupportedBehavior,
-    /// Policy applied when a known field contains an unsupported value.
-    #[serde(default = "default_error")]
-    pub unsupported_value: UnsupportedBehavior,
-}
-
-impl Default for ConfigPolicy {
-    fn default() -> Self {
-        Self {
-            unknown_component: default_warn(),
-            unknown_field: default_warn(),
-            unsupported_value: default_error(),
-        }
-    }
-}
-
-/// Applies non-default global policy fields to a component policy.
-///
-/// Component-specific policy remains in effect when the corresponding global
-/// setting is left at its default value.
-pub fn apply_global_config_policy(
-    component_policy: ConfigPolicy,
-    global_policy: &ConfigPolicy,
-) -> ConfigPolicy {
-    let default_policy = ConfigPolicy::default();
-    ConfigPolicy {
-        unknown_component: if global_policy.unknown_component != default_policy.unknown_component {
-            global_policy.unknown_component
-        } else {
-            component_policy.unknown_component
-        },
-        unknown_field: if global_policy.unknown_field != default_policy.unknown_field {
-            global_policy.unknown_field
-        } else {
-            component_policy.unknown_field
-        },
-        unsupported_value: if global_policy.unsupported_value != default_policy.unsupported_value {
-            global_policy.unsupported_value
-        } else {
-            component_policy.unsupported_value
-        },
-    }
-}
-
-crate::editor_config! {
-    impl ConfigPolicy {
-        unknown_component => {
-            label: "unknown_component",
-            kind: Enum,
-            values: ["warn", "ignore", "error"],
-        },
-        unknown_field => {
-            label: "unknown_field",
-            kind: Enum,
-            values: ["warn", "ignore", "error"],
-        },
-        unsupported_value => {
-            label: "unsupported_value",
-            kind: Enum,
-            values: ["warn", "ignore", "error"],
-        },
-    }
-}
-
-/// Per-policy behavior for unsupported configuration.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "lowercase")]
-pub enum UnsupportedBehavior {
-    /// Suppress the diagnostic entirely.
-    Ignore,
-    /// Emit a warning diagnostic.
-    #[default]
-    Warn,
-    /// Emit an error diagnostic.
-    Error,
-}
-
-fn default_warn() -> UnsupportedBehavior {
-    UnsupportedBehavior::Warn
-}
-
-fn default_error() -> UnsupportedBehavior {
-    UnsupportedBehavior::Error
-}
-
 fn default_plugin_config_version() -> u32 {
     1
-}
-
-fn default_enabled() -> bool {
-    true
-}
-
-/// Bookkeeping for one middleware/subscriber registration.
-pub struct PluginRegistration {
-    /// Registration kind used for bookkeeping.
-    pub kind: String,
-    /// Runtime-qualified registration name.
-    pub name: String,
-    deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
-}
-
-pub(crate) enum PluginRegistrationCleanupOutcome {
-    Removed,
-    RemovedWithError(PluginError),
-    NotRemoved(PluginError),
-}
-
-impl fmt::Debug for PluginRegistration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PluginRegistration")
-            .field("kind", &self.kind)
-            .field("name", &self.name)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PluginRegistration {
-    /// Creates a new registration bookkeeping entry.
-    pub fn new(
-        kind: impl Into<String>,
-        name: impl Into<String>,
-        mut deregister: Box<dyn FnMut() -> Result<()> + Send>,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            name: name.into(),
-            deregister: Box::new(move || match deregister() {
-                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
-                Err(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
-            }),
-        }
-    }
-
-    pub(crate) fn new_with_outcome(
-        kind: impl Into<String>,
-        name: impl Into<String>,
-        deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            name: name.into(),
-            deregister,
-        }
-    }
 }
 
 /// Context provided to plugin handlers during runtime registration.
@@ -1181,51 +957,6 @@ impl PluginRegistrationContext {
     pub fn into_registrations(self) -> Vec<PluginRegistration> {
         self.registrations
     }
-}
-
-/// Implemented by custom plugins that register runtime middleware.
-pub trait Plugin: Send + Sync + 'static {
-    /// Returns the unique plugin kind string.
-    fn plugin_kind(&self) -> &str;
-
-    /// Returns whether the plugin kind can appear multiple times in the config.
-    ///
-    /// Return `false` for singleton components such as the built-in adaptive
-    /// component.
-    fn allows_multiple_components(&self) -> bool {
-        true
-    }
-
-    /// Validates one plugin component config.
-    ///
-    /// Returning error-level diagnostics prevents plugin-host activation
-    /// from activating the configuration.
-    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic>;
-
-    /// Validates one plugin component config using the host's global policy.
-    ///
-    /// The default preserves the validation behavior of existing custom
-    /// plugins. Plugins that emit policy-controlled diagnostics should
-    /// override this method so host validation honors non-default fields in
-    /// [`PluginConfig::policy`].
-    fn validate_with_policy(
-        &self,
-        plugin_config: &Map<String, Json>,
-        _policy: &ConfigPolicy,
-    ) -> Vec<ConfigDiagnostic> {
-        self.validate(plugin_config)
-    }
-
-    /// Registers runtime middleware/subscribers for one plugin component.
-    ///
-    /// The provided [`PluginRegistrationContext`] is component-scoped. Any
-    /// error aborts the current initialization and triggers rollback of
-    /// registrations created during the failed activation attempt.
-    fn register<'a>(
-        &'a self,
-        plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
 /// Registers a plugin by kind.
@@ -2910,7 +2641,7 @@ fn rollback_registrations_checked(
     let mut outcome = PluginRollbackOutcome::default();
     let mut retained = Vec::new();
     while let Some(mut registration) = registrations.pop() {
-        match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
+        match catch_unwind(AssertUnwindSafe(|| registration.cleanup())) {
             Ok(PluginRegistrationCleanupOutcome::Removed) => {}
             Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
                 outcome.errors.push(format!(
@@ -3327,3 +3058,215 @@ fn join_error_messages(report: &ConfigReport) -> String {
 #[cfg(test)]
 #[path = "../tests/unit/plugin_tests.rs"]
 mod tests;
+
+impl PluginRegistrar for PluginRegistrationContext {
+    fn diagnostics_context(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self.diagnostics())
+    }
+
+    fn qualify_name(&self, name: &str) -> String {
+        PluginRegistrationContext::qualify_name(self, name)
+    }
+    fn register_subscriber(&mut self, name: &str, callback: EventSubscriberFn) -> Result<()> {
+        PluginRegistrationContext::register_subscriber(self, name, callback)
+    }
+    fn add_registration(&mut self, registration: PluginRegistration) {
+        PluginRegistrationContext::add_registration(self, registration);
+    }
+    fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
+        PluginRegistrationContext::record_activation_diagnostic(self, diagnostic);
+    }
+    fn record_nonfatal_activation_failure(
+        &mut self,
+        component_key: &'static str,
+        classification: Classification,
+        diagnostic: ConfigDiagnostic,
+    ) {
+        PluginRegistrationContext::record_nonfatal_activation_failure(
+            self,
+            component_key,
+            classification,
+            diagnostic,
+        );
+    }
+    fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
+        PluginRegistrationContext::activation_diagnostics(self)
+    }
+    fn register_conditional_middleware_guardrail(
+        &mut self,
+        name: &str,
+        kinds: BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        guardrail: ConditionalMiddlewareGuardrailFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_conditional_middleware_guardrail(
+            self,
+            name,
+            kinds,
+            registration_name,
+            guardrail,
+        )
+    }
+    fn register_event_metadata_injector(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventMetadataInjectorFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_event_metadata_injector(self, name, priority, callback)
+    }
+    fn register_mark_sanitize_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_mark_sanitize_guardrail(self, name, priority, callback)
+    }
+    fn register_scope_sanitize_start_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_scope_sanitize_start_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_scope_sanitize_end_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_scope_sanitize_end_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: LlmRequestInterceptFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_request_intercept(
+            self,
+            name,
+            priority,
+            break_chain,
+            callback,
+        )
+    }
+    fn register_tool_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_sanitize_request_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolSanitizeFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_sanitize_response_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolConditionalFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_conditional_execution_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_sanitize_request_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeRequestFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_sanitize_request_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_sanitize_response_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmSanitizeResponseFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_sanitize_response_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_conditional_execution_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmConditionalFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_conditional_execution_guardrail(
+            self, name, priority, callback,
+        )
+    }
+    fn register_llm_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_execution_intercept(self, name, priority, callback)
+    }
+    fn register_llm_stream_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmStreamExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_llm_stream_execution_intercept(
+            self, name, priority, callback,
+        )
+    }
+    fn register_tool_request_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: ToolInterceptFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_request_intercept(
+            self,
+            name,
+            priority,
+            break_chain,
+            callback,
+        )
+    }
+    fn register_tool_execution_intercept(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: ToolExecutionFn,
+    ) -> Result<()> {
+        PluginRegistrationContext::register_tool_execution_intercept(self, name, priority, callback)
+    }
+
+    fn uses_plugin_component_namespace(&self) -> bool {
+        PluginRegistrationContext::uses_plugin_component_namespace(self)
+    }
+    fn with_child_namespace(&self, name: &str) -> Box<dyn crate::plugin::PluginRegistrar> {
+        Box::new(PluginRegistrationContext::with_child_namespace(self, name))
+    }
+    fn into_registrations(self: Box<Self>) -> Vec<PluginRegistration> {
+        PluginRegistrationContext::into_registrations(*self)
+    }
+}

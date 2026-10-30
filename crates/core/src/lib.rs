@@ -74,3 +74,6 @@ pub mod stream;
 #[cfg(test)]
 #[path = "../tests/unit/types_tests.rs"]
 mod types_tests;
+
+/// Declare typed configuration editor metadata.
+pub use nemo_relay_types::editor_config;

@@ -40,8 +40,8 @@ use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{PluginHostReport, initialize, validate, validate_exact};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginHostActivation,
-    PluginRegistration, PluginRegistrationContext, deregister_plugin, list_plugin_kinds,
-    register_plugin, rollback_registrations,
+    PluginRegistration, deregister_plugin, list_plugin_kinds, register_plugin,
+    rollback_registrations,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -719,7 +719,7 @@ impl Plugin for PyPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();

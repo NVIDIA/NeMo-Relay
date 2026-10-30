@@ -16,7 +16,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Types
 
-`nemo-relay-types` provides the shared serializable data model for NeMo Relay.
+`nemo-relay-types` provides shared data models, codec traits, middleware callbacks,
+and invocation context contracts for NeMo Relay.
 Use it when a Rust integration, plugin SDK, or protocol implementation needs
 the same event, scope, tool, LLM, runtime-registration, codec, and
 plugin-diagnostic types as Relay.

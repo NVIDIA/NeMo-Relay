@@ -12,8 +12,8 @@ use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
 use nemo_relay::diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_plugin,
+    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
+    register_plugin,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -449,7 +449,7 @@ impl Plugin for PiiRedactionPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let parsed = parse_pii_redaction_config(plugin_config);
         Box::pin(async move {
@@ -544,7 +544,7 @@ fn string_enum_schema(
 
 fn register_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     if !config.profiles.is_empty() {
         let profiles = config.profiles.clone();
@@ -564,7 +564,7 @@ fn register_pii_redaction_backend(
 
 fn register_single_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     match config.mode.as_str() {
@@ -1255,7 +1255,7 @@ fn validate_codec_requirements(
 
 fn register_builtin_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let builtin = config.builtin.clone().ok_or_else(|| {
@@ -1365,7 +1365,7 @@ fn register_builtin_backend(
 
 fn with_selector_diagnostics(
     mut compiled: CompiledBuiltinBackend,
-    ctx: &PluginRegistrationContext,
+    ctx: &dyn nemo_relay::plugin::PluginRegistrar,
     profile_name: Option<&str>,
 ) -> CompiledBuiltinBackend {
     let component_key = profile_name.map_or_else(
@@ -1373,9 +1373,11 @@ fn with_selector_diagnostics(
         |name| format!("pii_redaction.selector.{name}"),
     );
     if !compiled.is_trajectory()
-        && let Ok(recorder) = ctx
-            .diagnostics()
-            .register_component(ComponentRegistration::new(&component_key, &[]))
+        && let Some(diagnostics) = ctx
+            .diagnostics_context()
+            .and_then(|context| context.downcast_ref::<nemo_relay::diagnostics::Diagnostics>())
+        && let Ok(recorder) =
+            diagnostics.register_component(ComponentRegistration::new(&component_key, &[]))
         && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {
             namespace: "pii_redaction",
             name: "selector_evaluated",

@@ -5815,7 +5815,8 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     });
     let mut invalid_host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
-        ctx: ptr::null_mut(),
+        ctx: ptr::null_mut::<PluginRegistrationContext>()
+            as *mut dyn crate::plugin::PluginRegistrar,
         instance: Arc::clone(&instance),
     };
     assert_eq!(

@@ -12,8 +12,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use serde_json::{Map, Value as Json};
 
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
-    PluginRegistrationContext, Result, register_builtin_plugin,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration, Result,
+    register_builtin_plugin,
 };
 use crate::resource_metrics::manager::ResourceMetricsRuntime;
 use config::ResourceMetricsConfig;
@@ -61,7 +61,7 @@ impl Plugin for ResourceMetricsPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {

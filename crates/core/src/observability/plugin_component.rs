@@ -83,9 +83,8 @@ use crate::observability::{
 use crate::plugin::{
     ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
     OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext,
-    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
-    register_builtin_plugin,
+    PluginRegistration, PluginRegistrationCleanupOutcome, Result as PluginResult,
+    UnsupportedBehavior, apply_global_config_policy, deregister_plugin, register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
@@ -1330,7 +1329,7 @@ impl Plugin for ObservabilityPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn crate::plugin::PluginRegistrar,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -1455,7 +1454,7 @@ fn string_enum_schema(
 
 fn register_observability(
     config: ObservabilityConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     if config.version != 4 {
         return Err(PluginError::InvalidConfig(format!(
@@ -1511,7 +1510,7 @@ fn opentelemetry_section_is_empty(section: &OpenTelemetrySectionConfig) -> bool 
 
 fn register_full_payload_policy(
     enabled: bool,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     let context = global_context();
     context
@@ -1535,7 +1534,7 @@ fn register_full_payload_policy(
 fn register_atof_exporter(
     section: AtofSectionConfig,
     plaintext: &PlaintextPolicy,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     let exporters = section
         .sinks
@@ -1636,7 +1635,7 @@ type AtifStorageList = Arc<Vec<Arc<AtifRemoteStorage>>>;
 fn register_atif_dispatcher(
     section: AtifSectionConfig,
     plaintext: &PlaintextPolicy,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     validate_atif_filename_template(&section.filename_template)
         .map_err(PluginError::InvalidConfig)?;
@@ -1847,7 +1846,7 @@ struct ResolvedSignalEndpoints {
 fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
     plaintext: &PlaintextPolicy,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
     automatic_active: bool,
 ) -> PluginResult<()> {
     let OpenTelemetrySectionConfig {
@@ -1934,7 +1933,7 @@ fn register_opentelemetry_resources(
     trace_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>,
     log_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>>,
     metric_subscribers: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>>,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<()> {
     log_opentelemetry_resource_access("traces", &trace_subscribers);
     log_opentelemetry_resource_access("logs", &log_subscribers);
@@ -2099,7 +2098,7 @@ fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
     configured_hosts: &[String],
     configured_plaintext: &PlaintextPolicy,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<bool> {
     let plaintext = automatic_plaintext_policy(configured_hosts, configured_plaintext, ctx);
     let trace_subscribers = automatic_subscriber(
@@ -2147,7 +2146,7 @@ fn register_automatic_opentelemetry(
 fn automatic_plaintext_policy(
     configured_hosts: &[String],
     configured_plaintext: &PlaintextPolicy,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PlaintextPolicy {
     let additional_hosts = match std::env::var(AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE) {
         Ok(value) if !value.trim().is_empty() => value,
@@ -2172,7 +2171,7 @@ fn automatic_plaintext_policy(
     }
 }
 
-fn record_invalid_automatic_insecure_hosts(ctx: &mut PluginRegistrationContext) {
+fn record_invalid_automatic_insecure_hosts(ctx: &mut dyn crate::plugin::PluginRegistrar) {
     ctx.record_activation_diagnostic(ConfigDiagnostic {
         level: DiagnosticLevel::Warning,
         code: "observability.invalid_automatic_insecure_http_hosts".to_string(),
@@ -2258,7 +2257,7 @@ fn automatic_subscriber<T>(
     enabled: bool,
     signal: &'static str,
     signal_endpoint_variable: &'static str,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
     build: impl FnOnce() -> crate::observability::otel::ExporterInitializationResult<T>,
 ) -> Vec<IndexedOpenTelemetryResource<Arc<T>>> {
     if !enabled {
@@ -2556,7 +2555,7 @@ fn build_opentelemetry_subscribers(
 fn build_opentelemetry_file_sink_subscribers(
     file_sinks: Vec<OpenTelemetryFileSinkConfig>,
     index_offset: usize,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn crate::plugin::PluginRegistrar,
 ) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>> {
     let mut subscribers = Vec::with_capacity(file_sinks.len());
     for (index, file_sink) in file_sinks.into_iter().enumerate() {
@@ -2621,7 +2620,7 @@ fn skipped_opentelemetry_endpoints<T>(
 }
 
 fn no_active_opentelemetry_destination_error(
-    ctx: &PluginRegistrationContext,
+    ctx: &dyn crate::plugin::PluginRegistrar,
     skipped_endpoints: Vec<String>,
 ) -> PluginError {
     let file_sink_failures = ctx

@@ -1,0 +1,145 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! LLM codec traits for bidirectional request translation.
+
+use crate::Json;
+use crate::api::llm::LlmRequest;
+use crate::codec::identity::LlmCodecIdentity;
+use crate::error::Result;
+
+use super::request::AnnotatedLlmRequest;
+use super::response::AnnotatedLlmResponse;
+
+// ---------------------------------------------------------------------------
+// LlmCodec trait
+// ---------------------------------------------------------------------------
+
+/// A bidirectional translator between opaque [`LlmRequest`] content and
+/// structured [`AnnotatedLlmRequest`].
+///
+/// Codecs are implemented by framework integrations and provider adapters
+/// because each SDK has its own request format. A codec is supplied per call by
+/// the caller; the built-in provider codecs can also be selected from a raw
+/// payload by the runtime provider resolver.
+///
+/// # Design
+///
+/// - **Synchronous**: `decode`/`encode` are pure data transforms (JSON
+///   restructuring), not I/O operations. This matches existing guardrails
+///   and request intercepts.
+/// - **`Send + Sync`**: Required for codec handles shared across async runtime contexts.
+/// - **Trait object**: Codecs are registered at runtime by callers or bindings,
+///   so the Rust core cannot know concrete types at compile time.
+///   Store as `Arc<dyn LlmCodec>`.
+pub trait LlmCodec: Send + Sync {
+    /// Return this codec's identity for LLM sanitizer context.
+    ///
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID. Callers must not infer a
+    /// provider surface from an opaque implementation or request shape.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
+    }
+
+    /// Parse opaque request content into structured form.
+    fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest>;
+
+    /// Merge structured changes back into the opaque request.
+    ///
+    /// The `original` parameter is the pre-intercept [`LlmRequest`], used to
+    /// preserve fields that the Codec does not structurally model. Implementations
+    /// MUST use merge-not-replace semantics: overlay structured changes onto
+    /// the original content, do not construct a fresh content object.
+    fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest>;
+
+    /// Merge changes using the annotation decoded from `original.content`.
+    ///
+    /// Use a baseline from this codec and the same raw request body. Do not change
+    /// the baseline or that body after decoding. Request headers can change while
+    /// middleware runs. The runtime supplies this baseline to avoid decoding twice.
+    /// The default calls [`Self::encode`], so existing custom codecs still work.
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        _baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        self.encode(annotated, original)
+    }
+    /// Encode a request that the caller gives to this codec.
+    ///
+    /// The codec can move the request body or keep it for later use. The baseline
+    /// must match the original request body. If both header maps have the same key,
+    /// keep the value from the original request. The default calls
+    /// [`Self::encode_with_baseline`] and then moves the original headers into the result.
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let mut encoded = self.encode_with_baseline(annotated, &original, baseline)?;
+        encoded.headers.extend(original.headers);
+        Ok(encoded)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmResponseCodec trait
+// ---------------------------------------------------------------------------
+
+/// Decode-only codec for LLM API responses.
+///
+/// Unlike [`LlmCodec`] (which is bidirectional for requests), response codecs
+/// are introspection-only: they parse a raw response into structured form but
+/// never need to encode back. This matches the pipeline design where responses
+/// are observed, not modified.
+///
+/// # Design
+///
+/// - **Synchronous**: `decode_response` is a pure data transform (JSON parsing),
+///   not an I/O operation.
+/// - **`Send + Sync`**: Required for storage in `Arc` behind `RwLock`.
+/// - **Trait object**: Codecs are registered at runtime, stored as
+///   `Arc<dyn LlmResponseCodec>`.
+/// - **Fallible**: Returns `Result`; managed call sites may omit annotations on
+///   decode failure, while manual lifecycle bindings may surface the error.
+///
+/// # Two-Phase Decode
+///
+/// Implementations should use a two-phase decode pattern:
+/// 1. Deserialize raw JSON into API-specific intermediate structs
+/// 2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
+pub trait LlmResponseCodec: Send + Sync {
+    /// Return this codec's identity for LLM sanitizer context.
+    ///
+    /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
+    /// they have a stable runtime registration ID.
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Opaque
+    }
+
+    /// Return whether aggregate response usage can be priced from its response model.
+    ///
+    /// Most providers report usage for one model, so the default permits model-based cost
+    /// enrichment. A provider can opt out when its response combines usage from multiple
+    /// models and no provider-reported cost is available.
+    fn allows_estimated_cost(&self, _response: &Json) -> bool {
+        true
+    }
+
+    /// Parse a raw JSON response into normalized structured form.
+    ///
+    /// Implementations should return `Err` only for genuinely unparseable input.
+    fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse>;
+}
+
+/// Additive encoder for materializing a normalized response in a provider wire format.
+///
+/// Existing response codecs remain decode-only. Components that perform cross-protocol dispatch
+/// can supply this companion trait without changing the managed observability pipeline.
+pub trait LlmResponseEncoder: Send + Sync {
+    /// Encode a normalized response into the target provider's buffered JSON representation.
+    fn encode_response(&self, response: &AnnotatedLlmResponse) -> Result<Json>;
+}
