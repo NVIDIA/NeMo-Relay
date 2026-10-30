@@ -96,7 +96,7 @@ pub struct PushScopeParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoRelayContextState::create_scope_handle`].
+/// Builder parameters for [`NemoRelayContextState::create_scope_handle`](crate::api::runtime::NemoRelayContextState::create_scope_handle).
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateScopeHandleParams<'a> {
@@ -122,7 +122,7 @@ pub struct CreateScopeHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoRelayContextState::build_scope_end_event`].
+/// Builder parameters for [`NemoRelayContextState::build_scope_end_event`](crate::api::runtime::NemoRelayContextState::build_scope_end_event).
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct EndScopeHandleParams<'a> {

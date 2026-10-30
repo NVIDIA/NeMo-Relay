@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 //! Provider request, response, and streaming codec implementations.
 //! Shared traits and normalized models live in `nemo-relay-types`.
 

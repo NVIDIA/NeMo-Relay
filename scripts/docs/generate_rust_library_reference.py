@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import posixpath
 import re
 import subprocess
@@ -161,10 +160,6 @@ def _crate_slug(crate_name: str) -> str:
 
 
 def _run_cargo_doc(repo_root: Path) -> None:
-    env = os.environ.copy()
-    existing = env.get("RUSTDOCFLAGS", "")
-    cap_lints = "--cap-lints allow"
-    env["RUSTDOCFLAGS"] = f"{existing} {cap_lints}".strip()
     subprocess.run(
         [
             "cargo",
@@ -173,7 +168,6 @@ def _run_cargo_doc(repo_root: Path) -> None:
             *(argument for crate, *_ in CRATES for argument in ("-p", crate)),
         ],
         cwd=repo_root,
-        env=env,
         check=True,
     )
 

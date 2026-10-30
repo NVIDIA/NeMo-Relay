@@ -584,7 +584,7 @@ pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
 }
 
 /// Restore a complete native thread binding captured by
-/// [`capture_thread_scope_stack`].
+/// `capture_thread_scope_stack`.
 #[pyfunction]
 pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
     restore_thread_scope_stack_handle(binding.inner.clone());

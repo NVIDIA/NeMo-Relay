@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Runtime execution, registries, scopes, and continuation handling for NeMo Relay.
 //! Component implementations are supplied by the embedding SDK or application.
 

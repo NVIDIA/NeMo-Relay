@@ -14,9 +14,9 @@
 //! streaming and non-streaming requests converge on the same observability output without
 //! per-route shape duplication.
 //!
-//! [`StreamingCodec`] is the trait that bundles the two functions
-//! ([`LlmCollectorFn`],
-//! [`LlmFinalizerFn`]) used by
+//! [`StreamingCodec`](crate::codec::streaming::StreamingCodec) is the trait that bundles the two functions
+//! ([`LlmCollectorFn`](crate::api::runtime::LlmCollectorFn),
+//! [`LlmFinalizerFn`](crate::api::runtime::LlmFinalizerFn)) used by
 //! the runtime streaming execution API. Each provider supplies one impl whose internal
 //! state holds whatever incremental information is needed to materialize the final payload.
 //!

@@ -223,7 +223,7 @@ impl AdaptiveHintsIntercept {
     }
 
     /// Converts this intercept into an [`LlmRequestInterceptFn`] suitable for
-    /// registration with [`register_llm_request_intercept`].
+    /// registration with [`register_llm_request_intercept`](nemo_relay_runtime::api::registry::register_llm_request_intercept).
     ///
     /// The returned closure reads the HotCache trie, builds AgentHints,
     /// injects them into the request headers and body, and returns the

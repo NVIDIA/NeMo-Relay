@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Shared in-process plugin contracts, stable native ABI, and Rust authoring helpers.
 //!
 //! This crate intentionally does not depend on the `nemo-relay` runtime crate.

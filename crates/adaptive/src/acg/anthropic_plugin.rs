@@ -10,7 +10,7 @@
 //! - **Breakpoint budget allocation**: Up to 4 breakpoints per request.
 //! - **Token minimum enforcement**: Per-model from [`CapabilityRegistry`].
 //! - **TTL mapping**: `RetentionTier` to Anthropic TTL (5m default or 1h extended).
-//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`].
+//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`](crate::acg::canonicalize::canonicalize_value).
 //! - **System string-to-array conversion**: Handles both string and array-of-blocks format.
 //!
 //! # Threat mitigations

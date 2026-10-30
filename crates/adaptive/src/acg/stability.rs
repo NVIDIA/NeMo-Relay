@@ -72,7 +72,7 @@ struct SpanObservations {
 /// the probability that two independent processes agree, and equivalently the
 /// probability that a persisted profile satisfies the reuse gate elsewhere.
 /// `A = 1` exactly when the analysis is seed-independent, which is what
-/// [`canonical_scores`] and [`dominant_prefix_length`] each establish.
+/// `canonical_scores` and `dominant_prefix_length` each establish.
 ///
 /// # Parameters
 /// - `observations`: Prompt observations to compare.

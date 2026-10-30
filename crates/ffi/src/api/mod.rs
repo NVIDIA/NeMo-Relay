@@ -4,7 +4,7 @@
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`] to retrieve
+//! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`](crate::error::nemo_relay_last_error) to retrieve
 //! the error message.
 
 use std::any::Any;

@@ -307,7 +307,7 @@ impl CacheStore for InMemoryCacheStore {
 /// Redis-backed [`CacheStore`] for sharing one cache across processes / a team.
 ///
 /// Uses Redis's native expiry (`SET … PX <ttl_ms>`) so entries drop themselves,
-/// and a configurable key prefix. The connection is a [`ConnectionManager`]
+/// and a configurable key prefix. The connection is a [`ConnectionManager`](redis::aio::ConnectionManager)
 /// (cheap to clone, auto-reconnecting), cloned before each await so the store
 /// never blocks. Mirrors the connection pattern of [`crate::redis::RedisBackend`].
 pub struct RedisCacheStore {

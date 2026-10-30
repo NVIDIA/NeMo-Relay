@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Shared data models and runtime contracts for NeMo Relay.
 //!
 //! This crate contains DTOs and wire-compatible type definitions used by the

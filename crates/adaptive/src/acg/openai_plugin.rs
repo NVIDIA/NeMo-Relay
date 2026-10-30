@@ -11,7 +11,7 @@
 //!
 //! Implements the [`ProviderPlugin`] trait with:
 //!
-//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`]
+//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`](crate::acg::canonicalize::canonicalize_value)
 //!   for deterministic key ordering in function parameter schemas.
 //! - **Stable message content canonicalization**: Structured JSON content
 //!   blocks in the stable prefix are canonicalized for byte-identical output.
