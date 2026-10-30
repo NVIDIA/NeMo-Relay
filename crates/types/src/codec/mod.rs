@@ -26,3 +26,6 @@ pub mod billing;
 
 /// Runtime-neutral cost estimation contract.
 pub mod pricing;
+
+/// Provider streaming codec contracts and normalized stream events.
+pub mod streaming;

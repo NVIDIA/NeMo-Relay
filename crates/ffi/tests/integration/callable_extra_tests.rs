@@ -400,8 +400,8 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
 
 #[test]
 fn test_sanitizer_context_resolves_directional_ffi_codecs() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
     use nemo_relay_runtime::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
-    use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
 
     let codec = Arc::new(OpenAIChatCodec);
     let request = LlmRequest {

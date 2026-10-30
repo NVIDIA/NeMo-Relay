@@ -19,11 +19,6 @@ use crate::api::runtime::{
 use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
-use crate::codec::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
-    ResponseToolCall, Usage,
-};
 use crate::json::Json;
 use crate::observability_test_support::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use crate::observability_test_support::otel_logs::{
@@ -33,6 +28,11 @@ use crate::observability_test_support::{relay_span_id, relay_trace_id};
 use nemo_relay_model_pricing::pricing_test_mutex;
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, MessageContent};
+use nemo_relay_types::codec::response::{
+    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason,
+    ResponseToolCall, Usage,
 };
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;

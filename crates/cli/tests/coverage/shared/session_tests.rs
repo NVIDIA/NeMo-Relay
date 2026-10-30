@@ -9,13 +9,12 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::FlowError;
+use nemo_relay_codecs::resolve::{ProviderSurface, request_codec as build_request_codec};
 use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay_observability::otel::OpenTelemetrySubscriber;
 use nemo_relay_runtime::api::runtime::EventSubscriberFn;
-use nemo_relay_runtime::codec::resolve::{
-    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
-};
+use nemo_relay_runtime::codec::response_codec as build_response_codec;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;

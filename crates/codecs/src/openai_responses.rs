@@ -22,10 +22,12 @@ use std::task::{Context, Poll};
 use serde::Deserialize;
 use tokio_stream::Stream;
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner};
-use crate::error::{FlowError, Result};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner,
+};
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionDefinition, GenerationParams,
@@ -38,7 +40,6 @@ use super::response::{
     ResponseToolCall, Usage, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
-use crate::pricing::{estimate_cost_for_provider, infer_model_provider};
 
 // ---------------------------------------------------------------------------
 // Public codec struct
@@ -1266,14 +1267,12 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         });
 
         // Map usage.
-        let model_for_pricing = raw.model.as_deref();
-        let model_provider = infer_model_provider("openai", model_for_pricing);
         let usage = raw.usage.map(|u| {
             let cache_read_tokens = u
                 .input_tokens_details
                 .as_ref()
                 .and_then(|details| details.cached_tokens);
-            let mut usage = Usage {
+            Usage {
                 prompt_tokens: u.input_tokens,
                 completion_tokens: u.output_tokens,
                 total_tokens: u.total_tokens,
@@ -1284,13 +1283,7 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
                     .zip(cache_read_tokens)
                     .and_then(|(total, cached)| total.checked_sub(cached)),
                 cost: provider_reported_cost(u.provider_cost, u.cost),
-            };
-            if usage.cost.is_none() {
-                usage.cost = model_for_pricing.and_then(|model| {
-                    estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
-                });
             }
-            usage
         });
 
         // Build API-specific fields.
@@ -1529,15 +1522,15 @@ impl LlmCodec for OpenAIResponsesCodec {
 ///    because their content is redelivered in the matching `output_item.done` event. Skipping
 ///    deltas keeps the codec resilient to schema additions and avoids double-accumulation.
 ///
-/// Use [`StreamingCodec::validate_stream`](super::streaming::StreamingCodec::validate_stream)
+/// Use [`StreamingCodec::validate_stream`](nemo_relay_types::codec::streaming::StreamingCodec::validate_stream)
 /// with this instance's collector and finalizer to report streams that end before a final event.
 ///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
 ///
-/// [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
-/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+/// [`AnnotatedLlmResponse`]: nemo_relay_types::codec::response::AnnotatedLlmResponse
+/// [`LlmFinalizerFn`]: nemo_relay_types::api::runtime::LlmFinalizerFn
 pub struct OpenAIResponsesStreamingCodec {
     state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
 }
@@ -1559,7 +1552,7 @@ impl Default for OpenAIResponsesStreamingCodec {
     }
 }
 
-impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
+impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
     /// Reports an error at EOF if this codec's collector did not receive a final response.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(ResponsesCompletionStream {
@@ -1570,7 +1563,7 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
     }
 
     /// Collects response snapshots and output items into this codec's shared state.
-    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+    fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
             let mut guard = state
@@ -1581,7 +1574,7 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
         })
     }
 
-    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+    fn borrowed_collector(&self) -> Option<nemo_relay_types::api::runtime::LlmBorrowedCollectorFn> {
         let state = std::sync::Arc::clone(&self.state);
         Some(Box::new(move |event: &Json| -> Result<()> {
             let mut guard = state
@@ -1593,7 +1586,7 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
     }
 
     /// Takes the collected state and returns the final provider response.
-    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+    fn finalizer(&self) -> nemo_relay_types::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
             let mut guard = state
@@ -1769,5 +1762,5 @@ fn is_terminal_response_event(event: &Json) -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/openai_responses_tests.rs"]
+#[path = "../tests/unit/openai_responses_tests.rs"]
 mod tests;

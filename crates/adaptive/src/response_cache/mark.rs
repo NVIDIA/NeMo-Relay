@@ -4,10 +4,11 @@
 //! The `response_cache` mark: every cache decision, its metadata, and the
 //! savings a reuse reports.
 
+use nemo_relay_codecs::resolve::detect_response_surface;
 use nemo_relay_model_pricing::{attach_estimated_cost_for_provider, estimate_cost_for_provider};
 use nemo_relay_runtime::api::scope::{EmitMarkEventParams, event};
-use nemo_relay_runtime::codec::resolve::{detect_response_surface, response_codec};
-use nemo_relay_runtime::codec::response::Usage;
+use nemo_relay_runtime::codec::response_codec;
+use nemo_relay_types::codec::response::Usage;
 use serde_json::{Map, Value as Json, json};
 
 use crate::response_cache::store::CacheEntry;

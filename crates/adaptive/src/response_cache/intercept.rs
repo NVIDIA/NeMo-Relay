@@ -12,14 +12,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use nemo_relay_codecs::resolve::{detect_request_surface_with_hint, streaming_codec};
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamInner,
 };
-use nemo_relay_runtime::codec::resolve::{detect_request_surface_with_hint, streaming_codec};
-use nemo_relay_runtime::codec::streaming::StreamingCodec;
 use nemo_relay_runtime::error::Result as FlowResult;
+use nemo_relay_types::codec::streaming::StreamingCodec;
 use serde_json::Value as Json;
 use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;

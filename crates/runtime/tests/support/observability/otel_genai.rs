@@ -13,11 +13,11 @@ use crate::api::event::{Event, EventNormalizationExt};
 
 use crate::api::scope::ScopeType;
 
-use crate::codec::request::{
+use nemo_relay_types::codec::request::{
     ApiSpecificRequest, ContentPart, Message, MessageContent, tool_definition_identities,
 };
 
-use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, FinishReason};
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, FinishReason};
 
 use crate::json::Json;
 

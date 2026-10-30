@@ -54,11 +54,11 @@ pub struct CallRecord {
     /// Annotated request captured for Adaptive Cache Governor (ACG) analysis,
     /// when available.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub annotated_request: Option<Arc<nemo_relay_runtime::codec::request::AnnotatedLlmRequest>>,
+    pub annotated_request: Option<Arc<nemo_relay_types::codec::request::AnnotatedLlmRequest>>,
     /// Annotated response captured for Adaptive Cache Governor (ACG) analysis,
     /// when available.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub annotated_response: Option<Arc<nemo_relay_runtime::codec::response::AnnotatedLlmResponse>>,
+    pub annotated_response: Option<Arc<nemo_relay_types::codec::response::AnnotatedLlmResponse>>,
 }
 
 /// Telemetry record for one observed agent run.

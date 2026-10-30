@@ -7,7 +7,6 @@ use crate::plugin::{ConfigDiagnostic, PluginConfig, Result};
 use nemo_relay_types::{
     api::resource_metrics::ResourceMetricsSnapshot,
     codec::{
-        billing::BilledUsage,
         pricing::CostEstimator,
         response::{AnnotatedLlmResponse, CostEstimate},
     },
@@ -31,8 +30,6 @@ pub struct RuntimeServices {
     pub infer_model_provider: fn(&str, Option<&str>) -> Option<String>,
     /// Attach estimates without replacing provider-reported costs.
     pub attach_estimated_cost: fn(&mut AnnotatedLlmResponse, Option<&str>),
-    /// Estimate provider-specific billed usage against reported tier counts.
-    pub estimate_billed_cost: fn(Option<&str>, &str, &BilledUsage<'_>) -> Option<CostEstimate>,
     /// Read an existing resource memory sample without initiating collection.
     pub resource_memory: fn(Option<u32>) -> ResourceMemoryView,
 }
@@ -56,7 +53,6 @@ impl Default for RuntimeServices {
             pricing_snapshot: || Arc::new(NoPricing),
             infer_model_provider: |provider, _| Some(provider.to_string()),
             attach_estimated_cost: |_, _| {},
-            estimate_billed_cost: |_, _, _| None,
             resource_memory: |_| ResourceMemoryView::disabled(),
         }
     }

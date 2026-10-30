@@ -71,9 +71,9 @@ use nemo_relay_runtime::api::runtime::{
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
     with_scope_stack as with_scope_stack_handle,
 };
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
-use nemo_relay_runtime::codec::response::Usage;
 use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::Usage;
 use {
     nemo_relay::plugin::initialize as initialize_impl,
     nemo_relay::plugin::validate as validate_impl,
@@ -2379,11 +2379,11 @@ fn node_event_metadata_injector_fn(
 }
 
 type NodeLlmCodec = (
-    Arc<dyn nemo_relay_runtime::codec::traits::LlmCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 type NodeLlmResponseCodec = (
-    Arc<dyn nemo_relay_runtime::codec::traits::LlmResponseCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 

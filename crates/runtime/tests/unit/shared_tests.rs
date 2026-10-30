@@ -16,10 +16,10 @@ use crate::api::runtime::global_context;
 use crate::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use crate::api::scope::ScopeType;
 use crate::api::scope::{pop_scope, push_scope};
-use crate::codec::optimization::LlmOptimizationContribution;
-use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::traits::LlmCodec;
 use crate::error::Result;
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::traits::LlmCodec;
 
 struct SharedTestCodec;
 
@@ -644,7 +644,7 @@ async fn request_intercept_can_block_two_tool_results() {
     let (encoded, _, _, _) = run_request_intercepts_with_codec(
         "shared",
         original,
-        Some(Arc::new(crate::codec::openai_chat::OpenAIChatCodec)),
+        Some(Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec)),
     )
     .await
     .unwrap();
@@ -662,7 +662,7 @@ async fn request_intercept_can_block_two_tool_results() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn request_encoding_reuses_the_original_decoded_baseline() {
-    use crate::codec::openai_chat::OpenAIChatCodec;
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountingCodec(Arc<AtomicUsize>);

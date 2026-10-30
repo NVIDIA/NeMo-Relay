@@ -17,9 +17,9 @@ use crate::api::runtime::{
     NemoRelayContextState,
 };
 use crate::api::tool::ToolExecutionResult;
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::optimization::LlmOptimizationContribution;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;

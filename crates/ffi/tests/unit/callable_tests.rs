@@ -297,12 +297,12 @@ unsafe extern "C" fn llm_exec_short_circuit_cb(
 
 struct OpaqueExecutionCodec;
 
-impl nemo_relay_runtime::codec::traits::LlmCodec for OpaqueExecutionCodec {
+impl nemo_relay_types::codec::traits::LlmCodec for OpaqueExecutionCodec {
     fn decode(
         &self,
         request: &LlmRequest,
-    ) -> nemo_relay::error::Result<nemo_relay_runtime::codec::request::AnnotatedLlmRequest> {
-        Ok(nemo_relay_runtime::codec::request::AnnotatedLlmRequest {
+    ) -> nemo_relay::error::Result<nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        Ok(nemo_relay_types::codec::request::AnnotatedLlmRequest {
             model: request.content["model"].as_str().map(str::to_owned),
             ..Default::default()
         })
@@ -310,7 +310,7 @@ impl nemo_relay_runtime::codec::traits::LlmCodec for OpaqueExecutionCodec {
 
     fn encode(
         &self,
-        annotated: &nemo_relay_runtime::codec::request::AnnotatedLlmRequest,
+        annotated: &nemo_relay_types::codec::request::AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> nemo_relay::error::Result<LlmRequest> {
         let mut request = original.clone();
@@ -320,12 +320,12 @@ impl nemo_relay_runtime::codec::traits::LlmCodec for OpaqueExecutionCodec {
     }
 }
 
-impl nemo_relay_runtime::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
+impl nemo_relay_types::codec::traits::LlmResponseCodec for OpaqueExecutionCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<nemo_relay_runtime::codec::response::AnnotatedLlmResponse> {
-        Ok(nemo_relay_runtime::codec::response::AnnotatedLlmResponse {
+    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+        Ok(nemo_relay_types::codec::response::AnnotatedLlmResponse {
             model: response["model"].as_str().map(str::to_owned),
             ..Default::default()
         })
@@ -731,7 +731,7 @@ fn test_llm_sanitizers_report_runtime_codec_ids_with_embedded_nul() {
 fn test_wrap_llm_request_intercept_with_annotated_input() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
-    let annotated = nemo_relay_runtime::codec::request::AnnotatedLlmRequest {
+    let annotated = nemo_relay_types::codec::request::AnnotatedLlmRequest {
         instructions: None,
         api_specific: None,
         messages: vec![],
@@ -829,9 +829,9 @@ fn assert_llm_exec_callbacks(runtime: &tokio::runtime::Runtime) {
             Ok(json!({"model": request.content["model"]}))
         })
     });
-    let request_codec: Arc<dyn nemo_relay_runtime::codec::traits::LlmCodec> =
+    let request_codec: Arc<dyn nemo_relay_types::codec::traits::LlmCodec> =
         Arc::new(OpaqueExecutionCodec);
-    let response_codec: Arc<dyn nemo_relay_runtime::codec::traits::LlmResponseCodec> =
+    let response_codec: Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec> =
         Arc::new(OpaqueExecutionCodec);
     let opaque = runtime
         .block_on(opaque_intercept(

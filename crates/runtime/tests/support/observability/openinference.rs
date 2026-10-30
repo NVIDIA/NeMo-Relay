@@ -20,11 +20,13 @@ use crate::api::event::{Event, EventNormalizationExt};
 
 use crate::api::scope::ScopeType;
 
-use crate::codec::request::{
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
 
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use nemo_relay_types::codec::response::{
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage,
+};
 
 use crate::json::Json;
 #[cfg(test)]

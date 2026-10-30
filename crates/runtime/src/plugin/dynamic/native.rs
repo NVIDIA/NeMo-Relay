@@ -53,8 +53,6 @@ use crate::api::scope::{
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
 use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
@@ -92,6 +90,8 @@ use nemo_relay_plugin::{
     NemoRelayNativeToolExecutionContextCb, NemoRelayNativeToolJsonCb,
     NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;

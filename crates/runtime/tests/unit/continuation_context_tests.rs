@@ -12,8 +12,8 @@ use crate::api::runtime::scope_stack::{
     with_scope_stack,
 };
 use crate::api::scope::{ScopeHandle, ScopeType};
-use crate::codec::optimization::LlmOptimizationContribution;
 use crate::error::FlowError;
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

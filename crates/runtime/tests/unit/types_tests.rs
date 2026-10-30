@@ -17,12 +17,12 @@ use crate::api::event::{
 use crate::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::{ToolAttributes, ToolHandle};
-use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::response::AnnotatedLlmResponse;
 use crate::config_editor::{
     EditorConfig, EditorFieldKind, JSON_LIST_ITEM, STRING_LIST_ITEM, default_json_list_item_value,
     default_string_list_item_value,
 };
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 
 #[derive(Default, serde::Serialize)]
 struct NestedEditorFixture {

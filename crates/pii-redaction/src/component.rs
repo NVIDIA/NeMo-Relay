@@ -8,7 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay_runtime::codec::resolve::{ProviderSurface, supported_codec_names};
+use nemo_relay_codecs::resolve::{ProviderSurface, supported_codec_names};
 use nemo_relay_runtime::diagnostics::{
     ComponentRegistration, DiagnosticOutcome, ExtensionRegistration,
 };

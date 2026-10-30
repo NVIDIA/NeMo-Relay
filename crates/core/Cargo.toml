@@ -24,6 +24,7 @@ __skip-implicit-config = ["nemo-relay-runtime/__skip-implicit-config"]
 __test-plugin-host = ["nemo-relay-runtime/__test-plugin-host"]
 
 [dependencies]
+nemo-relay-codecs.workspace = true
 nemo-relay-runtime.workspace = true
 nemo-relay-types.workspace = true
 nemo-relay-plugin.workspace = true

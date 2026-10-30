@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 
-pub use nemo_relay_types::codec::response::*;
+pub(crate) use nemo_relay_types::codec::response::*;
 
 /// Provider-reported cost accepted by OpenAI-compatible and Anthropic codecs.
 #[derive(Deserialize)]
@@ -113,5 +113,5 @@ fn default_cost_currency() -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/response_tests.rs"]
+#[path = "../tests/unit/response_tests.rs"]
 mod tests;

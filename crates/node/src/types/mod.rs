@@ -26,8 +26,8 @@ use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreSc
 use nemo_relay::api::tool::{
     ToolExecutionResult as CoreToolExecutionResult, ToolHandle as CoreToolHandle,
 };
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 /// Identity of one visible Relay scope.
 #[napi(object)]
@@ -594,11 +594,9 @@ impl OpenAIChatCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec,
-            ),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec,
+            inner_codec: std::sync::Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
             ),
         }
     }
@@ -656,10 +654,10 @@ impl OpenAIResponsesCodec {
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::openai_responses::OpenAIResponsesCodec,
+                nemo_relay_codecs::openai_responses::OpenAIResponsesCodec,
             ),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::openai_responses::OpenAIResponsesCodec,
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
             ),
         }
     }
@@ -717,10 +715,10 @@ impl GeminiGenerateContentCodec {
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::gemini_generate_content::GeminiGenerateContentCodec,
+                nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec,
             ),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
             ),
         }
     }
@@ -783,11 +781,9 @@ impl AnthropicMessagesCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec,
-            ),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec,
+            inner_codec: std::sync::Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
             ),
         }
     }
@@ -844,11 +840,9 @@ impl OCIGenAIChatCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::oci_genai::OCIGenAIChatCodec,
-            ),
-            inner_response_codec: std::sync::Arc::new(
-                nemo_relay_runtime::codec::oci_genai::OCIGenAIChatCodec,
+            inner_codec: std::sync::Arc::new(nemo_relay_codecs::oci_genai::OCIGenAIChatCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OCIGenAI,
             ),
         }
     }

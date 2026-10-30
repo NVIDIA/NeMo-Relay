@@ -3,9 +3,9 @@
 
 use serde_json::{Map, Value as Json};
 
-use nemo_relay_runtime::codec::request::{ContentPart, MessageContent};
-use nemo_relay_runtime::codec::resolve::ProviderSurface;
-use nemo_relay_runtime::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
+use nemo_relay_codecs::resolve::ProviderSurface;
+use nemo_relay_types::codec::request::{ContentPart, MessageContent};
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
 
 #[derive(Clone, Copy)]
 pub(crate) enum BuiltinCodecName {

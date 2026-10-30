@@ -3770,13 +3770,12 @@ async fn gateway_request_codec_exposes_annotations_and_applies_buffered_edits() 
                 }
                 let mut annotated = annotated.expect("gateway generation route must have a codec");
                 *captured.lock().unwrap() = Some(serde_json::to_value(&annotated).unwrap());
-                let nemo_relay_runtime::codec::request::Message::User { content, .. } =
+                let nemo_relay_types::codec::request::Message::User { content, .. } =
                     &mut annotated.messages[0]
                 else {
                     panic!("expected portable Responses string input");
                 };
-                *content =
-                    nemo_relay_runtime::codec::request::MessageContent::Text("edited".into());
+                *content = nemo_relay_types::codec::request::MessageContent::Text("edited".into());
                 request
                     .headers
                     .insert("x-test-intercept".into(), json!("visible"));
@@ -3968,12 +3967,12 @@ async fn gateway_request_codecs_apply_buffered_and_streaming_edits_on_all_genera
                     "marker": marker,
                     "annotation": annotated,
                 }));
-                let nemo_relay_runtime::codec::request::Message::User { content, .. } =
+                let nemo_relay_types::codec::request::Message::User { content, .. } =
                     &mut annotated.messages[0]
                 else {
                     panic!("expected the first request item to be a portable user message");
                 };
-                *content = nemo_relay_runtime::codec::request::MessageContent::Text(format!(
+                *content = nemo_relay_types::codec::request::MessageContent::Text(format!(
                     "edited-{marker}"
                 ));
                 request

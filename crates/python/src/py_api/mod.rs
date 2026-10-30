@@ -44,8 +44,8 @@ use nemo_relay_runtime::api::runtime::{
     scope_stack_active as scope_stack_is_active, set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::PySet;

@@ -338,8 +338,10 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec),
-        response_codec: Arc::new(nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
+        ),
     }))
 }
 
@@ -353,8 +355,10 @@ pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_runtime::codec::openai_responses::OpenAIResponsesCodec),
-        response_codec: Arc::new(nemo_relay_runtime::codec::openai_responses::OpenAIResponsesCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_responses::OpenAIResponsesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
+        ),
     }))
 }
 
@@ -368,8 +372,10 @@ pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec),
-        response_codec: Arc::new(nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec),
+        codec: Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
+        ),
     }))
 }
 
@@ -383,11 +389,9 @@ pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHand
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(
-            nemo_relay_runtime::codec::gemini_generate_content::GeminiGenerateContentCodec,
-        ),
-        response_codec: Arc::new(
-            nemo_relay_runtime::codec::gemini_generate_content::GeminiGenerateContentCodec,
+        codec: Arc::new(nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
         ),
     }))
 }
@@ -400,8 +404,8 @@ struct ParsedExecuteInputs {
     data: Option<serde_json::Value>,
     metadata: Option<serde_json::Value>,
     model_name: Option<String>,
-    codec: Option<Arc<dyn nemo_relay_runtime::codec::traits::LlmCodec>>,
-    response_codec: Option<Arc<dyn nemo_relay_runtime::codec::traits::LlmResponseCodec>>,
+    codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmCodec>>,
+    response_codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>>,
 }
 
 struct RawExecuteInputs {

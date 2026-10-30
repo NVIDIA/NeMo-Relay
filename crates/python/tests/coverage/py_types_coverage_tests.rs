@@ -16,10 +16,10 @@ use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
 use nemo_relay::api::scope::{PushScopeParams, pop_scope, push_scope};
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay_runtime::codec::request::{
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
-use nemo_relay_runtime::codec::response::{
+use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, CostEstimate, CostSource,
     FinishReason, ResponseToolCall, Usage,
 };
@@ -2076,14 +2076,14 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     },
                 ],
                 model: Some("demo-model".into()),
-                params: Some(nemo_relay_runtime::codec::request::GenerationParams {
+                params: Some(nemo_relay_types::codec::request::GenerationParams {
                     temperature: Some(0.1),
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
                 tools: Some(vec![
-                    nemo_relay_runtime::codec::request::ToolDefinition::Function {
-                        function: nemo_relay_runtime::codec::request::FunctionDefinition {
+                    nemo_relay_types::codec::request::ToolDefinition::Function {
+                        function: nemo_relay_types::codec::request::FunctionDefinition {
                             name: "lookup".into(),
                             description: None,
                             parameters: Some(json!({"type": "object"})),
@@ -2093,7 +2093,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                         extra: serde_json::Map::new(),
                     },
                 ]),
-                tool_choice: Some(nemo_relay_runtime::codec::request::ToolChoice::Auto),
+                tool_choice: Some(nemo_relay_types::codec::request::ToolChoice::Auto),
                 store: None,
                 previous_response_id: None,
                 truncation: None,

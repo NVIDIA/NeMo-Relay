@@ -71,8 +71,8 @@ use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_relay_runtime::codec::optimization::LlmOptimizationContribution;
 use nemo_relay_runtime::json::Json;
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
 use serde_json::{Map, json};
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());

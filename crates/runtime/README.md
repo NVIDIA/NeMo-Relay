@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Runtime
 
-Execution, scopes, registries, diagnostics, codecs, and plugin hosting.
+Execution, scopes, registries, diagnostics, and plugin hosting.
 The SDK supplies built-in component composition through explicit runtime services.
 This crate participates in the unified NeMo Relay release.
 
@@ -17,5 +17,10 @@ initialization and exporter constructors.
 
 Use `nemo-relay-types` for codec and middleware contracts, `nemo-relay-plugin`
 for the non-generic `Plugin` trait and `PluginRegistrar`, and this crate for
-codec implementations, execution context, registries, diagnostics, and dynamic
+codec registration, execution context, registries, diagnostics, and dynamic
 plugin hosting. SDK and plugin consumers share the same runtime globals.
+
+Provider implementations live in `nemo-relay-codecs`. Both its stateless
+`BuiltinLlmNormalizer` and runtime’s `RuntimeLlmNormalizer` implement the
+`LlmNormalizer` trait from `nemo-relay-types`. Runtime adds configured pricing
+to normalized responses; standalone codecs preserve provider-reported costs.

@@ -29,10 +29,6 @@ use crate::api::tool::{
     ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolExecutionResult, tool_call,
     tool_call_end, tool_call_execute,
 };
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
     ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, UnsupportedBehavior, ensure_builtin_plugins_registered,
@@ -40,6 +36,8 @@ use crate::plugin::{
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
 use nemo_relay_observability::OpenTelemetryType;
 use nemo_relay_observability::atif::AtifAgentInfo;
 use nemo_relay_observability::atof::AtofExporterConfig;
@@ -48,6 +46,8 @@ use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
 use nemo_relay_runtime::diagnostics::{
     DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
 };
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
@@ -866,7 +866,7 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
         json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
     ];
     for api_specific in response_cases {
-        let response: crate::codec::response::AnnotatedLlmResponse =
+        let response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
             serde_json::from_value(json!({
                 "finish_reason": {"unknown": "SECRET"},
                 "api_specific": api_specific
@@ -1073,7 +1073,7 @@ impl LlmResponseCodec for IdentifiedRequestCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<crate::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
         self.inner.decode_response(response)
     }
 }
@@ -1125,7 +1125,7 @@ impl LlmResponseCodec for WrappedResponsesCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<crate::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
         OpenAIResponsesCodec.decode_response(response.get("payload").unwrap_or(response))
     }
 }
@@ -1240,8 +1240,8 @@ async fn trajectory_managed_llm_events_trust_the_active_builtin_codec_over_raw_s
             }]
         }
     });
-    assert!(crate::codec::resolve::detect_request_surface(&request.content).is_none());
-    assert!(crate::codec::resolve::detect_response_surface(&response).is_none());
+    assert!(nemo_relay_codecs::resolve::detect_request_surface(&request.content).is_none());
+    assert!(nemo_relay_codecs::resolve::detect_response_surface(&response).is_none());
 
     let result = llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -1663,7 +1663,7 @@ async fn normalized_anthropic_overlapping_paths_redact_multiple_text_blocks() {
             }),
         },
         LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(
-            crate::codec::anthropic::AnthropicMessagesCodec,
+            nemo_relay_codecs::anthropic::AnthropicMessagesCodec,
         ))),
     )
     .await
@@ -2812,7 +2812,7 @@ async fn builtin_metric_marks_drop_invalid_envelopes() {
 #[tokio::test]
 async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
-    let annotated_response: nemo_relay_runtime::codec::response::AnnotatedLlmResponse =
+    let annotated_response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
         serde_json::from_value(json!({
             "model": "claude-sonnet-4-6",
             "message": "private answer",
@@ -2894,7 +2894,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     assert_eq!(response.response_text(), Some("[REDACTED]"));
     assert!(matches!(
         response.finish_reason,
-        Some(crate::codec::response::FinishReason::Complete)
+        Some(nemo_relay_types::codec::response::FinishReason::Complete)
     ));
     assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(120));
     assert_eq!(
@@ -2914,7 +2914,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     assert_eq!(cost.output, Some(0.12));
     assert_eq!(
         cost.source,
-        crate::codec::response::CostSource::ProviderReported
+        nemo_relay_types::codec::response::CostSource::ProviderReported
     );
     assert!(cost.pricing_provider.is_none());
     assert!(cost.pricing_model.is_none());
@@ -2969,19 +2969,20 @@ fn trajectory_component_preserves_normalized_cost_source_and_optimization_summar
         "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
     });
     let mut annotated_response = OpenAIChatCodec.decode_response(&response).unwrap();
-    annotated_response.usage.as_mut().unwrap().cost = Some(crate::codec::response::CostEstimate {
-        total: Some(0.125),
-        currency: "USD".into(),
-        input: Some(0.1),
-        output: Some(0.025),
-        cache_read: None,
-        cache_write: None,
-        source: crate::codec::response::CostSource::ModelPricing,
-        pricing_provider: Some("SECRET-provider".into()),
-        pricing_model: Some("SECRET-model".into()),
-        pricing_as_of: Some("SECRET-date".into()),
-        pricing_source: Some("SECRET-source".into()),
-    });
+    annotated_response.usage.as_mut().unwrap().cost =
+        Some(nemo_relay_types::codec::response::CostEstimate {
+            total: Some(0.125),
+            currency: "USD".into(),
+            input: Some(0.1),
+            output: Some(0.025),
+            cache_read: None,
+            cache_write: None,
+            source: nemo_relay_types::codec::response::CostSource::ModelPricing,
+            pricing_provider: Some("SECRET-provider".into()),
+            pricing_model: Some("SECRET-model".into()),
+            pricing_as_of: Some("SECRET-date".into()),
+            pricing_source: Some("SECRET-source".into()),
+        });
     annotated_response.optimization_summary = Some(
         serde_json::from_value(json!({
             "schema_version": "1",
@@ -3027,7 +3028,7 @@ fn trajectory_component_preserves_normalized_cost_source_and_optimization_summar
     let cost = annotated.usage.as_ref().unwrap().cost.as_ref().unwrap();
     assert_eq!(
         cost.source,
-        crate::codec::response::CostSource::ModelPricing
+        nemo_relay_types::codec::response::CostSource::ModelPricing
     );
     assert_eq!(cost.total, Some(0.125));
     assert!(cost.pricing_provider.is_none());
@@ -6884,7 +6885,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
 
 #[tokio::test]
 async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_codec() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
@@ -7516,7 +7517,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
 
     let events = capture_events("pii-redaction-anthropic-normalized-response");
     let response_codec: Arc<dyn LlmResponseCodec> =
-        Arc::new(crate::codec::anthropic::AnthropicMessagesCodec);
+        Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec);
 
     let _ = llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -7598,7 +7599,9 @@ async fn builtin_backend_omits_unprojectable_anthropic_normalized_usage_response
                 }),
             })
             .func(noop_openai_chat_exec_fn(response.clone()))
-            .response_codec(Arc::new(crate::codec::anthropic::AnthropicMessagesCodec))
+            .response_codec(Arc::new(
+                nemo_relay_codecs::anthropic::AnthropicMessagesCodec,
+            ))
             .build(),
     )
     .await
@@ -7789,7 +7792,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
 
 #[tokio::test]
 async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
@@ -7863,7 +7866,7 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
 
 #[tokio::test]
 async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();

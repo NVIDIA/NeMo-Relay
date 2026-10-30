@@ -19,11 +19,11 @@ use nemo_relay_runtime::api::registry::{
 use nemo_relay_runtime::api::runtime::{
     EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn, ToolExecutionFn,
 };
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
 use nemo_relay_runtime::plugin::{
     ConfigReport, DiagnosticLevel, PluginError, PluginRegistration as ComponentRegistration,
     PluginRegistrationContext as HostedRegistrationContext, rollback_registrations,
 };
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use uuid::Uuid;
 
 use crate::acg_component::{

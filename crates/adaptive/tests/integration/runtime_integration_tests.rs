@@ -35,9 +35,9 @@ use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
-use nemo_relay_runtime::codec::traits::LlmResponseCodec;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::LlmResponseCodec;
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;

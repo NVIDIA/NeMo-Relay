@@ -30,6 +30,9 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::{FlowError, Result};
+use nemo_relay_codecs::anthropic::AnthropicMessagesCodec;
+use nemo_relay_codecs::oci_genai::OCIGenAIChatCodec;
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
@@ -40,20 +43,15 @@ use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn,
 };
 use nemo_relay_runtime::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_relay_runtime::codec::anthropic::AnthropicMessagesCodec;
-use nemo_relay_runtime::codec::oci_genai::OCIGenAIChatCodec;
-use nemo_relay_runtime::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay_runtime::codec::optimization::{
+use nemo_relay_runtime::json::Json;
+use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
     LlmOptimizationModelTransition,
 };
-use nemo_relay_runtime::codec::request::{
-    AnnotatedLlmRequest, ContentPart, Message, MessageContent,
-};
-use nemo_relay_runtime::codec::response::FinishReason;
-use nemo_relay_runtime::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay_runtime::json::Json;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
+use nemo_relay_types::codec::response::FinishReason;
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 // ---------------------------------------------------------------------------
 // Test isolation

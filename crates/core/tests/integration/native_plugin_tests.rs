@@ -28,7 +28,6 @@ use nemo_relay_runtime::api::runtime::{
     LlmJsonStream, TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_thread_scope_stack,
     create_scope_stack, restore_thread_scope_stack, set_thread_scope_stack,
 };
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
 use nemo_relay_runtime::plugin::dynamic::{
     DynamicPluginKind, NativePluginLoadSpec, VerifiedDynamicPluginSpec, initialize,
     load_native_plugins,
@@ -37,6 +36,7 @@ use nemo_relay_runtime::plugin::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, Result as PluginResult,
     deregister_plugin, list_plugin_kinds, lookup_plugin, register_plugin,
 };
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use plugin_host_test_support::{test_close_plugin_host, test_initialize_plugin_host_exact};
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};

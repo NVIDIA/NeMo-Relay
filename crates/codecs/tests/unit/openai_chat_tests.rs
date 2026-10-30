@@ -1671,7 +1671,7 @@ fn request_schema_rejects_malformed_known_chat_components() {
 // Streaming codec tests
 // ===================================================================
 
-use super::super::streaming::StreamingCodec;
+use nemo_relay_types::codec::streaming::StreamingCodec;
 
 #[test]
 fn openai_chat_streaming_codec_assembles_text_response() {

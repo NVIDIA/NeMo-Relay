@@ -18,10 +18,10 @@
 
 use serde::Deserialize;
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use crate::error::{FlowError, Result};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionDefinition, GenerationParams,
@@ -34,7 +34,6 @@ use super::response::{
     ResponseToolCall, Usage, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
-use crate::pricing::{estimate_cost_for_provider, infer_model_provider};
 
 // ---------------------------------------------------------------------------
 // Public codec struct
@@ -102,7 +101,6 @@ struct RawAnthropicUsage {
 
 #[derive(Deserialize)]
 struct RawAnthropicIterationUsage {
-    model: Option<String>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
@@ -926,11 +924,7 @@ fn anthropic_tool_call_block(block: &Json) -> Option<ResponseToolCall> {
     })
 }
 
-fn anthropic_usage(
-    raw_usage: Option<RawAnthropicUsage>,
-    model_for_pricing: Option<&str>,
-) -> Option<Usage> {
-    let model_provider = infer_model_provider("anthropic", model_for_pricing);
+fn anthropic_usage(raw_usage: Option<RawAnthropicUsage>) -> Option<Usage> {
     raw_usage.map(|u| {
         let iterations = u.iterations.as_deref().filter(|values| !values.is_empty());
         let prompt = iterations
@@ -947,7 +941,7 @@ fn anthropic_usage(
                 sum_iteration_field(values, |value| value.cache_creation_input_tokens)
             })
             .or(u.cache_creation_input_tokens);
-        let mut usage = Usage {
+        Usage {
             prompt_tokens: prompt,
             completion_tokens: completion,
             // Anthropic does not supply total_tokens; compute it.
@@ -959,32 +953,7 @@ fn anthropic_usage(
             cache_write_tokens,
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
-        };
-        if usage.cost.is_none() && iteration_models_match_response(iterations, model_for_pricing) {
-            usage.cost = model_for_pricing.and_then(|model| {
-                estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
-            });
         }
-        usage
-    })
-}
-
-/// An iteration from another model cannot be priced using the response model's rates.
-///
-/// Anthropic reports fallback attempts alongside the final response in `usage.iterations`, but
-/// each attempt is billed at the model that ran it. Keep the aggregate token counts while leaving
-/// cost unset unless the response model can price every named iteration faithfully.
-fn iteration_models_match_response(
-    iterations: Option<&[RawAnthropicIterationUsage]>,
-    response_model: Option<&str>,
-) -> bool {
-    iterations.is_none_or(|values| {
-        values.iter().all(|iteration| {
-            iteration
-                .model
-                .as_deref()
-                .is_none_or(|model| Some(model) == response_model)
-        })
     })
 }
 
@@ -1052,7 +1021,7 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let finish_reason = raw.stop_reason.as_deref().map(map_anthropic_stop_reason);
 
         // Map usage.
-        let usage = anthropic_usage(raw.usage, raw.model.as_deref());
+        let usage = anthropic_usage(raw.usage);
 
         // Build API-specific fields: all content blocks + stop_sequence.
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
@@ -1261,7 +1230,7 @@ impl LlmCodec for AnthropicMessagesCodec {
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
 ///
-/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+/// [`LlmFinalizerFn`]: nemo_relay_types::api::runtime::LlmFinalizerFn
 pub struct AnthropicMessagesStreamingCodec {
     state: std::sync::Arc<std::sync::Mutex<AnthropicMessagesStreamingState>>,
 }
@@ -1283,8 +1252,8 @@ impl Default for AnthropicMessagesStreamingCodec {
     }
 }
 
-impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
-    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+impl nemo_relay_types::codec::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
+    fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
             let mut guard = state
@@ -1295,7 +1264,7 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
         })
     }
 
-    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+    fn borrowed_collector(&self) -> Option<nemo_relay_types::api::runtime::LlmBorrowedCollectorFn> {
         let state = std::sync::Arc::clone(&self.state);
         Some(Box::new(move |event: &Json| -> Result<()> {
             let mut guard = state
@@ -1306,7 +1275,7 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
         }))
     }
 
-    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+    fn finalizer(&self) -> nemo_relay_types::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
             let mut guard = state
@@ -1597,5 +1566,5 @@ impl StreamingBlock {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/anthropic_tests.rs"]
+#[path = "../tests/unit/anthropic_tests.rs"]
 mod tests;

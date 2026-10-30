@@ -41,6 +41,7 @@ worker-grpc = [
 ]
 
 [dependencies]
+nemo-relay-codecs.workspace = true
 # First-party crates.
 nemo-relay-plugin.workspace = true
 nemo-relay-types.workspace = true

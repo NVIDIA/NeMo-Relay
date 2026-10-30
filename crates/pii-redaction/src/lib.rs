@@ -30,12 +30,6 @@ pub mod api {
 
 #[cfg(test)]
 #[allow(missing_docs)]
-pub mod codec {
-    pub use nemo_relay_runtime::codec::*;
-}
-
-#[cfg(test)]
-#[allow(missing_docs)]
 pub mod plugin {
     pub use nemo_relay_runtime::plugin::*;
 

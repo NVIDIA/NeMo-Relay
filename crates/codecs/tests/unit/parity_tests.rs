@@ -20,51 +20,12 @@ use super::resolve::{normalize_request, normalize_request_with_hint, normalize_r
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, FinishReason, Usage,
 };
-use crate::api::llm::LlmRequest;
-use crate::json::Json;
-use nemo_relay_model_pricing::pricing_test_mutex;
-use nemo_relay_model_pricing::{
-    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
-};
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
 
 // -------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------
-
-struct ResetPricingResolverGuard;
-
-impl Drop for ResetPricingResolverGuard {
-    fn drop(&mut self) {
-        let _ = reset_active_pricing_resolver();
-    }
-}
-
-fn install_parity_pricing(model_id: &str) {
-    let catalog = PricingCatalog::from_json_str(
-        &json!({
-            "version": 1,
-            "entries": [
-                {
-                    "provider": "test",
-                    "model_id": model_id,
-                    "pricing_as_of": "2026-06-05",
-                    "pricing_source": "test",
-                    "rates": {
-                        "input_per_million": 0.15,
-                        "output_per_million": 0.60,
-                        "cache_read_per_million": 0.075
-                    },
-                    "prompt_cache": {
-                        "read_accounting": "included_in_prompt_tokens"
-                    }
-                }
-            ]
-        })
-        .to_string(),
-    )
-    .unwrap();
-    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
-}
 
 fn req(content: Json) -> LlmRequest {
     LlmRequest {
@@ -628,58 +589,6 @@ fn test_provider_reported_scalar_cost_parity() {
         assert_eq!(cost.input, None);
         assert_eq!(cost.output, None);
     }
-}
-
-#[test]
-fn test_estimated_cost_parity_for_identical_model_and_usage() {
-    let _pricing_guard = pricing_test_mutex()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    install_parity_pricing("parity-priced-model");
-    let _reset_guard = ResetPricingResolverGuard;
-
-    // Each codec infers its own default provider ("openai" vs "anthropic"),
-    // but pricing lookup falls back to the model-only key, so an identical
-    // model + request must estimate identically everywhere.
-    // Anthropic counts cache reads separately from input tokens.
-    let chat = decode(&chat_response_with_usage("parity-priced-model", json!({})));
-    let anthropic = decode(&anthropic_response_with_usage(
-        "parity-priced-model",
-        json!({"input_tokens": 800}),
-    ));
-    let responses = decode(&responses_response_with_usage(
-        "parity-priced-model",
-        json!({}),
-    ));
-
-    let chat_cost = chat.usage.unwrap().cost.expect("chat estimated cost");
-    let anthropic_cost = anthropic
-        .usage
-        .unwrap()
-        .cost
-        .expect("anthropic estimated cost");
-    let responses_cost = responses
-        .usage
-        .unwrap()
-        .cost
-        .expect("responses estimated cost");
-
-    assert_eq!(chat_cost, anthropic_cost);
-    assert_eq!(chat_cost, responses_cost);
-    // 800 billable prompt (1000 - 200 cached) * 0.15/M
-    //   + 500 completion * 0.60/M + 200 cache-read * 0.075/M
-    let total = chat_cost.total.expect("estimated total");
-    assert!(
-        (total - 0.000_435).abs() < 1e-9,
-        "unexpected estimated total: {total}"
-    );
-    assert_eq!(chat_cost.currency, "USD");
-    assert_eq!(chat_cost.source, CostSource::ModelPricing);
-    assert_eq!(chat_cost.pricing_provider.as_deref(), Some("test"));
-    assert_eq!(
-        chat_cost.pricing_model.as_deref(),
-        Some("parity-priced-model")
-    );
 }
 
 // ===================================================================

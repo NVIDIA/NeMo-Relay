@@ -45,10 +45,10 @@
 //! (the CLI's kebab-case `data` envelope, `oci.util.to_dict()` snake_case
 //! dicts) are the caller's responsibility to convert.
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use crate::error::{FlowError, Result};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, GenerationParams, Message,
@@ -1500,7 +1500,7 @@ fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
 /// collector and finalizer closures share access. Each instance is single-use
 /// because [`LlmFinalizerFn`] consumes the finalize step.
 ///
-/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+/// [`LlmFinalizerFn`]: nemo_relay_types::api::runtime::LlmFinalizerFn
 pub struct OCIGenAIStreamingCodec {
     state: std::sync::Arc<std::sync::Mutex<OCIGenAIStreamingState>>,
 }
@@ -1520,8 +1520,8 @@ impl Default for OCIGenAIStreamingCodec {
     }
 }
 
-impl super::streaming::StreamingCodec for OCIGenAIStreamingCodec {
-    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+impl nemo_relay_types::codec::streaming::StreamingCodec for OCIGenAIStreamingCodec {
+    fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
             let mut guard = state
@@ -1532,7 +1532,7 @@ impl super::streaming::StreamingCodec for OCIGenAIStreamingCodec {
         })
     }
 
-    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+    fn borrowed_collector(&self) -> Option<nemo_relay_types::api::runtime::LlmBorrowedCollectorFn> {
         let state = std::sync::Arc::clone(&self.state);
         Some(Box::new(move |event: &Json| -> Result<()> {
             let mut guard = state
@@ -1543,7 +1543,7 @@ impl super::streaming::StreamingCodec for OCIGenAIStreamingCodec {
         }))
     }
 
-    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+    fn finalizer(&self) -> nemo_relay_types::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
             let mut guard = state
@@ -1904,5 +1904,5 @@ impl OCIToolCallState {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/oci_genai_tests.rs"]
+#[path = "../tests/unit/oci_genai_tests.rs"]
 mod tests;

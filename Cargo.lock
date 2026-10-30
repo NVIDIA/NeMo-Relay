@@ -1929,6 +1929,7 @@ dependencies = [
  "jsonschema",
  "libloading",
  "log",
+ "nemo-relay-codecs",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-plugin",
@@ -1981,8 +1982,10 @@ dependencies = [
  "chrono",
  "log",
  "nemo-relay",
+ "nemo-relay-codecs",
  "nemo-relay-model-pricing",
  "nemo-relay-runtime",
+ "nemo-relay-types",
  "redis",
  "regex",
  "serde",
@@ -2024,6 +2027,7 @@ dependencies = [
  "log",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-codecs",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
@@ -2065,6 +2069,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-codecs"
+version = "1.0.0"
+dependencies = [
+ "futures",
+ "futures-util",
+ "log",
+ "nemo-relay-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "nemo-relay-daemon-transport-benchmark"
 version = "1.0.0"
 dependencies = [
@@ -2100,9 +2118,11 @@ dependencies = [
  "libc",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-codecs",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
+ "nemo-relay-types",
  "serde",
  "serde_json",
  "sha2",
@@ -2149,9 +2169,11 @@ dependencies = [
  "napi-derive",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-codecs",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
+ "nemo-relay-types",
  "serde",
  "serde_json",
  "stacker",
@@ -2212,8 +2234,10 @@ dependencies = [
  "futures",
  "log",
  "nemo-relay",
+ "nemo-relay-codecs",
  "nemo-relay-observability",
  "nemo-relay-runtime",
+ "nemo-relay-types",
  "opentelemetry",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -2259,9 +2283,11 @@ dependencies = [
  "libc",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-codecs",
  "nemo-relay-observability",
  "nemo-relay-pii-redaction",
  "nemo-relay-runtime",
+ "nemo-relay-types",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -2311,6 +2337,7 @@ dependencies = [
  "jsonschema",
  "libloading",
  "log",
+ "nemo-relay-codecs",
  "nemo-relay-model-pricing",
  "nemo-relay-observability",
  "nemo-relay-plugin",

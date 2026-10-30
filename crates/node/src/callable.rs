@@ -40,10 +40,10 @@ use nemo_relay::api::event::{
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::error::{FlowError, Result};
-use nemo_relay_runtime::codec::optimization::LlmOptimizationContribution;
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::api::PersistentJsFunction;
 use crate::callback_factory;

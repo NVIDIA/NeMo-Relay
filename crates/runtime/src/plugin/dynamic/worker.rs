@@ -104,13 +104,13 @@ use crate::api::scope::{
     event as emit_scope_mark, pop_scope, push_scope,
 };
 use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, active_runtime_diagnostics_snapshot,
     deregister_plugin_registration_checked, register_plugin_tracked,
 };
+use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use super::trust::DynamicPluginLoadTrust;
 use super::{

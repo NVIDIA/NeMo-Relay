@@ -15,7 +15,7 @@ use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_pro
 use nemo_relay_adaptive::acg_learner::AcgLearner;
 use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
 use nemo_relay_adaptive::learner::traits::Learner;
-use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use uuid::Uuid;
 
 use nemo_relay_adaptive::redis::RedisBackend;

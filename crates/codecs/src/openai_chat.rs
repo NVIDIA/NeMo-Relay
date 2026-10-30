@@ -8,10 +8,10 @@
 
 use serde::Deserialize;
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use crate::error::{FlowError, Result};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, FunctionDefinition,
@@ -24,7 +24,6 @@ use super::response::{
     ResponseToolCall, Usage, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
-use crate::pricing::{estimate_cost_for_provider, infer_model_provider};
 
 // ---------------------------------------------------------------------------
 // Public codec struct
@@ -1168,14 +1167,12 @@ impl LlmResponseCodec for OpenAIChatCodec {
             .map(map_chat_finish_reason);
 
         // Map usage.
-        let model_for_pricing = raw.model.as_deref();
-        let model_provider = infer_model_provider("openai", model_for_pricing);
         let usage = raw.usage.map(|u| {
             let cache_read_tokens = u
                 .prompt_tokens_details
                 .as_ref()
                 .and_then(|details| details.cached_tokens);
-            let mut usage = Usage {
+            Usage {
                 prompt_tokens: u.prompt_tokens,
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
@@ -1186,13 +1183,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
                     .zip(cache_read_tokens)
                     .and_then(|(total, cached)| total.checked_sub(cached)),
                 cost: provider_reported_cost(u.provider_cost, u.cost),
-            };
-            if usage.cost.is_none() {
-                usage.cost = model_for_pricing.and_then(|model| {
-                    estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
-                });
             }
-            usage
         });
 
         // Build API-specific fields.
@@ -1452,7 +1443,7 @@ fn json_f64(v: f64) -> Json {
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
 ///
-/// [`LlmFinalizerFn`]: crate::api::runtime::LlmFinalizerFn
+/// [`LlmFinalizerFn`]: nemo_relay_types::api::runtime::LlmFinalizerFn
 pub struct OpenAIChatStreamingCodec {
     state: std::sync::Arc<std::sync::Mutex<OpenAIChatStreamingState>>,
 }
@@ -1472,8 +1463,8 @@ impl Default for OpenAIChatStreamingCodec {
     }
 }
 
-impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
-    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIChatStreamingCodec {
+    fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
             let mut guard = state
@@ -1484,7 +1475,7 @@ impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
         })
     }
 
-    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+    fn borrowed_collector(&self) -> Option<nemo_relay_types::api::runtime::LlmBorrowedCollectorFn> {
         let state = std::sync::Arc::clone(&self.state);
         Some(Box::new(move |event: &Json| -> Result<()> {
             let mut guard = state
@@ -1495,7 +1486,7 @@ impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
         }))
     }
 
-    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+    fn finalizer(&self) -> nemo_relay_types::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
             let mut guard = state
@@ -1736,5 +1727,5 @@ impl ToolCallState {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/openai_chat_tests.rs"]
+#[path = "../tests/unit/openai_chat_tests.rs"]
 mod tests;

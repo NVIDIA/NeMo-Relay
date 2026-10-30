@@ -13,8 +13,8 @@ use nemo_relay_model_pricing::plugin::{
     store_pricing_config,
 };
 use nemo_relay_model_pricing::{PricingCatalog, PricingSourceConfig};
-use nemo_relay_runtime::codec::response::Usage;
 use nemo_relay_runtime::plugin::PluginConfig;
+use nemo_relay_types::codec::response::Usage;
 
 use crate::configuration::resolve_server_config;
 use crate::server::GatewayOverrides;

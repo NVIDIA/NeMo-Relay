@@ -38,8 +38,8 @@ use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::error::{FlowError, Result};
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay_runtime::codec::traits::LlmCodec;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::codec::traits::LlmCodec;
 
 use crate::convert::json_to_c_string;
 use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};

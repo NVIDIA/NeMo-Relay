@@ -13,13 +13,6 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::request::{
-    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
-    ToolDefinition,
-};
-use crate::codec::response::{
-    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, ResponseToolCall, Usage,
-};
 use crate::json::Json;
 use crate::observability_test_support::MarkProjection;
 use crate::observability_test_support::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -27,6 +20,13 @@ use crate::observability_test_support::otel::RelayIdGenerator;
 use nemo_relay_model_pricing::pricing_test_mutex;
 use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
+use nemo_relay_types::codec::request::{
+    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
+    ToolDefinition,
+};
+use nemo_relay_types::codec::response::{
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, ResponseToolCall, Usage,
 };
 use opentelemetry::trace::SpanContext;
 use opentelemetry::trace::Status;

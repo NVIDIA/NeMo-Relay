@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::runtime::LlmRequestInterceptFn;
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,

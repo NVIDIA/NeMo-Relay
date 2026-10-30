@@ -18,11 +18,11 @@ use crate::api::runtime::{
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::api::scope::ScopeType;
-use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::traits::LlmCodec;
 use crate::error::{FlowError, Result};
 use crate::json::{Json, merge_json};
 use crate::shared_runtime::ensure_process_runtime_owner;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::LlmCodec;
 
 /// Header carrying the current Dynamo agent session ID.
 pub const DYNAMO_SESSION_ID_HEADER_KEY: &str = "x-dynamo-session-id";
@@ -319,7 +319,7 @@ pub(crate) type InterceptedLlmRequest = (
     LlmRequest,
     Option<Arc<AnnotatedLlmRequest>>,
     Vec<crate::api::event::PendingMarkSpec>,
-    Vec<crate::codec::optimization::LlmOptimizationContribution>,
+    Vec<nemo_relay_types::codec::optimization::LlmOptimizationContribution>,
 );
 
 #[cfg(test)]

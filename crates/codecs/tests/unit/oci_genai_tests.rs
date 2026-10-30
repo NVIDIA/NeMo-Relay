@@ -11,7 +11,7 @@ use super::super::resolve::{
     detect_request_surface, detect_request_surface_with_hint, detect_response_surface,
 };
 use super::super::response::{ApiSpecificResponse, FinishReason};
-use super::super::streaming::StreamingCodec;
+use nemo_relay_types::codec::streaming::StreamingCodec;
 
 // -------------------------------------------------------------------
 // Helpers and fixtures
@@ -749,7 +749,10 @@ fn test_invalid_generic_content_shape_errors() {
         });
         let error = OCIGenAIChatCodec.decode_response(&response).unwrap_err();
         assert!(
-            matches!(error, crate::error::FlowError::InvalidArgument(_)),
+            matches!(
+                error,
+                nemo_relay_types::error::FlowError::InvalidArgument(_)
+            ),
             "expected InvalidArgument, got {error:?}"
         );
     }

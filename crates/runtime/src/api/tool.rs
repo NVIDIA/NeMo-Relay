@@ -738,7 +738,9 @@ async fn tool_call_end_with_pending_marks(
 
 // A handled failure remains a returned result, while its tool span reports ERROR.
 fn tool_result_metadata(metadata: Option<Json>, result: &Json) -> Option<Json> {
-    if crate::codec::tool::projected_tool_result(result).is_some_and(|(_, is_error)| is_error) {
+    if nemo_relay_types::codec::tool::projected_tool_result(result)
+        .is_some_and(|(_, is_error)| is_error)
+    {
         metadata_with_otel_status(metadata, "ERROR", None)
     } else {
         metadata

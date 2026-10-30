@@ -4,7 +4,7 @@
 //! Unit tests for stream in the NeMo Relay core crate.
 
 use super::*;
-use crate::codec::response::{FinishReason, Usage};
+use nemo_relay_types::codec::response::{FinishReason, Usage};
 use serde_json::json;
 
 fn assert_no_top_level_fields(data: &Json, fields: &[&str]) {

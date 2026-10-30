@@ -774,3 +774,7 @@ pub fn tool_definition_identities(tool: &ToolDefinition) -> Vec<(&str, &str)> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/codec/request_tests.rs"]
+mod tests;

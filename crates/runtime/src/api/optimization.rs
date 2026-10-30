@@ -10,13 +10,13 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::codec::optimization::{
+use nemo_relay_types::codec::billing::{InputSplit, input_split};
+use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationModel, LlmOptimizationSummary,
     LlmOptimizationSummaryStatus, LlmOptimizationTokens,
 };
-use crate::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
-use crate::pricing::{InputSplit, input_split};
 use nemo_relay_types::codec::pricing::CostEstimator;
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
 
 /// Maximum contributions retained for one LLM call.
 pub const MAX_LLM_OPTIMIZATION_CONTRIBUTIONS: usize = 64;
@@ -487,7 +487,7 @@ fn analyze_contributions(finished: &FinishedContributions) -> ContributionAnalys
         .filter(|contribution| contribution.applied)
         .filter(|contribution| {
             contribution.kind.as_str()
-                == crate::codec::optimization::LlmOptimizationKind::MODEL_ROUTING
+                == nemo_relay_types::codec::optimization::LlmOptimizationKind::MODEL_ROUTING
         })
         .collect::<Vec<_>>();
     let routing_ambiguous = applied_routing.len() > 1;
@@ -502,7 +502,7 @@ fn analyze_contributions(finished: &FinishedContributions) -> ContributionAnalys
         .filter(|contribution| contribution.applied)
     {
         let is_routing = contribution.kind.as_str()
-            == crate::codec::optimization::LlmOptimizationKind::MODEL_ROUTING;
+            == nemo_relay_types::codec::optimization::LlmOptimizationKind::MODEL_ROUTING;
         if routing_ambiguous && is_routing {
             continue;
         }
@@ -933,8 +933,8 @@ pub(crate) fn finalize_optimization_summary(
 }
 
 fn calculate_estimated_cost_saved(
-    baseline_cost: Option<&crate::codec::response::CostEstimate>,
-    actual_cost: Option<&crate::codec::response::CostEstimate>,
+    baseline_cost: Option<&nemo_relay_types::codec::response::CostEstimate>,
+    actual_cost: Option<&nemo_relay_types::codec::response::CostEstimate>,
     limitations: &mut Vec<String>,
 ) -> (Option<f64>, Option<String>) {
     let baseline_total = baseline_cost.and_then(|cost| cost.total_or_component_sum());

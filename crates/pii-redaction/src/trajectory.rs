@@ -8,21 +8,21 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value as Json};
 
+use nemo_relay_codecs::resolve::{
+    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
+};
 use nemo_relay_runtime::api::event::{
     CategoryProfile, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME,
     METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
 };
 use nemo_relay_runtime::api::llm::LlmRequest;
-use nemo_relay_runtime::codec::optimization::LlmOptimizationSummary;
-use nemo_relay_runtime::codec::request::{
+use nemo_relay_types::codec::optimization::LlmOptimizationSummary;
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, FunctionDefinition,
     GenerationParams, Message, MessageContent, OpenAiImageUrl, ProviderNativeComponent, ToolCall,
     ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
-use nemo_relay_runtime::codec::resolve::{
-    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
-};
-use nemo_relay_runtime::codec::response::{
+use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, FinishReason, ResponseToolCall, Usage,
 };
 

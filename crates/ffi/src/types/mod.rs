@@ -26,8 +26,8 @@ use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::ToolHandle;
 use nemo_relay_adaptive::AdaptiveRuntime;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_runtime::plugin::dynamic::PluginHostActivation;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 use crate::error::set_last_error;

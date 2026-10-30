@@ -15,10 +15,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-use crate::error::{FlowError, Result};
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message,
@@ -27,11 +27,7 @@ use super::request::{
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use super::traits::{LlmCodec, LlmResponseCodec};
-use crate::pricing::infer_model_provider;
-use crate::pricing::{
-    GeminiBilling, SeparateUsageCounts, ToolUsePromptBilling, billed_usage,
-    estimate_billed_cost_for_provider,
-};
+use nemo_relay_types::codec::billing::SeparateUsageCounts;
 
 const GEMINI_PROVIDER: &str = "gemini";
 
@@ -540,12 +536,7 @@ fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCal
 
 /// Map Gemini `usageMetadata` to a normalized [`Usage`] and the counts kept in
 /// `ApiSpecificResponse::GeminiGenerateContent`.
-fn map_usage(
-    meta: Option<RawUsageMetadata>,
-    model: Option<&str>,
-    tool_use_billing: ToolUsePromptBilling,
-) -> (Option<Usage>, SeparateUsageCounts) {
-    let model_provider = infer_model_provider("google", model);
+fn map_usage(meta: Option<RawUsageMetadata>) -> (Option<Usage>, SeparateUsageCounts) {
     let Some(m) = meta else {
         return (None, SeparateUsageCounts::default());
     };
@@ -585,18 +576,7 @@ fn map_usage(
         uncached_input_tokens,
         cost: None,
     };
-    let cost = model.and_then(|m| {
-        let billed = billed_usage(
-            &usage,
-            Some(GeminiBilling {
-                separate,
-                tool_use_billing,
-            }),
-        )
-        .ok()?;
-        estimate_billed_cost_for_provider(model_provider.as_deref(), m, &billed)
-    });
-    (Some(Usage { cost, ..usage }), separate)
+    (Some(usage), separate)
 }
 
 /// Validate the shape of a Gemini `systemInstruction` value.
@@ -1414,15 +1394,7 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
         let safety_ratings = extra.remove("safetyRatings");
         let grounding_metadata = extra.remove("groundingMetadata");
         let citation_metadata = extra.remove("citationMetadata");
-        let (usage, separate) = map_usage(
-            raw.usage_metadata,
-            model.as_deref(),
-            ToolUsePromptBilling::from_tool_evidence(
-                grounding_metadata.as_ref(),
-                &extra,
-                message.as_ref(),
-            ),
-        );
+        let (usage, separate) = map_usage(raw.usage_metadata);
         let has_candidate_data = !extra.is_empty()
             || safety_ratings.is_some()
             || grounding_metadata.is_some()
@@ -2981,8 +2953,8 @@ impl Default for GeminiGenerateContentStreamingCodec {
     }
 }
 
-impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
-    fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
+impl nemo_relay_types::codec::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
+    fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
             let mut guard = state
@@ -2993,7 +2965,7 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
         })
     }
 
-    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+    fn borrowed_collector(&self) -> Option<nemo_relay_types::api::runtime::LlmBorrowedCollectorFn> {
         let state = std::sync::Arc::clone(&self.state);
         Some(Box::new(move |event: &Json| -> Result<()> {
             let mut guard = state
@@ -3004,7 +2976,7 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
         }))
     }
 
-    fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
+    fn finalizer(&self) -> nemo_relay_types::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
             let mut guard = state
@@ -3658,5 +3630,5 @@ fn set_gemini_arg(target: &mut Json, tokens: &[GeminiArgPathToken], value: Json)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/gemini_generate_content_tests.rs"]
+#[path = "../tests/unit/gemini_generate_content_tests.rs"]
 mod tests;

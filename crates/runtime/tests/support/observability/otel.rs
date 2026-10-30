@@ -65,7 +65,7 @@ use crate::api::scope::ScopeType;
 
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 
-use crate::codec::response::CostEstimate;
+use nemo_relay_types::codec::response::CostEstimate;
 
 use crate::error::FlowError;
 

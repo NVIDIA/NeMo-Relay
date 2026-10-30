@@ -10,14 +10,14 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::api::event::DataSchema;
-use crate::codec::optimization::{
-    LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
-};
-use crate::codec::response::{ApiSpecificResponse, CostEstimate, CostSource, Usage};
 use crate::json::Json;
 use nemo_relay_model_pricing::PricingResolver;
 use nemo_relay_model_pricing::PricingSource;
 use nemo_relay_model_pricing::{PricingCatalog, PricingCatalogError};
+use nemo_relay_types::codec::optimization::{
+    LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
+};
+use nemo_relay_types::codec::response::{ApiSpecificResponse, CostEstimate, CostSource, Usage};
 
 fn resolver() -> PricingResolver {
     resolver_with_rates(2.0, 1.0)
@@ -56,7 +56,7 @@ fn resolver_without_cache_write_rate() -> PricingResolver {
 fn contribution() -> LlmOptimizationContribution {
     let mut contribution = LlmOptimizationContribution::new(
         "test.optimizer",
-        crate::codec::optimization::LlmOptimizationKind::model_routing(),
+        nemo_relay_types::codec::optimization::LlmOptimizationKind::model_routing(),
     );
     contribution.model_transition = Some(LlmOptimizationModelTransition {
         baseline: Some(LlmOptimizationModel::new("baseline").with_provider("test")),
@@ -278,7 +278,7 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
     {
         let mut item = LlmOptimizationContribution::new(
             producer,
-            crate::codec::optimization::LlmOptimizationKind::input_compression(),
+            nemo_relay_types::codec::optimization::LlmOptimizationKind::input_compression(),
         );
         item.token_impact = Some(LlmOptimizationTokenImpact {
             saved: Some(LlmOptimizationTokens {
@@ -795,7 +795,7 @@ fn compression_contribution(
 ) -> LlmOptimizationContribution {
     let mut contribution = LlmOptimizationContribution::new(
         producer,
-        crate::codec::optimization::LlmOptimizationKind::input_compression(),
+        nemo_relay_types::codec::optimization::LlmOptimizationKind::input_compression(),
     );
     contribution.token_impact = Some(LlmOptimizationTokenImpact {
         saved: Some(saved),

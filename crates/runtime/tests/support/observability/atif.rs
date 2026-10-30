@@ -25,9 +25,9 @@ use crate::api::runtime::EventSubscriberFn;
 
 use crate::api::subscriber::flush_subscribers;
 
-use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 
-use crate::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 
 use crate::error::Result;
 

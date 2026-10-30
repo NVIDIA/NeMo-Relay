@@ -50,9 +50,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{flow_error_to_py_err, json_to_py, py_to_json};
 use crate::py_types::{

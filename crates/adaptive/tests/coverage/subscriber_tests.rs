@@ -8,7 +8,7 @@ use nemo_relay::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use nemo_relay::api::scope::ScopeType;
-use nemo_relay_runtime::codec::response::{AnnotatedLlmResponse, FinishReason};
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

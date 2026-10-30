@@ -29,7 +29,7 @@ SUPPORT_API_REFERENCE_TEXT = (
     "Use the [Python Library Reference](/reference/api/python-library-reference),\n"
     "[Node.js Library Reference](/reference/api/nodejs-library-reference), and\n"
     "[Rust Library Reference](/reference/api/rust-library-reference) for generated\n"
-    "symbol-level documentation. The Rust reference includes `nemo-relay`, `nemo-relay-runtime`,\n"
+    "symbol-level documentation. The Rust reference includes `nemo-relay`, `nemo-relay-runtime`, `nemo-relay-codecs`,\n"
     "`nemo-relay-model-pricing`, `nemo-relay-resource-metrics`, `nemo-relay-observability`,\n"
     "`nemo-relay-adaptive`, `nemo-relay-pii-redaction`, and `nemo-relay-ffi`.\n"
     "For Go and raw FFI surfaces, use the source directories, tests, and\n"

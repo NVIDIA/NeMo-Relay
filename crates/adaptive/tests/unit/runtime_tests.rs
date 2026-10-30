@@ -18,7 +18,7 @@ use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
-use nemo_relay_runtime::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use {nemo_relay_runtime::plugin::ConfigPolicy, nemo_relay_runtime::plugin::UnsupportedBehavior};
 
 #[cfg(feature = "redis-backend")]

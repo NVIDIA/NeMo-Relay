@@ -52,8 +52,8 @@ use crate::api::runtime::{
     MiddlewareContinuationLease, NemoRelayContextState, TASK_SCOPE_STACK, current_scope_stack,
     global_context, with_active_event_uuid,
 };
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::response::AnnotatedLlmResponse;
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 
 #[test]
 fn native_logging_preserves_levels_targets_and_structured_fields() {

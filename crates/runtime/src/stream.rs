@@ -56,11 +56,11 @@ use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason};
-use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::pricing::attach_estimated_cost_for_provider;
+use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason};
+use nemo_relay_types::codec::traits::LlmResponseCodec;
 use serde_json::Map;
 
 /// Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:

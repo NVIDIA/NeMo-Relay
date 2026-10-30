@@ -12,8 +12,8 @@ use nemo_relay_adaptive::acg::{
 };
 use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime};
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay_runtime::codec::response::Usage;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::codec::response::Usage;
 use pyo3::prelude::*;
 use uuid::Uuid;
 

@@ -120,8 +120,8 @@ fn layered_acg_request() -> LlmRequest {
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
     let request = layered_acg_request();
-    let annotated_request = nemo_relay_runtime::codec::resolve::request_codec(
-        nemo_relay_runtime::codec::resolve::ProviderSurface::AnthropicMessages,
+    let annotated_request = nemo_relay_codecs::resolve::request_codec(
+        nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
     )
     .decode(&request)
     .expect("fixture request should decode");

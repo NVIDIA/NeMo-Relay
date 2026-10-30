@@ -38,18 +38,18 @@ use crate::api::runtime::{
 use crate::api::scope::{COMPACTION_EVENT_NAME, EmitMarkEventParams, event};
 use crate::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use crate::codec::anthropic::AnthropicMessagesCodec;
-use crate::codec::oci_genai::OCIGenAIChatCodec;
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::FlowError;
 use crate::json::Json;
-use crate::{
-    codec::optimization::LlmOptimizationContribution, codec::response::AnnotatedLlmResponse,
-};
+use nemo_relay_codecs::anthropic::AnthropicMessagesCodec;
+use nemo_relay_codecs::oci_genai::OCIGenAIChatCodec;
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
 use nemo_relay_model_pricing::PricingResolver;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_types::codec::{
+    optimization::LlmOptimizationContribution, response::AnnotatedLlmResponse,
+};
 
 fn reset_global() {
     let _ = spdlog::init_log_crate_proxy();
@@ -831,7 +831,7 @@ impl LlmResponseCodec for ProjectionFailingCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> crate::error::Result<crate::codec::response::AnnotatedLlmResponse> {
+    ) -> crate::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
         OpenAIChatCodec.decode_response(response)
     }
 }

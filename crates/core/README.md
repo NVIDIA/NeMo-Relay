@@ -48,7 +48,7 @@ Node.js bindings mirror the semantics exposed by this crate.
 - **Built-in observability plugin**: Configure first-party Agent Trajectory
   Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
   and OpenTelemetry trace, log, and metric exporters from the core crate.
-- **Runtime integration**: Use `nemo-relay-runtime` for provider codecs,
+- **Runtime integration**: Use `nemo-relay-codecs` for provider implementations and `nemo-relay-runtime` for
   diagnostics, execution context, and plugin hosting internals.
 - **Binding source of truth**: Use the runtime semantics mirrored by the
   Python and Node.js bindings.
@@ -61,7 +61,7 @@ internals directly; shared contracts live in `nemo-relay-types` and
 `nemo-relay-plugin`. There is one runtime state shared by all consumers.
 
 Imports from `nemo_relay::codec`, `diagnostics`, `logging`, and
-`api::runtime` have moved to `nemo_relay_runtime`. Initialize SDK composition
+`api::runtime` have moved to `nemo_relay_types`, `nemo_relay_codecs`, and `nemo_relay_runtime`. Initialize SDK composition
 with `nemo_relay::initialize_runtime()` before calling runtime APIs directly
 when default pricing and component services are needed. SDK plugin
 initialization and exporter constructors install composition automatically.

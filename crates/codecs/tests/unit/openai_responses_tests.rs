@@ -1584,7 +1584,7 @@ fn assert_responses_tool_and_choice_branches() {
 // Streaming codec tests
 // ===================================================================
 
-use super::super::streaming::StreamingCodec;
+use nemo_relay_types::codec::streaming::StreamingCodec;
 
 /// Later lifecycle and terminal events cannot replace the first final snapshot.
 #[test]

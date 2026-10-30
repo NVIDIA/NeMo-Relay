@@ -2421,8 +2421,8 @@ async fn managed_runtime_applies_request_middleware_before_provider_delivery() {
                 .headers
                 .insert("x-worker-intercept".into(), json!("applied"));
             annotated.as_mut().unwrap().messages =
-                vec![nemo_relay_runtime::codec::request::Message::User {
-                    content: nemo_relay_runtime::codec::request::MessageContent::Text(
+                vec![nemo_relay_types::codec::request::Message::User {
+                    content: nemo_relay_types::codec::request::MessageContent::Text(
                         "rewritten by middleware".into(),
                     ),
                     name: None,

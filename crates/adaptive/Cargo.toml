@@ -14,6 +14,8 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+nemo-relay-codecs.workspace = true
+nemo-relay-types.workspace = true
 nemo-relay-model-pricing.workspace = true
 # First-party crates.
 nemo-relay-runtime.workspace = true

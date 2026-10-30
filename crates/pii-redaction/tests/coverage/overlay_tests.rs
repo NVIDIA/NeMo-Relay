@@ -272,8 +272,7 @@ fn gemini_annotated(
     AnnotatedLlmResponse {
         id: id.map(String::from),
         model: model.map(String::from),
-        message: message
-            .map(|t| nemo_relay_runtime::codec::request::MessageContent::Text(t.into())),
+        message: message.map(|t| nemo_relay_types::codec::request::MessageContent::Text(t.into())),
         tool_calls,
         finish_reason: None,
         usage: None,
@@ -656,7 +655,7 @@ fn gemini_overlay_does_not_overwrite_finish_reason() {
     });
 
     let annotated = AnnotatedLlmResponse {
-        finish_reason: Some(nemo_relay_runtime::codec::response::FinishReason::ToolUse),
+        finish_reason: Some(nemo_relay_types::codec::response::FinishReason::ToolUse),
         tool_calls: Some(vec![tool_call("c1", "fn", json!({}))]),
         ..Default::default()
     };

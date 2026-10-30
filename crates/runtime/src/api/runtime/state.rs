@@ -51,8 +51,6 @@ use crate::api::tool::ToolHandle;
 use crate::api::tool::{
     CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
 };
-use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_event_metadata_injector_entries, merge_execution_intercept_callables,
     merge_guardrail_entries, merge_intercept_entries,
@@ -61,6 +59,8 @@ use crate::error::FlowError;
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::json;
 use uuid::Uuid;
 

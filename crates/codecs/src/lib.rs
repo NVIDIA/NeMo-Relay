@@ -1,36 +1,22 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! LLM codecs and the shared JSON format for tool results.
-//!
-//! This module provides the type system and traits for bidirectional
-//! request codecs ([`traits::LlmCodec`] / [`request::AnnotatedLlmRequest`]),
-//! the decode-only response codec
-//! ([`traits::LlmResponseCodec`] / [`response::AnnotatedLlmResponse`]), and
-//! the streaming response codec
-//! ([`streaming::StreamingCodec`]) used with the managed
-//! streaming LLM execution pipeline.
-//!
-//! [`resolve`] is the detect-then-decode entry point for selecting a built-in
-//! provider codec from a raw payload when no codec annotation is present.
-//! [`tool`] defines the shared JSON format for tool results.
+#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
+//! Provider request, response, and streaming codec implementations.
+//! Shared traits and normalized models live in `nemo-relay-types`.
 
 pub mod anthropic;
 pub mod gemini_generate_content;
 pub mod oci_genai;
 pub mod openai_chat;
 pub mod openai_responses;
-pub mod optimization;
-pub mod request;
 pub mod resolve;
-pub mod response;
+mod response;
 pub mod streaming;
-pub mod tool;
-pub mod traits;
-
 use nemo_relay_types::Json;
+use nemo_relay_types::codec::{request, traits};
 
-use crate::error::{FlowError, Result};
+use nemo_relay_types::error::{FlowError, Result};
 
 fn optional_bool(
     obj: &serde_json::Map<String, Json>,
@@ -369,5 +355,5 @@ fn patch_changed_json(original: &Json, baseline: &Json, edited: &Json) -> Result
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/parity_tests.rs"]
+#[path = "../tests/unit/parity_tests.rs"]
 mod parity_tests;

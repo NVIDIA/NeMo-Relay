@@ -429,6 +429,7 @@ jobs:
           version="${{ github.ref_name }}"
           packages=(
             nemo-relay-types
+            nemo-relay-codecs
             nemo-relay-plugin
             nemo-relay-model-pricing
             nemo-relay-resource-metrics

@@ -23,14 +23,14 @@ use crate::acg::{
     PassthroughPlugin, SharingScope, StabilityAnalysisResult, debug as acg_debug,
 };
 use chrono::Utc;
+use nemo_relay_codecs::resolve::request_codec;
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn,
 };
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
-use nemo_relay_runtime::codec::resolve::request_codec;
 use nemo_relay_runtime::json::Json;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use uuid::Uuid;
 
 use crate::acg_profile::{derive_acg_learning_key, derive_acg_profile_key};

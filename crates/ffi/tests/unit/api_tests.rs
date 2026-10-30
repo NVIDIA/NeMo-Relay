@@ -8,10 +8,10 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest;
-use nemo_relay_runtime::codec::response::AnnotatedLlmResponse;
-use nemo_relay_runtime::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay_runtime::plugin::PluginRegistrationContext;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 

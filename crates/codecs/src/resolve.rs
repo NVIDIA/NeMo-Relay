@@ -6,15 +6,15 @@
 
 use std::sync::Arc;
 
-use crate::api::llm::LlmRequest;
-use crate::error::Result;
-use crate::json::Json;
+use nemo_relay_types::Json;
+use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::error::Result;
 
 use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
-use super::streaming::StreamingCodec;
 use super::traits::{LlmCodec, LlmResponseCodec};
 use super::{anthropic, gemini_generate_content, oci_genai, openai_chat, openai_responses};
+use nemo_relay_types::codec::streaming::StreamingCodec;
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,5 +216,21 @@ pub fn streaming_codec(surface: ProviderSurface) -> Box<dyn StreamingCodec> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/resolve_tests.rs"]
+#[path = "../tests/unit/resolve_tests.rs"]
 mod tests;
+
+/// Stateless provider normalization, preserving usage and provider-reported costs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BuiltinLlmNormalizer;
+impl nemo_relay_types::codec::normalization::LlmNormalizer for BuiltinLlmNormalizer {
+    fn normalize_request(
+        &self,
+        request: &LlmRequest,
+        provider_hint: Option<&str>,
+    ) -> Option<AnnotatedLlmRequest> {
+        normalize_request_with_hint(request, provider_hint)
+    }
+    fn normalize_response(&self, raw: &Json) -> Option<AnnotatedLlmResponse> {
+        normalize_response(raw)
+    }
+}

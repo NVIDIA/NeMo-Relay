@@ -18,7 +18,7 @@ use nemo_relay_ffi::{api, convert, error};
 use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_relay_runtime::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use serde_json::{Value as Json, json};
 use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};

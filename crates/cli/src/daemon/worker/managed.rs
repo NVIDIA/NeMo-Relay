@@ -26,11 +26,10 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_codecs::resolve::{ProviderSurface, request_codec, streaming_codec};
+use nemo_relay_codecs::streaming::SseEventDecoder;
 use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
-use nemo_relay_runtime::codec::resolve::{
-    ProviderSurface, request_codec, response_codec, streaming_codec,
-};
-use nemo_relay_runtime::codec::streaming::SseEventDecoder;
+use nemo_relay_runtime::codec::response_codec;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 

@@ -3,6 +3,7 @@
 
 //! Event types for Agent Trajectory Observability Format (ATOF) runtime events.
 
+use nemo_relay_types::codec::normalization::LlmNormalizer;
 use std::borrow::Cow;
 
 pub use nemo_relay_types::api::event::*;
@@ -36,7 +37,7 @@ impl EventNormalizationExt for Event {
             return Some(Cow::Borrowed(annotated.as_ref()));
         }
         let request = serde_json::from_value(self.input()?.clone()).ok()?;
-        crate::codec::resolve::normalize_request_with_hint(&request, Some(self.name()))
+        nemo_relay_codecs::resolve::normalize_request_with_hint(&request, Some(self.name()))
             .map(Cow::Owned)
     }
 
@@ -44,6 +45,8 @@ impl EventNormalizationExt for Event {
         if let Some(annotated) = self.annotated_response() {
             return Some(Cow::Borrowed(annotated.as_ref()));
         }
-        crate::codec::resolve::normalize_response(self.output()?).map(Cow::Owned)
+        crate::codec::RuntimeLlmNormalizer
+            .normalize_response(self.output()?)
+            .map(Cow::Owned)
     }
 }

@@ -4,7 +4,7 @@
 //! Unit tests for provider-surface detection and best-effort normalization.
 
 use super::*;
-use crate::api::llm::LlmRequest;
+use nemo_relay_types::api::llm::LlmRequest;
 use serde_json::json;
 
 fn req(content: serde_json::Value) -> LlmRequest {

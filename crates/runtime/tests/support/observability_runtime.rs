@@ -9,14 +9,14 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for CoreObservability
         &self,
         request: &crate::api::llm::LlmRequest,
         provider_hint: Option<&str>,
-    ) -> Option<crate::codec::request::AnnotatedLlmRequest> {
-        crate::codec::resolve::normalize_request_with_hint(request, provider_hint)
+    ) -> Option<nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        nemo_relay_codecs::resolve::normalize_request_with_hint(request, provider_hint)
     }
     fn normalize_response(
         &self,
         response: &crate::json::Json,
-    ) -> Option<crate::codec::response::AnnotatedLlmResponse> {
-        crate::codec::resolve::normalize_response(response)
+    ) -> Option<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+        crate::codec::RuntimeLlmNormalizer.normalize_response(response)
     }
 }
 impl nemo_relay_observability::host::ObservabilityHost for CoreObservabilityHost {

@@ -43,13 +43,13 @@ use crate::api::shared::{
     run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
     snapshot_event_subscribers,
 };
-use crate::codec::request::{AnnotatedLlmRequest, Message};
-use crate::codec::response::AnnotatedLlmResponse;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::pricing::attach_estimated_cost_for_provider;
 use crate::stream::{LlmStreamWrapper, ManagedLlmStreamTelemetry};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message};
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 pub use nemo_relay_types::api::llm::{
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
@@ -798,7 +798,7 @@ async fn emit_optimization_marks_with_async<F, Fut>(
 
 fn optimization_mark_event(
     handle: &LlmHandle,
-    contribution: &crate::codec::optimization::LlmOptimizationContribution,
+    contribution: &nemo_relay_types::codec::optimization::LlmOptimizationContribution,
     recorded_at: DateTime<Utc>,
 ) -> Event {
     let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
