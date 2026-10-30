@@ -3275,6 +3275,7 @@ pub fn cost_from_llm_event(event: &EventView<'_>) -> Option<(f64, String)> {
     }
     let usage = manual::usage_from_manual_llm_output(event.output())?;
     estimate_cost_for_response_or_model(
+        event.host.pricing_snapshot().as_ref(),
         Some(event.name()),
         event.model_name(),
         manual::model_name_from_manual_llm_output(event.output()),

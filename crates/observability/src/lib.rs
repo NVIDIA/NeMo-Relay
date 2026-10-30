@@ -845,11 +845,12 @@ pub fn effective_mark_projection(
 
 #[doc(hidden)]
 pub fn estimate_cost_for_response_or_requested_model(
-    event: &nemo_relay_types::api::event::Event,
+    event: &EventView<'_>,
     response_model: Option<&str>,
     usage: &nemo_relay_types::codec::response::Usage,
 ) -> Option<nemo_relay_types::codec::response::CostEstimate> {
     estimate_cost_for_response_or_model(
+        event.host.pricing_snapshot().as_ref(),
         Some(event.name()),
         event.model_name(),
         response_model,
@@ -859,6 +860,7 @@ pub fn estimate_cost_for_response_or_requested_model(
 
 #[doc(hidden)]
 pub fn estimate_cost_for_response_or_model(
+    pricing: &dyn nemo_relay_types::codec::pricing::CostEstimator,
     provider: Option<&str>,
     requested_model: Option<&str>,
     response_model: Option<&str>,
@@ -867,8 +869,7 @@ pub fn estimate_cost_for_response_or_model(
     // Prefer the provider-echoed model, but fall back to the requested model
     // when pricing does not recognize the echoed model alias.
     if let Some(model_name) = response_model
-        && let Some(cost) =
-            nemo_relay_model_pricing::estimate_cost_for_provider(provider, model_name, usage)
+        && let Some(cost) = pricing.estimate_cost_for_provider(provider, model_name, usage)
     {
         return Some(cost);
     }
@@ -877,7 +878,7 @@ pub fn estimate_cost_for_response_or_model(
     if response_model == Some(requested_model) {
         return None;
     }
-    nemo_relay_model_pricing::estimate_cost_for_provider(provider, requested_model, usage)
+    pricing.estimate_cost_for_provider(provider, requested_model, usage)
 }
 
 #[doc(hidden)]

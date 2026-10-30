@@ -766,6 +766,7 @@ pub fn cost_total_from_llm_event(
 
     let usage = fallback_usage?;
     estimate_cost_for_response_or_model(
+        event.host.pricing_snapshot().as_ref(),
         Some(event.name()),
         event.model_name(),
         manual::model_name_from_manual_llm_output(event.output()),

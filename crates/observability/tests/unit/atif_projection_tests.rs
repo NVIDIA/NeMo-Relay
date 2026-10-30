@@ -569,6 +569,7 @@ fn test_exporter_prefers_effective_response_model_over_requested_profile_model()
 #[test]
 fn test_extract_metrics_supports_provider_usage_payloads() {
     let openai_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 10,
@@ -595,6 +596,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     assert_eq!(openai_metrics.cost_usd, Some(0.001));
 
     let responses_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "input_tokens": 75,
@@ -621,6 +623,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     assert_eq!(responses_metrics.cost_usd, Some(0.005));
 
     let anthropic_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "input_tokens": 11,
@@ -641,6 +644,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     assert_eq!(anthropic_metrics.cost_usd, Some(0.0042));
 
     let non_usd_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "input_tokens": 11,
@@ -659,6 +663,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
 #[test]
 fn test_extract_metrics_merges_usage_and_token_usage_fields() {
     let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 10,
@@ -689,6 +694,7 @@ fn test_extract_metrics_merges_usage_and_token_usage_fields() {
 #[test]
 fn test_extract_metrics_uses_shared_cache_read_precedence() {
     let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 10,
@@ -712,6 +718,7 @@ fn test_extract_metrics_uses_shared_cache_read_precedence() {
 #[test]
 fn test_extract_metrics_filters_extracted_usage_aliases_from_extra() {
     let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "inputTokens": 10,
@@ -745,6 +752,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
     let _reset_guard = ResetPricingResolverGuard;
 
     let non_usd_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -765,6 +773,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
     assert_eq!(non_usd_metrics.cost_usd, None);
 
     let missing_total_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -784,6 +793,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
     assert_eq!(missing_total_metrics.cost_usd, None);
 
     let legacy_missing_currency_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -803,6 +813,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
     assert_eq!(legacy_missing_currency_metrics.cost_usd, Some(0.42));
 
     let component_metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -1121,6 +1132,7 @@ fn test_extract_metrics_does_not_mix_raw_cost_when_annotated_cost_is_non_usd() {
     );
 
     let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 999,
@@ -1147,6 +1159,7 @@ fn test_exporter_omits_cost_for_unknown_model_pricing() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     reset_active_pricing_resolver().unwrap();
     let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -1222,7 +1235,14 @@ fn test_optimization_summary_projects_to_step_and_final_metrics() {
     );
     response.optimization_summary = Some(summary);
 
-    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
+        &json!({}),
+        None,
+        None,
+        Some(&response),
+    )
+    .unwrap();
     assert_eq!(
         metrics
             .extra
@@ -1284,7 +1304,14 @@ fn test_atif_preserves_non_usd_summary_without_labeling_savings_as_usd() {
     );
     response.optimization_summary = Some(summary);
 
-    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
+        &json!({}),
+        None,
+        None,
+        Some(&response),
+    )
+    .unwrap();
     assert_eq!(
         metrics
             .extra
@@ -1328,7 +1355,14 @@ fn test_atif_without_optimization_summary_does_not_add_optimization_extra() {
             ..Usage::default()
         },
     );
-    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    let metrics = extract_metrics(
+        nemo_relay_model_pricing::active_pricing_resolver().as_ref(),
+        &json!({}),
+        None,
+        None,
+        Some(&response),
+    )
+    .unwrap();
     assert!(metrics.extra.is_none());
 
     let final_metrics = compute_final_metrics(&[AtifStep {

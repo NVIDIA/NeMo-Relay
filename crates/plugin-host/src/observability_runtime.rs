@@ -20,6 +20,12 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for RuntimeObservabil
     }
 }
 impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityHost {
+    fn pricing_snapshot(
+        &self,
+    ) -> std::sync::Arc<dyn nemo_relay_types::codec::pricing::CostEstimator> {
+        nemo_relay_runtime::pricing::active_pricing_resolver()
+    }
+
     fn register_subscriber(
         &self,
         name: &str,

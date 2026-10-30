@@ -13,6 +13,11 @@ pub type EventSubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 
 /// Runtime operations used by the built-in exporters.
 pub trait ObservabilityHost: LlmNormalizer {
+    /// Capture the selected estimator for one projection operation.
+    /// Detached exporters use the standalone catalog; runtime adapters override
+    /// this with the embedding application's selected pricing service.
+    fn pricing_snapshot(&self) -> Arc<dyn nemo_relay_types::codec::pricing::CostEstimator>;
+
     /// Register an exporter callback.
     fn register_subscriber(&self, name: &str, callback: EventSubscriberFn) -> Result<()>;
     /// Remove an exporter callback.
@@ -92,6 +97,10 @@ impl LlmNormalizer for DetachedHost {
     }
 }
 impl ObservabilityHost for DetachedHost {
+    fn pricing_snapshot(&self) -> Arc<dyn nemo_relay_types::codec::pricing::CostEstimator> {
+        nemo_relay_model_pricing::active_pricing_resolver()
+    }
+
     fn register_subscriber(&self, _: &str, _: EventSubscriberFn) -> Result<()> {
         Err(FlowError::InvalidArgument(
             "observability exporter has no runtime host".into(),

@@ -810,6 +810,7 @@ pub const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 /// Returns `None` if the response has no recognized token or cost metrics.
 #[doc(hidden)]
 pub fn extract_metrics(
+    pricing: &dyn nemo_relay_types::codec::pricing::CostEstimator,
     output: &Json,
     provider: Option<&str>,
     model_name: Option<&str>,
@@ -851,6 +852,7 @@ pub fn extract_metrics(
         explicit_cost.or_else(|| {
             let usage = merged_usage.as_ref()?;
             estimate_cost_for_response_or_model(
+                pricing,
                 provider,
                 model_name,
                 normalized_response
@@ -2047,6 +2049,7 @@ impl LlmSpanCandidate {
                     .or_else(|| model_name_for_llm_event(start))
                     .or_else(|| end.model_name().map(ToOwned::to_owned));
                 extract_metrics(
+                    end.host.pricing_snapshot().as_ref(),
                     output,
                     Some(end.name()),
                     requested_model.as_deref(),
@@ -2996,6 +2999,7 @@ impl StepConversionState {
             {
                 let normalized_response = event.normalized_llm_response();
                 extract_metrics(
+                    event.host.pricing_snapshot().as_ref(),
                     output,
                     Some(event.name()),
                     paired_start_model.or_else(|| event.model_name()),

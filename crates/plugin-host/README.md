@@ -15,3 +15,8 @@ services explicitly selected by an embedding application. Plugin initialization
 and the `exporter` constructors install these defaults automatically. Exporter
 constructors inject runtime codec, scope, and diagnostic adapters internally.
 The public `nemo-relay` Rust SDK re-exports these supported entry points.
+
+Runtime-bound exporter fallbacks use the selected `RuntimeServices` pricing
+snapshot. Explicitly disabled or custom runtime estimators apply to ATIF,
+Full OpenTelemetry, and OpenInference alike. Detached observability exporters
+use the standalone model-pricing catalog until a host is supplied.
