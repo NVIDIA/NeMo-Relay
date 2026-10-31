@@ -160,13 +160,8 @@ Dependency audit hooks always run, regardless of which files changed. Rust
 and Python projects, including examples, test fixtures, and benchmarks, share
 the root `Cargo.lock` and `uv.lock`. The root Rust workspace also
 keeps its license, source, and duplicate-dependency checks. npm audits the root
-workspace lockfile through pinned `audit-ci` at the `low` threshold; Rust and
-Python reject vulnerability findings regardless of severity. `.audit-ci.jsonc`
-allows GHSA-g3hv-75wg-m249 only on the listed development dependency paths.
-Minimatch remains pinned to 10.2.6 because its patched releases introduce the
-unapproved `@isaacs/nonrecursive-glob-match` package. Remove the exception when
-an acceptable patch is available. Raw `npm audit` still reports this advisory;
-other advisories and unlisted paths fail the repository gate.
+workspace lockfile with `--audit-level=low`; Rust and Python reject vulnerability
+findings regardless of severity.
 
 During normal development, stage your changes and run:
 
