@@ -43,9 +43,13 @@ those cases.
 When the framework owns execution, use `llm.call()` and `llm.call_end()` to
 observe the call. Set `otel.status_code` to `"ERROR"` in the end-call metadata
 when the provider fails. Relay preserves that status and the optional
-`otel.status_description` and `error.type` fields. Without an explicit `"ERROR"`,
-manual LLM completion defaults to `OK`.
-The same metadata contract applies to Rust `llm_call_end`, Node.js `llmCallEnd`,
+`otel.status_description` and `error.type` fields.
+
+For a neutral outcome, such as a client cancelling a response, set
+`otel.status_code` to `"UNSET"`. Relay keeps that status and removes any status
+description. If you do not set `"ERROR"` or `"UNSET"`, Relay uses `"OK"`.
+
+The same metadata fields apply to Rust `llm_call_end`, Node.js `llmCallEnd`,
 and Go `LlmCallEnd`.
 
 ```python

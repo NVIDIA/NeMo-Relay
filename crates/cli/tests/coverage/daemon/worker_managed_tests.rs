@@ -114,6 +114,100 @@ async fn observation_preserves_delivery_while_capturing_json() {
 }
 
 #[tokio::test]
+async fn dropping_after_last_http_frame_completes_observation_without_an_eof_poll() {
+    let expected = Bytes::from_static(br#"{"ok":true}"#);
+    let (mut body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        usize::MAX,
+        OperationalContext::new(),
+    );
+    let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(frame, expected);
+    assert!(body.is_end_stream());
+    drop(body);
+
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, false)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+    assert_eq!(observed.value, Some(json!({ "ok": true })));
+    assert!(observed.failure.is_none());
+    assert_eq!(observed.metadata()["otel.status_code"], "OK");
+}
+
+#[tokio::test]
+async fn dropping_after_anthropic_message_stop_does_not_report_an_error() {
+    // The provider transport remains open after the protocol's completion event.
+    let stream = futures_util::stream::once(async {
+        Ok::<_, Infallible>(Frame::data(Bytes::from_static(
+            b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[]}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        )))
+    });
+    let stream = Box::pin(futures_util::StreamExt::chain(
+        stream,
+        futures_util::stream::pending(),
+    ));
+    let (mut body, observation) = observe_body(
+        StreamBody::new(stream),
+        StatusCode::OK,
+        usize::MAX,
+        OperationalContext::new(),
+    );
+    body.frame().await.unwrap().unwrap();
+    drop(body);
+
+    let observed = observation
+        .finish(ProviderSurface::AnthropicMessages, true)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_CANCELLED);
+    assert!(!observed.truncated);
+    assert_eq!(observed.value.as_ref().unwrap()["stop_reason"], "end_turn");
+    assert!(observed.failure.is_none());
+    assert_eq!(observed.metadata()["otel.status_code"], "UNSET");
+    assert!(observed.metadata().get("otel.status_description").is_none());
+}
+
+#[tokio::test]
+async fn observation_still_reports_http_and_body_errors() {
+    let (body, observation) = observe_body(
+        Full::new(Bytes::from_static(br#"{"error":"unavailable"}"#)),
+        StatusCode::SERVICE_UNAVAILABLE,
+        usize::MAX,
+        OperationalContext::new(),
+    );
+    body.collect().await.unwrap();
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, false)
+        .await;
+    assert_eq!(observed.metadata()["otel.status_code"], "ERROR");
+    assert_eq!(
+        observed.metadata()["otel.status_description"],
+        "provider returned HTTP 503"
+    );
+
+    let frames = [Err::<Frame<Bytes>, _>(io::Error::other(
+        "provider read failed",
+    ))];
+    let (body, observation) = observe_body(
+        StreamBody::new(futures_util::stream::iter(frames)),
+        StatusCode::OK,
+        usize::MAX,
+        OperationalContext::new(),
+    );
+    assert!(body.collect().await.is_err());
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, false)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_BODY_ERROR);
+    assert_eq!(observed.metadata()["otel.status_code"], "ERROR");
+    assert_eq!(
+        observed.metadata()["otel.status_description"],
+        "provider response body failed"
+    );
+}
+
+#[tokio::test]
 async fn capture_limit_truncates_observation_without_truncating_delivery() {
     let expected = Bytes::from_static(br#"{"too":"large"}"#);
     let (body, observation) = observe_body(
@@ -197,12 +291,9 @@ async fn dropping_delivery_marks_observation_cancelled_and_terminates_it() {
     .await
     .expect("observation task must terminate after cancellation");
     assert_eq!(observed.terminal, OBSERVATION_CANCELLED);
-    assert!(
-        observed
-            .failure
-            .as_deref()
-            .is_some_and(|failure| failure.contains("cancelled"))
-    );
+    assert!(observed.failure.is_none());
+    assert_eq!(observed.metadata()["otel.status_code"], "UNSET");
+    assert!(observed.metadata().get("otel.status_description").is_none());
 }
 
 #[tokio::test(start_paused = true)]

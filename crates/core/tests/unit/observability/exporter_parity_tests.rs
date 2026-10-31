@@ -434,6 +434,7 @@ fn test_exporters_omit_partial_model_pricing_totals_consistently() {
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
                             cache_write_tokens: Some(10),
+                            cache_write_1h_tokens: None,
                             uncached_input_tokens: None,
                             cost: Some(CostEstimate {
                                 total: None,

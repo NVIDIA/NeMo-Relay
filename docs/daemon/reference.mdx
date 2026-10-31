@@ -591,6 +591,16 @@ starting the worker to choose another bound. This setting changes only
 the observation copy. It does not limit, buffer, or cut off the stream delivered
 to the caller.
 
+When a client closes a response before the HTTP body ends, Relay records
+`daemon_worker_observation.terminal` as `cancelled`. The LLM span keeps the
+OpenTelemetry status `UNSET` unless Relay also detects an error. Cancellation
+alone does not mean the provider failed. If the HTTP body reports that it has
+ended, Relay records `complete`. The caller does not need to request another
+frame.
+
+Provider HTTP errors and response-body errors still set `ERROR`. Truncated
+observation copies and observation timeouts also set `ERROR`.
+
 Semantic observation has a separate 15-minute completion deadline, independent
 of the configured provider response-header wait. Exceeding the observation
 deadline marks only the observation copy as incomplete. It does not stop
