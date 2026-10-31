@@ -8485,7 +8485,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## pyasn1 (0.6.4)
+## pyasn1 (0.6.5)
 
 ### Licenses
 License: `BSD-2-Clause`
