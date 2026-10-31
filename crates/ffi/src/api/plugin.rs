@@ -104,7 +104,7 @@ impl Plugin for FfiHostedPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {

@@ -1833,7 +1833,7 @@ fn mixed_file_sink_directory_failure_is_reported_in_activation_diagnostics() {
 
 #[test]
 fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
     let error = register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
@@ -4380,7 +4380,7 @@ fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let directory = tempfile::tempdir().unwrap();
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
 
     register_opentelemetry(
         OpenTelemetrySectionConfig {
@@ -4409,7 +4409,7 @@ fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("trace.jsonl");
     std::fs::write(&path, b"earlier\n").unwrap();
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
 
     // A warning policy lets an invalid severity reach registration. An
     // overwrite sink truncates as it opens, so it must not be opened until
@@ -4441,7 +4441,7 @@ fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
 
 #[test]
 fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
     let error = register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
@@ -4473,7 +4473,7 @@ fn an_invalid_file_sink_is_skipped_while_the_others_register() {
     let mut working = file_sink_section(directory.path());
     working.filename = Some("working.jsonl".to_string());
 
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
     register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
@@ -4500,7 +4500,7 @@ fn file_sinks_register_even_when_the_environment_configures_automatic_signals() 
     const CHILD_MARKER: &str = "NEMO_RELAY_TEST_FILE_SINK_AUTOMATIC_CHILD";
     if std::env::var(CHILD_MARKER).is_ok() {
         let directory = tempfile::tempdir().unwrap();
-        let mut context = PluginRegistrationContext::new();
+        let mut context = HostPluginRegistrationContext::new();
         register_opentelemetry(
             OpenTelemetrySectionConfig {
                 enabled: true,
@@ -4657,7 +4657,7 @@ fn automatic_exporter_failures_reach_typed_diagnostics_and_legacy_reports_once()
             },
         )
         .unwrap();
-        let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let mut ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
         let projected = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&projected);
         let _projection = diagnostics
@@ -4700,7 +4700,7 @@ fn automatic_exporter_unknown_causes_stay_unknown_and_healthy_signals_are_unchan
         },
     )
     .unwrap();
-    let mut ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let mut ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
     let failed = automatic_subscriber::<()>(
         true,
         "traces",

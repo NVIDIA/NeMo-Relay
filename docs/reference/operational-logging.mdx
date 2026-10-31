@@ -405,8 +405,9 @@ Python, Node.js, and Go use the same setting through the TOML file selected by
 
 ## Rust Library API
 
-Initialize operational logging once during application startup by choosing one
-of these public APIs:
+The Rust SDK exposes logging through `nemo_relay::logging`. Initialization is
+explicit, so applications can keep using an existing logger. To use Relay's
+sinks, initialize logging once during application startup with one of these APIs:
 
 - `LoggingRuntime::configure(config)` for a constructed `LoggingConfig`
 - `LoggingRuntime::configure_from_environment()` for environment configuration
@@ -416,7 +417,7 @@ For example:
 
 ```rust
 let _logging_runtime =
-    nemo_relay_logging::LoggingRuntime::configure_from_environment()?;
+    nemo_relay::logging::LoggingRuntime::configure_from_environment()?;
 ```
 
 Keep the returned runtime alive until application shutdown so pending file

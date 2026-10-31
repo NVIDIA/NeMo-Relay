@@ -287,7 +287,7 @@ impl Plugin for PreclaimedBuiltinPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        _ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        _ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -305,7 +305,7 @@ impl Plugin for GenericTestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);

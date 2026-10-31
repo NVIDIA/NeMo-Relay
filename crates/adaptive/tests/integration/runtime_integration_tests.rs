@@ -727,7 +727,7 @@ impl Plugin for HeaderPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         let plugin_config = plugin_config.clone();
@@ -985,7 +985,7 @@ impl Plugin for FailingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn std::future::Future<Output = std::result::Result<(), PluginError>> + Send + 'a>>
     {
         Box::pin(async move {

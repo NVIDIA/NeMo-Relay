@@ -59,7 +59,7 @@ impl Plugin for DocumentationPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        context: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        context: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {

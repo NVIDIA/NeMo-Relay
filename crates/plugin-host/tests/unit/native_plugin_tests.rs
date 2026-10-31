@@ -5,7 +5,7 @@
 
 use super::*;
 #[cfg(unix)]
-use crate::PluginRegistrationContext;
+use crate::HostPluginRegistrationContext;
 
 fn native_test_diagnostic_context() -> nemo_relay_diagnostics::Diagnostics {
     nemo_relay_diagnostics::Diagnostics::from_settings(
@@ -479,7 +479,7 @@ fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
         _library: libloading::os::unix::Library::this().into(),
         _artifact_snapshot: None,
     });
-    let mut registration = PluginRegistrationContext::with_namespace("fixture:");
+    let mut registration = HostPluginRegistrationContext::with_namespace("fixture:");
     let mut host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
@@ -1083,7 +1083,7 @@ async fn native_plugin_adapter_covers_validation_and_registration_results() {
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].message, "validation callback failed");
 
-    let mut context = PluginRegistrationContext::new();
+    let mut context = HostPluginRegistrationContext::new();
     assert!(empty.register(&Map::new(), &mut context).await.is_ok());
     let error = failing
         .register(&Map::new(), &mut context)
@@ -5827,7 +5827,8 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     });
     let mut invalid_host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
-        ctx: ptr::null_mut::<PluginRegistrationContext>() as *mut dyn crate::PluginRegistrar,
+        ctx: ptr::null_mut::<HostPluginRegistrationContext>()
+            as *mut dyn crate::PluginRegistrationContext,
         instance: Arc::clone(&instance),
     };
     assert_eq!(
@@ -5843,7 +5844,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         NemoRelayStatus::NullPointer
     );
 
-    let mut registration = PluginRegistrationContext::new();
+    let mut registration = HostPluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
@@ -6283,7 +6284,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
         _library: libloading::os::unix::Library::this().into(),
         _artifact_snapshot: None,
     });
-    let mut registration = PluginRegistrationContext::new();
+    let mut registration = HostPluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
@@ -6318,7 +6319,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
         _library: libloading::os::unix::Library::this().into(),
         _artifact_snapshot: None,
     });
-    let mut context_registration = PluginRegistrationContext::new();
+    let mut context_registration = HostPluginRegistrationContext::new();
     let mut context_host = NativeHostPluginContext {
         diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut context_registration),
@@ -9643,7 +9644,7 @@ async fn native_validation_and_registration_observations_preserve_legacy_results
                 );
             }
         }
-        let mut registration = PluginRegistrationContext::new();
+        let mut registration = HostPluginRegistrationContext::new();
         let result = adapter.register(&Map::new(), &mut registration).await;
         if scenario == "status_error" {
             assert!(

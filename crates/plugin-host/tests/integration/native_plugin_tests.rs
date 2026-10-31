@@ -76,7 +76,7 @@ impl Plugin for StaticBasePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrationContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
             STATIC_BASE_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
@@ -105,7 +105,7 @@ impl Plugin for BlockingHostBasePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrationContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         let started = Arc::clone(&self.started);
         let release = Arc::clone(&self.release);
@@ -136,7 +136,7 @@ impl Plugin for ReplacementRegistryPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
+        _ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrationContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }

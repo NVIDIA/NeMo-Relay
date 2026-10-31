@@ -11,6 +11,21 @@
 
 pub use nemo_relay_builtins::initialize_runtime;
 
+/// Explicit operational logging configuration and sink lifecycle.
+///
+/// The SDK does not install a logger automatically. Applications can keep their
+/// existing logger or opt into Relay's stderr and file sinks:
+///
+/// ```no_run
+/// use nemo_relay::logging::{LoggingConfig, LoggingRuntime};
+///
+/// let logging = LoggingRuntime::configure(LoggingConfig::default())?;
+/// // Run the application, then flush and release Relay's logging sinks.
+/// logging.shutdown();
+/// # Ok::<(), nemo_relay::FlowError>(())
+/// ```
+pub use nemo_relay_logging as logging;
+
 /// Runtime-bound exporter constructors and their configuration contracts.
 ///
 /// Exporter pipeline state is private; use lifecycle methods and diagnostic snapshots.
@@ -169,7 +184,7 @@ pub mod plugin {
     };
     pub use nemo_relay_plugin::component::{
         ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
-        PluginRegistrar, PluginRegistration, PluginRegistrationCleanupOutcome, Result,
+        PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result,
         RuntimeDiagnostic, UnsupportedBehavior, apply_global_config_policy,
     };
 }

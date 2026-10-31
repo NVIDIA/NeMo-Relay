@@ -198,7 +198,7 @@ impl Plugin for TestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             ctx.register_llm_request_intercept(
@@ -228,7 +228,7 @@ impl Plugin for EventMetadataPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let configured = plugin_config
             .get("metadata")
@@ -286,7 +286,7 @@ impl Plugin for PolicyAwarePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn crate::PluginRegistrar,
+        _ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -308,7 +308,7 @@ impl Plugin for SingletonPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn crate::PluginRegistrar,
+        _ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -326,7 +326,7 @@ impl Plugin for RecordingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let qualified = ctx.qualify_name("subscriber");
         recorded_names().lock().unwrap().push(qualified.clone());
@@ -353,7 +353,7 @@ impl Plugin for DiscoverablePlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { ctx.register_subscriber("subscriber", Arc::new(|_| {})) })
     }
@@ -371,7 +371,7 @@ impl Plugin for PartialFailPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             ctx.add_registration(PluginRegistration::new(
@@ -402,7 +402,7 @@ impl Plugin for VanishingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn crate::PluginRegistrar,
+        _ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -426,7 +426,7 @@ impl Plugin for BlockingPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let started = Arc::clone(&self.started);
         let release = Arc::clone(&self.release);
@@ -457,7 +457,7 @@ impl Plugin for BackgroundTaskPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn crate::PluginRegistrar,
+        _ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let release = Arc::clone(&self.release);
         let completed = Arc::clone(&self.completed);
@@ -888,7 +888,7 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    let mut ctx = PluginRegistrationContext::new();
+    let mut ctx = HostPluginRegistrationContext::new();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1260,11 +1260,11 @@ fn test_plugin_component_effective_names_escape_and_discover_fields() {
     reset_global();
 
     let namespace = component_namespace("analytics/plugin:π%", 1);
-    let mut plugin_context = PluginRegistrationContext::with_plugin_component_namespace(
+    let mut plugin_context = HostPluginRegistrationContext::with_plugin_component_namespace(
         namespace,
         Diagnostics::process_default(),
     );
-    let mut global_registration_context = PluginRegistrationContext::new();
+    let mut global_registration_context = HostPluginRegistrationContext::new();
     plugin_context
         .register_subscriber("cache/value:π%", Arc::new(|_| {}))
         .unwrap();
@@ -1356,7 +1356,7 @@ fn test_plugin_component_effective_names_escape_and_discover_fields() {
 
 #[test]
 fn test_registration_context_namespace_and_manual_registration_helpers() {
-    let mut ctx = PluginRegistrationContext::with_namespace("demo::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("demo::");
     assert_eq!(ctx.qualify_name("subscriber"), "demo::subscriber");
 
     ctx.add_registration(PluginRegistration::new(
@@ -1383,7 +1383,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    let mut ctx = PluginRegistrationContext::with_namespace("demo::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
     ctx.register_event_metadata_injector(
@@ -2242,7 +2242,7 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("plugin::");
     ctx.register_mark_sanitize_guardrail(
         "mark_sanitize",
         1,
@@ -2344,7 +2344,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("duplicate::");
     ctx.register_mark_sanitize_guardrail(
         "mark",
         1,
@@ -2584,7 +2584,7 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     let _guard = lock_runtime_owner();
     reset_global();
 
-    let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("teardown::");
     ctx.register_mark_sanitize_guardrail(
         "mark-sanitize",
         1,
@@ -3766,7 +3766,7 @@ fn typed_activation_failure_records_once_through_its_scoped_context() {
         },
     )
     .unwrap();
-    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let context = HostPluginRegistrationContext::with_diagnostics(&service);
     let identity = context
         .diagnostic_recorder
         .as_ref()
@@ -3829,7 +3829,7 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
         },
     )
     .unwrap();
-    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let context = HostPluginRegistrationContext::with_diagnostics(&service);
     let identity = context
         .diagnostic_recorder
         .as_ref()
@@ -3955,7 +3955,7 @@ fn plugin_attribution_truncation_preserves_utf8_boundaries() {
         },
     )
     .unwrap();
-    let context = PluginRegistrationContext::in_diagnostic_context(
+    let context = HostPluginRegistrationContext::in_diagnostic_context(
         &service,
         Some(PluginRegistrationNamespace::Plain("é".repeat(20))),
     );
@@ -3988,7 +3988,7 @@ fn nonfatal_exporter_signal_counters_keep_child_owner_without_event_history() {
     )
     .unwrap();
     let responsibility = "test.observability:1";
-    let parent = PluginRegistrationContext::with_plugin_component_namespace(
+    let parent = HostPluginRegistrationContext::with_plugin_component_namespace(
         responsibility.to_string(),
         &service,
     );
@@ -4085,7 +4085,7 @@ fn nonfatal_exporter_admission_is_best_effort_and_preserves_legacy_warning() {
     .unwrap();
     for service in [Diagnostics::default(), blocked.clone()] {
         // The parent retains the only slot in the enabled context.
-        let parent = PluginRegistrationContext::with_diagnostics(&service);
+        let parent = HostPluginRegistrationContext::with_diagnostics(&service);
         let mut child = parent.with_child_namespace("exporters");
         child.record_nonfatal_activation_failure(
             "opentelemetry.automatic.traces",

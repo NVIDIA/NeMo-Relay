@@ -9,6 +9,11 @@ Native and gRPC plugin discovery, configuration, validation, trust verification,
 registration, activation, diagnostics, and teardown. Depends on runtime execution
 APIs; runtime execution does not depend on plugin hosting.
 
+Plugins receive the shared `PluginRegistrationContext` interface from
+`nemo-relay-plugin` during activation. This crate implements it with
+`HostPluginRegistrationContext`, which owns registration namespacing,
+activation diagnostics, and tracked cleanup.
+
 This crate also owns default built-in pricing, resource metrics, and observability
 composition. `initialize_runtime()` installs default services while preserving
 services explicitly selected by an embedding application. Plugin initialization

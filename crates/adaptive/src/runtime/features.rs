@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use crate::acg::CacheRequestFacts;
 use nemo_relay_plugin_host::{
-    ConfigReport, DiagnosticLevel, PluginError, PluginRegistration as ComponentRegistration,
-    PluginRegistrationContext as HostedRegistrationContext, rollback_registrations,
+    ConfigReport, DiagnosticLevel, HostPluginRegistrationContext as HostedRegistrationContext,
+    PluginError, PluginRegistration as ComponentRegistration, rollback_registrations,
 };
 use nemo_relay_runtime::api::event::Event;
 use nemo_relay_runtime::api::registry::{

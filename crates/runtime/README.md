@@ -17,7 +17,7 @@ its plugin initialization and exporter constructors. The Rust SDK re-exports
 these entry points.
 
 Use `nemo-relay-types` for codec and middleware contracts, `nemo-relay-plugin`
-for the non-generic `Plugin` trait and `PluginRegistrar`, and this crate for
+for the `Plugin` and `PluginRegistrationContext` contracts, and this crate for
 codec registration, execution context, and registries. SDK and plugin consumers
 share the same runtime globals.
 

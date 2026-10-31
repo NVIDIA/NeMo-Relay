@@ -285,13 +285,13 @@ pub trait Plugin: Send + Sync + 'static {
 
     /// Registers runtime middleware/subscribers for one plugin component.
     ///
-    /// The provided [`PluginRegistrar`] is component-scoped. Any
+    /// The provided [`PluginRegistrationContext`] is component-scoped. Any
     /// error aborts the current initialization and triggers rollback of
     /// registrations created during the failed activation attempt.
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn PluginRegistrar,
+        ctx: &'a mut dyn PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
@@ -302,11 +302,11 @@ impl PluginRegistration {
     }
 }
 
-/// Runtime capabilities used by built-in components during activation.
+/// Host capabilities available to plugins during component activation.
 ///
 /// Hosts retain ownership of registry mutation, namespacing, rollback, and
 /// activation diagnostics. Implementations do not depend on a runtime crate.
-pub trait PluginRegistrar: Send {
+pub trait PluginRegistrationContext: Send {
     /// Optional diagnostic producer context supplied by the embedding runtime.
     ///
     /// Runtime-specific components may downcast this handle to their runtime's
@@ -470,7 +470,7 @@ pub trait PluginRegistrar: Send {
     /// Whether registration names belong to a plugin component namespace.
     fn uses_plugin_component_namespace(&self) -> bool;
     /// Create an independent registration context nested under this namespace.
-    fn with_child_namespace(&self, name: &str) -> Box<dyn PluginRegistrar>;
+    fn with_child_namespace(&self, name: &str) -> Box<dyn PluginRegistrationContext>;
     /// Consume this context's cleanup entries.
     fn into_registrations(self: Box<Self>) -> Vec<PluginRegistration>;
     /// Track cleanup entries returned by a nested context or language adapter.

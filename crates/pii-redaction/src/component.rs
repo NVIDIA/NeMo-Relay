@@ -442,7 +442,7 @@ impl Plugin for PiiRedactionPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrar,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let parsed = parse_pii_redaction_config(plugin_config);
         Box::pin(async move {
@@ -524,7 +524,7 @@ fn string_enum_schema(
 
 fn register_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
 ) -> PluginResult<()> {
     if !config.profiles.is_empty() {
         let profiles = config.profiles.clone();
@@ -544,7 +544,7 @@ fn register_pii_redaction_backend(
 
 fn register_single_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     match config.mode.as_str() {
@@ -1235,7 +1235,7 @@ fn validate_codec_requirements(
 
 fn register_builtin_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let builtin = config.builtin.clone().ok_or_else(|| {
@@ -1345,7 +1345,7 @@ fn register_builtin_backend(
 
 fn with_selector_diagnostics(
     mut compiled: CompiledBuiltinBackend,
-    ctx: &dyn nemo_relay_plugin_host::PluginRegistrar,
+    ctx: &dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> CompiledBuiltinBackend {
     let component_key = profile_name.map_or_else(

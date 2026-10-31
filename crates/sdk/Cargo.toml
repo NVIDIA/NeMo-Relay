@@ -17,8 +17,9 @@ exclude = ["tests/documentation_examples.rs"]
 workspace = true
 
 [dependencies]
-nemo-relay-builtins.workspace = true
 # First-party crates.
+nemo-relay-builtins.workspace = true
+nemo-relay-logging.workspace = true
 nemo-relay-observability.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-resource-metrics.workspace = true

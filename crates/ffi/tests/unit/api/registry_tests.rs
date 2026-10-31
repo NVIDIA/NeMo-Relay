@@ -757,7 +757,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
         }
         drop(events);
 
-        let mut context = PluginRegistrationContext::with_namespace(unique_name("ffi_plugin_"));
+        let mut context = HostPluginRegistrationContext::with_namespace(unique_name("ffi_plugin_"));
         let mut ffi_context = FfiPluginContext(&mut context);
         for (name, status) in [
             (

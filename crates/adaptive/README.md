@@ -21,8 +21,7 @@ runtime behavior. Use it with `nemo-relay` when an agent runtime should learn
 from observed executions, inject runtime hints, persist adaptive state, or
 cache repeated LLM responses and classified tool results.
 
-Adaptive behavior is installed through the same plugin system used by the core
-runtime, so applications can enable it without changing their orchestration
+Adaptive behavior is installed through the shared NeMo Relay plugin system, so applications can enable it without changing their orchestration
 framework.
 
 ## Why Use It?
@@ -54,7 +53,7 @@ framework.
 
 ## Installation
 
-Install the published crate alongside the core runtime:
+Install the published crate alongside the Rust SDK:
 
 ```bash
 cargo add nemo-relay nemo-relay-adaptive

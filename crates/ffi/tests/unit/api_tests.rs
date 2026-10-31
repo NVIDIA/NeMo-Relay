@@ -8,7 +8,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use nemo_relay_plugin_host::PluginRegistrationContext;
+use nemo_relay_plugin_host::HostPluginRegistrationContext;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};

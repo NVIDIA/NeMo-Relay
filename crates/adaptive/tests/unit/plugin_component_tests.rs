@@ -15,7 +15,7 @@ use {
     nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::UnsupportedBehavior,
 };
 use {
-    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginRegistrationContext,
+    nemo_relay_plugin_host::HostPluginRegistrationContext, nemo_relay_plugin_host::Plugin,
     nemo_relay_plugin_host::rollback_registrations,
 };
 fn reset_global() {
@@ -432,7 +432,7 @@ async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
             "inject_header": true
         }
     });
-    let mut ctx = PluginRegistrationContext::with_namespace("adaptive.test.");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("adaptive.test.");
 
     plugin
         .register(config.as_object().unwrap(), &mut ctx)

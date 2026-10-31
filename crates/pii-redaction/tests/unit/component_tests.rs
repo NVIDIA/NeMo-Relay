@@ -30,8 +30,8 @@ use crate::api::tool::{
     tool_call_end, tool_call_execute,
 };
 use crate::plugin::{
-    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, UnsupportedBehavior, ensure_builtin_plugins_registered,
+    ConfigPolicy, DiagnosticLevel, HostPluginRegistrationContext, PluginComponentSpec,
+    PluginConfig, PluginError, UnsupportedBehavior, ensure_builtin_plugins_registered,
     list_plugin_kinds, rollback_registrations, test_close_plugin_host,
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
@@ -111,7 +111,7 @@ async fn selector_diagnostics_use_plugin_registration_context() {
         },
     )
     .unwrap();
-    let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+    let ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
     let backend = with_selector_diagnostics(
         CompiledBuiltinBackend::new(
             BuiltinBackendConfig {
@@ -202,7 +202,7 @@ async fn selector_diagnostic_admission_failures_do_not_disable_redaction() {
         let diagnostics =
             Diagnostics::from_settings(source.clone(), DiagnosticsSettings { enabled, limits })
                 .unwrap();
-        let ctx = PluginRegistrationContext::with_diagnostics(&diagnostics);
+        let ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
         let backend = with_selector_diagnostics(
             CompiledBuiltinBackend::new(
                 BuiltinBackendConfig {
@@ -3317,7 +3317,7 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("profiles::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("profiles::");
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
@@ -3969,7 +3969,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
     register_local_backend_provider(Arc::new(
-        move |config, _ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrar| {
+        move |config, _ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext| {
             called_inner.store(true, Ordering::SeqCst);
             assert_eq!(config.mode, "local_model");
             Ok(())
@@ -3978,7 +3978,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     .unwrap();
 
     let plugin = PiiRedactionPlugin;
-    let mut ctx = PluginRegistrationContext::with_namespace("test::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("test::");
     let config = json!({
         "mode": "local_model",
         "tool_input": true,
@@ -4002,7 +4002,7 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("missing::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("missing::");
     let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
         .expect_err("missing local provider should fail registration");
     assert!(missing.to_string().contains("unavailable"));
@@ -4013,7 +4013,7 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
         ))
     }))
     .unwrap();
-    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("failed::");
     let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
         .expect_err("failed local provider should fail registration");
     assert!(

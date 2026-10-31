@@ -206,7 +206,7 @@ typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
- * `nemo_relay_plugin_host::PluginRegistrar`, not an owned heap allocation.
+ * `nemo_relay_plugin_host::PluginRegistrationContext`, not an owned heap allocation.
  * It is only valid for the duration of the plugin registration callback that receives
  * it. C callers must not store the pointer, use it after the callback returns, or attempt to
  * free or drop it.

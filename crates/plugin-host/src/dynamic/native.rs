@@ -399,7 +399,7 @@ impl Plugin for NativePluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -786,7 +786,7 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 #[repr(C)]
 struct NativeHostPluginContext<'a> {
     diagnostics: Arc<native_diagnostics::NativeDiagnostics>,
-    ctx: *mut (dyn crate::PluginRegistrar + 'a),
+    ctx: *mut (dyn crate::PluginRegistrationContext + 'a),
     instance: Arc<NativePluginInstance>,
 }
 

@@ -1916,6 +1916,7 @@ version = "1.0.0"
 dependencies = [
  "nemo-relay-builtins",
  "nemo-relay-diagnostics",
+ "nemo-relay-logging",
  "nemo-relay-observability",
  "nemo-relay-plugin",
  "nemo-relay-plugin-host",

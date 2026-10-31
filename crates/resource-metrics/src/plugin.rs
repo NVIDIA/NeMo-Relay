@@ -12,8 +12,8 @@ use serde_json::{Map, Value as Json};
 use crate::config::ResourceMetricsConfig;
 use crate::manager::ResourceMetricsRuntime;
 use nemo_relay_plugin::component::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrar, PluginRegistration,
-    Result,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
+    PluginRegistrationContext, Result,
 };
 
 /// Plugin kind used by the resource metrics component.
@@ -43,7 +43,7 @@ impl Plugin for ResourceMetricsPlugin {
     fn register<'a>(
         &'a self,
         config: &Map<String, Json>,
-        ctx: &'a mut dyn PluginRegistrar,
+        ctx: &'a mut dyn PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let config = config.clone();
         Box::pin(async move {

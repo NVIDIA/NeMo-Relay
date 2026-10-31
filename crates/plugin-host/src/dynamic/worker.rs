@@ -4,7 +4,7 @@
 //! gRPC worker dynamic plugin loader and host-side proxy adapter.
 
 #[cfg(test)]
-use crate::PluginRegistrationContext;
+use crate::HostPluginRegistrationContext;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -307,7 +307,7 @@ impl Plugin for WorkerPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn crate::PluginRegistrar,
+        ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>> {
         let config_matches = plugin_config == &self.instance.config;
         Box::pin(async move {
@@ -1487,7 +1487,10 @@ impl WorkerPluginInstance {
         Ok(registrations)
     }
 
-    fn install_registrations(&self, ctx: &mut dyn crate::PluginRegistrar) -> crate::Result<()> {
+    fn install_registrations(
+        &self,
+        ctx: &mut dyn crate::PluginRegistrationContext,
+    ) -> crate::Result<()> {
         for registration in self.registrations.get().ok_or_else(|| {
             PluginError::Internal("worker registration plan is not prepared".into())
         })? {
@@ -1545,7 +1548,7 @@ impl WorkerPluginInstance {
 
     fn install_subscriber_registration(
         &self,
-        ctx: &mut dyn crate::PluginRegistrar,
+        ctx: &mut dyn crate::PluginRegistrationContext,
         name: &str,
     ) -> crate::Result<()> {
         let instance = Arc::new(self.clone_for_callback());
@@ -1562,7 +1565,7 @@ impl WorkerPluginInstance {
 
     fn install_event_metadata_injector_registration(
         &self,
-        ctx: &mut dyn crate::PluginRegistrar,
+        ctx: &mut dyn crate::PluginRegistrationContext,
         name: &str,
         priority: i32,
     ) -> crate::Result<()> {
@@ -1582,7 +1585,7 @@ impl WorkerPluginInstance {
 
     fn install_event_sanitize_registration(
         &self,
-        ctx: &mut dyn crate::PluginRegistrar,
+        ctx: &mut dyn crate::PluginRegistrationContext,
         name: &str,
         priority: i32,
         surface: RegistrationSurface,
@@ -1615,7 +1618,7 @@ impl WorkerPluginInstance {
 
     fn install_tool_registration(
         &self,
-        ctx: &mut dyn crate::PluginRegistrar,
+        ctx: &mut dyn crate::PluginRegistrationContext,
         registration: &Registration,
         surface: RegistrationSurface,
     ) -> crate::Result<()> {
@@ -1712,7 +1715,7 @@ impl WorkerPluginInstance {
 
     fn install_llm_registration(
         &self,
-        ctx: &mut dyn crate::PluginRegistrar,
+        ctx: &mut dyn crate::PluginRegistrationContext,
         registration: &Registration,
         surface: RegistrationSurface,
     ) -> crate::Result<()> {

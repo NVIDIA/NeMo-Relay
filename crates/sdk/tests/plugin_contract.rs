@@ -6,7 +6,8 @@
 use nemo_relay::Json;
 use nemo_relay::plugin::{
     self, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
-    PluginConfig, PluginRegistrar, PluginRegistration, Result as PluginResult, UnsupportedBehavior,
+    PluginConfig, PluginRegistration, PluginRegistrationContext, Result as PluginResult,
+    UnsupportedBehavior,
 };
 use nemo_relay::{scope, subscriber};
 use serde_json::{Map, json};
@@ -42,7 +43,7 @@ impl Plugin for AuditPlugin {
     fn register<'a>(
         &'a self,
         _: &Map<String, Json>,
-        context: &'a mut dyn PluginRegistrar,
+        context: &'a mut dyn PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let observed = self.observed.clone();
         let cleaned = self.cleaned.clone();

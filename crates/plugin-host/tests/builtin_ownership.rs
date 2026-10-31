@@ -29,7 +29,7 @@ impl Plugin for PreclaimedObservabilityPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Json>,
-        _ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
+        _ctx: &'a mut dyn nemo_relay_plugin::component::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }

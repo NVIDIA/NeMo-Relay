@@ -63,8 +63,8 @@ use nemo_relay_observability::{
     validate_attribute_mappings, validate_metadata_promotion_prefixes,
 };
 use nemo_relay_plugin_host::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext,
+    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, HostPluginRegistrationContext, Plugin,
+    PluginComponentSpec, PluginError, PluginRegistration, PluginRegistrationCleanupOutcome,
     Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
     register_builtin_plugin,
 };

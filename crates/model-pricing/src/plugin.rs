@@ -13,8 +13,8 @@ use crate::{
     PricingConfig, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use nemo_relay_plugin::component::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError, PluginRegistrar,
-    PluginRegistration, Result,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
+    PluginRegistration, PluginRegistrationContext, Result,
 };
 
 /// Plugin kind used by the model pricing component.
@@ -39,7 +39,7 @@ impl Plugin for PricingPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut dyn PluginRegistrar,
+        ctx: &'a mut dyn PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {

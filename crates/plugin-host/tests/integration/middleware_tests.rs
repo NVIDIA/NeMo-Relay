@@ -72,7 +72,7 @@ use nemo_relay_runtime::api::tool::{
 use nemo_relay_types::error::FlowError;
 
 use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
-use nemo_relay_plugin_host::{PluginRegistrationContext, rollback_registrations};
+use nemo_relay_plugin_host::{HostPluginRegistrationContext, rollback_registrations};
 use nemo_relay_runtime::api::runtime::NemoRelayContextState;
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::{
@@ -1330,7 +1330,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         }),
     )
     .unwrap();
-    let mut plugin_ctx = PluginRegistrationContext::new();
+    let mut plugin_ctx = HostPluginRegistrationContext::new();
     plugin_ctx
         .register_tool_execution_intercept(
             "outcome_outer",
@@ -1843,7 +1843,7 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
         }),
     )
     .unwrap();
-    let mut plugin_ctx = PluginRegistrationContext::new();
+    let mut plugin_ctx = HostPluginRegistrationContext::new();
     plugin_ctx
         .register_tool_execution_intercept(
             "outcome_before_error",
@@ -1919,7 +1919,7 @@ async fn test_managed_tool_reuses_start_subscriber_snapshot_for_end_and_marks() 
 
     let replacement_events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured_replacement = replacement_events.clone();
-    let mut plugin_ctx = PluginRegistrationContext::new();
+    let mut plugin_ctx = HostPluginRegistrationContext::new();
     plugin_ctx
         .register_tool_execution_intercept(
             "mutate_tool_subscribers",
@@ -2086,7 +2086,7 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
 
     let completion_order = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured_completion_order = completion_order.clone();
-    let mut plugin_ctx = PluginRegistrationContext::new();
+    let mut plugin_ctx = HostPluginRegistrationContext::new();
     plugin_ctx
         .register_tool_execution_intercept(
             "delayed_outcomes",
@@ -6899,7 +6899,7 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
     setup_isolated_thread();
 
     let mut context =
-        PluginRegistrationContext::with_namespace("nemo-relay-plugin.v1.observability:1:");
+        HostPluginRegistrationContext::with_namespace("nemo-relay-plugin.v1.observability:1:");
     let deliveries = Arc::new(AtomicU32::new(0));
     let captured_deliveries = Arc::clone(&deliveries);
     context

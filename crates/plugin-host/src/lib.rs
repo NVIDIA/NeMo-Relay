@@ -61,7 +61,7 @@ use nemo_relay_types::diagnostics::{
 };
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
-pub use nemo_relay_plugin::component::PluginRegistrar;
+pub use nemo_relay_plugin::component::PluginRegistrationContext;
 pub use nemo_relay_plugin::component::{
     ConfigPolicy, Plugin, PluginComponentSpec, PluginError, PluginRegistration,
     PluginRegistrationCleanupOutcome, RuntimeDiagnostic, UnsupportedBehavior,
@@ -197,12 +197,12 @@ fn default_plugin_config_version() -> u32 {
     1
 }
 
-/// Context provided to plugin handlers during runtime registration.
+/// Host implementation of the shared [`PluginRegistrationContext`] interface.
 ///
 /// Each `register_*` call both installs the middleware/subscriber into the
 /// NeMo Relay runtime and records the inverse deregistration closure so the host
 /// can roll back partial setup on failure.
-pub struct PluginRegistrationContext {
+pub struct HostPluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     activation_diagnostics: Vec<ConfigDiagnostic>,
     namespace: Option<PluginRegistrationNamespace>,
@@ -241,7 +241,7 @@ const PLUGIN_EXPORTER_INITIALIZATION_CODES: &[BuiltinDiagnosticCode] =
         PluginFailureCode::Common(CommonPluginFailureCode::ExporterInitializationFailed),
     ))];
 
-impl Default for PluginRegistrationContext {
+impl Default for HostPluginRegistrationContext {
     fn default() -> Self {
         Self::with_diagnostics(Diagnostics::process_default())
     }
@@ -252,7 +252,7 @@ enum PluginRegistrationNamespace {
     PluginComponent(String),
 }
 
-impl PluginRegistrationContext {
+impl HostPluginRegistrationContext {
     /// Return the diagnostics context selected for this plugin activation.
     pub fn diagnostics(&self) -> &Diagnostics {
         &self.diagnostics
@@ -2724,7 +2724,7 @@ impl Drop for PendingPluginRegistrations {
 }
 
 struct PendingPluginRegistrationContext {
-    context: PluginRegistrationContext,
+    context: HostPluginRegistrationContext,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
 }
 
@@ -2735,7 +2735,7 @@ impl PendingPluginRegistrationContext {
         diagnostic_context: &Diagnostics,
     ) -> Self {
         Self {
-            context: PluginRegistrationContext::with_plugin_component_namespace(
+            context: HostPluginRegistrationContext::with_plugin_component_namespace(
                 namespace,
                 diagnostic_context,
             ),
@@ -2920,22 +2920,22 @@ fn join_error_messages(report: &ConfigReport) -> String {
 #[path = "../tests/unit/plugin_tests.rs"]
 mod tests;
 
-impl PluginRegistrar for PluginRegistrationContext {
+impl PluginRegistrationContext for HostPluginRegistrationContext {
     fn diagnostics_context(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
         Some(self.diagnostics())
     }
 
     fn qualify_name(&self, name: &str) -> String {
-        PluginRegistrationContext::qualify_name(self, name)
+        HostPluginRegistrationContext::qualify_name(self, name)
     }
     fn register_subscriber(&mut self, name: &str, callback: EventSubscriberFn) -> Result<()> {
-        PluginRegistrationContext::register_subscriber(self, name, callback)
+        HostPluginRegistrationContext::register_subscriber(self, name, callback)
     }
     fn add_registration(&mut self, registration: PluginRegistration) {
-        PluginRegistrationContext::add_registration(self, registration);
+        HostPluginRegistrationContext::add_registration(self, registration);
     }
     fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
-        PluginRegistrationContext::record_activation_diagnostic(self, diagnostic);
+        HostPluginRegistrationContext::record_activation_diagnostic(self, diagnostic);
     }
     fn record_nonfatal_activation_failure(
         &mut self,
@@ -2943,7 +2943,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         classification: Classification,
         diagnostic: ConfigDiagnostic,
     ) {
-        PluginRegistrationContext::record_nonfatal_activation_failure(
+        HostPluginRegistrationContext::record_nonfatal_activation_failure(
             self,
             component_key,
             classification,
@@ -2951,7 +2951,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         );
     }
     fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
-        PluginRegistrationContext::activation_diagnostics(self)
+        HostPluginRegistrationContext::activation_diagnostics(self)
     }
     fn register_conditional_middleware_guardrail(
         &mut self,
@@ -2960,7 +2960,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         registration_name: &str,
         guardrail: ConditionalMiddlewareGuardrailFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_conditional_middleware_guardrail(
+        HostPluginRegistrationContext::register_conditional_middleware_guardrail(
             self,
             name,
             kinds,
@@ -2974,7 +2974,9 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: EventMetadataInjectorFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_event_metadata_injector(self, name, priority, callback)
+        HostPluginRegistrationContext::register_event_metadata_injector(
+            self, name, priority, callback,
+        )
     }
     fn register_mark_sanitize_guardrail(
         &mut self,
@@ -2982,7 +2984,9 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: EventSanitizeFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_mark_sanitize_guardrail(self, name, priority, callback)
+        HostPluginRegistrationContext::register_mark_sanitize_guardrail(
+            self, name, priority, callback,
+        )
     }
     fn register_scope_sanitize_start_guardrail(
         &mut self,
@@ -2990,7 +2994,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: EventSanitizeFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_scope_sanitize_start_guardrail(
+        HostPluginRegistrationContext::register_scope_sanitize_start_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3000,7 +3004,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: EventSanitizeFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_scope_sanitize_end_guardrail(
+        HostPluginRegistrationContext::register_scope_sanitize_end_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3011,7 +3015,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         break_chain: bool,
         callback: LlmRequestInterceptFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_request_intercept(
+        HostPluginRegistrationContext::register_llm_request_intercept(
             self,
             name,
             priority,
@@ -3025,7 +3029,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: ToolSanitizeFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_tool_sanitize_request_guardrail(
+        HostPluginRegistrationContext::register_tool_sanitize_request_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3035,7 +3039,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: ToolSanitizeFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_tool_sanitize_response_guardrail(
+        HostPluginRegistrationContext::register_tool_sanitize_response_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3045,7 +3049,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: ToolConditionalFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_tool_conditional_execution_guardrail(
+        HostPluginRegistrationContext::register_tool_conditional_execution_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3055,7 +3059,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: LlmSanitizeRequestFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_sanitize_request_guardrail(
+        HostPluginRegistrationContext::register_llm_sanitize_request_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3065,7 +3069,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: LlmSanitizeResponseFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_sanitize_response_guardrail(
+        HostPluginRegistrationContext::register_llm_sanitize_response_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3075,7 +3079,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: LlmConditionalFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_conditional_execution_guardrail(
+        HostPluginRegistrationContext::register_llm_conditional_execution_guardrail(
             self, name, priority, callback,
         )
     }
@@ -3085,7 +3089,9 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: LlmExecutionFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_execution_intercept(self, name, priority, callback)
+        HostPluginRegistrationContext::register_llm_execution_intercept(
+            self, name, priority, callback,
+        )
     }
     fn register_llm_stream_execution_intercept(
         &mut self,
@@ -3093,7 +3099,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: LlmStreamExecutionFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_llm_stream_execution_intercept(
+        HostPluginRegistrationContext::register_llm_stream_execution_intercept(
             self, name, priority, callback,
         )
     }
@@ -3104,7 +3110,7 @@ impl PluginRegistrar for PluginRegistrationContext {
         break_chain: bool,
         callback: ToolInterceptFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_tool_request_intercept(
+        HostPluginRegistrationContext::register_tool_request_intercept(
             self,
             name,
             priority,
@@ -3118,17 +3124,21 @@ impl PluginRegistrar for PluginRegistrationContext {
         priority: i32,
         callback: ToolExecutionFn,
     ) -> Result<()> {
-        PluginRegistrationContext::register_tool_execution_intercept(self, name, priority, callback)
+        HostPluginRegistrationContext::register_tool_execution_intercept(
+            self, name, priority, callback,
+        )
     }
 
     fn uses_plugin_component_namespace(&self) -> bool {
-        PluginRegistrationContext::uses_plugin_component_namespace(self)
+        HostPluginRegistrationContext::uses_plugin_component_namespace(self)
     }
-    fn with_child_namespace(&self, name: &str) -> Box<dyn crate::PluginRegistrar> {
-        Box::new(PluginRegistrationContext::with_child_namespace(self, name))
+    fn with_child_namespace(&self, name: &str) -> Box<dyn crate::PluginRegistrationContext> {
+        Box::new(HostPluginRegistrationContext::with_child_namespace(
+            self, name,
+        ))
     }
     fn into_registrations(self: Box<Self>) -> Vec<PluginRegistration> {
-        PluginRegistrationContext::into_registrations(*self)
+        HostPluginRegistrationContext::into_registrations(*self)
     }
 }
 

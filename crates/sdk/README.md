@@ -47,7 +47,7 @@ Node.js bindings mirror the semantics exposed by this crate.
   one shared plugin system.
 - **Built-in observability plugin**: Configure first-party Agent Trajectory
   Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
-  and OpenTelemetry trace, log, and metric exporters from the core crate.
+  and OpenTelemetry trace, log, and metric exporters through the Rust SDK.
 - **Runtime integration**: Use `nemo-relay-codecs` for provider implementations and `nemo-relay-runtime` for
   execution context and middleware internals. Use `nemo-relay-plugin-host` for
   loading and managing native and gRPC plugins, `nemo-relay-logging` for logging
@@ -58,19 +58,23 @@ Node.js bindings mirror the semantics exposed by this crate.
 ## Crate boundaries
 
 `nemo-relay` is a declarative Rust SDK over `nemo-relay-runtime`. Its flat
-modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, and `exporter`.
+modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, `exporter`, and `logging`.
 Shared request, response, error, and codec contracts are re-exported from
 `nemo-relay-types`; applications do not need an `api` module prefix.
 
 `nemo-relay-plugin-host` owns default pricing, resource metrics, and
-observability composition, runtime adapters, and dynamic plugin loading.
+observability services, runtime adapters, and dynamic plugin loading.
+`nemo-relay-builtins` adds adaptive and PII redaction to the default plugin
+composition shared by the SDKs and CLI.
 Bindings and component implementations depend on their owning crates and
 `nemo-relay-runtime` directly. All consumers share one runtime state.
 
 Call `nemo_relay::initialize_runtime()` before execution when default pricing
 services are needed. Plugin initialization and exporter constructors install
-these services automatically. Logging and diagnostic internals live in
-`nemo-relay-logging` and `nemo-relay-diagnostics`.
+these services automatically. Configure logging explicitly through
+`nemo_relay::logging::LoggingRuntime`, or keep the application's existing logger.
+The SDK does not install a logger automatically. Logging and diagnostic internals
+live in `nemo-relay-logging` and `nemo-relay-diagnostics`.
 
 ## Installation
 

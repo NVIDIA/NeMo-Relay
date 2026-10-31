@@ -65,7 +65,7 @@ impl nemo_relay_plugin::component::Plugin for ExternalAdaptive {
     fn register<'a>(
         &'a self,
         _: &serde_json::Map<String, nemo_relay_types::Json>,
-        _: &'a mut dyn nemo_relay_plugin::component::PluginRegistrar,
+        _: &'a mut dyn nemo_relay_plugin::component::PluginRegistrationContext,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = nemo_relay_plugin::component::Result<()>> + Send + 'a>,
     > {

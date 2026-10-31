@@ -10,7 +10,10 @@ use super::component::profile_registration_prefix;
 
 #[doc(hidden)]
 pub type LocalBackendProvider = Arc<
-    dyn Fn(PiiRedactionConfig, &mut dyn nemo_relay_plugin_host::PluginRegistrar) -> PluginResult<()>
+    dyn Fn(
+            PiiRedactionConfig,
+            &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
+        ) -> PluginResult<()>
         + Send
         + Sync,
 >;
@@ -43,7 +46,7 @@ pub fn clear_local_backend_provider() -> PluginResult<()> {
 
 pub(super) fn register_local_backend(
     config: PiiRedactionConfig,
-    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrar,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let provider = local_backend_provider_guard()?.clone();

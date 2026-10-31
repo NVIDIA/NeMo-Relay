@@ -2939,7 +2939,7 @@ async fn install_registrations_covers_registry_error_edges() {
             registration(surface, &duplicate_name),
         ])
         .await;
-        let mut ctx = PluginRegistrationContext::new();
+        let mut ctx = HostPluginRegistrationContext::new();
         let error = match instance.install_registrations(&mut ctx) {
             Err(error) => error,
             Ok(()) => panic!("{surface:?}: duplicate worker registration should fail"),
@@ -2958,7 +2958,7 @@ async fn install_registrations_covers_registry_error_edges() {
         ..registration(RegistrationSurface::Subscriber, "bad")
     }])
     .await;
-    let mut ctx = PluginRegistrationContext::new();
+    let mut ctx = HostPluginRegistrationContext::new();
     assert!(
         instance
             .install_registrations(&mut ctx)
@@ -2969,7 +2969,7 @@ async fn install_registrations_covers_registry_error_edges() {
 
     let (instance, _shutdown) =
         fake_worker_instance(vec![registration(RegistrationSurface::Unspecified, "bad")]).await;
-    let mut ctx = PluginRegistrationContext::new();
+    let mut ctx = HostPluginRegistrationContext::new();
     assert!(
         instance
             .install_registrations(&mut ctx)
@@ -2983,7 +2983,7 @@ async fn install_registrations_covers_registry_error_edges() {
 #[allow(clippy::await_holding_lock)] // The process-wide test mutex intentionally serializes runtime state.
 async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
-        registrations: Option<PluginRegistrationContext>,
+        registrations: Option<HostPluginRegistrationContext>,
     }
 
     impl Drop for RuntimeCleanup {
@@ -3045,7 +3045,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
     let context = nemo_relay_runtime::api::runtime::global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
 
-    let mut registration_context = PluginRegistrationContext::new();
+    let mut registration_context = HostPluginRegistrationContext::new();
     instance
         .install_registrations(&mut registration_context)
         .expect("worker registrations should install");
@@ -3164,7 +3164,7 @@ async fn adapter_register_rejects_config_drift_even_without_validation_call() {
         allows_multiple_components: false,
         instance: Arc::new(instance),
     };
-    let mut ctx = PluginRegistrationContext::new();
+    let mut ctx = HostPluginRegistrationContext::new();
     let changed = serde_json::Map::from_iter([("changed".into(), json!(true))]);
 
     let error = adapter
@@ -3179,7 +3179,7 @@ async fn install_registrations_requires_a_prepared_plan() {
     enable_operational_logs();
     let (mut instance, _shutdown) = fake_worker_instance(Vec::new()).await;
     instance.registrations = tokio::sync::OnceCell::new();
-    let mut ctx = PluginRegistrationContext::new();
+    let mut ctx = HostPluginRegistrationContext::new();
 
     let error = instance
         .install_registrations(&mut ctx)
@@ -3219,11 +3219,11 @@ async fn adapter_registration_requests_the_deferred_plan_once() {
 
     assert_eq!(register_calls.load(Ordering::Relaxed), 0);
     adapter
-        .register(&config, &mut PluginRegistrationContext::new())
+        .register(&config, &mut HostPluginRegistrationContext::new())
         .await
         .expect("the first component registration should request the plan");
     adapter
-        .register(&config, &mut PluginRegistrationContext::new())
+        .register(&config, &mut HostPluginRegistrationContext::new())
         .await
         .expect("the second component registration should reuse the plan");
     assert_eq!(register_calls.load(Ordering::Relaxed), 1);
