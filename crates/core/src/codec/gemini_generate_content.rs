@@ -583,6 +583,7 @@ fn map_usage(
         total_tokens: total,
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens,
         cost: None,
     };
