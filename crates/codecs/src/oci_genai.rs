@@ -1466,6 +1466,7 @@ fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
         total_tokens: usage.get("totalTokens").and_then(Json::as_u64),
         cache_read_tokens,
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: prompt_tokens
             .zip(cache_read_tokens)
             .and_then(|(total, cached)| total.checked_sub(cached)),

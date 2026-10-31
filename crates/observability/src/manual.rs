@@ -97,6 +97,24 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
             "cacheWrite",
         ],
     );
+    let cache_write_1h_aliases = [
+        "cache_write_1h_tokens",
+        "cache_creation_1h_input_tokens",
+        "cacheWrite1hTokens",
+        "cacheCreation1hInputTokens",
+    ];
+    // Preserve map precedence: inspect all supported shapes in `usage`
+    // before falling back to the lower-priority `token_usage` map.
+    let cache_write_1h_tokens = usage
+        .and_then(|value| first_u64(value, &cache_write_1h_aliases))
+        .or_else(|| {
+            usage.and_then(|value| nested_u64(value, "cache_creation", "ephemeral_1h_input_tokens"))
+        })
+        .or_else(|| token_usage.and_then(|value| first_u64(value, &cache_write_1h_aliases)))
+        .or_else(|| {
+            token_usage
+                .and_then(|value| nested_u64(value, "cache_creation", "ephemeral_1h_input_tokens"))
+        });
     let uncached_input_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,
@@ -108,6 +126,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         && reported_total_tokens.is_none()
         && cache_read_tokens.is_none()
         && cache_write_tokens.is_none()
+        && cache_write_1h_tokens.is_none()
         && uncached_input_tokens.is_none()
     {
         return None;
@@ -121,6 +140,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cache_write_1h_tokens,
         uncached_input_tokens,
         cost: None,
     })

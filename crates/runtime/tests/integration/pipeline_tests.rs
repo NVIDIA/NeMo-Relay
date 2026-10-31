@@ -1342,6 +1342,7 @@ impl LlmResponseCodec for MockResponseCodec {
                 total_tokens: Some(1_500),
                 cache_read_tokens: Some(200),
                 cache_write_tokens: None,
+                cache_write_1h_tokens: None,
                 uncached_input_tokens: None,
                 cost: None,
             }),

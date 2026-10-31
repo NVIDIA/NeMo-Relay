@@ -1178,6 +1178,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
                 total_tokens: u.total_tokens,
                 cache_read_tokens,
                 cache_write_tokens: None,
+                cache_write_1h_tokens: None,
                 uncached_input_tokens: u
                     .prompt_tokens
                     .zip(cache_read_tokens)

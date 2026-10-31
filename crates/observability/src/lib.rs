@@ -875,30 +875,40 @@ pub fn merge_usage(
         (None, None) => None,
         (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
         (Some(primary), Some(secondary)) => {
-            let (prompt_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens) =
-                match [primary, secondary]
-                    .into_iter()
-                    .find(|usage| usage.uncached_input_tokens.is_some())
-                {
-                    Some(split) => (
-                        split.prompt_tokens,
-                        split.cache_read_tokens,
-                        split.cache_write_tokens,
-                        split.uncached_input_tokens,
-                    ),
-                    None => (
-                        primary.prompt_tokens.or(secondary.prompt_tokens),
-                        primary.cache_read_tokens.or(secondary.cache_read_tokens),
-                        primary.cache_write_tokens.or(secondary.cache_write_tokens),
-                        None,
-                    ),
-                };
+            let (
+                prompt_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                cache_write_1h_tokens,
+                uncached_input_tokens,
+            ) = match [primary, secondary]
+                .into_iter()
+                .find(|usage| usage.uncached_input_tokens.is_some())
+            {
+                Some(split) => (
+                    split.prompt_tokens,
+                    split.cache_read_tokens,
+                    split.cache_write_tokens,
+                    split.cache_write_1h_tokens,
+                    split.uncached_input_tokens,
+                ),
+                None => (
+                    primary.prompt_tokens.or(secondary.prompt_tokens),
+                    primary.cache_read_tokens.or(secondary.cache_read_tokens),
+                    primary.cache_write_tokens.or(secondary.cache_write_tokens),
+                    primary
+                        .cache_write_1h_tokens
+                        .or(secondary.cache_write_1h_tokens),
+                    None,
+                ),
+            };
             Some(nemo_relay_types::codec::response::Usage {
                 prompt_tokens,
                 completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
                 total_tokens: primary.total_tokens.or(secondary.total_tokens),
                 cache_read_tokens,
                 cache_write_tokens,
+                cache_write_1h_tokens,
                 uncached_input_tokens,
                 cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
             })

@@ -41,6 +41,7 @@ fn full_response() -> AnnotatedLlmResponse {
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
             cache_write_tokens: Some(3),
+            cache_write_1h_tokens: None,
             uncached_input_tokens: None,
             cost: None,
         }),

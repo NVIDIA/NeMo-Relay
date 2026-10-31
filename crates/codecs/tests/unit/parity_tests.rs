@@ -439,6 +439,7 @@ fn test_response_usage_parity() {
         total_tokens: Some(1500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: Some(800),
         cost: None,
     };
@@ -456,6 +457,7 @@ fn test_response_usage_parity() {
             total_tokens: Some(1500),
             cache_read_tokens: Some(200),
             cache_write_tokens: None,
+            cache_write_1h_tokens: None,
             uncached_input_tokens: Some(1000),
             cost: None,
         })

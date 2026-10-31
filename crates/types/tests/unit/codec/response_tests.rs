@@ -42,6 +42,7 @@ fn test_usage_all_populated_round_trip() {
         total_tokens: Some(150),
         cache_read_tokens: Some(20),
         cache_write_tokens: Some(10),
+        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: None,
     };
@@ -351,6 +352,7 @@ fn full_response() -> AnnotatedLlmResponse {
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
             cache_write_tokens: Some(3),
+            cache_write_1h_tokens: None,
             uncached_input_tokens: None,
             cost: None,
         }),
@@ -386,6 +388,7 @@ fn test_usage_cost_round_trip_preserves_provider_reported_codec_compatibility() 
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: Some(CostEstimate {
             total: Some(0.42),

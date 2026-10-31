@@ -16,6 +16,7 @@ fn test_default_pricing_resolver_has_no_model_prices() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: None,
     };
@@ -47,6 +48,7 @@ fn test_configured_model_pricing_estimates_total_cost() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: None,
     };
@@ -318,7 +320,8 @@ fn test_custom_pricing_catalog_supports_future_models_without_code_changes() {
                 "input_per_million": 1.0,
                 "output_per_million": 2.0,
                 "cache_read_per_million": 0.25,
-                "cache_write_per_million": 1.5
+                "cache_write_per_million": 1.5,
+                "cache_write_1h_per_million": 2.4
             },
             "prompt_cache": {
                 "read_accounting": "separate"
@@ -330,17 +333,18 @@ fn test_custom_pricing_catalog_supports_future_models_without_code_changes() {
         completion_tokens: Some(2_000),
         cache_read_tokens: Some(3_000),
         cache_write_tokens: Some(4_000),
+        cache_write_1h_tokens: Some(1_000),
         uncached_input_tokens: None,
         ..Usage::default()
     };
 
     let cost = estimate_cost_with_catalog(&catalog, "future-model-latest", &usage).unwrap();
 
-    assert_eq!(cost.total, Some(0.011_75));
+    assert_eq!(cost.total, Some(0.012_65));
     assert_eq!(cost.input, Some(0.001));
     assert_eq!(cost.output, Some(0.004));
     assert_eq!(cost.cache_read, Some(0.000_75));
-    assert_eq!(cost.cache_write, Some(0.006));
+    assert_eq!(cost.cache_write, Some(0.0069));
     assert_eq!(cost.pricing_provider.as_deref(), Some("future-ai"));
     assert_eq!(cost.pricing_model.as_deref(), Some("future-model"));
 }
@@ -821,6 +825,10 @@ fn test_pricing_catalog_rejects_empty_required_fields_and_invalid_rates() {
         ("output_per_million", "rates.output_per_million"),
         ("cache_read_per_million", "rates.cache_read_per_million"),
         ("cache_write_per_million", "rates.cache_write_per_million"),
+        (
+            "cache_write_1h_per_million",
+            "rates.cache_write_1h_per_million",
+        ),
     ] {
         let mut entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
         entry["rates"][field] = json!(-0.1);
@@ -1192,6 +1200,7 @@ fn test_usage_cost_round_trip_preserves_model_pricing_codec_compatibility() {
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
+        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: estimate_cost_with_catalog(
             &catalog,
@@ -1202,6 +1211,7 @@ fn test_usage_cost_round_trip_preserves_model_pricing_codec_compatibility() {
                 total_tokens: Some(1_500),
                 cache_read_tokens: Some(200),
                 cache_write_tokens: None,
+                cache_write_1h_tokens: None,
                 uncached_input_tokens: None,
                 cost: None,
             },
@@ -1317,4 +1327,60 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
             }
         }
     ]))
+}
+
+#[test]
+fn test_model_pricing_rejects_one_hour_writes_above_combined_writes() {
+    let catalog = pricing_catalog(json!([{
+        "provider": "future-ai",
+        "model_id": "future-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/pricing",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_write_per_million": 1.5,
+            "cache_write_1h_per_million": 2.4
+        },
+        "prompt_cache": {"read_accounting": "separate"}
+    }]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_write_tokens: Some(1_000),
+        cache_write_1h_tokens: Some(1_001),
+        ..Usage::default()
+    };
+
+    assert!(estimate_cost_with_catalog(&catalog, "future-model", &usage).is_none());
+}
+
+#[test]
+fn test_model_pricing_omits_cache_write_component_when_one_hour_rate_is_missing() {
+    let catalog = pricing_catalog(json!([{
+        "provider": "future-ai",
+        "model_id": "future-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/pricing",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_write_per_million": 1.5
+        },
+        "prompt_cache": {"read_accounting": "separate"}
+    }]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_write_tokens: Some(4_000),
+        cache_write_1h_tokens: Some(1_000),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "future-model", &usage).unwrap();
+
+    assert_eq!(cost.total, None);
+    assert_eq!(cost.input, Some(0.001));
+    assert_eq!(cost.output, Some(0.004));
+    assert_eq!(cost.cache_write, None);
 }
