@@ -15,9 +15,11 @@
     "fern-api": "5.168.0",
     "typescript": "^5.9.3"
   },
-  "//": "The transitive ip-address dependency requires a minimum version of 10.7.4 to resolve GHSA-rxp7-6hxx-x8q5.",
+  "//": "Minimum patched transitive versions for ip-address (GHSA-rxp7-6hxx-x8q5), glob (GHSA-3g3m-2fjr-6pw4), and minimatch (GHSA-g3hv-75wg-m249).",
   "overrides": {
+    "glob": "^14.0.3",
     "ip-address": "^10.7.4",
+    "minimatch": "^11.0.3",
     "openclaw": {
       "@modelcontextprotocol/sdk": "1.32.1",
       "zod": "4.6.6",
