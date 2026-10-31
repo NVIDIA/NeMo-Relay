@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use console::{Key, style, truncate_str};
 use dialoguer::theme::ColorfulTheme;
-use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
+use nemo_relay_runtime::config_editor::{EditorFieldKind, EditorFieldSpec};
 use serde_json::{Value, json};
 
 use crate::error::CliError;
@@ -19,7 +19,6 @@ mod dynamic_editor;
 mod editor_model;
 pub(crate) mod lifecycle;
 pub(crate) mod policy;
-pub(crate) mod pricing;
 mod prompt;
 pub(crate) mod schema;
 mod types;
@@ -485,7 +484,7 @@ fn string_map_entry_exists(value: &Value, key: &str) -> bool {
 
 fn editor_item_label(
     value: &Value,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> String {
     if let Some(tagged_union) = item.tagged_union {
         return value
@@ -498,7 +497,7 @@ fn editor_item_label(
 }
 
 fn tagged_union_variant_value(
-    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
     selected: usize,
 ) -> Result<Value, CliError> {
     tagged_union
@@ -539,7 +538,7 @@ impl TaggedUnionFieldState {
 
     fn change_variant(
         &mut self,
-        tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+        tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
         selected: usize,
     ) -> Result<(), CliError> {
         self.value = tagged_union_variant_value(tagged_union, selected)?;
@@ -613,7 +612,7 @@ where
 
 fn value_section_menu_items(
     value: &Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     default: Option<&Value>,
 ) -> Result<Vec<MenuItem>, CliError> {
     let mut items = schema
@@ -648,7 +647,7 @@ fn value_field_menu_item(
 
 fn reset_value_section_item(
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     default: Option<&Value>,
     selected: usize,
 ) {
@@ -662,7 +661,7 @@ fn reset_value_section_item(
 
 fn clear_value_field(
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     selected: usize,
 ) -> bool {
     let Some(field) = schema.fields.get(selected) else {

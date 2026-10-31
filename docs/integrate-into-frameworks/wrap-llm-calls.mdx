@@ -133,8 +133,8 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::api::scope::get_handle;
+use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::scope::get_handle;
 use serde_json::json;
 use std::sync::Arc;
 

@@ -11,23 +11,23 @@
 //! with their corresponding `nemo_relay_*_free` function.
 
 use libc::c_char;
-use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
-use nemo_relay::plugin::PluginRegistrationContext;
+use nemo_relay_plugin_host::PluginRegistrationContext;
+use nemo_relay_runtime::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
-#[cfg(test)]
-use nemo_relay::api::llm::LlmAttributes;
-use nemo_relay::api::llm::{LlmHandle, LlmRequest};
-#[cfg(test)]
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::scope::{ScopeHandle, ScopeType};
-#[cfg(test)]
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::api::tool::ToolHandle;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::plugin::dynamic::PluginHostActivation;
 use nemo_relay_adaptive::AdaptiveRuntime;
+use nemo_relay_plugin_host::dynamic::PluginHostActivation;
+use nemo_relay_runtime::api::event::{Event, LogSeverity, MetricKind, MetricValueType};
+#[cfg(test)]
+use nemo_relay_runtime::api::llm::LlmAttributes;
+use nemo_relay_runtime::api::llm::{LlmHandle, LlmRequest};
+#[cfg(test)]
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::scope::{ScopeHandle, ScopeType};
+#[cfg(test)]
+use nemo_relay_runtime::api::tool::ToolAttributes;
+use nemo_relay_runtime::api::tool::ToolHandle;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 use crate::error::set_last_error;
@@ -61,25 +61,26 @@ pub struct FfiThreadScopeStackBinding {
     pub(crate) override_stack: Option<ScopeStackHandle>,
 }
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nemo_relay_observability::atif::AtifExporter);
 /// Opaque ATOF JSONL exporter handle.
-pub struct FfiAtofExporter(pub nemo_relay::observability::atof::AtofExporter);
+pub struct FfiAtofExporter(pub nemo_relay_observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
-pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenTelemetrySubscriber);
+pub struct FfiOpenTelemetrySubscriber(pub nemo_relay_observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenTelemetry log subscriber handle.
 pub struct FfiOpenTelemetryLogSubscriber(
-    pub nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+    pub nemo_relay_observability::otel_logs::OpenTelemetryLogSubscriber,
 );
 /// Opaque OpenTelemetry metric subscriber handle.
 pub struct FfiOpenTelemetryMetricSubscriber(
-    pub nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+    pub nemo_relay_observability::otel_metrics::OpenTelemetryMetricSubscriber,
 );
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
 /// Opaque handle for an asynchronous resource metrics collection.
 pub struct FfiResourceMetricsCollection {
-    pub(crate) receiver:
-        std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<nemo_relay::error::Result<String>>>>,
+    pub(crate) receiver: std::sync::Mutex<
+        Option<tokio::sync::oneshot::Receiver<nemo_relay_types::error::Result<String>>>,
+    >,
     pub(crate) task: tokio::task::AbortHandle,
 }
 
@@ -96,14 +97,14 @@ pub struct FfiPluginHostActivation(pub std::sync::Mutex<Option<PluginHostActivat
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_relay::plugin::PluginRegistrationContext`, not an owned heap allocation.
+/// `nemo_relay_plugin_host::PluginRegistrationContext`, not an owned heap allocation.
 /// It is only valid for the duration of the plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
 /// There is intentionally no `nemo_relay_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
-pub struct FfiPluginContext(pub *mut PluginRegistrationContext);
+pub struct FfiPluginContext<'a>(pub *mut (dyn PluginRegistrationContext + 'a));
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
@@ -857,8 +858,8 @@ pub unsafe extern "C" fn nemo_relay_event_scope_category(ptr: *const FfiEvent) -
         return std::ptr::null_mut();
     }
     match unsafe { &*ptr }.0.scope_category() {
-        Some(nemo_relay::api::event::ScopeCategory::Start) => str_to_c_string("start"),
-        Some(nemo_relay::api::event::ScopeCategory::End) => str_to_c_string("end"),
+        Some(nemo_relay_runtime::api::event::ScopeCategory::Start) => str_to_c_string("start"),
+        Some(nemo_relay_runtime::api::event::ScopeCategory::End) => str_to_c_string("end"),
         None => std::ptr::null_mut(),
     }
 }

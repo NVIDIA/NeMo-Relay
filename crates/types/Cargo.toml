@@ -7,22 +7,24 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared serializable data model types for NeMo Relay."
+description = "Shared data models and runtime contracts for NeMo Relay."
+
+# These tests compile shared documentation source available only in the repository.
+exclude = ["tests/documentation_examples.rs"]
 
 [lints]
 workspace = true
 
-[features]
-default = []
-schema = ["dep:schemars"]
-
 [dependencies]
+opentelemetry = { workspace = true, features = ["trace"] }
+tokio-stream.workspace = true
 bitflags = { workspace = true, features = ["serde"] }
 chrono = { workspace = true, features = ["std", "serde", "now"] }
 enumset.workspace = true
-schemars = { workspace = true, features = ["chrono", "uuid1"], optional = true }
+schemars = { workspace = true, features = ["chrono", "uuid1"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
+thiserror.workspace = true
 strum = { workspace = true, features = ["derive"] }
 typed-builder.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }

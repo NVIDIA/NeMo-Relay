@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::*;
 use chrono::Utc;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use uuid::Uuid;
 
 use crate::acg::prompt_ir::{

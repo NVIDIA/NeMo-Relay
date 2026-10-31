@@ -3,16 +3,19 @@
 
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-use nemo_relay::plugin::{
-    PluginError, PluginRegistrationContext, Result as PluginResult, rollback_registrations,
-};
+use nemo_relay_plugin_host::{PluginError, Result as PluginResult, rollback_registrations};
 
 use super::component::PiiRedactionConfig;
 use super::component::profile_registration_prefix;
 
 #[doc(hidden)]
 pub type LocalBackendProvider = Arc<
-    dyn Fn(PiiRedactionConfig, &mut PluginRegistrationContext) -> PluginResult<()> + Send + Sync,
+    dyn Fn(
+            PiiRedactionConfig,
+            &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
+        ) -> PluginResult<()>
+        + Send
+        + Sync,
 >;
 
 static LOCAL_BACKEND_PROVIDER: LazyLock<Mutex<Option<LocalBackendProvider>>> =
@@ -43,7 +46,7 @@ pub fn clear_local_backend_provider() -> PluginResult<()> {
 
 pub(super) fn register_local_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let provider = local_backend_provider_guard()?.clone();
@@ -75,7 +78,7 @@ pub(super) fn register_local_backend(
     let mut scoped_context = profile_name.map(|profile_name| {
         ctx.with_child_namespace(&format!("{}/", profile_registration_prefix(profile_name)))
     });
-    let provider_context = scoped_context.as_mut().unwrap_or(ctx);
+    let provider_context = scoped_context.as_deref_mut().unwrap_or(ctx);
     match provider(config, provider_context) {
         Ok(()) => {
             if let Some(scoped_context) = scoped_context {

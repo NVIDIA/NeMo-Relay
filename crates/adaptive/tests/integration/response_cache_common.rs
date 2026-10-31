@@ -5,12 +5,15 @@
 //! via `#[path]` from each `[[test]]` target, so this file is not a test
 //! target of its own.
 
-use nemo_relay::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
-use nemo_relay::api::runtime::LlmExecutionNextFn;
-use nemo_relay::plugin::{PluginConfig, test_initialize_plugin_host_exact};
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
+use nemo_relay_runtime::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
+use nemo_relay_runtime::api::runtime::LlmExecutionNextFn;
 use serde_json::{Value as Json, json};
+use {
+    crate::plugin_host_test_support::test_initialize_plugin_host_exact,
+    nemo_relay_plugin_host::PluginConfig,
+};
 
 pub fn chat_request(prompt: &str) -> LlmRequest {
     LlmRequest {

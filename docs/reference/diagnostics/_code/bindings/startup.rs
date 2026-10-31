@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay::{
+use nemo_relay_runtime::{
     diagnostics::{DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings, embedded},
-    plugin::dynamic::{PluginHostConfig, initialize, validate},
+    plugin::dynamic::PluginHostConfig,
 };
+
+use nemo_relay::plugin::{initialize, validate};
 
 let config = PluginHostConfig {
     diagnostics: Some(DiagnosticsSettings {

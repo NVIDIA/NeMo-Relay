@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native and gRPC plugin loading, verification, registration, and lifecycle."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+# Private test hook for suppressing implicit user/system plugin discovery.
+__skip-implicit-config = []
+[dependencies]
+# First-party crates.
+nemo-relay-codecs.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-model-pricing.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-plugin.workspace = true
+nemo-relay-resource-metrics.workspace = true
+nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
+nemo-relay-worker-proto = { workspace = true }
+
+# Third-party dependencies.
+async-trait.workspace = true
+base64.workspace = true
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+futures-util.workspace = true
+http.workspace = true
+http-body.workspace = true
+hyper-util = { workspace = true, features = ["tokio"] }
+jsonschema.workspace = true
+libloading.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+prost.workspace = true
+reqwest = { workspace = true, features = ["charset", "http2", "rustls", "stream"] }
+ring.workspace = true
+schemars = { workspace = true }
+semver.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+sha2.workspace = true
+strum = { workspace = true, features = ["derive"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
+tokio-stream = { workspace = true, features = ["sync", "net"] }
+toml.workspace = true
+tonic = { workspace = true, features = ["codegen", "router", "transport"] }
+tower = { workspace = true, features = ["util"] }
+uuid = { workspace = true, features = ["v7", "serde"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs", "param"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[dev-dependencies]
+# First-party crates.
+nemo-relay-logging.workspace = true
+
+# Third-party dependencies.
+opentelemetry-http.workspace = true
+opentelemetry-otlp = { workspace = true, features = ["trace", "logs", "metrics", "http-proto", "http-json", "reqwest-client", "reqwest-rustls", "grpc-tonic", "gzip-http", "gzip-tonic", "zstd-http", "zstd-tonic", "tls-ring", "tls-roots"] }
+opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
+sysinfo = { workspace = true, features = ["system", "network"] }
+futures.workspace = true
+object_store = { workspace = true, features = ["aws"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "logs", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "testing"] }
+rcgen.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
+tokio-stream = { workspace = true, default-features = true, features = ["net"] }
+tonic = { workspace = true, default-features = true, features = ["transport"] }

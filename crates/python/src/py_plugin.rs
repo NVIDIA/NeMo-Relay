@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::PySet;
 use serde_json::{Map, Value as Json};
 
-use nemo_relay::api::registry::{
+use nemo_relay_runtime::api::registry::{
     RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
@@ -35,13 +35,19 @@ use nemo_relay::api::registry::{
     register_tool_request_intercept, register_tool_sanitize_request_guardrail,
     register_tool_sanitize_response_guardrail,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_relay::error::Result as FlowResult;
-use nemo_relay::plugin::dynamic::{PluginHostReport, initialize, validate, validate_exact};
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginHostActivation,
-    PluginRegistration, PluginRegistrationContext, deregister_plugin, list_plugin_kinds,
-    register_plugin, rollback_registrations,
+use nemo_relay_runtime::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay_types::error::Result as FlowResult;
+use {
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::PluginHostActivation,
+    nemo_relay_plugin_host::PluginRegistration, nemo_relay_plugin_host::deregister_plugin,
+    nemo_relay_plugin_host::list_plugin_kinds, nemo_relay_plugin_host::register_plugin,
+    nemo_relay_plugin_host::rollback_registrations,
+};
+use {
+    nemo_relay_plugin_host::dynamic::PluginHostReport, nemo_relay_plugin_host::initialize,
+    nemo_relay_plugin_host::validate, nemo_relay_plugin_host::validate_exact,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -719,7 +725,7 @@ impl Plugin for PyPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();
@@ -1049,7 +1055,7 @@ fn validate_py(
     config: &Bound<'_, PyAny>,
     additional_plugins_toml: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig =
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
         serde_json::from_value(py_to_json(config)?)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let report = py
@@ -1085,7 +1091,7 @@ fn initialize_py<'py>(
     config: &Bound<'_, PyAny>,
     additional_plugins_toml: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig =
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
         serde_json::from_value(py_to_json(config)?)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {

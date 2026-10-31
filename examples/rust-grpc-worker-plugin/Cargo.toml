@@ -21,7 +21,8 @@ tokio = { workspace = true, default-features = true, features = ["macros", "rt-m
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true, default-features = true, features = ["worker-grpc", "__skip-implicit-config"] }
+nemo-relay-plugin-host = { workspace = true, features = ["__skip-implicit-config"] }
+nemo-relay-runtime.workspace = true
 
 # Third-party dependencies.
 sha2.workspace = true

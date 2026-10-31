@@ -15,7 +15,7 @@
 //!
 //! - **Synchronous**: `translate` is a pure data transform (JSON
 //!   restructuring), not an I/O operation. This matches the `LlmCodec`
-//!   pattern in `crates/core/src/codec/traits.rs`.
+//!   pattern in `crates/types/src/codec/traits.rs`.
 //! - **Compatibility facade**: provider plugins keep their existing
 //!   synchronous trait surface, but can internally split translation into
 //!   semantic hint planning plus request-surface application.
@@ -23,7 +23,7 @@
 //!   in concurrent contexts.
 //! - **Object-safe**: The trait is designed to be used as a trait object.
 
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 
 use crate::acg::capability::BackendCapabilities;
 use crate::acg::prompt_ir::PromptIR;

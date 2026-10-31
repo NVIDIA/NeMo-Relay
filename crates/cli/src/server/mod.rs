@@ -6,7 +6,7 @@ mod types;
 pub(crate) use types::GatewayOverrides;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+use nemo_relay_diagnostics::{CliFailureCode, FailureClass, SuccessCode};
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -25,16 +25,17 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 #[cfg(test)]
-use nemo_relay::plugin::PluginComponentSpec;
-use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{PluginHostActivation, VerifiedDynamicPluginSpec};
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_plugin_host::PluginComponentSpec;
+use nemo_relay_plugin_host::PluginConfig;
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
+use {
+    nemo_relay_plugin_host::dynamic::PluginHostActivation,
+    nemo_relay_plugin_host::dynamic::VerifiedDynamicPluginSpec,
+};
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
@@ -461,7 +462,8 @@ async fn finish_server_shutdown(
     instance_id: &str,
 ) -> Result<(), CliError> {
     let close_result = sessions.close_all("gateway_shutdown").await;
-    let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
+    let flush_result =
+        nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
     let clear_result = plugin_activation
         .map(ServerPluginActivation::clear)
         .unwrap_or(Ok(()));
@@ -1339,23 +1341,21 @@ impl ServerPluginActivation {
 
 #[derive(Debug)]
 pub(crate) enum PluginComponentSetupError {
-    Adaptive(String),
-    PiiRedaction(String),
+    Builtins(String),
     RemovedSwitchyard,
 }
 
 impl PluginComponentSetupError {
     pub(crate) const fn check_name(&self) -> &'static str {
         match self {
-            Self::Adaptive(_) => "Adaptive plugin",
-            Self::PiiRedaction(_) => "PII redaction plugin",
+            Self::Builtins(_) => "Built-in plugins",
             Self::RemovedSwitchyard => "Switchyard migration",
         }
     }
 
     pub(crate) fn diagnostic_details(&self) -> String {
         match self {
-            Self::Adaptive(error) | Self::PiiRedaction(error) => {
+            Self::Builtins(error) => {
                 format!("registration failed: {error}")
             }
             Self::RemovedSwitchyard => REMOVED_SWITCHYARD_MESSAGE.into(),
@@ -1366,14 +1366,8 @@ impl PluginComponentSetupError {
 impl std::fmt::Display for PluginComponentSetupError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Adaptive(error) => {
-                write!(formatter, "adaptive plugin registration failed: {error}")
-            }
-            Self::PiiRedaction(error) => {
-                write!(
-                    formatter,
-                    "PII redaction plugin registration failed: {error}"
-                )
+            Self::Builtins(error) => {
+                write!(formatter, "built-in plugin registration failed: {error}")
             }
             Self::RemovedSwitchyard => formatter.write_str(REMOVED_SWITCHYARD_MESSAGE),
         }
@@ -1384,11 +1378,8 @@ pub(crate) fn register_and_validate_plugin_components(
     plugin_config: &PluginConfig,
 ) -> Vec<PluginComponentSetupError> {
     let mut errors = Vec::new();
-    if let Err(error) = register_adaptive_component() {
-        errors.push(PluginComponentSetupError::Adaptive(error.to_string()));
-    }
-    if let Err(error) = register_pii_redaction_component() {
-        errors.push(PluginComponentSetupError::PiiRedaction(error.to_string()));
+    if let Err(error) = nemo_relay_builtins::plugin::ensure_builtin_plugins_registered() {
+        errors.push(PluginComponentSetupError::Builtins(error.to_string()));
     }
     if plugin_config
         .components
@@ -1420,7 +1411,7 @@ async fn activate_server_plugins(
         return Err(CliError::Config(error.to_string()));
     }
     if dynamic_plugins.is_empty() {
-        let host = PluginHostActivation::initialize_exact(plugin_config)
+        let host = nemo_relay_plugin_host::initialize_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         return Ok(Some(ServerPluginActivation {
@@ -1464,7 +1455,7 @@ async fn activate_server_plugins(
             })
         })
         .collect::<Result<Vec<_>, CliError>>()?;
-    let (host, _) = PluginHostActivation::initialize_with_verified_specs(plugin_config, specs)
+    let (host, _) = nemo_relay_plugin_host::initialize_with_verified_specs(plugin_config, specs)
         .await
         .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
     Ok(Some(ServerPluginActivation {

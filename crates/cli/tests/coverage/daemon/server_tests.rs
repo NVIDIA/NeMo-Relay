@@ -1113,7 +1113,7 @@ async fn disconnected_worker_requests_log_pass_through_without_changing_response
         );
         return;
     }
-    use nemo_relay::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -4053,7 +4053,7 @@ async fn published_worker_probe_failure_retains_the_session_and_reports_recovery
         );
         return;
     }
-    use nemo_relay::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -4569,7 +4569,7 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
         );
         return;
     }
-    use nemo_relay::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -5116,7 +5116,7 @@ async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error()
     let mut state = test_daemon_state(false, "route-token", GatewayConfig::default());
     Arc::get_mut(&mut state).unwrap().diagnostics_http = Some(
         crate::diagnostics_http::DiagnosticsHttp::new(
-            nemo_relay::diagnostics::Diagnostics::default().reader(),
+            nemo_relay_diagnostics::Diagnostics::default().reader(),
             crate::configuration::BootstrapChallengeKey::from_bytes(b"transport-error"),
             vec![],
         )
@@ -5149,7 +5149,7 @@ async fn plain_http_diagnostics_routes_share_the_authenticated_transport_error()
 
 #[tokio::test]
 async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_mutate_state() {
-    use nemo_relay::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     let context = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {
@@ -5263,12 +5263,12 @@ async fn diagnostic_activation_deadline_revokes_expired_route_and_is_idempotent(
 
 #[tokio::test]
 async fn worker_stream_application_errors_preserve_the_route_and_next_request() {
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::registry::{
         deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
         register_llm_execution_intercept, register_llm_stream_execution_intercept,
     };
-    use nemo_relay::api::runtime::LlmJsonStream;
-    use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+    use nemo_relay_runtime::api::runtime::LlmJsonStream;
+    use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
     use serde_json::json;
 
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;

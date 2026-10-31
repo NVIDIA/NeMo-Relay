@@ -16,7 +16,7 @@ use crate::acg::types::{
     SharingScope, TranslationReport,
 };
 use chrono::Utc;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use serde_json::json;
 use uuid::Uuid;
 

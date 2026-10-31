@@ -4,8 +4,8 @@
 //! Integration tests for module registration in the NeMo Relay Python crate.
 
 use _native::{py_adaptive, py_api, py_plugin, py_types};
-use nemo_relay::api::runtime::NemoRelayContextState;
-use nemo_relay::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::NemoRelayContextState;
+use nemo_relay_runtime::api::runtime::global_context;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 

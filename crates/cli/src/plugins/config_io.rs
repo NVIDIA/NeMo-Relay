@@ -8,9 +8,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use console::style;
-use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_static_plugin_config};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use {
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::validate_static_plugin_config,
+};
 
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::error::CliError;
@@ -784,7 +787,7 @@ pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
         let messages = report
             .diagnostics
             .into_iter()
-            .filter(|diagnostic| diagnostic.level == nemo_relay::plugin::DiagnosticLevel::Error)
+            .filter(|diagnostic| diagnostic.level == nemo_relay_plugin_host::DiagnosticLevel::Error)
             .map(|diagnostic| diagnostic.message)
             .collect::<Vec<_>>()
             .join("; ");

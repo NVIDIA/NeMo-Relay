@@ -3,7 +3,7 @@
 
 //! Error types for the nemo-relay-adaptive crate.
 
-use nemo_relay::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 use thiserror::Error;
 
 /// The error type for all nemo-relay-adaptive operations.
@@ -38,7 +38,6 @@ pub enum AdaptiveError {
     ChannelClosed(String),
 
     /// A Redis operation failed.
-    #[cfg(feature = "redis-backend")]
     #[error("redis error: {0}")]
     Redis(#[from] redis::RedisError),
 }

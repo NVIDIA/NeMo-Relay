@@ -27,8 +27,8 @@ use super::error::Result;
 ///
 /// # Errors
 ///
-/// Returns [`AcgError::Serialization`] if the input is not valid JSON or
-/// if canonicalization fails.
+/// Returns [`AcgError::Serialization`](super::error::AcgError::Serialization) if the input is not valid JSON, or
+/// [`AcgError::Internal`](super::error::AcgError::Internal) if canonicalization fails.
 pub fn canonicalize_json(json_str: &str) -> Result<String> {
     let value: serde_json::Value = serde_json::from_str(json_str)?;
     canonicalize_value(&value)
@@ -38,7 +38,7 @@ pub fn canonicalize_json(json_str: &str) -> Result<String> {
 ///
 /// # Errors
 ///
-/// Returns [`AcgError::Serialization`] if canonicalization fails.
+/// Returns [`AcgError::Internal`](super::error::AcgError::Internal) if canonicalization fails.
 pub fn canonicalize_value(value: &serde_json::Value) -> Result<String> {
     let canonical = serde_json_canonicalizer::to_string(value)
         .map_err(|e| super::error::AcgError::Internal(format!("canonicalization failed: {e}")))?;

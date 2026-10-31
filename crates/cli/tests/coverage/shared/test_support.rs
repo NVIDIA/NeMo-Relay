@@ -25,7 +25,7 @@ pub(crate) async fn http_model_listener() -> (tokio::net::TcpListener, std::net:
 pub(crate) fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
                 .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
@@ -173,3 +173,6 @@ pub(crate) fn header(request: &str, name: &str) -> String {
         })
         .unwrap_or_else(|| panic!("missing {name} header in {request:?}"))
 }
+
+#[path = "plugin_host.rs"]
+pub(crate) mod plugin_host;

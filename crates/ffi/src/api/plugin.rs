@@ -8,19 +8,21 @@ use super::{
     NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
     NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
     NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
-    PluginConfig, PluginError, PluginHostActivation, PluginRegistrationContext, c_char,
-    c_str_to_json, c_str_to_string, clear_last_error, deregister_plugin, json_to_c_string,
-    last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
-    register_plugin, set_last_error, status_from_error, status_from_plugin_error,
-    wrap_event_metadata_injector_fn, wrap_event_sanitize_fn, wrap_event_subscriber,
-    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    PluginConfig, PluginError, PluginHostActivation, c_char, c_str_to_json, c_str_to_string,
+    clear_last_error, deregister_plugin, json_to_c_string, last_error_message, list_plugin_kinds,
+    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
+    status_from_error, status_from_plugin_error, wrap_event_metadata_injector_fn,
+    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
-use nemo_relay::plugin::dynamic::{initialize, validate, validate_exact};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use {
+    nemo_relay_builtins::plugin::initialize, nemo_relay_builtins::plugin::validate,
+    nemo_relay_builtins::plugin::validate_exact,
+};
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
@@ -102,7 +104,7 @@ impl Plugin for FfiHostedPluginAdapter {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
@@ -199,7 +201,8 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
         return status;
     }
     let config =
-        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
+        match parse_plugin_config::<nemo_relay_plugin_host::dynamic::PluginHostConfig>(config_json)
+        {
             Ok(config) => config,
             Err(status) => return status,
         };
@@ -340,7 +343,8 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
         return status;
     }
     let config =
-        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
+        match parse_plugin_config::<nemo_relay_plugin_host::dynamic::PluginHostConfig>(config_json)
+        {
             Ok(config) => config,
             Err(status) => return status,
         };

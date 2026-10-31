@@ -12,9 +12,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::LlmRequestInterceptFn;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::runtime::LlmRequestInterceptFn;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
@@ -223,7 +223,7 @@ impl AdaptiveHintsIntercept {
     }
 
     /// Converts this intercept into an [`LlmRequestInterceptFn`] suitable for
-    /// registration with [`register_llm_request_intercept`].
+    /// registration with [`register_llm_request_intercept`](nemo_relay_runtime::api::registry::register_llm_request_intercept).
     ///
     /// The returned closure reads the HotCache trie, builds AgentHints,
     /// injects them into the request headers and body, and returns the
@@ -253,8 +253,9 @@ impl AdaptiveHintsIntercept {
                     inject_agent_hints(&mut request, &mut annotated, &hints, &this.injection);
                 }
 
-                let outcome =
-                    nemo_relay::api::llm::LlmRequestInterceptOutcome::new(request, annotated);
+                let outcome = nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                );
                 Box::pin(async move { Ok(outcome) })
             },
         )

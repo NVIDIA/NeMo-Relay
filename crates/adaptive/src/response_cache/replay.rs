@@ -3,9 +3,9 @@
 
 //! Replay of a stored aggregate as provider-native streaming chunks.
 
-use nemo_relay::api::runtime::LlmJsonStream;
-use nemo_relay::codec::resolve::{ProviderSurface, detect_response_surface, streaming_codec};
-use nemo_relay::error::FlowError;
+use nemo_relay_codecs::resolve::{ProviderSurface, detect_response_surface, streaming_codec};
+use nemo_relay_runtime::api::runtime::LlmJsonStream;
+use nemo_relay_runtime::error::FlowError;
 use serde_json::{Map, Value as Json, json};
 
 use crate::response_cache::anthropic::AnthropicResponseKind;

@@ -13,7 +13,7 @@ use napi::bindgen_prelude::FromNapiValue;
 use napi::{Env, JsObject, JsUnknown, NapiRaw, ValueType};
 use serde_json::Value as Json;
 
-use nemo_relay::error::FlowError;
+use nemo_relay_types::error::FlowError;
 
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 

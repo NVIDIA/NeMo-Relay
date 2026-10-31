@@ -10,7 +10,7 @@
 //! - **Breakpoint budget allocation**: Up to 4 breakpoints per request.
 //! - **Token minimum enforcement**: Per-model from [`CapabilityRegistry`].
 //! - **TTL mapping**: `RetentionTier` to Anthropic TTL (5m default or 1h extended).
-//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`].
+//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`](crate::acg::canonicalize::canonicalize_value).
 //! - **System string-to-array conversion**: Handles both string and array-of-blocks format.
 //!
 //! # Threat mitigations
@@ -93,10 +93,10 @@ impl ProviderPlugin for AnthropicCachePlugin {
 impl HintPlanApplier for AnthropicCachePlugin {
     fn apply_hint_plan(
         &self,
-        request: &nemo_relay::api::llm::LlmRequest,
+        request: &nemo_relay_runtime::api::llm::LlmRequest,
         prompt_ir: &PromptIR,
         hint_plan: &HintPlan,
-    ) -> crate::acg::error::Result<nemo_relay::api::llm::LlmRequest> {
+    ) -> crate::acg::error::Result<nemo_relay_runtime::api::llm::LlmRequest> {
         crate::acg::request_surfaces::apply_request_surface(
             self.plugin_id(),
             request,

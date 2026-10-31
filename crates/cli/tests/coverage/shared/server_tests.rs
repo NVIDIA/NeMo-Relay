@@ -15,9 +15,10 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
-use nemo_relay::api::event::ScopeCategory;
-use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::registry::{
+use nemo_relay_plugin_host::dynamic::DynamicPluginKind;
+use nemo_relay_runtime::api::event::ScopeCategory;
+use nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay_runtime::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_scope_sanitize_end_guardrail,
     deregister_tool_conditional_execution_guardrail, deregister_tool_request_intercept,
@@ -25,11 +26,8 @@ use nemo_relay::api::registry::{
     register_llm_stream_execution_intercept, register_scope_sanitize_end_guardrail,
     register_tool_conditional_execution_guardrail, register_tool_request_intercept,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::plugin::dynamic::DynamicPluginKind;
-use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginConfig, PluginRegistration, PluginRegistrationContext,
-    deregister_plugin, ensure_builtin_plugins_registered, register_plugin,
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,6 +35,13 @@ use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
+use {
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginRegistration,
+    nemo_relay_plugin_host::deregister_plugin,
+    nemo_relay_plugin_host::ensure_builtin_plugins_registered,
+    nemo_relay_plugin_host::register_plugin,
+};
 
 use super::*;
 use crate::configuration::BootstrapChallengeKey;
@@ -127,11 +132,10 @@ static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 async fn assert_plugin_host_lease_available() {
-    let mut probe = nemo_relay::plugin::dynamic::PluginHostActivation::initialize_exact(
-        nemo_relay::plugin::PluginConfig::default(),
-    )
-    .await
-    .expect("server should leave the plugin-host lease available");
+    let mut probe =
+        nemo_relay_plugin_host::initialize_exact(nemo_relay_plugin_host::PluginConfig::default())
+            .await
+            .expect("server should leave the plugin-host lease available");
     assert!(probe.is_active());
     probe
         .close()
@@ -283,8 +287,8 @@ impl Plugin for PreclaimedBuiltinPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        _ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
+        _ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -301,8 +305,8 @@ impl Plugin for GenericTestPlugin {
     fn register<'a>(
         &'a self,
         _plugin_config: &Map<String, Value>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = nemo_relay_plugin_host::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
             ctx.add_registration(PluginRegistration::new(
@@ -1881,7 +1885,7 @@ fn cli_resource_metrics_defaults_to_global_and_honors_explicit_scope() {
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -2001,7 +2005,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 #[tokio::test]
 async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
@@ -2160,7 +2164,7 @@ async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
 #[tokio::test]
 async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -2264,7 +2268,7 @@ fn event_has_session_id(event: &Value, session_id: &str) -> bool {
 #[tokio::test]
 async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     async fn anthropic_messages() -> TestServer {
         async fn messages(_headers: HeaderMap, _request: Request<Body>) -> impl IntoResponse {
@@ -2559,7 +2563,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
 #[tokio::test]
 async fn serve_listener_records_codex_stop_atof_contract() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -2697,7 +2701,7 @@ async fn serve_listener_records_codex_stop_atof_contract() {
 #[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
     GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
@@ -2749,7 +2753,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 #[tokio::test]
 async fn static_only_cli_configuration_uses_the_owned_host_lifecycle() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     register_plugin(Arc::new(GenericTestPlugin)).unwrap();
 
@@ -2798,23 +2802,15 @@ fn register_and_validate_plugin_components_rejects_legacy_switchyard_components(
 
 #[test]
 fn plugin_component_setup_errors_render_every_diagnostic_variant() {
-    let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
-    assert_eq!(adaptive.check_name(), "Adaptive plugin");
+    let builtins = PluginComponentSetupError::Builtins("registration failure".into());
+    assert_eq!(builtins.check_name(), "Built-in plugins");
     assert_eq!(
-        adaptive.diagnostic_details(),
-        "registration failed: adaptive failure"
+        builtins.diagnostic_details(),
+        "registration failed: registration failure"
     );
     assert_eq!(
-        adaptive.to_string(),
-        "adaptive plugin registration failed: adaptive failure"
-    );
-
-    let pii = PluginComponentSetupError::PiiRedaction("pii failure".into());
-    assert_eq!(pii.check_name(), "PII redaction plugin");
-    assert_eq!(pii.diagnostic_details(), "registration failed: pii failure");
-    assert_eq!(
-        pii.to_string(),
-        "PII redaction plugin registration failed: pii failure"
+        builtins.to_string(),
+        "built-in plugin registration failed: registration failure"
     );
 
     let switchyard = PluginComponentSetupError::RemovedSwitchyard;
@@ -2891,14 +2887,14 @@ async fn plugin_host_activation_covers_empty_invalid_and_missing_manifest_paths(
 #[tokio::test]
 async fn dynamic_cli_activation_initializes_builtins_before_loading_dynamic_plugins() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
     ensure_builtin_plugins_registered().expect("builtin registration must be available");
     assert!(deregister_plugin("observability"));
     let _restore_builtin_observability = BuiltinObservabilityRestore;
     register_plugin(Arc::new(PreclaimedBuiltinPlugin))
         .expect("fixture must claim the builtin kind");
 
-    let error = match PluginHostActivation::initialize_with_verified_specs(
+    let error = match nemo_relay_plugin_host::initialize_with_verified_specs(
         PluginConfig::default(),
         [VerifiedDynamicPluginSpec {
             plugin_id: "fixture.missing".into(),
@@ -2939,7 +2935,7 @@ async fn shutdown_future_helpers_cover_receiver_combinations() {
 #[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -2978,7 +2974,7 @@ async fn serve_listener_activates_adaptive_plugin_config() {
 #[tokio::test]
 async fn serve_listener_activates_pii_redaction_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -3018,7 +3014,7 @@ async fn serve_listener_activates_pii_redaction_plugin_config() {
 #[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -3053,7 +3049,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
 #[tokio::test]
 async fn serve_listener_preflights_dynamic_load_before_static_activation() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
     GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
@@ -3106,7 +3102,7 @@ async fn serve_listener_preflights_dynamic_load_before_static_activation() {
 #[tokio::test]
 async fn serve_listener_rejects_invalid_pii_redaction_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -3769,12 +3765,12 @@ async fn gateway_request_codec_exposes_annotations_and_applies_buffered_edits() 
                 }
                 let mut annotated = annotated.expect("gateway generation route must have a codec");
                 *captured.lock().unwrap() = Some(serde_json::to_value(&annotated).unwrap());
-                let nemo_relay::codec::request::Message::User { content, .. } =
+                let nemo_relay_types::codec::request::Message::User { content, .. } =
                     &mut annotated.messages[0]
                 else {
                     panic!("expected portable Responses string input");
                 };
-                *content = nemo_relay::codec::request::MessageContent::Text("edited".into());
+                *content = nemo_relay_types::codec::request::MessageContent::Text("edited".into());
                 request
                     .headers
                     .insert("x-test-intercept".into(), json!("visible"));
@@ -3966,13 +3962,14 @@ async fn gateway_request_codecs_apply_buffered_and_streaming_edits_on_all_genera
                     "marker": marker,
                     "annotation": annotated,
                 }));
-                let nemo_relay::codec::request::Message::User { content, .. } =
+                let nemo_relay_types::codec::request::Message::User { content, .. } =
                     &mut annotated.messages[0]
                 else {
                     panic!("expected the first request item to be a portable user message");
                 };
-                *content =
-                    nemo_relay::codec::request::MessageContent::Text(format!("edited-{marker}"));
+                *content = nemo_relay_types::codec::request::MessageContent::Text(format!(
+                    "edited-{marker}"
+                ));
                 request
                     .headers
                     .insert("x-codec-edited".into(), json!(marker));
@@ -5253,7 +5250,7 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
 #[tokio::test]
 async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-next";
     const MARKER: &str = "select the successful concurrent buffered attempt";
@@ -5341,7 +5338,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
 #[tokio::test]
 async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-next";
     const MARKER: &str = "select the successful concurrent streaming attempt";
@@ -5424,7 +5421,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
 #[tokio::test]
 async fn gateway_concurrent_next_relays_selected_buffered_failure() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-failures";
     const MARKER: &str = "select one concurrent buffered failure";
@@ -5503,7 +5500,7 @@ async fn gateway_concurrent_next_relays_selected_buffered_failure() {
 #[tokio::test]
 async fn gateway_concurrent_next_relays_selected_streaming_failure() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-failures";
     const MARKER: &str = "select one concurrent streaming failure";
@@ -5606,7 +5603,7 @@ const MOCK_CHAT_BODY: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","c
 #[tokio::test]
 async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let (upstream, upstream_calls) =
         spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
@@ -5666,13 +5663,13 @@ async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 }
 
 #[tokio::test]
 async fn gateway_preserves_non_2xx_upstream_failure_and_never_caches_it() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     // A 503 whose body has NO top-level `error` key — the shape the
     // response-body error check alone would not catch; only the status gate
@@ -5730,13 +5727,13 @@ async fn gateway_preserves_non_2xx_upstream_failure_and_never_caches_it() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 }
 
 #[tokio::test]
 async fn gateway_preserves_2xx_non_json_and_never_caches_it() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let (upstream, upstream_calls) = spawn_mock_upstream(
         StatusCode::OK,
@@ -5800,13 +5797,13 @@ async fn gateway_preserves_2xx_non_json_and_never_caches_it() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 }
 
 #[tokio::test]
 async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_body() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     const INTERCEPT_NAME: &str = "cli-test-post-upstream-reject";
     const MARKER: &str = "cli-test reject the response after upstream success";
@@ -5819,7 +5816,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
                 let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
                 let response = next(request).await?;
                 if marked {
-                    return Err(nemo_relay::error::FlowError::Internal(
+                    return Err(nemo_relay_types::error::FlowError::Internal(
                         "response rejected by policy".to_string(),
                     ));
                 }
@@ -5866,7 +5863,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 }
 
 const MOCK_CHAT_SSE: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
@@ -5874,7 +5871,7 @@ const MOCK_CHAT_SSE: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.comp
 #[tokio::test]
 async fn gateway_streaming_hit_carries_event_stream_content_type() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
     let (upstream, upstream_calls) =
         spawn_mock_upstream(StatusCode::OK, "text/event-stream", MOCK_CHAT_SSE).await;
@@ -5934,7 +5931,7 @@ async fn gateway_streaming_hit_carries_event_stream_content_type() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    let _ = nemo_relay::plugin::test_close_plugin_host();
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
 }
 
 struct ToolInterceptCleanup(&'static str);
@@ -6468,7 +6465,7 @@ async fn model_call_policy_still_applies_on_a_named_upstream() {
         Arc::new(move |_name, request, _context, next| {
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() == Some("blocked by policy") {
-                    return Err(nemo_relay::error::FlowError::GuardrailRejected(
+                    return Err(nemo_relay_types::error::FlowError::GuardrailRejected(
                         "model calls are refused by test policy".to_string(),
                     ));
                 }

@@ -800,8 +800,8 @@ fn cli_logging_options_override_environment_source() {
 
     let config = cli.logging.resolve_without_ambient_config().unwrap();
 
-    assert_eq!(config.level, nemo_relay::logging::LogLevel::Trace);
-    assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
+    assert_eq!(config.level, nemo_relay_logging::LogLevel::Trace);
+    assert_eq!(config.stderr_format, nemo_relay_logging::LogFormat::Jsonl);
     assert!(config.sinks.is_empty());
 }
 
@@ -848,7 +848,7 @@ path = "daemon.log"
         }
         .unwrap();
         let mut expected = base;
-        expected.level = nemo_relay::logging::LogLevel::Info;
+        expected.level = nemo_relay_logging::LogLevel::Info;
         expected.stderr_enabled = true;
         let actual = if daemon {
             cli.logging.resolve_daemon(Some(&config_path))
@@ -859,7 +859,7 @@ path = "daemon.log"
         assert_eq!(actual, expected);
 
         let cli = Cli::try_parse_from(["nemo-relay", "--log-level", "trace", "agents"]).unwrap();
-        expected.level = nemo_relay::logging::LogLevel::Trace;
+        expected.level = nemo_relay_logging::LogLevel::Trace;
         let actual = if daemon {
             cli.logging.resolve_daemon(Some(&config_path))
         } else {
@@ -899,8 +899,8 @@ stderr_format = "jsonl"
 
     let config = cli.logging.resolve(cli.server.config.as_deref()).unwrap();
 
-    assert_eq!(config.level, nemo_relay::logging::LogLevel::Warn);
-    assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
+    assert_eq!(config.level, nemo_relay_logging::LogLevel::Warn);
+    assert_eq!(config.stderr_format, nemo_relay_logging::LogFormat::Jsonl);
     assert!(config.sinks.is_empty());
 }
 
@@ -928,14 +928,14 @@ fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
     .unwrap();
     assert_eq!(
         resolve_command_logging_config(&cli).unwrap().0.level,
-        nemo_relay::logging::LogLevel::Warn
+        nemo_relay_logging::LogLevel::Warn
     );
 
     // SAFETY: `EnvScope` holds the process-wide environment lock for this test.
     unsafe { std::env::set_var("NEMO_RELAY_LOG", "info") };
     assert_eq!(
         resolve_command_logging_config(&cli).unwrap().0.level,
-        nemo_relay::logging::LogLevel::Info
+        nemo_relay_logging::LogLevel::Info
     );
 
     let cli = Cli::try_parse_from(vec![
@@ -949,7 +949,7 @@ fn daemon_logging_uses_its_own_config_section_but_keeps_explicit_overrides() {
     .unwrap();
     assert_eq!(
         resolve_command_logging_config(&cli).unwrap().0.level,
-        nemo_relay::logging::LogLevel::Debug
+        nemo_relay_logging::LogLevel::Debug
     );
 }
 
@@ -989,9 +989,9 @@ fn cli_logging_file_selectors_bypass_ambient_config() {
         assert_eq!(
             config.level,
             if from_environment {
-                nemo_relay::logging::LogLevel::Debug
+                nemo_relay_logging::LogLevel::Debug
             } else {
-                nemo_relay::logging::LogLevel::Warn
+                nemo_relay_logging::LogLevel::Warn
             }
         );
         assert!(!config.stderr_enabled);
@@ -1050,7 +1050,7 @@ fn uninstall_logging_ignores_malformed_ambient_relay_config() {
 
     let config = cli.logging.resolve_without_ambient_config().unwrap();
 
-    assert_eq!(config, nemo_relay::logging::LoggingConfig::default());
+    assert_eq!(config, nemo_relay_logging::LoggingConfig::default());
 }
 
 #[test]

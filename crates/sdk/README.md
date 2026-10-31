@@ -1,0 +1,246 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
+
+# NeMo Relay
+
+`nemo-relay` is the public Rust SDK for NeMo Relay, a portable execution
+runtime for agent systems. Use it when a Rust application, framework adapter,
+or service needs one consistent way to scope, control, and observe tool and LLM
+calls.
+
+Rust is the source of truth for NeMo Relay runtime behavior. The Python and
+Node.js bindings mirror the semantics exposed by this crate.
+
+## Why Use It?
+
+- **Own Rust execution context**: Hierarchical scopes preserve parent-child
+  relationships across tools, LLM calls, middleware, subscribers, and events.
+- **Put policy around real calls**: Guardrails and intercepts can block work,
+  sanitize observability payloads, rewrite requests, or wrap execution.
+- **Emit one lifecycle stream**: Subscribers can consume canonical runtime
+  events in-process or export them to Agent Trajectory Interchange Format
+  (ATIF) or OpenTelemetry traces, logs, and metrics.
+- **Integrate without changing orchestration**: Wrap framework and provider
+  callbacks while leaving scheduling, retries, memory, and result handling in
+  the owning application.
+
+## What You Get
+
+- **Managed tool and LLM execution**: Run call boundaries through consistent
+  lifecycle helpers and middleware ordering.
+- **Scope-local runtime behavior**: Attach middleware and subscribers to the
+  scope that owns them and clean them up when that scope closes.
+- **Plugin primitives**: Register reusable runtime behavior configured from
+  one shared plugin system.
+- **Built-in observability plugin**: Configure first-party Agent Trajectory
+  Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
+  and OpenTelemetry trace, log, and metric exporters through the Rust SDK.
+- **Runtime integration**: Use `nemo-relay-codecs` for provider implementations and `nemo-relay-runtime` for
+  execution context and middleware internals. Use `nemo-relay-plugin-host` for
+  loading and managing native and gRPC plugins, `nemo-relay-logging` for logging
+  setup, and `nemo-relay-diagnostics` for bounded evidence and inspection.
+- **Binding source of truth**: Use the runtime semantics mirrored by the
+  Python and Node.js bindings.
+
+## Crate boundaries
+
+`nemo-relay` is a declarative Rust SDK over `nemo-relay-runtime`. Its flat
+modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, `exporter`, and `logging`.
+Shared request, response, error, and codec contracts are re-exported from
+`nemo-relay-types`; applications do not need an `api` module prefix.
+
+`nemo-relay-plugin-host` owns default pricing, resource metrics, and
+observability services, runtime adapters, and dynamic plugin loading.
+`nemo-relay-builtins` adds adaptive and PII redaction to the default plugin
+composition shared by the SDKs and CLI.
+Bindings and component implementations depend on their owning crates and
+`nemo-relay-runtime` directly. All consumers share one runtime state.
+
+Call `nemo_relay::initialize_runtime()` before execution when default pricing
+services are needed. Plugin initialization and exporter constructors install
+these services automatically. Configure logging explicitly through
+`nemo_relay::logging::LoggingRuntime`, or keep the application's existing logger.
+The SDK does not install a logger automatically. Logging and diagnostic internals
+live in `nemo-relay-logging` and `nemo-relay-diagnostics`.
+
+## Installation
+
+Install the published crate in a Rust application:
+
+```bash
+cargo add nemo-relay serde_json
+```
+
+Adaptive and PII redaction are registered by default. To use typed adaptive
+configuration and imperative helpers, install the companion crate too:
+
+```bash
+cargo add nemo-relay-adaptive
+```
+
+When consuming a local checkout, use path dependencies:
+
+```toml
+[dependencies]
+nemo-relay = { path = "../NeMo-Relay/crates/sdk" }
+nemo-relay-adaptive = { path = "../NeMo-Relay/crates/adaptive" }
+serde_json = "1"
+```
+
+## Getting Started
+
+The smallest useful workflow is to create a scope, emit a mark event, and close
+the scope:
+
+```rust
+use nemo_relay::scope::{
+    self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
+};
+use serde_json::json;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let handle = scope::push_scope(
+        PushScopeParams::builder()
+            .name("demo-agent")
+            .scope_type(ScopeType::Agent)
+            .attributes(ScopeAttributes::empty())
+            .data(json!({"binding": "rust"}))
+            .build(),
+    )?;
+
+    scope::event(
+        EmitMarkEventParams::builder()
+            .name("initialized")
+            .parent(&handle)
+            .data(json!({"ok": true}))
+            .build(),
+    )?;
+
+    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    Ok(())
+}
+```
+
+## OTLP Logs and Metrics
+
+Configure plugin-managed trace, log, and metric export with an observability
+version-4 component. When log and metric endpoints are omitted, Relay derives
+`/v1/logs` and `/v1/metrics` from each trace endpoint:
+
+```toml
+# plugins.toml
+version = 1
+
+[[components]]
+kind = "observability"
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+
+[components.config.opentelemetry.logs]
+enabled = true
+
+[components.config.opentelemetry.metrics]
+enabled = true
+```
+
+Emit a schema-tagged log mark with `event` and an atomically validated metric
+group with `metric`:
+
+```rust
+use nemo_relay::{
+    event::{DataSchema, LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
+    scope::{self, EmitMarkEventParams, EmitMetricEventParams},
+};
+use serde_json::json;
+
+scope::event(
+    EmitMarkEventParams::builder()
+        .name("cache-nearly-full")
+        .data(json!({"entries": 900}))
+        .data_schema(DataSchema::builder().name("example.cache").version("1").build())
+        .severity(LogSeverity::Warn)
+        .build(),
+)?;
+scope::metric(
+    EmitMetricEventParams::builder()
+        .name("cache-entries")
+        .measurements(vec![
+            MetricMeasurement::builder()
+                .name("example.cache.entries")
+                .kind(MetricKind::Gauge)
+                .value_type(MetricValueType::U64)
+                .value(json!(900_u64))
+                .build(),
+        ])
+        .build(),
+)?;
+```
+
+Direct subscribers are independently managed. Register them before emitting
+marks, then deregister, force-flush, and shut them down during graceful
+teardown. The metric subscriber has the same lifecycle:
+
+```rust
+use nemo_relay::exporter::{
+    otel_logs::OpenTelemetryLogConfig,
+    otel_metrics::OpenTelemetryMetricConfig,
+};
+
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
+let logs = nemo_relay::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+    "http://localhost:4318",
+))?;
+let metrics = nemo_relay::exporter::opentelemetry_metrics(OpenTelemetryMetricConfig::new(
+    "http://localhost:4318",
+))?;
+logs.register("otlp-logs")?;
+metrics.register("otlp-metrics")?;
+
+let diagnostics = logs.runtime_diagnostics();
+for diagnostic in diagnostics.entries() {
+    eprintln!("{}: {}", diagnostic.code, diagnostic.message);
+}
+
+logs.deregister("otlp-logs")?;
+logs.force_flush()?;
+logs.shutdown()?;
+metrics.deregister("otlp-metrics")?;
+metrics.force_flush()?;
+metrics.shutdown()?;
+```
+
+## Documentation
+
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+JSON Schema support, gRPC workers, object storage, and ATOF streaming are built
+in to their owning crates. These capabilities require no Cargo feature flags,
+including when consuming crates with `default-features = false`.
+
+Use `context::with_task_scope_stack(context::create_scope_stack(), future)`
+for each independent async request. The task-local binding follows the future
+across executor threads. Use `context::propagate_scope_to_thread()` and
+`context::set_thread_scope_stack()` when handing work to an OS thread, or
+`context::capture_propagation_context()` and
+`context::create_scope_stack_from_propagation()` across process boundaries.

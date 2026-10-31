@@ -20,15 +20,16 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, 
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
-use nemo_relay::api::llm::{
+use nemo_relay_codecs::resolve::{ProviderSurface, request_codec, streaming_codec};
+use nemo_relay_codecs::streaming::SseEventDecoder;
+use nemo_relay_runtime::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
     llm_request_intercepts_with_source,
 };
-use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay::api::runtime::TASK_SCOPE_STACK;
-use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
-use nemo_relay::codec::streaming::SseEventDecoder;
-use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_runtime::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
+use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::codec::response_codec;
+use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -167,7 +168,8 @@ impl ManagedRuntime {
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
         let sessions = self.sessions.close_all("daemon_worker_shutdown").await;
-        let subscribers = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
+        let subscribers =
+            nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
         let activation = lock(&self.activation)
             .take()
             .map(ServerPluginActivation::clear);
@@ -1232,7 +1234,7 @@ fn request_body_decode_required() -> Result<bool, CliError> {
 }
 
 fn finish_llm_after_dispatch_failure(
-    handle: &nemo_relay::api::llm::LlmHandle,
+    handle: &nemo_relay_runtime::api::llm::LlmHandle,
     metadata: Value,
     error: &CliError,
 ) {

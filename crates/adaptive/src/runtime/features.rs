@@ -12,18 +12,18 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::acg::CacheRequestFacts;
-use nemo_relay::api::event::Event;
-use nemo_relay::api::registry::{
+use nemo_relay_plugin_host::{
+    ConfigReport, DiagnosticLevel, HostPluginRegistrationContext as HostedRegistrationContext,
+    PluginError, PluginRegistration as ComponentRegistration, rollback_registrations,
+};
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::registry::{
     scope_deregister_llm_request_intercept, scope_register_llm_request_intercept,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn, ToolExecutionFn,
 };
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::plugin::{
-    ConfigReport, DiagnosticLevel, PluginError, PluginRegistration as ComponentRegistration,
-    PluginRegistrationContext as HostedRegistrationContext, rollback_registrations,
-};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use uuid::Uuid;
 
 use crate::acg_component::{

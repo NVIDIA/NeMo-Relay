@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Execution engine, scopes, registries, and continuation handling for NeMo Relay."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-codecs.workspace = true
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+bitflags = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+futures-util.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+opentelemetry = { workspace = true, features = ["trace", "logs", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+shell-words.workspace = true
+strum = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process"] }
+tokio-stream = { workspace = true, features = ["sync", "net"] }
+typed-builder.workspace = true
+uuid = { workspace = true, features = ["v7", "serde"] }
+
+[dev-dependencies]
+# First-party crates.
+nemo-relay-diagnostics.workspace = true
+nemo-relay-model-pricing = { workspace = true }
+nemo-relay-resource-metrics.workspace = true
+
+# Third-party dependencies.
+futures.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, default-features = true, features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "codec_integration"
+path = "tests/integration/codec_tests.rs"
+
+[[test]]
+name = "context_isolation_integration"
+path = "tests/integration/context_isolation_tests.rs"
+
+[[test]]
+name = "pipeline_integration"
+path = "tests/integration/pipeline_tests.rs"
+
+[[test]]
+name = "scope_local_integration"
+path = "tests/integration/scope_local_tests.rs"
+
+[[test]]
+name = "stream_integration"
+path = "tests/integration/stream_tests.rs"
+
+[[test]]
+name = "subscriber_dispatcher_integration"
+path = "tests/integration/subscriber_dispatcher_tests.rs"
+
+[[test]]
+name = "api_surface_integration"
+path = "tests/integration/api_surface_tests.rs"

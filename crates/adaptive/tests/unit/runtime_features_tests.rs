@@ -18,32 +18,40 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
-use nemo_relay::api::event::{BaseEvent, EventCategory, ScopeCategory, ScopeEvent};
-use nemo_relay::api::llm::{
+use nemo_relay_runtime::api::event::{BaseEvent, EventCategory, ScopeCategory, ScopeEvent};
+use nemo_relay_runtime::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_request_intercepts, llm_stream_call_execute,
 };
-use nemo_relay::api::registry::{
+use nemo_relay_runtime::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_tool_execution_intercept,
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
     scope_deregister_llm_request_intercept, scope_register_llm_request_intercept,
 };
-use nemo_relay::api::runtime::ToolExecutionNextFn;
-use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::ToolExecutionNextFn;
+use nemo_relay_runtime::api::runtime::global_context;
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState,
 };
-use nemo_relay::api::runtime::{LlmJsonStream, create_scope_stack, set_thread_scope_stack};
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_relay::api::tool::tool_call_execute;
-use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
-use nemo_relay::plugin::{rollback_registrations, test_close_plugin_host};
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, create_scope_stack, set_thread_scope_stack};
+use nemo_relay_runtime::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
+};
+use nemo_relay_runtime::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay_runtime::api::tool::tool_call_execute;
+use nemo_relay_types::error::FlowError;
 use serde_json::json;
 use tokio_stream::StreamExt;
+use {
+    crate::test_support::plugin_host::test_close_plugin_host,
+    nemo_relay_plugin_host::rollback_registrations,
+};
+use {
+    nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::UnsupportedBehavior,
+};
 
 fn reset_global() {
     test_close_plugin_host().expect("test plugin host must close");
@@ -114,8 +122,8 @@ fn layered_acg_request() -> LlmRequest {
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
     let request = layered_acg_request();
-    let annotated_request = nemo_relay::codec::resolve::request_codec(
-        nemo_relay::codec::resolve::ProviderSurface::AnthropicMessages,
+    let annotated_request = nemo_relay_codecs::resolve::request_codec(
+        nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
     )
     .decode(&request)
     .expect("fixture request should decode");
@@ -155,7 +163,7 @@ fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResu
     }
 }
 
-fn assert_already_registered(result: nemo_relay::error::Result<()>, name: &str) {
+fn assert_already_registered(result: nemo_relay_types::error::Result<()>, name: &str) {
     match result {
         Err(FlowError::AlreadyExists(message)) => assert!(message.contains(name)),
         other => panic!("expected {name} to be registered, got {other:?}"),
@@ -179,9 +187,11 @@ fn assert_llm_request_intercept_registered(name: &str) {
             false,
             Arc::new(|_name, request, annotated| {
                 Box::pin(async move {
-                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                        request, annotated,
-                    ))
+                    Ok(
+                        nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                            request, annotated,
+                        ),
+                    )
                 })
             }),
         ),
@@ -196,9 +206,11 @@ fn assert_llm_request_intercept_absent(name: &str) {
         false,
         Arc::new(|_name, request, annotated| {
             Box::pin(async move {
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                Ok(
+                    nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ),
+                )
             })
         }),
     )
@@ -668,7 +680,7 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
 
     let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let result = tool_call_execute(
-        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay_runtime::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "coverage"}))
             .func(next)
@@ -797,9 +809,11 @@ async fn registration_context_registers_all_supported_callback_types() {
         false,
         Arc::new(|_name, request, annotated| {
             Box::pin(async move {
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                Ok(
+                    nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ),
+                )
             })
         }),
     )
@@ -1301,9 +1315,11 @@ async fn bind_scope_reports_duplicate_scope_intercept_registration() {
         false,
         Arc::new(|_name, request, annotated| {
             Box::pin(async move {
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                Ok(
+                    nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ),
+                )
             })
         }),
     )
@@ -1320,7 +1336,6 @@ async fn bind_scope_reports_duplicate_scope_intercept_registration() {
     pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn response_cache_store_initialization_failure_fails_open() {
     let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;

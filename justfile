@@ -193,6 +193,7 @@ generate_docs_api_references() {
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
+    uv run --no-sync python -m unittest scripts.tests.test_rust_library_reference
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py
 }
 
@@ -479,12 +480,21 @@ changed = []
 found_workspace_version = False
 local_dependencies = (
     "nemo-relay-types",
+    "nemo-relay-codecs",
+    "nemo-relay-model-pricing",
+    "nemo-relay-resource-metrics",
+    "nemo-relay-observability",
     "nemo-relay-worker-proto",
     "nemo-relay-worker",
+    "nemo-relay-diagnostics",
+    "nemo-relay-logging",
+    "nemo-relay-runtime",
+    "nemo-relay-plugin-host",
     "nemo-relay",
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
+    "nemo-relay-builtins",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -839,17 +849,27 @@ print(f"python/plugin/pyproject.toml version updated to {version}")
 PY
 }
 
+# Publish dependencies first, including dev dependencies used in package validation.
 published_cargo_packages() {
     printf '%s\n' \
         nemo-relay-types \
-        nemo-relay-plugin \
         nemo-relay-worker-proto \
+        nemo-relay-codecs \
+        nemo-relay-plugin \
         nemo-relay-worker \
-        nemo-relay \
+        nemo-relay-diagnostics \
+        nemo-relay-model-pricing \
+        nemo-relay-logging \
+        nemo-relay-observability \
+        nemo-relay-resource-metrics \
+        nemo-relay-runtime \
+        nemo-relay-plugin-host \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
+        nemo-relay-builtins \
         nemo-relay-ffi \
-        nemo-relay-cli
+        nemo-relay-cli \
+        nemo-relay
 }
 
 # Keep local wheel packaging aligned with the CI matrix without requiring raw
@@ -968,10 +988,10 @@ prepare_test_plugin_fixtures() {
 
     cd "$NEMO_RELAY_REPO_ROOT"
     cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/native_plugin/Cargo.toml \
         --target-dir "$target_dir"
     cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/worker_plugin/Cargo.toml \
         --target-dir "$target_dir"
 
     export NEMO_RELAY_TEST_NATIVE_PLUGIN="$target_dir/debug/$native_library"
@@ -1065,7 +1085,7 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay --test documentation_examples
+    cargo test --locked -p nemo-relay-types -p nemo-relay --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
@@ -1547,6 +1567,10 @@ test-python-plugin-e2e:
         exit 0
     fi
     tmp="$(mktemp -d)"
+    # Keep the worker lifecycle independent of ambient user and system plugins.
+    export XDG_CONFIG_HOME="$tmp/user-config"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$tmp/system-config"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     gateway_pid=""
     cleanup() {
         if [[ -n "$gateway_pid" ]]; then
@@ -1558,7 +1582,7 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
-    cargo build -p nemo-relay-cli
+    cargo build -p nemo-relay-cli --features __skip-implicit-config
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
     # Explicit --config paths must exist; plugin policy and state are sibling files.
@@ -1602,8 +1626,8 @@ test-python-plugin-e2e:
         exit 1
     fi
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo nextest run --locked -p nemo-relay --features worker-grpc \
-        --test worker_plugin_integration \
+        cargo nextest run --locked -p nemo-relay-plugin-host --features __skip-implicit-config \
+        --lib \
         -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs) + test(python_worker_message_limits_follow_plugin_defaults)' \
         --no-capture \
         --profile ci
@@ -1887,30 +1911,105 @@ package-rust:
             cargo_package_args+=(--allow-dirty)
         fi
         case "$package" in
-            nemo-relay)
+            nemo-relay-plugin-host)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                ;;
+            nemo-relay-logging)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                ;;
+            nemo-relay-diagnostics)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-adaptive)
+            nemo-relay-observability)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                ;;
+            nemo-relay|nemo-relay-runtime)
+                if [[ "$package" == nemo-relay ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-builtins.path="crates/builtins"')
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                if [[ "$package" != nemo-relay-runtime ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-adaptive)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-worker)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
-            nemo-relay-plugin)
+            nemo-relay-resource-metrics|nemo-relay-model-pricing)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-plugin|nemo-relay-codecs)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 ;;
             nemo-relay-pii-redaction)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-ffi|nemo-relay-cli)
+            nemo-relay-builtins|nemo-relay-ffi|nemo-relay-cli)
+                if [[ "$package" != nemo-relay-builtins ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-builtins.path="crates/builtins"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')

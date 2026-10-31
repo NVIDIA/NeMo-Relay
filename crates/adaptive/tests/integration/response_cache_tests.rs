@@ -4,6 +4,9 @@
 //! End-to-end tests for the adaptive plugin's `response_cache` feature
 //! (exact-match).
 
+#[path = "../support/plugin_host.rs"]
+mod plugin_host_test_support;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,34 +14,38 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
-};
-use nemo_relay::api::registry::{
-    deregister_tool_execution_intercept, register_tool_execution_intercept,
-};
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    NemoRelayContextState, ToolExecutionNextFn, global_context,
-};
-use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
-use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{
-    DiagnosticLevel, PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact,
-    test_validate_static_plugin_config,
-};
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, ResponseCacheKeyStrategy,
     StateConfig, ToolCacheConfig, ToolClass, ToolOverride,
 };
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
+use nemo_relay_runtime::api::registry::{
+    deregister_tool_execution_intercept, register_tool_execution_intercept,
+};
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
+    NemoRelayContextState, ToolExecutionNextFn, global_context,
+};
+use nemo_relay_runtime::api::scope::ScopeType;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay_types::error::FlowError;
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::{Stream, StreamExt};
+use {
+    crate::plugin_host_test_support::test_close_plugin_host,
+    crate::plugin_host_test_support::test_initialize_plugin_host_exact,
+    crate::plugin_host_test_support::test_validate_static_plugin_config,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::PluginConfig,
+};
 
 #[path = "response_cache_common.rs"]
 mod response_cache_common;
@@ -630,20 +637,6 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
         "an unknown backend kind must be rejected: {:?}",
         unknown.diagnostics
     );
-
-    // Without the redis-backend feature, selecting redis is rejected as unavailable.
-    #[cfg(not(feature = "redis-backend"))]
-    {
-        let redis = validate("redis");
-        assert!(
-            redis
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "response_cache.backend_unavailable"),
-            "redis without the redis-backend feature must be rejected: {:?}",
-            redis.diagnostics
-        );
-    }
 }
 
 #[tokio::test]
@@ -698,18 +691,6 @@ async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
         report.diagnostics
     );
 
-    #[cfg(not(feature = "redis-backend"))]
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.backend_unavailable"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.field.as_deref() == Some("backend.kind")
-        }),
-        "redis must be rejected when its backend feature is not compiled: {:?}",
-        report.diagnostics
-    );
-
-    #[cfg(feature = "redis-backend")]
     assert!(
         report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "response_cache.missing_redis_url"
@@ -2698,8 +2679,8 @@ async fn cache_coexists_with_acg_execution_intercept() {
 /// Shared-cache test: a second, independent store instance (a stand-in for
 /// another process / teammate) sees entries written by the first. Requires a
 /// local Redis and `NEMO_RELAY_RUN_REDIS_TESTS=1`; otherwise it skips. Compile
-/// with `--features redis-backend`.
-#[cfg(feature = "redis-backend")]
+/// with a configured Redis instance.
+
 #[tokio::test]
 async fn redis_backend_shares_entries_across_store_instances() {
     use std::time::Duration;
@@ -3577,7 +3558,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
             }
         }
     });
-    let component = nemo_relay::plugin::PluginComponentSpec {
+    let component = nemo_relay_plugin_host::PluginComponentSpec {
         kind: "adaptive".to_string(),
         enabled: true,
         config: adaptive_json.as_object().unwrap().clone(),
@@ -3610,7 +3591,7 @@ async fn default_cache_keeps_policy_execution_outside_hits() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     let policy_runs = Arc::new(AtomicUsize::new(0));
-    nemo_relay::api::registry::register_llm_execution_intercept(
+    nemo_relay_runtime::api::registry::register_llm_execution_intercept(
         "cache_policy_test",
         100, // Policy check priority
         Arc::new({
@@ -3636,7 +3617,8 @@ async fn default_cache_keeps_policy_execution_outside_hits() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
     assert_eq!(first["policy_run"], json!(1));
     assert_eq!(second["policy_run"], json!(2));
-    nemo_relay::api::registry::deregister_llm_execution_intercept("cache_policy_test").unwrap();
+    nemo_relay_runtime::api::registry::deregister_llm_execution_intercept("cache_policy_test")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -3644,7 +3626,7 @@ async fn default_stream_cache_keeps_policy_execution_outside_hits() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     let policy_runs = Arc::new(AtomicUsize::new(0));
-    nemo_relay::api::registry::register_llm_stream_execution_intercept(
+    nemo_relay_runtime::api::registry::register_llm_stream_execution_intercept(
         "stream_cache_policy_test",
         100,
         Arc::new({
@@ -3666,7 +3648,7 @@ async fn default_stream_cache_keeps_policy_execution_outside_hits() {
     stream_call(&provider, chat_request("stream policy hit")).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
     assert_eq!(policy_runs.load(Ordering::SeqCst), 2);
-    nemo_relay::api::registry::deregister_llm_stream_execution_intercept(
+    nemo_relay_runtime::api::registry::deregister_llm_stream_execution_intercept(
         "stream_cache_policy_test",
     )
     .unwrap();

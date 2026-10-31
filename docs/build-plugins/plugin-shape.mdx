@@ -100,7 +100,7 @@ impl Plugin for AuditPlugin {
     fn register<'a>(
         &'a self,
         _config: &Map<String, Json>,
-        context: &'a mut PluginRegistrationContext,
+        context: &'a mut dyn PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
             context.register_subscriber(

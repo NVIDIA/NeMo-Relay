@@ -5,7 +5,7 @@ use super::*;
 
 #[tokio::test]
 async fn close_result_is_published_before_a_retry_can_reset_completion() {
-    let activation = CorePluginHostActivation::initialize_exact(PluginConfig::default())
+    let activation = nemo_relay_builtins::plugin::initialize_exact(PluginConfig::default())
         .await
         .expect("empty plugin host must initialize");
     let state = Arc::new(DynamicPluginCloseState::new(activation));

@@ -30,7 +30,7 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-ffi`, `nemo-relay-cli` |
+| crates.io | `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`, `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`, `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`, `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and `nemo-relay` |
 | PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` and `nemo-relay-cli-bin` wheels |
 | npm | `nemo-relay-node` and its seven platform packages, and `nemo-relay-openclaw` |
 | GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, and checksums |
@@ -54,9 +54,12 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
 - The root `Cargo.toml` `workspace.package.version` is the canonical release
   version for the Rust workspace.
 - The root `Cargo.toml` `workspace.dependencies` entries for
-  `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`,
-  `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`,
-  `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and `nemo-relay-cli` must
+  `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+  `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
+  `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
+  `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
+  `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and
+  `nemo-relay` must
   stay aligned with that same version.
 - `crates/node/package.json` carries the base npm version for the Node.js
   package. The repository-root `package-lock.json` carries the npm workspace
@@ -144,10 +147,12 @@ Before you create a release tag, confirm the following:
 3. The working tree you use for local validation is clean or disposable.
 4. Registry credentials and repository settings are in place:
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job
-   - crates.io trusted publishers for `nemo-relay-types`,
-     `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`,
-     `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`,
-     `nemo-relay-ffi`, and `nemo-relay-cli` are
+   - crates.io trusted publishers for `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+   `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
+   `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
+   `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
+   `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`,
+   and `nemo-relay` are
      configured for the top-level
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
@@ -175,9 +180,12 @@ The helper updates:
 
 1. The root [`Cargo.toml`](Cargo.toml) workspace version.
 2. The root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions for
-   `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`,
-   `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`,
-   `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and `nemo-relay-cli`.
+   `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+   `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
+   `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
+   `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
+   `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`,
+   and `nemo-relay`.
 3. [`crates/node/package.json`](crates/node/package.json) and the `crates/node`
    entry in the root [`package-lock.json`](package-lock.json) to the same
    release version.
@@ -309,10 +317,12 @@ The release pipeline then:
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
-     runs `cargo publish --package` for `nemo-relay-types`,
-     `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`,
-     `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`,
-     `nemo-relay-ffi`, and `nemo-relay-cli` through
+     runs `cargo publish --package` for `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+     `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
+     `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
+     `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
+     `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`,
+     and `nemo-relay` through
      trusted publishing from
      the top-level workflow
    - `publish-python` downloads the `nemo-relay` wheel and source distribution
@@ -393,9 +403,12 @@ for that tag.
 
 After the release is live, verify:
 
-1. The `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`,
-   `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`,
-   `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and `nemo-relay-cli` crates
+1. The `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+`nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
+`nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
+`nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
+`nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and
+`nemo-relay` crates
    are visible on crates.io.
 2. The `nemo-relay` and `nemo-relay-cli-bin` wheels are visible on PyPI, and
    `pip install "nemo-relay[cli]"` exposes `nemo-relay`.

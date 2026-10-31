@@ -11,8 +11,7 @@ use super::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 /// One retained row per component registration instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ComponentSnapshot {
     /// Logical responsibility and registration incarnation.
     pub identity: ComponentIdentity,
@@ -31,12 +30,11 @@ pub struct ComponentSnapshot {
 }
 
 /// Read evidence from one source incarnation, using the canonical snapshot schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticSnapshot {
     /// Supported envelope version, independent of the catalogue version.
     #[serde(deserialize_with = "deserialize_schema_version")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "schema_version_schema"))]
+    #[schemars(schema_with = "schema_version_schema")]
     pub schema_version: u32,
     /// Stable catalogue revision; unknown names stay opaque in this envelope.
     pub catalogue_version: u32,
@@ -67,7 +65,6 @@ fn deserialize_schema_version<'de, D: Deserializer<'de>>(deserializer: D) -> Res
     Ok(version)
 }
 
-#[cfg(feature = "schema")]
 fn schema_version_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {

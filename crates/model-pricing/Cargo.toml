@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-model-pricing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model pricing catalogs and cost estimation for NeMo Relay."
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-plugin.workspace = true
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+log = { workspace = true, features = ["kv", "kv_serde"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

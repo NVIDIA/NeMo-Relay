@@ -2,27 +2,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::{LlmCallExecuteParams, llm_call_execute};
-use nemo_relay::api::registry::{
+use nemo_relay_codecs::resolve::{ProviderSurface, request_codec as build_request_codec};
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
+use nemo_relay_observability::otel::OpenTelemetrySubscriber;
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::llm::{LlmCallExecuteParams, llm_call_execute};
+use nemo_relay_runtime::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
-use nemo_relay::api::runtime::EventSubscriberFn;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::codec::resolve::{
-    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+use nemo_relay_runtime::api::runtime::EventSubscriberFn;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
 };
-use nemo_relay::error::FlowError;
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
-use nemo_relay::observability::otel::OpenTelemetrySubscriber;
-use nemo_relay::plugin::{PluginConfig, test_close_plugin_host, test_initialize_plugin_host_exact};
+use nemo_relay_runtime::codec::response_codec as build_response_codec;
+use nemo_relay_types::error::FlowError;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
+use {
+    crate::test_support::plugin_host::test_close_plugin_host,
+    crate::test_support::plugin_host::test_initialize_plugin_host_exact,
+    nemo_relay_plugin_host::PluginConfig,
+};
 
 use super::*;
 use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
@@ -1270,7 +1275,7 @@ enabled = true
 
 fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExporter {
     std::fs::create_dir_all(output_directory).unwrap();
-    AtofExporter::new(
+    nemo_relay_plugin_host::exporter::atof(
         AtofExporterConfig::new()
             .with_output_directory(output_directory)
             .with_filename(filename)
@@ -1308,7 +1313,7 @@ fn make_typed_test_subscriber(
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         provider,
         scope.to_string(),
         otel_type,
@@ -2061,7 +2066,7 @@ fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         provider,
         "harness-tool-metadata",
         OpenTelemetryType::GenAi,
@@ -9318,7 +9323,7 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
         provider,
         "mcp-normalization",
         OpenTelemetryType::GenAi,
-        nemo_relay::observability::otel::OpenTelemetrySubscriberOptions {
+        nemo_relay_observability::otel::OpenTelemetrySubscriberOptions {
             promote_metadata_prefixes: vec!["mcp.method.name".into()],
             ..Default::default()
         },
@@ -9357,7 +9362,7 @@ fn assert_mcp_failure_projections(events: &[Event]) {
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
             provider,
             "tool-failure",
             projection,
@@ -9431,7 +9436,7 @@ fn assert_completion_marks_omitted_from_genai(events: &[Event]) {
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
         .build();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         provider,
         "partial-hooks",
         OpenTelemetryType::GenAi,
@@ -9592,7 +9597,7 @@ async fn compound_stop_without_observed_start_emits_one_mark_and_keeps_no_sessio
 
 #[tokio::test]
 async fn unmatched_tool_completion_applies_tool_sanitizers_without_executing_tools() {
-    use nemo_relay::api::registry::{
+    use nemo_relay_runtime::api::registry::{
         deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
         register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     };
@@ -10218,7 +10223,7 @@ async fn codex_gateway_results_recover_missing_mcp_completions_by_id_and_owner()
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
             provider,
             "mcp-recovery",
             OpenTelemetryType::GenAi,
@@ -11677,7 +11682,7 @@ async fn hook_launcher_trace_context_parents_the_session_once() {
         let sessions = manager.inner.lock().await;
         let stack = sessions.get(session_id).unwrap().subagent_stacks["worker"].clone();
         let traceparent = TASK_SCOPE_STACK
-            .sync_scope(stack, nemo_relay::api::runtime::capture_traceparent)
+            .sync_scope(stack, nemo_relay_runtime::api::runtime::capture_traceparent)
             .unwrap();
         assert!(
             traceparent.starts_with(&format!("00-{LAUNCHER_TRACE_ID}-")),

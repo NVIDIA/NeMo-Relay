@@ -8,12 +8,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
-use nemo_relay::diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
-use nemo_relay::plugin::{
+use nemo_relay_codecs::resolve::{ProviderSurface, supported_codec_names};
+use nemo_relay_diagnostics::{ComponentRegistration, DiagnosticOutcome, ExtensionRegistration};
+use nemo_relay_plugin_host::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_plugin,
+    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -70,15 +69,14 @@ impl From<ComponentSpec> for PluginComponentSpec {
 }
 
 /// Canonical config document for the PII redaction component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PiiRedactionConfig {
     /// PII redaction config schema version.
     #[serde(default = "default_pii_redaction_config_version")]
     pub version: u32,
     /// Backend mode: `builtin` or `local_model`.
     #[serde(default = "default_mode", skip_serializing_if = "is_default_mode")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
+    #[schemars(schema_with = "mode_schema")]
     pub mode: String,
     /// Whether to sanitize managed LLM request payloads.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -104,7 +102,7 @@ pub struct PiiRedactionConfig {
     /// Compatibility fallback codec for LLM-managed surfaces without an active
     /// per-call codec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "codec_schema"))]
+    #[schemars(schema_with = "codec_schema")]
     pub codec: Option<String>,
     /// Ordered redaction profiles. When present, legacy backend and surface
     /// fields must be omitted and every enabled profile covers all supported
@@ -143,15 +141,14 @@ impl Default for PiiRedactionConfig {
 }
 
 /// One ordered redaction policy within the singleton PII component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PiiRedactionProfile {
     /// Whether this profile registers runtime sanitizers.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Backend mode: `builtin` or `local_model`.
     #[serde(default = "default_mode")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "mode_schema"))]
+    #[schemars(schema_with = "mode_schema")]
     pub mode: String,
     /// Guardrail priority. Lower values run earlier; array order breaks ties.
     #[serde(default = "default_priority")]
@@ -177,19 +174,18 @@ impl Default for PiiRedactionProfile {
 }
 
 /// Built-in redaction backend settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BuiltinBackendConfig {
     /// Optional semantic sanitization preset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_preset_schema"))]
+    #[schemars(schema_with = "builtin_preset_schema")]
     pub preset: Option<String>,
     /// Action applied to matching string leaves.
     #[serde(
         default = "default_builtin_action",
         skip_serializing_if = "is_default_builtin_action"
     )]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "builtin_action_schema"))]
+    #[schemars(schema_with = "builtin_action_schema")]
     pub action: String,
     /// Exact RFC 6901 JSON-pointer paths to sanitize. Empty together with
     /// [`Self::target_path_globs`] means every string leaf, except that
@@ -223,10 +219,7 @@ pub struct BuiltinBackendConfig {
         default = "default_custom_mark_payload_policy",
         skip_serializing_if = "is_default_custom_mark_payload_policy"
     )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "custom_mark_payload_policy_schema")
-    )]
+    #[schemars(schema_with = "custom_mark_payload_policy_schema")]
     pub custom_mark_payload_policy: String,
     /// Exact string values that the trajectory preset may preserve for each typed metric attribute.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -253,8 +246,7 @@ impl Default for BuiltinBackendConfig {
 }
 
 /// Local-backend settings for a future in-process local-model runtime.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LocalBackendConfig {
     /// Optional local-model backend identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,7 +265,7 @@ pub struct LocalBackendConfig {
     pub max_latency_ms: Option<u64>,
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl PiiRedactionConfig {
         mode => {
             label: "mode",
@@ -316,7 +308,7 @@ nemo_relay::editor_config! {
     }
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl PiiRedactionProfile {
         enabled => { label: "enabled", kind: Boolean },
         mode => {
@@ -342,8 +334,9 @@ nemo_relay::editor_config! {
     }
 }
 
-fn pii_redaction_profile_editor_schema() -> &'static nemo_relay::config_editor::EditorSchema {
-    <PiiRedactionProfile as nemo_relay::config_editor::EditorConfig>::editor_schema()
+fn pii_redaction_profile_editor_schema() -> &'static nemo_relay_runtime::config_editor::EditorSchema
+{
+    <PiiRedactionProfile as nemo_relay_runtime::config_editor::EditorConfig>::editor_schema()
 }
 
 fn default_pii_redaction_profile_editor_value() -> Json {
@@ -351,16 +344,16 @@ fn default_pii_redaction_profile_editor_value() -> Json {
         .expect("PII redaction profile should serialize")
 }
 
-static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay::config_editor::EditorListItemSpec =
-    nemo_relay::config_editor::EditorListItemSpec {
-        kind: nemo_relay::config_editor::EditorFieldKind::Section,
+static PII_REDACTION_PROFILE_LIST_ITEM: nemo_relay_runtime::config_editor::EditorListItemSpec =
+    nemo_relay_runtime::config_editor::EditorListItemSpec {
+        kind: nemo_relay_runtime::config_editor::EditorFieldKind::Section,
         schema: Some(pii_redaction_profile_editor_schema),
         default: Some(default_pii_redaction_profile_editor_value),
         tagged_union: None,
         list_item: None,
     };
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl BuiltinBackendConfig {
         preset => {
             label: "preset",
@@ -373,8 +366,8 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
-        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay_runtime::config_editor::STRING_LIST_ITEM },
+        target_path_globs => { label: "target_path_globs", kind: List, list: &nemo_relay_runtime::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -413,7 +406,7 @@ nemo_relay::editor_config! {
     }
 }
 
-nemo_relay::editor_config! {
+nemo_relay_runtime::editor_config! {
     impl LocalBackendConfig {
         backend => { label: "backend", kind: String, optional: true },
         model_id => { label: "model_id", kind: String, optional: true },
@@ -449,7 +442,7 @@ impl Plugin for PiiRedactionPlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         let parsed = parse_pii_redaction_config(plugin_config);
         Box::pin(async move {
@@ -461,13 +454,7 @@ impl Plugin for PiiRedactionPlugin {
 
 /// Registers the `pii_redaction` component kind in the plugin registry.
 pub fn register_pii_redaction_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(PiiRedactionPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    nemo_relay_plugin_host::register_builtin_plugin(Arc::new(PiiRedactionPlugin))
 }
 
 /// Deregisters the `pii_redaction` component kind from the plugin registry.
@@ -476,18 +463,15 @@ pub fn deregister_pii_redaction_component() -> bool {
 }
 
 /// Returns the JSON Schema for the PII redaction component configuration.
-#[cfg(feature = "schema")]
 pub fn pii_redaction_config_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(PiiRedactionConfig))
         .expect("PII redaction config schema should serialize")
 }
 
-#[cfg(feature = "schema")]
 fn mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     string_enum_schema(generator, &["builtin", "local_model"], Some("builtin"))
 }
 
-#[cfg(feature = "schema")]
 fn builtin_action_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -498,14 +482,12 @@ fn builtin_action_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 fn builtin_preset_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["trajectory_context"], None)
 }
 
-#[cfg(feature = "schema")]
 fn custom_mark_payload_policy_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -516,13 +498,11 @@ fn custom_mark_payload_policy_schema(
     )
 }
 
-#[cfg(feature = "schema")]
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     let codec_names = supported_codec_names();
     string_enum_schema(generator, &codec_names, None)
 }
 
-#[cfg(feature = "schema")]
 fn string_enum_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
     values: &[&str],
@@ -544,7 +524,7 @@ fn string_enum_schema(
 
 fn register_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
 ) -> PluginResult<()> {
     if !config.profiles.is_empty() {
         let profiles = config.profiles.clone();
@@ -564,7 +544,7 @@ fn register_pii_redaction_backend(
 
 fn register_single_pii_redaction_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     match config.mode.as_str() {
@@ -1255,7 +1235,7 @@ fn validate_codec_requirements(
 
 fn register_builtin_backend(
     config: PiiRedactionConfig,
-    ctx: &mut PluginRegistrationContext,
+    ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let builtin = config.builtin.clone().ok_or_else(|| {
@@ -1365,7 +1345,7 @@ fn register_builtin_backend(
 
 fn with_selector_diagnostics(
     mut compiled: CompiledBuiltinBackend,
-    ctx: &PluginRegistrationContext,
+    ctx: &dyn nemo_relay_plugin_host::PluginRegistrationContext,
     profile_name: Option<&str>,
 ) -> CompiledBuiltinBackend {
     let component_key = profile_name.map_or_else(
@@ -1373,9 +1353,11 @@ fn with_selector_diagnostics(
         |name| format!("pii_redaction.selector.{name}"),
     );
     if !compiled.is_trajectory()
-        && let Ok(recorder) = ctx
-            .diagnostics()
-            .register_component(ComponentRegistration::new(&component_key, &[]))
+        && let Some(diagnostics) = ctx
+            .diagnostics_context()
+            .and_then(|context| context.downcast_ref::<nemo_relay_diagnostics::Diagnostics>())
+        && let Ok(recorder) =
+            diagnostics.register_component(ComponentRegistration::new(&component_key, &[]))
         && let Ok(Some(code)) = recorder.register_extension(ExtensionRegistration {
             namespace: "pii_redaction",
             name: "selector_evaluated",

@@ -6,16 +6,14 @@
 //! These tests require a running Redis instance at `redis://127.0.0.1/`
 //! and only run when `NEMO_RELAY_RUN_REDIS_TESTS=1` is set.
 
-#![cfg(feature = "redis-backend")]
-
 use std::sync::{Arc, Once, RwLock};
 
 use chrono::Utc;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
 use nemo_relay_adaptive::acg_learner::AcgLearner;
 use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
 use nemo_relay_adaptive::learner::traits::Learner;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use uuid::Uuid;
 
 use nemo_relay_adaptive::redis::RedisBackend;
@@ -45,7 +43,7 @@ fn env_value_is_truthy(value: Option<&str>) -> bool {
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
                 .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });

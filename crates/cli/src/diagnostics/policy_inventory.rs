@@ -4,8 +4,8 @@
 //! Non-activating inventory of file exporters and configured privacy policies.
 
 use super::{Check, Status, check_dir_writable, section_enabled};
-use nemo_relay::plugin::PluginConfig;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_plugin_host::PluginConfig;
 use serde_json::Value;
 use std::path::{Component, Path};
 

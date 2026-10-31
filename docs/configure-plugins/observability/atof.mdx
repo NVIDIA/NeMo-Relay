@@ -392,12 +392,12 @@ void (async () => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::observability::plugin_component::{
+use nemo_relay_observability::plugin::{
     AtofFileSinkSectionConfig, AtofSectionConfig, AtofSinkSectionConfig,
     AtofStreamSinkSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::{initialize, validate};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -500,8 +500,8 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::observability::atof::{
-    AtofEndpointTransport, AtofExporter, AtofExporterConfig, AtofStreamSinkConfig,
+use nemo_relay_observability::atof::{
+    AtofEndpointTransport, AtofExporterConfig, AtofStreamSinkConfig,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -509,7 +509,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "http://localhost:8080/events",
         AtofEndpointTransport::HttpPost,
     ));
-    let exporter = AtofExporter::new(config)?;
+    let exporter = nemo_relay::exporter::atof(config)?;
     exporter.register("atof-exporter")?;
 
     // Run instrumented application work here.

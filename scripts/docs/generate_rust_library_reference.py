@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import posixpath
 import re
 import subprocess
@@ -21,11 +20,24 @@ from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
-    ("nemo-relay", "nemo_relay", "Core Rust runtime APIs for NeMo Relay."),
+    ("nemo-relay-builtins", "nemo_relay_builtins", "Default plugin composition for SDKs and the CLI."),
+    ("nemo-relay-diagnostics", "nemo_relay_diagnostics", "Runtime diagnostics and failure aggregation."),
+    ("nemo-relay-logging", "nemo_relay_logging", "Operational logging setup and lifecycle."),
+    ("nemo-relay-plugin-host", "nemo_relay_plugin_host", "Plugin loading, validation, verification, and activation."),
+    ("nemo-relay-codecs", "nemo_relay_codecs", "Provider request, response, and streaming implementations."),
+    ("nemo-relay", "nemo_relay", "Public Rust SDK with flat instrumentation APIs and shared contracts."),
+    ("nemo-relay-runtime", "nemo_relay_runtime", "Execution engine, scope context, and middleware registries."),
+    ("nemo-relay-model-pricing", "nemo_relay_model_pricing", "Model pricing catalogs and cost estimation."),
+    (
+        "nemo-relay-resource-metrics",
+        "nemo_relay_resource_metrics",
+        "System resource collection and measurement configuration.",
+    ),
+    ("nemo-relay-observability", "nemo_relay_observability", "Observability exporters and projections."),
     ("nemo-relay-adaptive", "nemo_relay_adaptive", "Adaptive runtime primitives and plugin components."),
     ("nemo-relay-pii-redaction", "nemo_relay_pii_redaction", "PII redaction plugin components for NeMo Relay."),
     ("nemo-relay-ffi", "nemo_relay_ffi", "C-compatible FFI surface for NeMo Relay."),
-    ("nemo-relay-types", "nemo_relay_types", "Shared serializable data model types for NeMo Relay."),
+    ("nemo-relay-types", "nemo_relay_types", "Shared data models and runtime contracts for NeMo Relay."),
     ("nemo-relay-plugin", "nemo_relay_plugin", "Rust SDK and stable ABI for native NeMo Relay plugins."),
     (
         "nemo-relay-worker-proto",
@@ -152,10 +164,6 @@ def _crate_slug(crate_name: str) -> str:
 
 
 def _run_cargo_doc(repo_root: Path) -> None:
-    env = os.environ.copy()
-    existing = env.get("RUSTDOCFLAGS", "")
-    cap_lints = "--cap-lints allow"
-    env["RUSTDOCFLAGS"] = f"{existing} {cap_lints}".strip()
     subprocess.run(
         [
             "cargo",
@@ -164,7 +172,6 @@ def _run_cargo_doc(repo_root: Path) -> None:
             *(argument for crate, *_ in CRATES for argument in ("-p", crate)),
         ],
         cwd=repo_root,
-        env=env,
         check=True,
     )
 
@@ -405,7 +412,7 @@ def _render_heading(node: Tag, page: Page, pages_by_html: dict[Path, Page]) -> s
     if not text or text in {"Auto Trait Implementations", "Blanket Implementations"}:
         return ""
     levels = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}
-    return f"{levels[node.name]} {text}\n\n"
+    return f"{levels[node.name]} {_escape_text(text)}\n\n"
 
 
 def _render_section_header(node: Tag, _page: Page, _pages_by_html: dict[Path, Page], _depth: int) -> str:

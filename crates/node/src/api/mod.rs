@@ -26,11 +26,13 @@ use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 
-use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
-use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::resource_metrics as core_resource_metrics_api;
-use nemo_relay::api::resource_metrics::{
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
+use nemo_relay_plugin_host::resource_metrics as core_resource_metrics_api;
+use nemo_relay_plugin_host::resource_metrics::{
     AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
     CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics,
     GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics,
@@ -40,14 +42,17 @@ use nemo_relay::api::resource_metrics::{
     ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
     UtilizationUnit,
 };
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay_runtime::api::llm as core_llm_api;
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_runtime::api::registry as core_registry_api;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
     LlmJsonStream, ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
@@ -58,33 +63,31 @@ use nemo_relay::api::runtime::{
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
     with_scope_stack as with_scope_stack_handle,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::Usage;
-use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::{
-    PluginHostActivation as CorePluginHostActivation, PluginHostReport,
-    initialize as initialize_impl, validate as validate_impl,
-    validate_exact as validate_exact_impl,
+use nemo_relay_runtime::api::scope as core_scope_api;
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::subscriber as core_subscriber_api;
+use nemo_relay_runtime::api::tool as core_tool_api;
+use nemo_relay_runtime::api::tool::ToolAttributes;
+use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::Usage;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
+use {
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::PluginRegistration,
+    nemo_relay_plugin_host::deregister_plugin as deregister_plugin_impl,
+    nemo_relay_plugin_host::list_plugin_kinds as list_plugin_kinds_impl,
+    nemo_relay_plugin_host::register_plugin as register_plugin_impl,
+    nemo_relay_plugin_host::rollback_registrations,
 };
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    PluginRegistrationContext, deregister_plugin as deregister_plugin_impl,
-    list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
-    rollback_registrations,
+use {
+    nemo_relay_plugin_host::dynamic::PluginHostActivation as CorePluginHostActivation,
+    nemo_relay_plugin_host::dynamic::PluginHostReport,
+    nemo_relay_plugin_host::initialize as initialize_impl,
+    nemo_relay_plugin_host::validate as validate_impl,
+    nemo_relay_plugin_host::validate_exact as validate_exact_impl,
 };
-use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
-use nemo_relay_adaptive::acg::{
-    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
-};
-use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
 
@@ -113,7 +116,7 @@ fn register_node_environment() -> FlowResult<()> {
     let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    nemo_relay::logging::initialize_default_logging()?;
+    nemo_relay_logging::initialize_default_logging()?;
     NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
     Ok(())
 }
@@ -123,7 +126,7 @@ fn cleanup_node_environment() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
-        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+        && let Err(error) = nemo_relay_logging::shutdown_default_logging()
     {
         eprintln!("nemo-relay: operational logging shutdown failed: {error}");
     }
@@ -148,7 +151,7 @@ pub fn log(
     } else {
         format!("nemo_relay.node.{target}")
     };
-    nemo_relay::logging::emit_str(&level, &target, &message, fields)
+    nemo_relay_logging::emit_str(&level, &target, &message, fields)
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
@@ -258,7 +261,7 @@ impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorDeviceMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
@@ -280,7 +283,7 @@ impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorProcessMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     process_id: u32,
@@ -581,14 +584,16 @@ pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> n
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
-    nemo_relay::api::runtime::ScopeStackHandle,
+    nemo_relay_runtime::api::runtime::ScopeStackHandle,
     Option<PublicationBuffer>,
 )> {
     Ok(callback_factory::callback_scope_stack(env)?
         .unwrap_or_else(|| (current_scope_stack_handle(), None)))
 }
 
-fn effective_scope_stack(env: &Env) -> napi::Result<nemo_relay::api::runtime::ScopeStackHandle> {
+fn effective_scope_stack(
+    env: &Env,
+) -> napi::Result<nemo_relay_runtime::api::runtime::ScopeStackHandle> {
     effective_scope_context(env).map(|(scope_stack, _)| scope_stack)
 }
 
@@ -600,19 +605,18 @@ fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> nap
 }
 
 fn effective_scope_top(
-    scope_stack: &nemo_relay::api::runtime::ScopeStackHandle,
-) -> nemo_relay::api::scope::ScopeHandle {
+    scope_stack: &nemo_relay_runtime::api::runtime::ScopeStackHandle,
+) -> nemo_relay_runtime::api::scope::ScopeHandle {
     with_scope_stack_handle(scope_stack.clone(), task_scope_top)
 }
 
 #[napi::module_init]
 fn init() {
+    nemo_relay_builtins::initialize_runtime();
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
-    register_adaptive_component()
-        .expect("node adaptive plugin component registration should succeed");
-    register_pii_redaction_component()
-        .expect("node pii redaction plugin component registration should succeed");
+    nemo_relay_builtins::plugin::ensure_builtin_plugins_registered()
+        .expect("node built-in plugin registration should succeed");
 }
 
 // Core publication executors and registry state live for the whole process.
@@ -710,11 +714,11 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     Json::Object(metadata)
 }
 
-fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
+fn parse_otel_type(value: &str) -> napi::Result<nemo_relay_observability::OpenTelemetryType> {
     match value {
-        "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
-        "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
-        "openinference" => Ok(nemo_relay::observability::OpenTelemetryType::OpenInference),
+        "full" => Ok(nemo_relay_observability::OpenTelemetryType::Full),
+        "gen_ai" => Ok(nemo_relay_observability::OpenTelemetryType::GenAi),
+        "openinference" => Ok(nemo_relay_observability::OpenTelemetryType::OpenInference),
         other => Err(napi::Error::from_reason(format!(
             "type must be 'full', 'gen_ai', or 'openinference', got {other:?}",
         ))),
@@ -723,10 +727,10 @@ fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenT
 
 fn parse_otel_transport(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpTransport> {
+) -> napi::Result<nemo_relay_observability::otel::OtlpTransport> {
     match value.as_deref().unwrap_or("http_binary") {
-        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
-        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        "http_binary" => Ok(nemo_relay_observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay_observability::otel::OtlpTransport::Grpc),
         other => Err(napi::Error::from_reason(format!(
             "transport must be 'http_binary' or 'grpc', got {other:?}",
         ))),
@@ -735,20 +739,20 @@ fn parse_otel_transport(
 
 fn parse_mark_projection(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::MarkProjection> {
+) -> napi::Result<nemo_relay_observability::MarkProjection> {
     serde_json::from_value(Json::String(value.unwrap_or_else(|| "inherit".to_string())))
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 fn parse_attribute_mappings(
     value: Option<Json>,
-) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+) -> napi::Result<Vec<nemo_relay_observability::OtlpAttributeMapping>> {
     let mappings = match value {
         Some(value) => serde_json::from_value(value)
             .map_err(|error| napi::Error::from_reason(format!("attributeMappings: {error}")))?,
         None => Vec::new(),
     };
-    nemo_relay::observability::validate_attribute_mappings(&mappings)
+    nemo_relay_observability::validate_attribute_mappings(&mappings)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     Ok(mappings)
 }
@@ -758,8 +762,8 @@ fn parse_otel_file_sink(
     filename: Option<&str>,
     format: Option<&str>,
     mode: Option<&str>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
-    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+) -> napi::Result<nemo_relay_observability::otel::OtlpFileSinkSettings> {
+    nemo_relay_observability::otel::OtlpFileSinkSettings::from_parts(
         output_directory,
         filename,
         format,
@@ -770,7 +774,7 @@ fn parse_otel_file_sink(
 
 fn build_otel_config(
     options: OpenTelemetryConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
@@ -789,7 +793,7 @@ fn build_otel_config(
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
 
-    let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
+    let mut config = nemo_relay_observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_service_name(service_name)
@@ -824,7 +828,7 @@ fn build_otel_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -856,7 +860,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
         .transpose()?
         .unwrap_or_else(|| {
             u64::try_from(
-                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+                nemo_relay_observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
             )
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
@@ -865,7 +869,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
 
 fn build_otel_log_config(
     options: OpenTelemetryLogConfig,
-) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+) -> napi::Result<nemo_relay_observability::otel_logs::OpenTelemetryLogConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -874,7 +878,7 @@ fn build_otel_log_config(
     }
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
-    let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
+    let mut config = nemo_relay_observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
             options
@@ -926,7 +930,7 @@ fn build_otel_log_config(
 
 fn build_otel_metric_config(
     options: OpenTelemetryMetricConfig,
-) -> napi::Result<nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig> {
+) -> napi::Result<nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -934,7 +938,7 @@ fn build_otel_metric_config(
         ));
     }
     let mut config =
-        nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
+        nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
             .with_transport(parse_otel_transport(options.transport)?)
             .with_service_name(
                 options
@@ -982,7 +986,7 @@ fn build_otel_metric_config(
 }
 
 fn exporter_runtime_diagnostics_json(
-    diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
+    diagnostics: nemo_relay_observability::ExporterRuntimeDiagnostics,
 ) -> Json {
     Json::Array(
         diagnostics
@@ -1001,11 +1005,11 @@ fn exporter_runtime_diagnostics_json(
 
 fn build_atof_config(
     options: Option<AtofExporterConfig>,
-) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
+) -> napi::Result<nemo_relay_observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
     match options.r#type.as_deref().unwrap_or("file") {
         "file" => {
-            let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
+            let mut config = nemo_relay_observability::atof::AtofExporterConfig::new();
             if let Some(output_directory) = options.output_directory {
                 config = config.with_output_directory(PathBuf::from(output_directory));
             }
@@ -1013,7 +1017,7 @@ fn build_atof_config(
                 config = config.with_filename(filename);
             }
             if let Some(mode) = options.mode {
-                let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode)
+                let Some(mode) = nemo_relay_observability::atof::AtofExporterMode::parse(&mode)
                 else {
                     return Err(napi::Error::from_reason(
                         "mode must be 'append' or 'overwrite'",
@@ -1029,14 +1033,14 @@ fn build_atof_config(
                 .ok_or_else(|| napi::Error::from_reason("stream sink requires url"))?;
             let transport = options.transport.unwrap_or_else(|| "http_post".to_string());
             let Some(transport) =
-                nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
+                nemo_relay_observability::atof::AtofEndpointTransport::parse(&transport)
             else {
                 return Err(napi::Error::from_reason(
                     "stream transport must be 'http_post', 'websocket', or 'ndjson'",
                 ));
             };
             let mut sink =
-                nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
+                nemo_relay_observability::atof::AtofStreamSinkConfig::new(url, transport);
             if let Some(timeout_millis) = options.timeout_millis {
                 sink = sink.with_timeout_millis(timeout_millis.into());
             }
@@ -1045,7 +1049,7 @@ fn build_atof_config(
             }
             if let Some(field_name_policy) = options.field_name_policy {
                 let Some(field_name_policy) =
-                    nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                    nemo_relay_observability::atof::AtofEndpointFieldNamePolicy::parse(
                         &field_name_policy,
                     )
                 else {
@@ -1061,7 +1065,7 @@ fn build_atof_config(
             for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
                 sink = sink.with_header_env(key, variable);
             }
-            Ok(nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
+            Ok(nemo_relay_observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
         }
         _ => Err(napi::Error::from_reason(
             "ATOF sink type must be 'file' or 'stream'",
@@ -1097,7 +1101,7 @@ struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
     propagation_parent_uuid: Option<String>,
-    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
+    propagation_context: Option<nemo_relay_runtime::api::runtime::PropagationContext>,
 }
 
 impl ScopedCallbackContext {
@@ -2371,11 +2375,11 @@ fn node_event_metadata_injector_fn(
 }
 
 type NodeLlmCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 type NodeLlmResponseCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmResponseCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 
@@ -2490,7 +2494,7 @@ impl Plugin for NodePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();
@@ -2562,7 +2566,7 @@ pub struct PropagationContext {
 
 fn propagation_context_from_napi(
     context: PropagationContext,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let root_uuid = context
         .root_uuid
         .as_deref()
@@ -2573,7 +2577,7 @@ fn propagation_context_from_napi(
         .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
     let version = u16::try_from(context.version)
         .map_err(|_| napi::Error::from_reason("propagation context version is out of range"))?;
-    let context = nemo_relay::api::runtime::PropagationContext {
+    let context = nemo_relay_runtime::api::runtime::PropagationContext {
         version,
         root_uuid,
         parent_uuid,
@@ -2587,7 +2591,7 @@ fn propagation_context_from_napi(
 }
 
 pub(crate) fn propagation_context_to_napi(
-    context: nemo_relay::api::runtime::PropagationContext,
+    context: nemo_relay_runtime::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
         version: u32::from(context.version),
@@ -2601,7 +2605,7 @@ pub(crate) fn propagation_context_to_napi(
 fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let context = callback_factory::callback_propagation_context(env)?
         .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
     let mut context = propagation_context_from_napi(context)?;
@@ -2638,7 +2642,7 @@ fn callback_propagation_context(
 fn rootless_callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let mut context = callback_propagation_context(env, parent_uuid)?;
     context.root_uuid = None;
     let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
@@ -2749,7 +2753,7 @@ pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::
 /// Deserialize and validate a Relay causal context from the JSON wire format.
 #[napi]
 pub fn propagation_context_from_json(value: String) -> napi::Result<PropagationContext> {
-    nemo_relay::api::runtime::PropagationContext::from_json(&value)
+    nemo_relay_runtime::api::runtime::PropagationContext::from_json(&value)
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -2793,8 +2797,10 @@ pub fn current_scope_stack_snapshot(
     env: Env,
 ) -> napi::Result<Option<crate::types::ScopeStackSnapshot>> {
     let snapshot = match callback_factory::callback_scope_stack(&env)? {
-        Some((stack, _)) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
-        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+        Some((stack, _)) => {
+            nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack).map(Some)
+        }
+        None => nemo_relay_runtime::api::runtime::current_scope_stack_snapshot(),
     };
     snapshot
         .map(|snapshot| snapshot.map(Into::into))
@@ -5486,7 +5492,7 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct AtifExporter {
-    inner: nemo_relay::observability::atif::AtifExporter,
+    inner: nemo_relay_observability::atif::AtifExporter,
 }
 
 #[napi]
@@ -5502,7 +5508,7 @@ impl AtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay_observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -5510,7 +5516,7 @@ impl AtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay_plugin_host::exporter::atif(session_id, agent_info),
         })
     }
 
@@ -5583,7 +5589,7 @@ pub struct AtofExporterConfig {
 /// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 #[napi]
 pub struct AtofExporter {
-    inner: nemo_relay::observability::atof::AtofExporter,
+    inner: nemo_relay_observability::atof::AtofExporter,
 }
 
 #[napi]
@@ -5592,7 +5598,7 @@ impl AtofExporter {
     /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::atof::AtofExporter::new(build_atof_config(config)?)
+        let inner = nemo_relay_plugin_host::exporter::atof(build_atof_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -5707,7 +5713,7 @@ pub struct OpenTelemetryTlsConfig {
     pub private_key: Option<String>,
 }
 
-impl From<OpenTelemetryTlsConfig> for nemo_relay::observability::OpenTelemetryTlsConfig {
+impl From<OpenTelemetryTlsConfig> for nemo_relay_observability::OpenTelemetryTlsConfig {
     fn from(value: OpenTelemetryTlsConfig) -> Self {
         Self {
             certificate: value.certificate,
@@ -5764,7 +5770,7 @@ pub struct OpenTelemetryFileSinkConfig {
 
 fn build_otel_file_sink_config(
     options: OpenTelemetryFileSinkConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryFileSinkConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let directory = options.output_directory.trim();
     if directory.is_empty() {
@@ -5779,7 +5785,7 @@ fn build_otel_file_sink_config(
         options.mode.as_deref(),
     )?;
     let mut config =
-        nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
+        nemo_relay_observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
             .with_instrumentation_scope(
                 options
                     .instrumentation_scope
@@ -5807,7 +5813,7 @@ fn build_otel_file_sink_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -5822,7 +5828,7 @@ fn build_otel_file_sink_config(
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
-    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay_observability::otel::OpenTelemetrySubscriber,
 }
 
 #[napi]
@@ -5830,17 +5836,15 @@ impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
-            build_otel_config(config)?,
-        )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry(build_otel_config(config)?)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
 
     /// Create a subscriber that writes OTLP to a local file.
     #[napi(factory)]
     pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_file(
             build_otel_file_sink_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -5935,7 +5939,7 @@ pub struct OpenTelemetryLogConfig {
 /// Subscriber that exports severity-tagged marks through OTLP logs.
 #[napi]
 pub struct OpenTelemetryLogSubscriber {
-    inner: nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+    inner: nemo_relay_observability::otel_logs::OpenTelemetryLogSubscriber,
 }
 
 #[napi]
@@ -5943,10 +5947,9 @@ impl OpenTelemetryLogSubscriber {
     /// Create a log subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryLogConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber::new(
-            build_otel_log_config(config)?,
-        )
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner =
+            nemo_relay_plugin_host::exporter::opentelemetry_logs(build_otel_log_config(config)?)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -6036,7 +6039,7 @@ pub struct OpenTelemetryMetricConfig {
 /// Subscriber that records metric marks and exports them through OTLP metrics.
 #[napi]
 pub struct OpenTelemetryMetricSubscriber {
-    inner: nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+    inner: nemo_relay_observability::otel_metrics::OpenTelemetryMetricSubscriber,
 }
 
 #[napi]
@@ -6044,7 +6047,7 @@ impl OpenTelemetryMetricSubscriber {
     /// Create a metric subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryMetricConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber::new(
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_metrics(
             build_otel_metric_config(config)?,
         )
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
@@ -6128,7 +6131,7 @@ struct CacheRequestFactsOptions {
 enum NodeAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_relay::plugin::ConfigReport,
+        report: nemo_relay_plugin_host::ConfigReport,
     },
     Ready(CoreAdaptiveRuntime),
 }
@@ -6344,7 +6347,7 @@ impl AdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> napi::Result<nemo_relay::plugin::ConfigReport> {
+) -> napi::Result<nemo_relay_plugin_host::ConfigReport> {
     let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
@@ -6776,7 +6779,7 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
@@ -6789,7 +6792,7 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;

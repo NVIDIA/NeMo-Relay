@@ -46,14 +46,14 @@ fn asynchronous_collection_returns_the_active_plugins_snapshot() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
-        let snapshot: nemo_relay::api::resource_metrics::ResourceMetricsSnapshot =
+        let snapshot: nemo_relay_plugin_host::resource_metrics::ResourceMetricsSnapshot =
             serde_json::from_str(std::ffi::CStr::from_ptr(output).to_str().unwrap()).unwrap();
         let cpu = snapshot.cpu.as_ref().unwrap();
         if let Some(total_time) = &cpu.total_time {
-            let unit: nemo_relay::api::resource_metrics::DurationUnit = total_time.unit;
+            let unit: nemo_relay_plugin_host::resource_metrics::DurationUnit = total_time.unit;
             assert_eq!(
                 unit,
-                nemo_relay::api::resource_metrics::DurationUnit::Milliseconds
+                nemo_relay_plugin_host::resource_metrics::DurationUnit::Milliseconds
             );
         }
         let memory = snapshot
@@ -63,15 +63,15 @@ fn asynchronous_collection_returns_the_active_plugins_snapshot() {
             .system_total
             .as_ref()
             .unwrap();
-        let unit: nemo_relay::api::resource_metrics::CapacityUnit = memory.unit;
+        let unit: nemo_relay_plugin_host::resource_metrics::CapacityUnit = memory.unit;
         assert_eq!(
             unit,
-            nemo_relay::api::resource_metrics::CapacityUnit::Kibibytes
+            nemo_relay_plugin_host::resource_metrics::CapacityUnit::Kibibytes
         );
         assert!(snapshot.gpu.is_none());
         assert_eq!(
             snapshot.measurement_scope,
-            nemo_relay::api::resource_metrics::ResourceMeasurementScope::ProcessTree
+            nemo_relay_plugin_host::resource_metrics::ResourceMeasurementScope::ProcessTree
         );
         nemo_relay_string_free(output);
         nemo_relay_resource_metrics_collect_free(collection);
@@ -145,7 +145,7 @@ fn collection_handle_delivers_errors_and_rejects_null_pointers() {
         task: task.abort_handle(),
     }));
     sender
-        .send(Err(nemo_relay::error::FlowError::InvalidArgument(
+        .send(Err(nemo_relay_types::error::FlowError::InvalidArgument(
             "inactive resource metrics".into(),
         )))
         .unwrap();

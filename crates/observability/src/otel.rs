@@ -1,0 +1,3397 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#![allow(missing_docs)]
+
+//! OpenTelemetry subscriber support for NeMo Relay.
+//!
+//! This crate adapts NeMo Relay lifecycle events into the selected `full`,
+//! `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and
+//! end events open and close supported spans. Non-metric mark behavior is fixed
+//! by the selected projection; reserved metric-schema marks are not projected
+//! into traces.
+//!
+//! The public API is intentionally small:
+//!
+//! - [`OpenTelemetryConfig`] configures the OTLP exporter and resource metadata
+//! - [`OpenTelemetrySubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
+//!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
+
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use super::OpenTelemetryTlsConfig;
+use super::header_file::{
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
+    validate_header_files, validate_otlp_transport_typed,
+};
+use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
+use super::otel_signal::{
+    MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
+    automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
+    automatic_signal_endpoint, classify_metric_mark, drain_startup_queue, resolve_header_env,
+    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
+    validate_telemetry_sdk_resource_attributes,
+};
+use super::{
+    ExporterRuntimeDiagnostics, MarkProjection, OpenTelemetryType, OtlpAttributeMapping,
+    apply_attribute_mappings, attribute_mapping_aliases, attribute_mapping_inputs,
+    default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
+    estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
+    promote_event_metadata_attributes, push_serialized_top_level_attributes,
+    push_session_identity_attributes, push_tool_result_annotation_attribute,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
+    validate_metadata_promotion_prefixes,
+};
+
+use crate::host::EventSubscriberFn;
+use crate::normalization::EventView;
+use nemo_relay_types::api::event::{Event, ScopeCategory};
+
+use nemo_relay_types::api::scope::ScopeType;
+
+use chrono::{DateTime, Utc};
+use nemo_relay_types::codec::response::CostEstimate;
+use nemo_relay_types::error::FlowError;
+use opentelemetry::trace::{
+    Span as _, SpanContext, SpanId, SpanKind, TraceContextExt, TraceFlags, TraceId, TraceState,
+    Tracer, TracerProvider as _,
+};
+use opentelemetry::{Context, KeyValue};
+use opentelemetry_otlp::{
+    Protocol, SpanExporter as OtlpSpanExporter, WithExportConfig, WithHttpConfig,
+};
+use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as AsyncBatchSpanProcessor;
+use opentelemetry_sdk::trace::{
+    BatchConfigBuilder, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    SpanData, SpanExporter, SpanProcessor,
+};
+use opentelemetry_sdk::{Resource, runtime};
+use uuid::Uuid;
+
+use crate::host::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
+
+/// Default period for attaching late marks to a completed scope's trace span.
+pub const DEFAULT_COMPLETED_SPAN_CONTEXT_TTL: Duration = Duration::from_secs(60);
+
+#[doc(hidden)]
+pub const AUTOMATIC_OTLP_ENDPOINT_MARKER: &str = "<environment>";
+
+use opentelemetry_otlp::WithTonicConfig;
+use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
+
+thread_local! {
+    static PENDING_RELAY_IDS: RefCell<Option<(TraceId, SpanId)>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Debug, Default)]
+#[doc(hidden)]
+pub struct RelayIdGenerator;
+
+impl IdGenerator for RelayIdGenerator {
+    fn new_trace_id(&self) -> TraceId {
+        PENDING_RELAY_IDS
+            .with(|ids| ids.borrow().map(|(trace_id, _)| trace_id))
+            .unwrap_or_else(|| RandomIdGenerator::default().new_trace_id())
+    }
+
+    fn new_span_id(&self) -> SpanId {
+        PENDING_RELAY_IDS
+            .with(|ids| ids.borrow().map(|(_, span_id)| span_id))
+            .unwrap_or_else(|| RandomIdGenerator::default().new_span_id())
+    }
+}
+
+pub(crate) fn with_relay_ids<T>(uuid: Uuid, build: impl FnOnce() -> T) -> T {
+    #[doc(hidden)]
+    pub struct ResetPendingIds;
+
+    impl Drop for ResetPendingIds {
+        fn drop(&mut self) {
+            PENDING_RELAY_IDS.with(|ids| {
+                ids.replace(None);
+            });
+        }
+    }
+
+    PENDING_RELAY_IDS.with(|ids| {
+        ids.replace(Some((
+            super::relay_trace_id(uuid),
+            super::relay_span_id(uuid),
+        )));
+    });
+    let _reset = ResetPendingIds;
+    build()
+}
+
+/// Result type for the OpenTelemetry subscriber crate.
+pub type Result<T> = std::result::Result<T, OpenTelemetryError>;
+
+#[doc(hidden)]
+pub fn normalize_shutdown_result(result: OTelSdkResult) -> OTelSdkResult {
+    match result {
+        Err(OTelSdkError::AlreadyShutdown) => Ok(()),
+        result => result,
+    }
+}
+
+/// Errors produced while configuring or operating the OpenTelemetry subscriber.
+#[derive(Debug, thiserror::Error)]
+pub enum OpenTelemetryError {
+    /// Failed to parse a configured gRPC metadata header.
+    #[error("invalid OTLP gRPC header {key:?}: {message}")]
+    InvalidGrpcHeader {
+        /// Header name that failed to parse.
+        key: String,
+        /// Parser failure message.
+        message: String,
+    },
+    /// A configured OTLP header name or value is invalid.
+    #[error("invalid OTLP header {key:?}: {message}")]
+    InvalidHeader {
+        /// Header name that failed validation.
+        key: String,
+        /// Validation failure message.
+        message: String,
+    },
+    /// Process-global OTLP header variables cannot be isolated per endpoint.
+    #[error(
+        "{variable} is not supported because process-global OTLP headers can leak across endpoints; use the endpoint headers or header_env configuration"
+    )]
+    GlobalHeaderEnvironmentUnsupported {
+        /// Environment variable that was set.
+        variable: &'static str,
+    },
+    /// Failed to build the OTLP exporter.
+    #[error("failed to build the OTLP exporter: {0}")]
+    ExporterBuild(String),
+    /// The underlying tracer provider returned an error.
+    #[error("OpenTelemetry tracer provider error: {0}")]
+    TraceProvider(String),
+    /// The underlying logger provider returned an error.
+    #[error("OpenTelemetry log provider error: {0}")]
+    LogProvider(String),
+    /// The underlying meter provider returned an error.
+    #[error("OpenTelemetry metric provider error: {0}")]
+    MetricProvider(String),
+    /// Attribute mapping configuration was invalid.
+    #[error("invalid attribute mappings: {0}")]
+    InvalidAttributeMappings(String),
+    /// Metadata promotion prefix configuration was invalid.
+    #[error("invalid metadata promotion prefixes: {0}")]
+    InvalidMetadataPromotionPrefixes(String),
+    /// Registration errors from the core runtime.
+    #[error(transparent)]
+    Core(#[from] FlowError),
+}
+
+// Preserve typed initialization evidence until the automatic plugin reports it.
+// Public constructors retain the historical exhaustive error enum and payloads.
+#[doc(hidden)]
+pub type ExporterInitializationResult<T> = std::result::Result<T, ExporterInitializationError>;
+
+#[derive(Debug, thiserror::Error)]
+#[doc(hidden)]
+pub enum ExporterInitializationError {
+    /// A configured endpoint is malformed or uses an unsupported transport scheme.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidEndpoint(String),
+    /// The plaintext transport policy rejected the endpoint's destination.
+    #[error("failed to build the OTLP exporter: {0}")]
+    PlaintextRejected(String),
+    /// TLS settings or certificate/key material failed validation.
+    #[error("failed to build the OTLP exporter: {0}")]
+    InvalidTlsConfiguration(String),
+    /// A TLS material file could not be read. The path is deliberately omitted.
+    #[error("failed to build the OTLP exporter: tls.{field}: cannot read PEM file")]
+    TlsFileRead {
+        /// TLS field whose configured file could not be read.
+        field: String,
+        /// Filesystem cause, retained without the sensitive configured path.
+        kind: std::io::ErrorKind,
+    },
+    #[error(transparent)]
+    Public(#[from] OpenTelemetryError),
+}
+
+impl From<ExporterInitializationError> for OpenTelemetryError {
+    fn from(error: ExporterInitializationError) -> Self {
+        match error {
+            ExporterInitializationError::Public(error) => error,
+            ExporterInitializationError::InvalidEndpoint(message)
+            | ExporterInitializationError::PlaintextRejected(message)
+            | ExporterInitializationError::InvalidTlsConfiguration(message) => {
+                Self::ExporterBuild(message)
+            }
+            ExporterInitializationError::TlsFileRead { field, .. } => {
+                Self::ExporterBuild(format!("tls.{field}: cannot read PEM file"))
+            }
+        }
+    }
+}
+
+impl From<super::header_file::EndpointTransportError> for ExporterInitializationError {
+    fn from(error: super::header_file::EndpointTransportError) -> Self {
+        match error {
+            super::header_file::EndpointTransportError::InvalidEndpoint(message) => {
+                Self::InvalidEndpoint(message)
+            }
+            super::header_file::EndpointTransportError::PlaintextRejected(message) => {
+                Self::PlaintextRejected(message)
+            }
+        }
+    }
+}
+
+/// Supported OTLP trace transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OtlpTransport {
+    /// OTLP/HTTP protobuf, typically `http://host:4318/v1/traces`.
+    #[default]
+    HttpBinary,
+    /// OTLP/gRPC, typically `http://host:4317`.
+    Grpc,
+}
+
+/// Completes a bare OTLP/HTTP base URL with the standard trace signal path.
+#[doc(hidden)]
+pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
+    let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
+        return Cow::Borrowed(endpoint);
+    };
+
+    // A trailing slash deliberately selects the collector root. A bare authority
+    // is the only form that receives the conventional OTLP trace path.
+    let has_explicit_root_path = endpoint
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with('/'));
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.path() != "/"
+        || has_explicit_root_path
+    {
+        return Cow::Borrowed(endpoint);
+    }
+    parsed.set_path("/v1/traces");
+    Cow::Owned(parsed.into())
+}
+
+/// Returns an endpoint identity that is safe to include in delivery failures.
+///
+/// Delivery errors can be written to stderr, so never include an endpoint's
+/// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
+/// distinguish independently configured collectors without exposing a token
+/// embedded in a URL.
+pub(crate) fn trace_endpoint_log_identity(endpoint: &str) -> String {
+    if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
+        return "the environment-configured OTLP endpoint".to_string();
+    }
+    let Ok(endpoint) = reqwest::Url::parse(endpoint) else {
+        return "an invalid OTLP endpoint".to_string();
+    };
+    if !matches!(endpoint.scheme(), "http" | "https") {
+        return "an invalid OTLP endpoint".to_string();
+    }
+    let Some(host) = endpoint.host_str() else {
+        return "an invalid OTLP endpoint".to_string();
+    };
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let port = endpoint
+        .port_or_known_default()
+        .expect("HTTP(S) URLs always have a known default port");
+    format!("{}://{host}:{port}", endpoint.scheme())
+}
+
+/// Require protected transport for remote OTLP trace exports, regardless of projection.
+pub(crate) fn validate_trace_endpoint(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+) -> ExporterInitializationResult<()> {
+    validate_otlp_transport_typed(endpoint, plaintext, "trace")
+        .map_err(ExporterInitializationError::from)
+}
+
+/// Open mode used when a trace file sink creates its output file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OtlpFileSinkMode {
+    /// Append spans to an existing file or create it if missing.
+    Append,
+    /// Truncate an existing file when the sink is created.
+    #[default]
+    Overwrite,
+}
+
+impl OtlpFileSinkMode {
+    /// Parses the string mode used by the language bindings.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "append" => Some(Self::Append),
+            "overwrite" => Some(Self::Overwrite),
+            _ => None,
+        }
+    }
+}
+
+/// A local file destination for exported spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtlpFileSinkSettings {
+    /// Directory the output is confined to.
+    pub output_directory: PathBuf,
+    /// Output filename, resolved under `output_directory`.
+    pub filename: String,
+    /// On-disk encoding.
+    pub format: OtlpFileFormat,
+    /// Open mode used when the file is created.
+    pub mode: OtlpFileSinkMode,
+}
+
+impl OtlpFileSinkSettings {
+    /// Returns the path this sink writes to.
+    pub fn path(&self) -> PathBuf {
+        self.output_directory.join(&self.filename)
+    }
+}
+
+impl OtlpFileSinkSettings {
+    /// Builds sink settings from the string forms every binding receives.
+    ///
+    /// The normalization policy lives here so the FFI, Node.js and Python
+    /// surfaces cannot drift: `output_directory` is trimmed, an omitted
+    /// `format` is `json_lines`, an omitted `mode` is `overwrite`, and an
+    /// omitted filename is derived from the format. Errors are returned as
+    /// messages for each binding to map onto its own error type.
+    pub fn from_parts(
+        output_directory: &str,
+        filename: Option<&str>,
+        format: Option<&str>,
+        mode: Option<&str>,
+    ) -> std::result::Result<Self, String> {
+        let output_directory = output_directory.trim();
+        if output_directory.is_empty() {
+            return Err("output_directory must be a nonblank path".to_string());
+        }
+        let format = match format {
+            None | Some("json_lines") => OtlpFileFormat::JsonLines,
+            Some("proto") => OtlpFileFormat::Proto,
+            Some(other) => {
+                return Err(format!(
+                    "format must be 'json_lines' or 'proto', got {other:?}"
+                ));
+            }
+        };
+        let mode = match mode {
+            None => OtlpFileSinkMode::default(),
+            Some(value) => OtlpFileSinkMode::parse(value)
+                .ok_or_else(|| format!("mode must be 'append' or 'overwrite', got {value:?}"))?,
+        };
+        let filename = match filename {
+            Some(filename) => {
+                validate_otlp_file_sink_filename(filename)
+                    .map_err(|message| format!("filename {message}"))?;
+                filename.to_string()
+            }
+            None => default_otlp_file_sink_filename(format),
+        };
+        Ok(Self {
+            output_directory: PathBuf::from(output_directory),
+            filename,
+            format,
+            mode,
+        })
+    }
+}
+
+/// Returns the default output filename for a trace file sink.
+///
+/// Timestamped so a rerun writes beside its predecessor rather than sharing or
+/// truncating it.
+pub fn default_otlp_file_sink_filename(format: OtlpFileFormat) -> String {
+    format!(
+        "nemo-relay-otlp-{}.{}",
+        chrono::Utc::now().format("%Y-%m-%d-%H.%M.%S"),
+        format.extension()
+    )
+}
+
+/// Reports whether an output directory is blank once trimmed.
+///
+/// Shared with the plugin validator: `OtlpFileSinkSettings::from_parts` trims
+/// the value, so a whitespace-only directory the plugin accepted would be
+/// rejected by every binding.
+#[doc(hidden)]
+pub fn otlp_file_sink_directory_is_blank(directory: &Path) -> bool {
+    directory
+        .to_str()
+        .is_none_or(|value| value.trim().is_empty())
+}
+
+/// Resolves an output directory to an absolute path for comparison.
+///
+/// `std::path::absolute` drops `.` components and needs no directory on disk.
+/// A path it cannot resolve is returned unchanged, which is no worse than the
+/// component-wise comparison it replaces.
+#[doc(hidden)]
+pub fn absolute_otlp_file_sink_directory(directory: &Path) -> PathBuf {
+    std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf())
+}
+
+/// Rejects a file-sink filename that is not one plain path component.
+///
+/// Shared by [`OtlpFileSinkSettings::from_parts`] and the plugin configuration
+/// validator: a filename one surface accepts must reach the same file on every
+/// other one. `.` and `..` are rejected here rather than by the confinement
+/// check, which would report them as an internal failure.
+#[doc(hidden)]
+pub fn validate_otlp_file_sink_filename(filename: &str) -> std::result::Result<(), &'static str> {
+    if filename.trim().is_empty() || filename.trim() != filename {
+        return Err("must be nonblank and unpadded");
+    }
+    let mut components = Path::new(filename).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err("must be a single path component");
+    }
+    Ok(())
+}
+
+/// Trace options that apply to any destination.
+///
+/// Held by both [`OpenTelemetryConfig`] and [`OpenTelemetryFileSinkConfig`] so
+/// the projection and batching settings stay identical between them.
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub struct SharedTraceOptions {
+    pub otel_type: OpenTelemetryType,
+    pub resource_attributes: HashMap<String, String>,
+    pub service_name: Option<String>,
+    pub service_namespace: Option<String>,
+    pub service_version: Option<String>,
+    pub instrumentation_scope: String,
+    pub mark_projection: MarkProjection,
+    pub mark_exclude_names: Vec<String>,
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    pub promote_metadata_prefixes: Vec<String>,
+    pub promote_resource_metadata_prefixes: Vec<String>,
+    pub max_queue_size: Option<usize>,
+    pub max_export_batch_size: Option<usize>,
+    pub scheduled_delay: Option<Duration>,
+    pub completed_span_context_ttl: Duration,
+}
+
+impl SharedTraceOptions {
+    #[doc(hidden)]
+    pub fn new(otel_type: OpenTelemetryType) -> Self {
+        Self {
+            otel_type,
+            resource_attributes: HashMap::new(),
+            service_name: None,
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "opentelemetry".to_string(),
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
+            promote_resource_metadata_prefixes: Vec::new(),
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay: None,
+            completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+        }
+    }
+}
+
+/// Configuration for an OpenTelemetry subscriber exporting to a collector.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetryConfig {
+    pub shared: SharedTraceOptions,
+    /// Whether the exporter takes its endpoint and protocol from OTEL_* vars.
+    pub automatic: bool,
+    pub endpoint: String,
+    pub transport: OtlpTransport,
+    pub headers: HashMap<String, String>,
+    pub header_env: HashMap<String, String>,
+    pub header_file: HeaderFiles,
+    pub tls: Option<Box<OpenTelemetryTlsConfig>>,
+    pub plaintext: PlaintextPolicy,
+    pub timeout: Duration,
+}
+
+/// Configuration for an OpenTelemetry subscriber writing OTLP to a local file.
+///
+/// Carries no endpoint, transport, headers, or timeout: a file destination has
+/// no use for any of them, so they are absent rather than rejected.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetryFileSinkConfig {
+    pub shared: SharedTraceOptions,
+    pub sink: OtlpFileSinkSettings,
+}
+
+/// Generates the builders and accessors every trace config shares.
+///
+/// Both destinations carry the same projection, resource, and batching
+/// options; only the transport-specific ones differ, and those are written out
+/// on the type that has them.
+macro_rules! shared_trace_options {
+    ($config:ty) => {
+        impl $config {
+            /// Sets the `service.name` resource attribute.
+            pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
+                self.shared.service_name = Some(service_name.into());
+                self
+            }
+
+            /// Sets the optional `service.namespace` resource attribute.
+            pub fn with_service_namespace(mut self, namespace: impl Into<String>) -> Self {
+                self.shared.service_namespace = Some(namespace.into());
+                self
+            }
+
+            /// Sets the optional `service.version` resource attribute.
+            pub fn with_service_version(mut self, version: impl Into<String>) -> Self {
+                self.shared.service_version = Some(version.into());
+                self
+            }
+
+            /// Sets the instrumentation scope name.
+            pub fn with_instrumentation_scope(mut self, scope: impl Into<String>) -> Self {
+                self.shared.instrumentation_scope = scope.into();
+                self
+            }
+
+            /// Adds a resource attribute as a string key/value pair.
+            pub fn with_resource_attribute(
+                mut self,
+                key: impl Into<String>,
+                value: impl Into<String>,
+            ) -> Self {
+                self.shared
+                    .resource_attributes
+                    .insert(key.into(), value.into());
+                self
+            }
+
+            /// Selects how point-in-time marks are represented.
+            pub fn with_mark_projection(mut self, mark_projection: MarkProjection) -> Self {
+                self.shared.mark_projection = mark_projection;
+                self
+            }
+
+            /// Replaces the mark names excluded from tool projection.
+            pub fn with_mark_exclude_names<I, S>(mut self, names: I) -> Self
+            where
+                I: IntoIterator<Item = S>,
+                S: Into<String>,
+            {
+                self.shared.mark_exclude_names = names.into_iter().map(Into::into).collect();
+                self
+            }
+
+            /// Copies a projected attribute to a second attribute name.
+            pub fn with_attribute_mapping(
+                mut self,
+                key: impl Into<String>,
+                alias: impl Into<String>,
+            ) -> Self {
+                self.shared
+                    .attribute_mappings
+                    .push(OtlpAttributeMapping::new(key, alias));
+                self
+            }
+
+            /// Replaces the projected attribute aliases.
+            pub fn with_attribute_mappings<I>(mut self, mappings: I) -> Self
+            where
+                I: IntoIterator<Item = OtlpAttributeMapping>,
+            {
+                self.shared.attribute_mappings = mappings.into_iter().collect();
+                self
+            }
+
+            /// Replaces the Event metadata prefixes copied to span attributes.
+            pub fn with_promote_metadata_prefixes<I, S>(mut self, prefixes: I) -> Self
+            where
+                I: IntoIterator<Item = S>,
+                S: Into<String>,
+            {
+                self.shared.promote_metadata_prefixes =
+                    prefixes.into_iter().map(Into::into).collect();
+                self
+            }
+
+            /// Replaces the root-scope metadata prefixes copied to resource attributes.
+            pub fn with_promote_resource_metadata_prefixes<I, S>(mut self, prefixes: I) -> Self
+            where
+                I: IntoIterator<Item = S>,
+                S: Into<String>,
+            {
+                self.shared.promote_resource_metadata_prefixes =
+                    prefixes.into_iter().map(Into::into).collect();
+                self
+            }
+
+            /// Sets how long completed scopes retain trace context for late marks.
+            pub fn with_completed_span_context_ttl(mut self, ttl: Duration) -> Self {
+                self.shared.completed_span_context_ttl = ttl;
+                self
+            }
+
+            /// Overrides the batch processor queue size.
+            #[doc(hidden)]
+            pub fn with_max_queue_size(mut self, max_queue_size: usize) -> Self {
+                self.shared.max_queue_size = Some(max_queue_size);
+                self
+            }
+
+            /// Overrides the maximum number of spans exported in one batch.
+            #[doc(hidden)]
+            pub fn with_max_export_batch_size(mut self, max_export_batch_size: usize) -> Self {
+                self.shared.max_export_batch_size = Some(max_export_batch_size);
+                self
+            }
+
+            /// Overrides the delay before a non-full batch is exported.
+            #[doc(hidden)]
+            pub fn with_scheduled_delay(mut self, scheduled_delay: Duration) -> Self {
+                self.shared.scheduled_delay = Some(scheduled_delay);
+                self
+            }
+
+            #[allow(dead_code)]
+            #[doc(hidden)]
+            pub fn batch_overrides(&self) -> (Option<usize>, Option<usize>, Option<Duration>) {
+                (
+                    self.shared.max_queue_size,
+                    self.shared.max_export_batch_size,
+                    self.shared.scheduled_delay,
+                )
+            }
+
+            #[allow(dead_code)]
+            #[doc(hidden)]
+            pub fn completed_span_context_ttl(&self) -> Duration {
+                self.shared.completed_span_context_ttl
+            }
+
+            #[allow(dead_code)]
+            #[doc(hidden)]
+            pub fn promote_resource_metadata_prefixes(&self) -> &[String] {
+                &self.shared.promote_resource_metadata_prefixes
+            }
+
+            /// `None` leaves `service.name` to the SDK's resource detection.
+            #[allow(dead_code)]
+            #[doc(hidden)]
+            pub fn service_name(&self) -> Option<&str> {
+                self.shared.service_name.as_deref()
+            }
+        }
+    };
+}
+
+/// The config a subscriber was built from.
+///
+/// Private: callers pass one of the two public config types. The runtime keeps
+/// it because resource-metadata promotion builds additional providers after
+/// startup, and those need the settings the subscriber was created with.
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub enum TraceConfig {
+    Endpoint(OpenTelemetryConfig),
+    File(OpenTelemetryFileSinkConfig),
+}
+
+impl TraceConfig {
+    #[doc(hidden)]
+    pub fn shared(&self) -> &SharedTraceOptions {
+        match self {
+            Self::Endpoint(config) => &config.shared,
+            Self::File(config) => &config.shared,
+        }
+    }
+
+    /// The name used in diagnostics and delivery errors.
+    ///
+    /// An endpoint is reduced to scheme, host and port so no credentials or
+    /// query reach a log; a file path carries none of those and is reported as
+    /// written, which is what identifies the destination to a reader.
+    #[doc(hidden)]
+    pub fn delivery_identity(&self) -> String {
+        match self {
+            Self::Endpoint(config) => trace_endpoint_log_identity(&config.endpoint),
+            Self::File(config) => config.sink.path().display().to_string(),
+        }
+    }
+
+    /// Bounds retrying `force_flush` and `shutdown` while the batch
+    /// processor's queue is full. The queue fills from the producer side, so
+    /// this is not a property of the destination; an endpoint reuses its
+    /// request timeout and a file sink has no equivalent knob to reuse.
+    #[doc(hidden)]
+    pub fn channel_full_retry_budget(&self) -> Duration {
+        match self {
+            Self::Endpoint(config) => config.timeout,
+            Self::File(_) => Duration::from_secs(3),
+        }
+    }
+}
+
+shared_trace_options!(OpenTelemetryConfig);
+shared_trace_options!(OpenTelemetryFileSinkConfig);
+
+impl OpenTelemetryConfig {
+    /// Creates a typed OpenTelemetry exporter for a required OTLP endpoint.
+    #[doc(hidden)]
+    pub fn new(otel_type: OpenTelemetryType, endpoint: impl Into<String>) -> Self {
+        Self {
+            shared: SharedTraceOptions::new(otel_type),
+            automatic: false,
+            endpoint: endpoint.into(),
+            transport: OtlpTransport::HttpBinary,
+            headers: HashMap::new(),
+            header_env: HashMap::new(),
+            header_file: HashMap::new(),
+            tls: None,
+            plaintext: PlaintextPolicy::LoopbackOnly,
+            timeout: Duration::from_secs(3),
+        }
+    }
+
+    /// Creates the Relay trace projection from OpenTelemetry SDK and OTLP
+    /// exporter environment configuration.
+    #[doc(hidden)]
+    pub fn from_automatic_configuration() -> Self {
+        Self {
+            automatic: true,
+            ..Self::new(
+                OpenTelemetryType::GenAi,
+                AUTOMATIC_OTLP_ENDPOINT_MARKER.to_string(),
+            )
+        }
+    }
+
+    /// Creates an HTTP OTLP config for the given service name.
+    #[doc(hidden)]
+    pub fn http_binary(service_name: impl Into<String>) -> Self {
+        Self::new(OpenTelemetryType::Full, String::new()).with_service_name(service_name)
+    }
+
+    /// Creates a gRPC OTLP config for the given service name.
+    #[doc(hidden)]
+    pub fn grpc(service_name: impl Into<String>) -> Self {
+        Self::new(OpenTelemetryType::Full, String::new())
+            .with_transport(OtlpTransport::Grpc)
+            .with_service_name(service_name)
+    }
+
+    /// Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Sets the certificate and private key file paths for this endpoint.
+    pub fn with_tls(mut self, tls: OpenTelemetryTlsConfig) -> Self {
+        self.tls = Some(Box::new(tls));
+        self
+    }
+
+    /// Selects the OTLP transport.
+    pub fn with_transport(mut self, transport: OtlpTransport) -> Self {
+        self.transport = transport;
+        self
+    }
+
+    /// Adds a header/metadata entry for the exporter.
+    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Maps an exporter header name to the environment variable supplying its value.
+    pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
+        self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    /// Maps an exporter header name to the file supplying its value.
+    #[doc(hidden)]
+    pub fn with_header_file(mut self, key: impl Into<String>, path: impl Into<String>) -> Self {
+        self.header_file.insert(key.into(), path.into());
+        self
+    }
+
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn header(&self, key: &str) -> Option<&str> {
+        self.headers.get(key).map(String::as_str)
+    }
+
+    /// Sets the OTLP request timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+impl OpenTelemetryFileSinkConfig {
+    /// Creates a config writing OTLP to the file `sink` describes.
+    #[doc(hidden)]
+    pub fn new(otel_type: OpenTelemetryType, sink: OtlpFileSinkSettings) -> Self {
+        Self {
+            shared: SharedTraceOptions::new(otel_type),
+            sink,
+        }
+    }
+
+    /// Returns the file this config writes to.
+    pub fn sink(&self) -> &OtlpFileSinkSettings {
+        &self.sink
+    }
+}
+
+impl Default for OpenTelemetryConfig {
+    fn default() -> Self {
+        Self::new(OpenTelemetryType::Full, String::new())
+    }
+}
+
+/// OpenTelemetry-backed NeMo Relay subscriber.
+#[derive(Clone)]
+pub struct OpenTelemetrySubscriber {
+    inner: Arc<Inner>,
+}
+
+/// Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetrySubscriberOptions {
+    /// How mark events are projected into the trace.
+    pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection.
+    pub mark_exclude_names: Vec<String>,
+    /// Typed OTLP attributes copied to alias keys.
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    /// Literal Event metadata prefixes copied to OTLP attributes.
+    pub promote_metadata_prefixes: Vec<String>,
+    /// How long completed scopes retain their trace context for late marks.
+    pub completed_span_context_ttl: Duration,
+}
+
+impl Default for OpenTelemetrySubscriberOptions {
+    fn default() -> Self {
+        Self {
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
+            completed_span_context_ttl: DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+        }
+    }
+}
+
+struct Inner {
+    host: crate::host::HostCell,
+    // Keep `provider` before `_runtime`: the provider must be dropped before
+    // `ExporterRuntime` joins and tears down its Tokio runtime. Do not reorder
+    // these fields.
+    provider: SdkTracerProvider,
+    processor: Arc<Mutex<OtelEventProcessor>>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    subscriber: EventSubscriberFn,
+    _runtime: Option<ExporterRuntime>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // An externally supplied provider remains owned by its caller. Providers built by this
+        // subscriber, however, must finish their accepted exports before their runtime exits.
+        if self._runtime.is_none() {
+            return;
+        }
+        // Accept all Relay events queued before teardown before closing the provider.
+        let _ = self.host_ref().flush_subscribers();
+        let dynamic_providers = self
+            .processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .dynamic_providers();
+        let _ = shutdown_trace_providers(self.provider.clone(), dynamic_providers);
+    }
+}
+
+pub(crate) struct ExporterRuntime {
+    pub(crate) stop: Option<mpsc::Sender<()>>,
+    pub(crate) thread: Option<thread::JoinHandle<()>>,
+    pub(crate) runtime_diagnostics: SignalRuntimeDiagnostics,
+}
+
+impl Drop for ExporterRuntime {
+    fn drop(&mut self) {
+        self.stop.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl OpenTelemetrySubscriber {
+    /// Builds a subscriber backed by a new OTLP tracer provider.
+    #[doc(hidden)]
+    pub fn new(config: OpenTelemetryConfig) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(TraceConfig::Endpoint(config), None)
+            .map_err(OpenTelemetryError::from)
+    }
+
+    /// Creates a subscriber writing OTLP to a local file.
+    pub fn new_file_sink(config: OpenTelemetryFileSinkConfig) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(TraceConfig::File(config), None)
+            .map_err(OpenTelemetryError::from)
+    }
+
+    #[doc(hidden)]
+    pub fn new_for_plugin(config: OpenTelemetryConfig, endpoint_index: usize) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(
+            TraceConfig::Endpoint(config),
+            Some(format!("opentelemetry.traces[{endpoint_index}].endpoint")),
+        )
+        .map_err(OpenTelemetryError::from)
+    }
+
+    /// Creates a plugin-managed subscriber for a configured file sink.
+    #[doc(hidden)]
+    pub fn new_for_plugin_file_sink(
+        config: OpenTelemetryFileSinkConfig,
+        file_sink_index: usize,
+    ) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(
+            TraceConfig::File(config),
+            Some(format!(
+                "opentelemetry.file_sinks[{file_sink_index}].output_directory"
+            )),
+        )
+        .map_err(OpenTelemetryError::from)
+    }
+
+    #[doc(hidden)]
+    pub fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> ExporterInitializationResult<Self> {
+        super::otel_signal::validate_automatic_header_environment(
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        )?;
+        Self::new_with_runtime_diagnostics(
+            TraceConfig::Endpoint(
+                OpenTelemetryConfig::from_automatic_configuration()
+                    .with_plaintext_policy(plaintext),
+            ),
+            Some("opentelemetry.automatic.traces".to_string()),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_runtime_diagnostics(
+        mut config: TraceConfig,
+        diagnostic_field: Option<String>,
+    ) -> ExporterInitializationResult<Self> {
+        let shared = config.shared();
+        if shared.completed_span_context_ttl.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "completed_span_context_ttl must be greater than 0".to_string(),
+            )
+            .into());
+        }
+        validate_attribute_mappings(&shared.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&shared.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        validate_metadata_promotion_prefixes(&shared.promote_resource_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        // An automatic endpoint takes its settings from the environment, so the
+        // checks below do not apply to it. A file sink has no endpoint at all.
+        // Resource attributes apply to either destination. An automatic
+        // endpoint takes them from the environment, so it is exempt.
+        let automatic = matches!(&config, TraceConfig::Endpoint(endpoint) if endpoint.automatic);
+        if !automatic {
+            validate_telemetry_sdk_resource_attributes(&shared.resource_attributes)?;
+        }
+        if let TraceConfig::Endpoint(endpoint) = &mut config {
+            if endpoint.automatic {
+                let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")?
+                    .ok_or_else(|| {
+                        ExporterInitializationError::InvalidEndpoint(
+                            "automatic trace exporter requires a nonblank OTLP endpoint"
+                                .to_string(),
+                        )
+                    })?;
+                validate_trace_endpoint(&resolved, &endpoint.plaintext)?;
+            } else {
+                if endpoint.endpoint.trim().is_empty() {
+                    return Err(OpenTelemetryError::ExporterBuild(
+                        "endpoint must be a nonblank string".to_string(),
+                    )
+                    .into());
+                }
+                validate_trace_endpoint(&endpoint.endpoint, &endpoint.plaintext)?;
+                reject_global_header_environment()?;
+                validate_headers(&endpoint.headers)?;
+                validate_header_files(
+                    &endpoint.headers,
+                    &endpoint.header_env,
+                    &endpoint.header_file,
+                )
+                .map_err(OpenTelemetryError::ExporterBuild)?;
+                endpoint.headers = resolve_header_env(&endpoint.headers, &endpoint.header_env)?;
+                validate_headers(&endpoint.headers)?;
+            }
+        }
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
+        let (provider, runtime) =
+            build_owned_tracer_provider(config.clone(), runtime_diagnostics.clone())?;
+        let shared = config.shared().clone();
+        Ok(Self::from_tracer_provider_with_scope_and_type(
+            provider,
+            shared.instrumentation_scope,
+            shared.otel_type,
+            shared.mark_projection,
+            shared.mark_exclude_names,
+            shared.attribute_mappings,
+            shared.promote_metadata_prefixes,
+            shared.completed_span_context_ttl,
+            Some(runtime),
+            Some(config),
+        ))
+    }
+
+    /// Builds a subscriber from an already-configured tracer provider.
+    ///
+    /// Keep the runtime that drives an asynchronous processor alive until after this subscriber
+    /// has been flushed or shut down.
+    pub fn from_tracer_provider(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+    ) -> Self {
+        Self::from_tracer_provider_with_type(
+            provider,
+            instrumentation_scope,
+            OpenTelemetryType::Full,
+        )
+    }
+
+    /// Builds a typed subscriber from an already-configured tracer provider.
+    pub fn from_tracer_provider_with_type(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        otel_type: OpenTelemetryType,
+    ) -> Self {
+        let instrumentation_scope = instrumentation_scope.into();
+        Self::from_tracer_provider_with_scope_and_type(
+            provider,
+            instrumentation_scope,
+            otel_type,
+            MarkProjection::default(),
+            default_mark_exclude_names(),
+            Vec::new(),
+            Vec::new(),
+            DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+            None,
+            None,
+        )
+    }
+
+    /// Builds a subscriber from a tracer provider with typed attribute copies.
+    pub fn from_tracer_provider_with_attribute_mappings<I>(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        attribute_mappings: I,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = OtlpAttributeMapping>,
+    {
+        let attribute_mappings = attribute_mappings.into_iter().collect::<Vec<_>>();
+        Self::from_tracer_provider_with_options(
+            provider,
+            instrumentation_scope,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Builds a subscriber from a tracer provider with composable projection options.
+    pub fn from_tracer_provider_with_options(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        options: OpenTelemetrySubscriberOptions,
+    ) -> Result<Self> {
+        validate_attribute_mappings(&options.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&options.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        if options.completed_span_context_ttl.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "completed_span_context_ttl must be greater than 0".to_string(),
+            ));
+        }
+        Ok(Self::from_tracer_provider_with_scope_and_type(
+            provider,
+            instrumentation_scope.into(),
+            OpenTelemetryType::Full,
+            options.mark_projection,
+            options.mark_exclude_names,
+            options.attribute_mappings,
+            options.promote_metadata_prefixes,
+            options.completed_span_context_ttl,
+            None,
+            None,
+        ))
+    }
+
+    /// Builds a typed subscriber from a tracer provider with projection options.
+    pub fn from_tracer_provider_with_type_and_options(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        otel_type: OpenTelemetryType,
+        options: OpenTelemetrySubscriberOptions,
+    ) -> Result<Self> {
+        validate_attribute_mappings(&options.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        validate_metadata_promotion_prefixes(&options.promote_metadata_prefixes)
+            .map_err(OpenTelemetryError::InvalidMetadataPromotionPrefixes)?;
+        if options.completed_span_context_ttl.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "completed_span_context_ttl must be greater than 0".to_string(),
+            ));
+        }
+        Ok(Self::from_tracer_provider_with_scope_and_type(
+            provider,
+            instrumentation_scope.into(),
+            otel_type,
+            options.mark_projection,
+            options.mark_exclude_names,
+            options.attribute_mappings,
+            options.promote_metadata_prefixes,
+            options.completed_span_context_ttl,
+            None,
+            None,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_tracer_provider_with_scope_and_type(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        otel_type: OpenTelemetryType,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
+        promote_metadata_prefixes: Vec<String>,
+        completed_span_context_ttl: Duration,
+        runtime: Option<ExporterRuntime>,
+        owned_config: Option<TraceConfig>,
+    ) -> Self {
+        let runtime_diagnostics = runtime
+            .as_ref()
+            .map(|runtime| runtime.runtime_diagnostics.clone())
+            .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
+        let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
+        let processor = Arc::new(Mutex::new(
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
+                provider.clone(),
+                instrumentation_scope,
+                otel_type,
+                mark_projection,
+                mark_exclude_names,
+                attribute_mappings,
+                promote_metadata_prefixes,
+                completed_span_context_ttl,
+                runtime_diagnostics.clone(),
+                owned_config,
+                Arc::clone(&dynamic_pipelines),
+            ),
+        ));
+        let processor_for_callback = Arc::clone(&processor);
+        let pipelines_for_callback = Arc::clone(&dynamic_pipelines);
+        let host = crate::host::HostCell::default();
+        let callback_host = host.clone();
+        let subscriber: EventSubscriberFn =
+            Arc::new(move |event: &nemo_relay_types::api::event::Event| {
+                let runtime_host = callback_host.get();
+                let event = &EventView::new(event, runtime_host.as_ref());
+                let request = processor_for_callback
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.resource_pipeline_request(event));
+                let root_tracer = request.map(|request| {
+                    let fallback = request.fallback_tracer.clone();
+                    ensure_dynamic_pipeline(&pipelines_for_callback, request).unwrap_or(fallback)
+                });
+                let Ok(mut guard) = processor_for_callback.lock() else {
+                    // Observability should not take down the host process if the
+                    // subscriber state was previously poisoned.
+                    return;
+                };
+                guard.process_with_root_tracer(event, root_tracer);
+            });
+
+        Self {
+            inner: Arc::new(Inner {
+                host,
+                provider,
+                processor,
+                runtime_diagnostics,
+                subscriber,
+                _runtime: runtime,
+            }),
+        }
+    }
+
+    /// Returns the raw NeMo Relay subscriber callback for custom registration flows.
+    pub fn subscriber(&self) -> EventSubscriberFn {
+        Arc::clone(&self.inner.subscriber)
+    }
+
+    /// Return a bounded snapshot of runtime diagnostics for this subscriber.
+    pub fn runtime_diagnostics(&self) -> ExporterRuntimeDiagnostics {
+        self.inner.runtime_diagnostics.snapshot()
+    }
+
+    /// Registers this subscriber globally with the NeMo Relay runtime.
+    pub fn register(&self, name: &str) -> Result<()> {
+        self.host_ref()
+            .register_subscriber(name, self.subscriber())?;
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_registered",
+            exporter = "opentelemetry",
+            subscriber = name;
+            "OpenTelemetry exporter registered"
+        );
+        Ok(())
+    }
+
+    /// Deregisters a previously-registered global subscriber by name.
+    pub fn deregister(&self, name: &str) -> Result<bool> {
+        let removed = self.host_ref().deregister_subscriber(name)?;
+        if removed {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "subscriber_deregistered",
+                subscriber = name;
+                "Observability subscriber deregistered"
+            );
+        }
+        Ok(removed)
+    }
+
+    /// Flushes finished spans through the underlying tracer provider.
+    ///
+    /// After a successful flush, runtime diagnostics include queue drops observed so far.
+    /// This is a synchronous completion barrier; call it from a blocking task in async code.
+    #[doc(hidden)]
+    pub fn force_flush(&self) -> Result<()> {
+        self.host_ref().flush_subscribers()?;
+        // Keep the processor lock guard temporary: subscriber callbacks also use it.
+        let dynamic_providers = self
+            .inner
+            .processor
+            .lock()
+            .map_err(|_| {
+                OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
+            })?
+            .dynamic_providers();
+        flush_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
+    }
+
+    /// Shuts down the underlying tracer provider.
+    ///
+    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
+    /// This waits for the final export and should run in a blocking task in async code.
+    pub fn shutdown(&self) -> Result<()> {
+        let barrier_error = self
+            .host_ref()
+            .flush_subscribers()
+            .err()
+            .map(OpenTelemetryError::Core);
+        let provider_result = self.shutdown_provider();
+        if let Some(error) = barrier_error {
+            return Err(error);
+        }
+        provider_result
+    }
+
+    #[doc(hidden)]
+    pub fn shutdown_provider(&self) -> Result<()> {
+        // Keep the processor lock guard temporary: subscriber callbacks also use it.
+        let dynamic_providers = self
+            .inner
+            .processor
+            .lock()
+            .map_err(|_| {
+                OpenTelemetryError::TraceProvider("event processor lock poisoned".to_string())
+            })?
+            .dynamic_providers();
+        shutdown_trace_providers(self.inner.provider.clone(), dynamic_providers)
+            .map_err(OpenTelemetryError::TraceProvider)
+    }
+}
+
+pub(crate) fn flush_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = provider.force_flush() {
+        errors.push(error.to_string());
+    }
+    for provider in dynamic_providers {
+        if let Err(error) = provider.force_flush() {
+            errors.push(error.to_string());
+        }
+    }
+    errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+pub(crate) fn shutdown_trace_providers(
+    provider: SdkTracerProvider,
+    dynamic_providers: Vec<SdkTracerProvider>,
+) -> std::result::Result<(), String> {
+    let mut dynamic_errors = Vec::new();
+    for provider in dynamic_providers {
+        if let Err(error) = normalize_shutdown_result(provider.shutdown()) {
+            dynamic_errors.push(error.to_string());
+        }
+    }
+    let provider_result = provider.shutdown();
+    if provider_result.is_ok() {
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_shutdown",
+            exporter = "opentelemetry";
+            "OpenTelemetry exporter shut down"
+        );
+    }
+    normalize_shutdown_result(provider_result).map_err(|error| error.to_string())?;
+    dynamic_errors.into_iter().next().map_or(Ok(()), Err)
+}
+
+pub(crate) fn build_owned_tracer_provider(
+    config: TraceConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
+    let resource_attributes = configured_resource_attributes(&config);
+    build_owned_tracer_provider_with_resource(config, runtime_diagnostics, resource_attributes)
+}
+
+pub(crate) fn build_owned_tracer_provider_with_resource(
+    config: TraceConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    resource_attributes: Vec<KeyValue>,
+) -> ExporterInitializationResult<(SdkTracerProvider, ExporterRuntime)> {
+    let (result_sender, result_receiver) = mpsc::sync_channel(1);
+    let (stop_sender, stop_receiver) = mpsc::channel();
+    let provider_diagnostics = runtime_diagnostics.clone();
+    let runtime_thread = thread::Builder::new()
+        .name("nemo-relay-otlp".to_string())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = result_sender
+                        .send(Err(
+                            OpenTelemetryError::ExporterBuild(error.to_string()).into()
+                        ));
+                    return;
+                }
+            };
+            let provider = {
+                let _guard = runtime.enter();
+                build_tracer_provider_with_resource(
+                    &config,
+                    provider_diagnostics,
+                    resource_attributes,
+                )
+            };
+            let keep_runtime_alive = provider.is_ok();
+            let _ = result_sender.send(provider);
+            if keep_runtime_alive {
+                let _ = stop_receiver.recv();
+            }
+        })
+        .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+    let provider = result_receiver.recv().map_err(|error| {
+        OpenTelemetryError::ExporterBuild(format!("exporter runtime stopped unexpectedly: {error}"))
+    })??;
+    Ok((
+        provider,
+        ExporterRuntime {
+            stop: Some(stop_sender),
+            thread: Some(runtime_thread),
+            runtime_diagnostics,
+        },
+    ))
+}
+
+pub(crate) fn reject_global_header_environment() -> Result<()> {
+    for variable in [
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    ] {
+        if std::env::var_os(variable).is_some_and(|value| !value.is_empty()) {
+            return Err(OpenTelemetryError::GlobalHeaderEnvironmentUnsupported { variable });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_headers(headers: &HashMap<String, String>) -> Result<()> {
+    let mut normalized = HashSet::new();
+    for (key, value) in headers {
+        let normalized_key = key.to_ascii_lowercase();
+        if !normalized.insert(normalized_key) {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: "header names must be unique ignoring ASCII case".to_string(),
+            });
+        }
+        reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
+            OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        reqwest::header::HeaderValue::from_str(value).map_err(|error| {
+            OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: error.to_string(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn build_tracer_provider_with_resource(
+    config: &TraceConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    resource_attributes: Vec<KeyValue>,
+) -> ExporterInitializationResult<SdkTracerProvider> {
+    match config {
+        TraceConfig::File(file) => provider_with_exporter(
+            OtlpFileSpanExporter::new(
+                &file.sink.output_directory,
+                &file.sink.path(),
+                file.sink.format,
+                matches!(file.sink.mode, OtlpFileSinkMode::Append),
+            )
+            .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?,
+            config,
+            runtime_diagnostics,
+            resource_attributes,
+        ),
+        TraceConfig::Endpoint(endpoint) => provider_with_exporter(
+            otlp_span_exporter(endpoint, runtime_diagnostics.clone())?,
+            config,
+            runtime_diagnostics,
+            resource_attributes,
+        ),
+    }
+}
+
+/// Builds the OTLP network exporter for an endpoint destination.
+pub(crate) fn otlp_span_exporter(
+    settings: &OpenTelemetryConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+) -> ExporterInitializationResult<OtlpSpanExporter> {
+    if settings.automatic {
+        let builder = OtlpSpanExporter::builder();
+        return if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            builder
+                .with_http()
+                .with_protocol(Protocol::HttpBinary)
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
+        } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            let mut builder = builder.with_tonic();
+            if let Some(tls) = super::otel_signal::automatic_otlp_grpc_tls("TRACES")? {
+                builder = builder.with_tls_config(tls);
+            }
+            builder
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
+        } else {
+            builder
+                .with_http()
+                .with_http_client(DiagnosticTraceHttpClient {
+                    inner: automatic_otlp_http_client("TRACES")?,
+                    diagnostics: runtime_diagnostics,
+                })
+                .build()
+                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()).into())
+        };
+    }
+    match settings.transport {
+        OtlpTransport::HttpBinary => {
+            let client = settings
+                .tls
+                .as_deref()
+                .cloned()
+                .unwrap_or_default()
+                .http_client(&settings.endpoint, Some(settings.timeout))?;
+            let mut builder = OtlpSpanExporter::builder()
+                .with_http()
+                .with_protocol(Protocol::HttpBinary)
+                .with_timeout(settings.timeout);
+            if !settings.header_file.is_empty() {
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: HeaderFileHttpClient::new(
+                        client,
+                        HeaderFileResolver::new(settings.header_file.clone()),
+                        settings.plaintext.clone(),
+                    ),
+                    diagnostics: runtime_diagnostics,
+                });
+            } else {
+                builder = builder.with_http_client(DiagnosticTraceHttpClient {
+                    inner: client,
+                    diagnostics: runtime_diagnostics,
+                });
+            }
+            builder =
+                builder.with_endpoint(resolve_http_trace_endpoint(&settings.endpoint).into_owned());
+            if !settings.headers.is_empty() {
+                builder = builder.with_headers(settings.headers.clone());
+            }
+            builder
+                .build()
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
+        }
+        OtlpTransport::Grpc => {
+            let mut builder = OtlpSpanExporter::builder()
+                .with_tonic()
+                .with_protocol(Protocol::Grpc)
+                .with_timeout(settings.timeout);
+            builder = builder.with_endpoint(settings.endpoint.clone());
+            if settings
+                .endpoint
+                .trim()
+                .parse::<reqwest::Url>()
+                .is_ok_and(|url| url.scheme() == "https")
+            {
+                builder = builder.with_tls_config(
+                    settings
+                        .tls
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default()
+                        .grpc_config(&settings.endpoint)?,
+                );
+            } else if let Some(tls) = &settings.tls {
+                tls.validate(&settings.endpoint)?;
+            }
+            if !settings.headers.is_empty() {
+                builder = builder.with_metadata(build_grpc_metadata(&settings.headers)?);
+            }
+            if !settings.header_file.is_empty() {
+                builder = builder.with_interceptor(HeaderFileInterceptor::new(
+                    HeaderFileResolver::new(settings.header_file.clone()),
+                ));
+            }
+            builder
+                .build()
+                .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()).into())
+        }
+    }
+}
+
+/// Wraps any span exporter in the shared provider, batching, and diagnostics.
+pub(crate) fn provider_with_exporter<E: SpanExporter + 'static>(
+    exporter: E,
+    config: &TraceConfig,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    resource_attributes: Vec<KeyValue>,
+) -> ExporterInitializationResult<SdkTracerProvider> {
+    // Disable per-span attribute caps. Consumers may emit large attribute
+    // sets on long-running spans; the OTel SDK default (128) silently drops
+    // attributes added last in the span's lifecycle.
+    let builder = SdkTracerProvider::builder()
+        .with_resource(telemetry_resource(resource_attributes))
+        .with_id_generator(RelayIdGenerator)
+        .with_max_attributes_per_span(u32::MAX)
+        .with_max_attributes_per_event(u32::MAX);
+
+    let mut batch_config = BatchConfigBuilder::default();
+    // Relay's diagnostic processor serializes export diagnostics, so retain
+    // its single-export execution model instead of inheriting this setting.
+    batch_config = batch_config.with_max_concurrent_exports(1);
+    if let Some(max_queue_size) = config.shared().max_queue_size {
+        batch_config = batch_config.with_max_queue_size(max_queue_size);
+    }
+    if let Some(max_export_batch_size) = config.shared().max_export_batch_size {
+        batch_config = batch_config.with_max_export_batch_size(max_export_batch_size);
+    }
+    if let Some(scheduled_delay) = config.shared().scheduled_delay {
+        batch_config = batch_config.with_scheduled_delay(scheduled_delay);
+    }
+    let processor = DiagnosticBatchSpanProcessor::new_with_identity_batch_config_and_retry_timeout(
+        exporter,
+        config.delivery_identity(),
+        runtime_diagnostics,
+        batch_config.build(),
+        config.channel_full_retry_budget(),
+    );
+    let provider = builder.with_span_processor(processor).build();
+    drain_startup_queue(|| provider.force_flush())?;
+    Ok(provider)
+}
+
+pub(crate) fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
+    if matches!(config, TraceConfig::Endpoint(endpoint) if endpoint.automatic) {
+        return Vec::new();
+    }
+    let shared = config.shared();
+    let mut attributes = Vec::new();
+    if let Some(service_name) = &shared.service_name {
+        attributes.push(KeyValue::new("service.name", service_name.clone()));
+    }
+    if let Some(namespace) = &shared.service_namespace {
+        attributes.push(KeyValue::new("service.namespace", namespace.clone()));
+    }
+    if let Some(version) = &shared.service_version {
+        attributes.push(KeyValue::new("service.version", version.clone()));
+    }
+    attributes.extend(
+        shared
+            .resource_attributes
+            .iter()
+            .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
+    );
+    attributes
+}
+
+pub(crate) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
+    let mut entries = attributes
+        .iter()
+        .map(|attribute| format!("{}={:?}", attribute.key.as_str(), attribute.value))
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries.join("\u{1f}")
+}
+
+/// Inspect TLS failures before the OTLP HTTP exporter replaces them with a
+/// generic network error. Only static classifications and URL origins are safe
+/// to report; error strings can contain credentials or collector response data.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct DiagnosticTraceHttpClient<C> {
+    pub inner: C,
+    pub diagnostics: SignalRuntimeDiagnostics,
+}
+
+#[async_trait::async_trait]
+impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
+    for DiagnosticTraceHttpClient<C>
+{
+    async fn send_bytes(
+        &self,
+        request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        if let Some(reason) = self.diagnostics.trace_tls_failure() {
+            return Err(std::io::Error::other(reason).into());
+        }
+        let endpoint = trace_endpoint_log_identity(&request.uri().to_string());
+        let result = self.inner.send_bytes(request).await;
+        if let Err(error) = &result
+            && let Some(reason) = safe_tls_failure_reason(error.as_ref())
+            && self
+                .diagnostics
+                .stop_trace_exports_after_tls_failure(reason)
+        {
+            let message = format!(
+                "OpenTelemetry trace export to {endpoint} stopped: {reason}; recreate the exporter after correcting TLS configuration"
+            );
+            self.diagnostics
+                .record("otel.tls_failed", message.clone(), 1);
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_tls_failed";
+                "{message}"
+            );
+        }
+        result
+    }
+}
+
+/// Return a safe reason for TLS failures that must stop the exporter.
+pub(crate) fn safe_tls_failure_reason(
+    mut error: &(dyn std::error::Error + 'static),
+) -> Option<&'static str> {
+    loop {
+        if let Some(error) = error.downcast_ref::<rustls::Error>() {
+            return match error {
+                // Broken connections can produce malformed or unexpected
+                // records. Let a later request recover from these errors.
+                rustls::Error::InvalidMessage(_) | rustls::Error::InappropriateMessage { .. } => {
+                    None
+                }
+                rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer) => Some(
+                    "TLS certificate verification failed: unknown issuer; check the configured CA bundle",
+                ),
+                rustls::Error::InvalidCertificate(_) => Some("TLS certificate verification failed"),
+                _ => Some("TLS handshake failed"),
+            };
+        }
+        // io::Error's source can skip the wrapped error itself.
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io.get_ref()
+        {
+            error = inner;
+            continue;
+        }
+        error = error.source()?;
+    }
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct CountingSpanExporter<E> {
+    pub inner: E,
+    pub accepted_spans: Arc<AtomicU64>,
+    pub diagnostics: Arc<TraceDeliveryDiagnostics>,
+}
+
+impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        self.accepted_spans
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        let result = self.inner.export(batch).await;
+        match result {
+            Ok(()) => {
+                self.diagnostics.record_export_success();
+                Ok(())
+            }
+            Err(_) => {
+                self.diagnostics.record_export_failure();
+                // The SDK's shutdown drains its final batch and forwards the
+                // export result. Mark this known delivery failure here as well
+                // as in the processor's successful-shutdown path, so cleanup
+                // does not mistake it for an incomplete provider shutdown.
+                let marker = if self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
+                    format!("{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: ")
+                } else {
+                    String::new()
+                };
+                Err(OTelSdkError::InternalFailure(format!(
+                    "{marker}OpenTelemetry trace export to {} failed{}",
+                    self.diagnostics.endpoint,
+                    self.diagnostics.failure_reason_suffix()
+                )))
+            }
+        }
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn set_resource(&mut self, resource: &Resource) {
+        self.inner.set_resource(resource);
+    }
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct TraceDeliveryDiagnostics {
+    pub endpoint: String,
+    pub runtime_diagnostics: SignalRuntimeDiagnostics,
+    pub export_failures: AtomicU64,
+    pub unresolved_export_failure: AtomicBool,
+}
+
+impl TraceDeliveryDiagnostics {
+    /// Takes an identity the caller has already made safe to log: a sanitized
+    /// endpoint, or a file sink's path.
+    #[doc(hidden)]
+    pub fn with_identity(identity: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
+        Self {
+            endpoint: identity,
+            runtime_diagnostics,
+            export_failures: AtomicU64::new(0),
+            unresolved_export_failure: AtomicBool::new(false),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_export_failure(&self) {
+        self.export_failures.fetch_add(1, Ordering::Relaxed);
+        self.unresolved_export_failure
+            .store(true, Ordering::Relaxed);
+        let count = self.runtime_diagnostics.record(
+            "otel.traces_export_failed",
+            format!(
+                "OpenTelemetry trace export to endpoint {} failed{}",
+                self.endpoint,
+                self.failure_reason_suffix()
+            ),
+            1,
+        );
+        if self.runtime_diagnostics.trace_tls_failure().is_none()
+            && should_relog_runtime_diagnostic(count)
+        {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "otel_traces_export_failed",
+                endpoint = self.endpoint.as_str();
+                "OpenTelemetry trace export failed"
+            );
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn failure_reason_suffix(&self) -> String {
+        self.runtime_diagnostics
+            .trace_tls_failure()
+            .map(|reason| format!(": {reason}; recreate the exporter to resume HTTP trace exports"))
+            .unwrap_or_default()
+    }
+
+    #[doc(hidden)]
+    pub fn record_export_success(&self) {
+        self.unresolved_export_failure
+            .store(false, Ordering::Relaxed);
+    }
+
+    #[doc(hidden)]
+    pub fn unresolved_failure_summary(&self) -> Option<String> {
+        self.unresolved_export_failure
+            .load(Ordering::Relaxed)
+            .then(|| {
+                let failures = self.export_failures.load(Ordering::Relaxed);
+                format!(
+                    "otel.traces_export_failed ({failures}): export to endpoint {} has not recovered{}",
+                    self.endpoint,
+                    self.failure_reason_suffix()
+                )
+            })
+    }
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct DiagnosticBatchSpanProcessor {
+    pub inner: AsyncBatchSpanProcessor<runtime::Tokio>,
+    pub completed_spans: AtomicU64,
+    pub accepted_spans: Arc<AtomicU64>,
+    pub diagnostics: Arc<TraceDeliveryDiagnostics>,
+    pub reported_dropped_spans: AtomicU64,
+    pub retry_timeout: Duration,
+}
+
+impl DiagnosticBatchSpanProcessor {
+    #[doc(hidden)]
+    pub fn new_with_batch_config<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+    ) -> Self {
+        Self::new_with_batch_config_and_retry_timeout(
+            exporter,
+            endpoint,
+            runtime_diagnostics,
+            batch_config,
+            Duration::from_secs(3),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_batch_config_and_retry_timeout<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+        retry_timeout: Duration,
+    ) -> Self {
+        Self::new_with_identity_batch_config_and_retry_timeout(
+            exporter,
+            trace_endpoint_log_identity(&endpoint),
+            runtime_diagnostics,
+            batch_config,
+            retry_timeout,
+        )
+    }
+
+    /// As above, for a destination that has already resolved its own identity:
+    /// a file sink reports its path, which is not a URL to be sanitized.
+    #[doc(hidden)]
+    pub fn new_with_identity_batch_config_and_retry_timeout<E: SpanExporter + 'static>(
+        exporter: E,
+        identity: String,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+        retry_timeout: Duration,
+    ) -> Self {
+        let accepted_spans = Arc::new(AtomicU64::new(0));
+        let diagnostics = Arc::new(TraceDeliveryDiagnostics::with_identity(
+            identity,
+            runtime_diagnostics,
+        ));
+        let exporter = CountingSpanExporter {
+            inner: exporter,
+            accepted_spans: Arc::clone(&accepted_spans),
+            diagnostics: Arc::clone(&diagnostics),
+        };
+        Self {
+            inner: AsyncBatchSpanProcessor::builder(exporter, runtime::Tokio)
+                .with_batch_config(batch_config)
+                .build(),
+            completed_spans: AtomicU64::new(0),
+            accepted_spans,
+            diagnostics,
+            reported_dropped_spans: AtomicU64::new(0),
+            retry_timeout,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_dropped_spans(&self) -> u64 {
+        let dropped = self
+            .completed_spans
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.accepted_spans.load(Ordering::Relaxed));
+        let mut reported = self.reported_dropped_spans.load(Ordering::Relaxed);
+        while dropped > reported {
+            match self.reported_dropped_spans.compare_exchange_weak(
+                reported,
+                dropped,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.diagnostics.runtime_diagnostics.record(
+                        "otel.spans_dropped",
+                        format!(
+                            "OpenTelemetry dropped spans before export to endpoint {} because the batch queue was full",
+                            self.diagnostics.endpoint
+                        ),
+                        dropped - reported,
+                    );
+                    break;
+                }
+                Err(current) => reported = current,
+            }
+        }
+        dropped
+    }
+}
+
+impl SpanProcessor for DiagnosticBatchSpanProcessor {
+    fn on_start(&self, span: &mut Span, cx: &Context) {
+        self.inner.on_start(span, cx);
+    }
+
+    fn on_end(&self, span: SpanData) {
+        // The endpoint is disabled until it is recreated. Keep new spans out
+        // of the batch queue rather than repeatedly invoking a failed exporter.
+        if self
+            .diagnostics
+            .runtime_diagnostics
+            .trace_tls_failure()
+            .is_some()
+        {
+            return;
+        }
+        self.completed_spans.fetch_add(1, Ordering::Relaxed);
+        self.inner.on_end(span);
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        let result =
+            retry_batch_processor_channel_full(self.retry_timeout, || self.inner.force_flush());
+        if result.is_ok() {
+            self.record_dropped_spans();
+        }
+        if result.is_ok()
+            && let Some(summary) = self.diagnostics.unresolved_failure_summary()
+        {
+            return Err(OTelSdkError::InternalFailure(summary));
+        }
+        result
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        let result = retry_batch_processor_channel_full(self.retry_timeout.min(timeout), || {
+            self.inner.shutdown_with_timeout(timeout)
+        });
+        if result.is_ok() {
+            let dropped = self.record_dropped_spans();
+            let export_failure = self.diagnostics.unresolved_failure_summary();
+            if (dropped > 0 || export_failure.is_some())
+                && self.diagnostics.runtime_diagnostics.has_plugin_mirror()
+            {
+                let mut diagnostics = Vec::new();
+                if dropped > 0 {
+                    diagnostics.push(format!("otel.spans_dropped ({dropped})"));
+                }
+                if let Some(export_failure) = export_failure {
+                    diagnostics.push(export_failure);
+                }
+                return Err(OTelSdkError::InternalFailure(format!(
+                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
+                    diagnostics.join(", ")
+                )));
+            }
+        }
+        result
+    }
+
+    fn set_resource(&mut self, resource: &Resource) {
+        self.inner.set_resource(resource);
+    }
+}
+
+#[doc(hidden)]
+pub fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
+    let mut metadata = MetadataMap::new();
+    for (key, value) in headers {
+        let metadata_key = MetadataKey::from_bytes(key.as_bytes()).map_err(|e| {
+            OpenTelemetryError::InvalidGrpcHeader {
+                key: key.clone(),
+                message: e.to_string(),
+            }
+        })?;
+        let metadata_value = MetadataValue::try_from(value.as_str()).map_err(|e| {
+            OpenTelemetryError::InvalidGrpcHeader {
+                key: key.clone(),
+                message: e.to_string(),
+            }
+        })?;
+        metadata.insert(metadata_key, metadata_value);
+    }
+    Ok(metadata)
+}
+
+#[doc(hidden)]
+pub struct ActiveSpan {
+    pub span: Span,
+    pub span_context: SpanContext,
+    pub tracer: SdkTracer,
+    pub start_model_name: Option<String>,
+    pub projected_attributes: Vec<KeyValue>,
+    pub projection_attribute_keys: HashSet<String>,
+    pub inferred_tool_attribute_keys: HashSet<String>,
+    pub start_promoted_metadata: Vec<KeyValue>,
+    pub descendant_error_type: Option<String>,
+    pub descendant_exception_type: Option<String>,
+}
+
+#[doc(hidden)]
+pub struct OtelEventProcessor {
+    pub active_spans: HashMap<Uuid, ActiveSpan>,
+    pub completed_span_contexts: HashMap<Uuid, CompletedSpanContext>,
+    pub completed_span_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
+    pub provider: SdkTracerProvider,
+    pub tracer: SdkTracer,
+    pub instrumentation_scope: String,
+    pub otel_type: OpenTelemetryType,
+    pub mark_projection: MarkProjection,
+    pub mark_exclude_names: Vec<String>,
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    pub promote_metadata_prefixes: Vec<String>,
+    pub resource_metadata_prefixes: Vec<String>,
+    pub resource_metadata_protected_keys: HashSet<String>,
+    pub owned_config: Option<TraceConfig>,
+    pub dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
+    pub invalid_metric_count: u64,
+    pub completed_span_context_ttl: Duration,
+    pub runtime_diagnostics: SignalRuntimeDiagnostics,
+}
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct CompletedSpanContext {
+    pub closed_at: DateTime<Utc>,
+    pub span_context: SpanContext,
+    pub tracer: SdkTracer,
+}
+
+#[doc(hidden)]
+pub struct DynamicTracePipeline {
+    pub provider: SdkTracerProvider,
+    pub tracer: SdkTracer,
+    pub(crate) _runtime: ExporterRuntime,
+}
+
+#[doc(hidden)]
+pub struct ResourcePipelineRequest {
+    pub key: String,
+    pub config: TraceConfig,
+    pub attributes: Vec<KeyValue>,
+    pub instrumentation_scope: String,
+    pub runtime_diagnostics: SignalRuntimeDiagnostics,
+    pub fallback_tracer: SdkTracer,
+}
+
+pub(crate) fn ensure_dynamic_pipeline(
+    pipelines: &Mutex<HashMap<String, DynamicTracePipeline>>,
+    request: ResourcePipelineRequest,
+) -> Option<SdkTracer> {
+    let mut pipelines = pipelines.lock().ok()?;
+    if let Some(pipeline) = pipelines.get(&request.key) {
+        return Some(pipeline.tracer.clone());
+    }
+    let (provider, runtime) = match build_owned_tracer_provider_with_resource(
+        request.config,
+        request.runtime_diagnostics.clone(),
+        request.attributes,
+    ) {
+        Ok(pipeline) => pipeline,
+        Err(error) => {
+            let count = request.runtime_diagnostics.record(
+                "otel.resource_metadata_pipeline_build_failed",
+                format!("OpenTelemetry resource metadata pipeline was not created: {error}"),
+                1,
+            );
+            if should_relog_runtime_diagnostic(count) {
+                log::warn!(target: "nemo_relay.observability", event = "otel_resource_metadata_pipeline_build_failed"; "OpenTelemetry resource metadata pipeline was not created");
+            }
+            return None;
+        }
+    };
+    let tracer = provider.tracer(request.instrumentation_scope);
+    pipelines.insert(
+        request.key,
+        DynamicTracePipeline {
+            provider,
+            tracer: tracer.clone(),
+            _runtime: runtime,
+        },
+    );
+    Some(tracer)
+}
+
+impl OtelEventProcessor {
+    #[doc(hidden)]
+    pub fn new(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
+        Self::new_with_mark_projection(provider, instrumentation_scope, MarkProjection::default())
+    }
+
+    #[doc(hidden)]
+    pub fn new_openinference(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings(
+            provider,
+            instrumentation_scope,
+            OpenTelemetryType::OpenInference,
+            MarkProjection::default(),
+            default_mark_exclude_names(),
+            Vec::new(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_openinference_with_mark_projection(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings(
+            provider,
+            instrumentation_scope,
+            OpenTelemetryType::OpenInference,
+            mark_projection,
+            default_mark_exclude_names(),
+            Vec::new(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_openinference_with_mark_projection_and_exclusions(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings(
+            provider,
+            instrumentation_scope,
+            OpenTelemetryType::OpenInference,
+            mark_projection,
+            mark_exclude_names,
+            Vec::new(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_mark_projection(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions(
+            provider,
+            instrumentation_scope,
+            mark_projection,
+            default_mark_exclude_names(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_mark_projection_and_exclusions(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings(
+            provider,
+            instrumentation_scope,
+            OpenTelemetryType::Full,
+            mark_projection,
+            mark_exclude_names,
+            Vec::new(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_mark_projection_and_exclusions_and_mappings(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        otel_type: OpenTelemetryType,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+            provider,
+            instrumentation_scope,
+            otel_type,
+            mark_projection,
+            mark_exclude_names,
+            attribute_mappings,
+            Vec::new(),
+            SignalRuntimeDiagnostics::new(None),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        otel_type: OpenTelemetryType,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
+        promote_metadata_prefixes: Vec<String>,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
+            provider,
+            instrumentation_scope,
+            otel_type,
+            mark_projection,
+            mark_exclude_names,
+            attribute_mappings,
+            promote_metadata_prefixes,
+            DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+            runtime_diagnostics,
+            None,
+            Arc::new(Mutex::new(HashMap::new())),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        otel_type: OpenTelemetryType,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
+        promote_metadata_prefixes: Vec<String>,
+        completed_span_context_ttl: Duration,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+        owned_config: Option<TraceConfig>,
+        dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
+    ) -> Self {
+        let tracer = provider.tracer(instrumentation_scope.clone());
+        let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
+            .as_ref()
+            .map(|config| {
+                (
+                    config.shared().promote_resource_metadata_prefixes.clone(),
+                    configured_resource_attributes(config)
+                        .into_iter()
+                        .map(|attribute| attribute.key.as_str().to_string())
+                        .collect::<HashSet<_>>(),
+                )
+            })
+            .unwrap_or_default();
+        resource_metadata_protected_keys.extend(
+            TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS
+                .iter()
+                .map(|key| (*key).to_string()),
+        );
+        Self {
+            active_spans: HashMap::new(),
+            completed_span_contexts: HashMap::new(),
+            completed_span_expiry_index: BTreeMap::new(),
+            provider,
+            tracer,
+            instrumentation_scope,
+            otel_type,
+            mark_projection,
+            mark_exclude_names,
+            attribute_mappings,
+            promote_metadata_prefixes,
+            resource_metadata_prefixes,
+            resource_metadata_protected_keys,
+            owned_config,
+            dynamic_pipelines,
+            invalid_metric_count: 0,
+            completed_span_context_ttl,
+            runtime_diagnostics,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn process(&mut self, event: &EventView<'_>) {
+        self.process_with_root_tracer(event, None);
+    }
+
+    #[doc(hidden)]
+    pub fn process_with_root_tracer(
+        &mut self,
+        event: &EventView<'_>,
+        root_tracer: Option<SdkTracer>,
+    ) {
+        if !accept_otlp_timestamp(event, &self.runtime_diagnostics) {
+            return;
+        }
+        self.expire_completed_span_contexts(*event.timestamp());
+        match event.scope_category() {
+            Some(ScopeCategory::Start) => self.process_start(event, root_tracer),
+            Some(ScopeCategory::End) => self.process_end(event),
+            None => self.process_mark(event),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn resource_pipeline_request(
+        &self,
+        event: &EventView<'_>,
+    ) -> Option<ResourcePipelineRequest> {
+        if event.scope_category() != Some(ScopeCategory::Start)
+            || self.parent_context(event).span().span_context().is_valid()
+        {
+            return None;
+        }
+        let config = self.owned_config.as_ref()?;
+        if config
+            .shared()
+            .promote_resource_metadata_prefixes
+            .is_empty()
+        {
+            return None;
+        }
+        let mut attributes = configured_resource_attributes(config);
+        let promotion = promote_event_metadata_attributes(
+            &mut attributes,
+            event,
+            &config.shared().promote_resource_metadata_prefixes,
+            &self.resource_metadata_protected_keys,
+        );
+        self.record_metadata_promotion_issues(promotion.issues, "resource_metadata");
+        let key = canonical_resource_key(&attributes);
+        if key == canonical_resource_key(&configured_resource_attributes(config)) {
+            return None;
+        }
+        Some(ResourcePipelineRequest {
+            key,
+            config: config.clone(),
+            attributes,
+            instrumentation_scope: self.instrumentation_scope.clone(),
+            runtime_diagnostics: self.runtime_diagnostics.clone(),
+            fallback_tracer: self.tracer.clone(),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn tracer_for_root(&mut self, event: &EventView<'_>) -> SdkTracer {
+        let Some(config) = self.owned_config.as_ref() else {
+            return self.tracer.clone();
+        };
+        if config
+            .shared()
+            .promote_resource_metadata_prefixes
+            .is_empty()
+        {
+            return self.tracer.clone();
+        }
+
+        let mut attributes = configured_resource_attributes(config);
+        promote_event_metadata_attributes(
+            &mut attributes,
+            event,
+            &config.shared().promote_resource_metadata_prefixes,
+            &self.resource_metadata_protected_keys,
+        );
+        let key = canonical_resource_key(&attributes);
+        let base_key = canonical_resource_key(&configured_resource_attributes(config));
+        if key == base_key {
+            return self.tracer.clone();
+        }
+        self.dynamic_pipelines
+            .lock()
+            .ok()
+            .and_then(|pipelines| pipelines.get(&key).map(|pipeline| pipeline.tracer.clone()))
+            .unwrap_or_else(|| self.tracer.clone())
+    }
+
+    #[doc(hidden)]
+    pub fn tracer_for_start(&mut self, event: &EventView<'_>, is_trace_root: bool) -> SdkTracer {
+        if let Some(tracer) = self.find_parent_span(event).map(|span| span.tracer.clone()) {
+            return tracer;
+        }
+        if let Some(tracer) = event
+            .parent_uuid()
+            .and_then(|uuid| self.completed_span_contexts.get(&uuid))
+            .map(|context| context.tracer.clone())
+        {
+            return tracer;
+        }
+        if is_trace_root {
+            return self.tracer_for_root(event);
+        }
+        self.tracer.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn tracer_for_mark(&self, event: &EventView<'_>) -> SdkTracer {
+        self.find_parent_span(event)
+            .map(|span| span.tracer.clone())
+            .or_else(|| {
+                event
+                    .parent_uuid()
+                    .and_then(|uuid| self.completed_span_contexts.get(&uuid))
+                    .map(|context| context.tracer.clone())
+            })
+            .unwrap_or_else(|| self.tracer.clone())
+    }
+
+    #[doc(hidden)]
+    pub fn force_flush(&self) -> Result<()> {
+        self.provider
+            .force_flush()
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
+    }
+
+    #[doc(hidden)]
+    pub fn dynamic_providers(&self) -> Vec<SdkTracerProvider> {
+        self.dynamic_pipelines
+            .lock()
+            .map(|pipelines| {
+                pipelines
+                    .values()
+                    .map(|pipeline| pipeline.provider.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[doc(hidden)]
+    pub fn process_start(
+        &mut self,
+        event: &EventView<'_>,
+        prepared_root_tracer: Option<SdkTracer>,
+    ) {
+        self.remove_completed_span_context(event.uuid());
+        let parent_context = self.parent_context(event);
+        let is_trace_root = !parent_context.span().span_context().is_valid();
+        let tracer = prepared_root_tracer
+            .filter(|_| is_trace_root)
+            .unwrap_or_else(|| self.tracer_for_start(event, is_trace_root));
+        let start_model_name = model_name_for_llm_event(event);
+        let span_name = match self.otel_type {
+            OpenTelemetryType::Full => span_name(event),
+            OpenTelemetryType::GenAi => super::otel_genai::span_name(event),
+            OpenTelemetryType::OpenInference => super::openinference::span_name(event),
+        };
+        let span_kind = match self.otel_type {
+            OpenTelemetryType::Full => span_kind(event),
+            OpenTelemetryType::GenAi => super::otel_genai::span_kind(event),
+            OpenTelemetryType::OpenInference => super::openinference::span_kind(event),
+        };
+        let mut span = with_relay_ids(event.uuid(), || {
+            tracer
+                .span_builder(span_name)
+                .with_kind(span_kind)
+                .with_start_time(to_system_time(*event.timestamp()))
+                .start_with_context(&tracer, &parent_context)
+        });
+        let mut attributes = match self.otel_type {
+            OpenTelemetryType::Full => start_attributes(event),
+            OpenTelemetryType::GenAi => super::otel_genai::start_attributes(event),
+            OpenTelemetryType::OpenInference => super::openinference::start_attributes(event),
+        };
+        if self.otel_type == OpenTelemetryType::Full && start_model_name.is_some() {
+            attributes.retain(|attribute| attribute.key.as_str() != "nemo_relay.model_name");
+        }
+        if self.otel_type == OpenTelemetryType::OpenInference && start_model_name.is_some() {
+            super::openinference::remove_start_model_name(&mut attributes);
+        }
+        if self.otel_type != OpenTelemetryType::GenAi && is_trace_root {
+            push_session_identity_attributes(&mut attributes, event);
+        }
+        // Snapshot keys claimed by the projection so promoted metadata cannot
+        // replace them when the span completes.
+        let mut projection_attribute_keys = attributes
+            .iter()
+            .map(|attribute| attribute.key.as_str().to_string())
+            .collect::<HashSet<_>>();
+        if self.otel_type != OpenTelemetryType::GenAi {
+            projection_attribute_keys.extend(
+                self.attribute_mappings
+                    .iter()
+                    .map(|mapping| mapping.alias.clone()),
+            );
+        }
+        let projected_attributes = if self.otel_type == OpenTelemetryType::GenAi {
+            Vec::new()
+        } else {
+            attribute_mapping_inputs(&attributes, &self.attribute_mappings)
+        };
+        let mut start_promoted_metadata = Vec::new();
+        let promoted_metadata_keys = self.promote_metadata(
+            &mut start_promoted_metadata,
+            event,
+            &projection_attribute_keys,
+        );
+        self.remove_promoted_metadata_attributes(&mut attributes, event, promoted_metadata_keys);
+        span.set_attributes(attributes);
+        let span_context = local_parent_span_context(span.span_context());
+        self.active_spans.insert(
+            event.uuid(),
+            ActiveSpan {
+                span,
+                span_context,
+                tracer,
+                start_model_name,
+                projected_attributes,
+                projection_attribute_keys,
+                inferred_tool_attribute_keys: if self.otel_type == OpenTelemetryType::GenAi
+                    && event.scope_type() == Some(ScopeType::Tool)
+                {
+                    super::otel_genai::inferred_tool_attribute_keys(event)
+                } else {
+                    HashSet::new()
+                },
+                start_promoted_metadata,
+                descendant_error_type: None,
+                descendant_exception_type: None,
+            },
+        );
+    }
+
+    #[doc(hidden)]
+    pub fn process_end(&mut self, event: &EventView<'_>) {
+        let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
+            return;
+        };
+        self.record_completed_span_context(
+            event.uuid(),
+            *event.timestamp(),
+            active_span.span_context.clone(),
+            active_span.tracer.clone(),
+        );
+
+        super::set_span_status_from_event_metadata(&mut active_span.span, event);
+        let mut attributes = match self.otel_type {
+            OpenTelemetryType::Full => end_attributes(event),
+            OpenTelemetryType::GenAi => super::otel_genai::end_attributes(event),
+            OpenTelemetryType::OpenInference => super::openinference::end_attributes(event),
+        };
+        let is_error = metadata_string(event, "otel.status_code") == Some("ERROR");
+        if self.otel_type == OpenTelemetryType::GenAi && event.scope_type() == Some(ScopeType::Tool)
+        {
+            // Explicit start identity (especially a typed call ID) remains
+            // authoritative. Only inferred defaults can be refined by explicit
+            // completion metadata, never by another inferred default.
+            let inferred_end_keys = super::otel_genai::inferred_tool_attribute_keys(event);
+            attributes.retain(|attribute| {
+                !matches!(
+                    attribute.key.as_str(),
+                    "gen_ai.tool.call.id"
+                        | "gen_ai.tool.type"
+                        | "gen_ai.tool.description"
+                        | "gen_ai.agent.name"
+                ) || !active_span
+                    .projection_attribute_keys
+                    .contains(attribute.key.as_str())
+                    || (active_span
+                        .inferred_tool_attribute_keys
+                        .contains(attribute.key.as_str())
+                        && !inferred_end_keys.contains(attribute.key.as_str()))
+            });
+        }
+        let explicit_error_type = metadata_string(event, "error.type");
+        let error_type = is_error.then(|| {
+            explicit_error_type
+                .map(ToOwned::to_owned)
+                .or(active_span.descendant_error_type.take())
+                .unwrap_or_else(|| "_OTHER".to_string())
+        });
+        let exception_type = is_error
+            .then(|| {
+                metadata_string(event, "exception.type")
+                    .map(ToOwned::to_owned)
+                    .or(active_span.descendant_exception_type.take())
+            })
+            .flatten();
+        if matches!(
+            self.otel_type,
+            OpenTelemetryType::Full | OpenTelemetryType::GenAi
+        ) && let Some(error_type) = error_type.as_ref()
+        {
+            attributes.retain(|attribute| attribute.key.as_str() != "error.type");
+            attributes.push(KeyValue::new("error.type", error_type.clone()));
+        }
+        if let Some(exception_type) = exception_type.as_ref() {
+            active_span.span.add_event_with_timestamp(
+                "exception",
+                to_system_time(*event.timestamp()),
+                vec![KeyValue::new("exception.type", exception_type.clone())],
+            );
+        }
+        let end_model_name =
+            model_name_for_llm_event(event).or_else(|| active_span.start_model_name.take());
+        if self.otel_type == OpenTelemetryType::Full
+            && let Some(model_name) = end_model_name.clone()
+        {
+            attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
+        }
+        if self.otel_type == OpenTelemetryType::OpenInference
+            && let Some(model_name) = end_model_name
+        {
+            super::openinference::push_model_name(&mut attributes, model_name);
+        }
+        if self.otel_type != OpenTelemetryType::GenAi && !self.attribute_mappings.is_empty() {
+            let mut projected_attributes = active_span.projected_attributes;
+            projected_attributes.extend(attributes.iter().cloned());
+            attributes.extend(attribute_mapping_aliases(
+                &projected_attributes,
+                &self.attribute_mappings,
+            ));
+        }
+        // Scope-end key presence is authoritative even when the final value
+        // cannot be represented as an OTLP attribute. Do not restore a stale
+        // promoted value retained from scope start.
+        active_span.projection_attribute_keys.extend(
+            attributes
+                .iter()
+                .map(|attribute| attribute.key.as_str().to_string()),
+        );
+        let end_metadata = event.metadata().and_then(nemo_relay_types::Json::as_object);
+        active_span.start_promoted_metadata.retain(|attribute| {
+            let key = attribute.key.as_str();
+            !active_span.projection_attribute_keys.contains(key)
+                && !end_metadata.is_some_and(|metadata| metadata.contains_key(key))
+        });
+        attributes.extend(active_span.start_promoted_metadata);
+        let promoted_metadata_keys = self.promote_metadata(
+            &mut attributes,
+            event,
+            &active_span.projection_attribute_keys,
+        );
+        self.remove_promoted_metadata_attributes(&mut attributes, event, promoted_metadata_keys);
+        if is_error && let Some(parent_span) = self.find_parent_span_mut(event) {
+            if parent_span.descendant_error_type.is_none() {
+                parent_span.descendant_error_type = error_type;
+            }
+            if parent_span.descendant_exception_type.is_none() {
+                parent_span.descendant_exception_type = exception_type;
+            }
+        }
+        active_span.span.set_attributes(attributes);
+        active_span
+            .span
+            .end_with_timestamp(to_system_time(*event.timestamp()));
+    }
+
+    #[doc(hidden)]
+    pub fn process_mark(&mut self, event: &EventView<'_>) {
+        match classify_metric_mark(event) {
+            MetricMarkClassification::NotMetric => {}
+            MetricMarkClassification::Valid(_) => return,
+            MetricMarkClassification::Invalid(error) => {
+                self.invalid_metric_count = self.invalid_metric_count.saturating_add(1);
+                let diagnostic_count = self.runtime_diagnostics.record(
+                    "otel.metric_mark_invalid",
+                    format!(
+                        "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
+                        event.name()
+                    ),
+                    1,
+                );
+                if should_relog_runtime_diagnostic(diagnostic_count) {
+                    log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "otel_metric_mark_rejected",
+                        mark_name = event.name();
+                        "OpenTelemetry metric mark was dropped atomically: {error}"
+                    );
+                }
+                return;
+            }
+        }
+        if self.otel_type == OpenTelemetryType::GenAi {
+            return;
+        }
+        if effective_mark_projection(event, self.mark_projection, &self.mark_exclude_names)
+            == MarkProjection::Tool
+        {
+            self.process_mark_as_tool(event);
+            return;
+        }
+        let mark_name = event.name().to_string();
+        let timestamp = to_system_time(*event.timestamp());
+        let mut attributes = self.mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
+
+        if self.find_parent_span(event).is_some() {
+            apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+            let promoted_metadata_keys =
+                self.promote_metadata(&mut attributes, event, &HashSet::new());
+            self.remove_promoted_metadata_attributes(
+                &mut attributes,
+                event,
+                promoted_metadata_keys,
+            );
+            let parent_span = self
+                .find_parent_span_mut(event)
+                .expect("parent span was present during mark projection");
+            parent_span
+                .span
+                .add_event_with_timestamp(mark_name, timestamp, attributes);
+            return;
+        }
+
+        let tracer = self.tracer_for_mark(event);
+        let mut span = with_relay_ids(event.uuid(), || {
+            tracer
+                .span_builder(format!("mark:{mark_name}"))
+                .with_kind(SpanKind::Internal)
+                .with_start_time(timestamp)
+                .start_with_context(&tracer, &self.parent_context(event))
+        });
+        if self.otel_type == OpenTelemetryType::OpenInference {
+            super::openinference::push_orphan_mark_attributes(&mut attributes);
+        } else {
+            attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
+        }
+        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+        let promoted_metadata_keys = self.promote_metadata(&mut attributes, event, &HashSet::new());
+        self.remove_promoted_metadata_attributes(&mut attributes, event, promoted_metadata_keys);
+        span.set_attributes(attributes);
+        span.end_with_timestamp(timestamp);
+    }
+
+    #[doc(hidden)]
+    pub fn process_mark_as_tool(&mut self, event: &EventView<'_>) {
+        let timestamp = to_system_time(*event.timestamp());
+        let orphan = self.find_parent_span(event).is_none();
+        let mut attributes = self.mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
+        attributes.push(KeyValue::new("nemo_relay.mark.projection", "tool"));
+        if self.otel_type == OpenTelemetryType::OpenInference {
+            super::openinference::push_tool_mark_attributes(&mut attributes, event);
+        } else {
+            attributes.push(KeyValue::new("nemo_relay.scope_type", "tool"));
+        }
+        if orphan {
+            attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
+        }
+        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+        let promoted_metadata_keys = self.promote_metadata(&mut attributes, event, &HashSet::new());
+        self.remove_promoted_metadata_attributes(&mut attributes, event, promoted_metadata_keys);
+
+        let tracer = self.tracer_for_mark(event);
+        let mut span = with_relay_ids(event.uuid(), || {
+            tracer
+                .span_builder(format!("mark:{}", event.name()))
+                .with_kind(SpanKind::Internal)
+                .with_start_time(timestamp)
+                .start_with_context(&tracer, &self.parent_context(event))
+        });
+        span.set_attributes(attributes);
+        span.end_with_timestamp(timestamp);
+    }
+
+    // Report unsupported metadata by key without exposing its value or
+    // interrupting Event export.
+    #[doc(hidden)]
+    pub fn promote_metadata(
+        &self,
+        attributes: &mut Vec<KeyValue>,
+        event: &EventView<'_>,
+        protected_keys: &HashSet<String>,
+    ) -> HashSet<String> {
+        let promotion = promote_event_metadata_attributes(
+            attributes,
+            event,
+            &self.promote_metadata_prefixes,
+            protected_keys,
+        );
+
+        let promoted_keys = promotion.promoted_keys;
+        self.record_metadata_promotion_issues(promotion.issues, "metadata");
+        promoted_keys
+    }
+
+    #[doc(hidden)]
+    pub fn remove_promoted_metadata_attributes(
+        &self,
+        attributes: &mut Vec<KeyValue>,
+        event: &EventView<'_>,
+        mut promoted_keys: HashSet<String>,
+    ) {
+        if !self.resource_metadata_prefixes.is_empty() {
+            let resource_promotion = promote_event_metadata_attributes(
+                &mut Vec::new(),
+                event,
+                &self.resource_metadata_prefixes,
+                &self.resource_metadata_protected_keys,
+            );
+            promoted_keys.extend(resource_promotion.promoted_keys);
+        }
+        if promoted_keys.is_empty() {
+            return;
+        }
+
+        let had_openinference_metadata = attributes
+            .iter()
+            .any(|attribute| attribute.key.as_str() == "metadata");
+        attributes.retain(|attribute| {
+            let key = attribute.key.as_str();
+            key != "metadata"
+                && ![
+                    "nemo_relay.start.metadata.",
+                    "nemo_relay.end.metadata.",
+                    "nemo_relay.mark.metadata.",
+                    "openinference.metadata.",
+                ]
+                .iter()
+                .any(|prefix| {
+                    key.strip_prefix(prefix)
+                        .is_some_and(|metadata_key| promoted_keys.contains(metadata_key))
+                })
+        });
+        if had_openinference_metadata
+            && let Some(nemo_relay_types::Json::Object(mut metadata)) = event.metadata().cloned()
+        {
+            metadata.retain(|key, _| !promoted_keys.contains(key));
+            if let Ok(metadata) = serde_json::to_string(&metadata) {
+                attributes.push(KeyValue::new("metadata", metadata));
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_metadata_promotion_issues(
+        &self,
+        mut issues: Vec<super::MetadataPromotionIssue>,
+        kind: &str,
+    ) {
+        issues.sort_by(|left, right| left.key.cmp(&right.key));
+        for issue in issues {
+            let diagnostic_code = format!("otel.{kind}_promotion_value_unsupported.{}", issue.key);
+            let diagnostic_count = self.runtime_diagnostics.record(
+                diagnostic_code,
+                format!(
+                    "OpenTelemetry {kind} attribute {:?} was not promoted: {}",
+                    issue.key, issue.reason
+                ),
+                1,
+            );
+            if should_relog_runtime_diagnostic(diagnostic_count) {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "otel_metadata_promotion_value_unsupported",
+                    metadata_key = issue.key.as_str();
+                    "OpenTelemetry {kind} attribute was not promoted: {}",
+                    issue.reason
+                );
+            }
+        }
+    }
+    #[doc(hidden)]
+    pub fn mark_attributes(&self, event: &EventView<'_>) -> Vec<KeyValue> {
+        match self.otel_type {
+            OpenTelemetryType::Full => mark_attributes(event),
+            OpenTelemetryType::OpenInference => super::openinference::mark_attributes(event),
+            OpenTelemetryType::GenAi => Vec::new(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn parent_context(&self, event: &EventView<'_>) -> Context {
+        if let Some(active_span) = self.find_parent_span(event) {
+            return Context::new().with_remote_span_context(active_span.span_context.clone());
+        }
+        if let Some(span_context) = event
+            .parent_uuid()
+            .and_then(|uuid| self.completed_span_contexts.get(&uuid))
+        {
+            return Context::new().with_remote_span_context(span_context.span_context.clone());
+        }
+        let Some(parent_uuid) = event.parent_uuid() else {
+            return Context::new();
+        };
+        if let Some(span_context) = event.host.w3c_span_context(
+            event.propagation_traceparent(),
+            event.propagation_tracestate(),
+        ) && (event.propagation_parent_uuid() == Some(parent_uuid)
+            || span_context.span_id() == relay_span_id(parent_uuid))
+        {
+            return Context::new().with_remote_span_context(span_context);
+        }
+        if event.propagation_parent_uuid() != Some(parent_uuid) {
+            return Context::new();
+        }
+        let Some(root_uuid) = event.propagation_root_uuid() else {
+            return Context::new();
+        };
+        Context::new().with_remote_span_context(SpanContext::new(
+            relay_trace_id(root_uuid),
+            relay_span_id(parent_uuid),
+            TraceFlags::SAMPLED,
+            true,
+            TraceState::default(),
+        ))
+    }
+
+    #[doc(hidden)]
+    pub fn parent_span_uuid(&self, event: &EventView<'_>) -> Option<Uuid> {
+        let parent_uuid = event.parent_uuid()?;
+        self.active_spans
+            .contains_key(&parent_uuid)
+            .then_some(parent_uuid)
+    }
+
+    #[doc(hidden)]
+    pub fn find_parent_span(&self, event: &EventView<'_>) -> Option<&ActiveSpan> {
+        self.parent_span_uuid(event)
+            .and_then(|uuid| self.active_spans.get(&uuid))
+    }
+
+    #[doc(hidden)]
+    pub fn find_parent_span_mut(&mut self, event: &EventView<'_>) -> Option<&mut ActiveSpan> {
+        self.parent_span_uuid(event)
+            .and_then(|uuid| self.active_spans.get_mut(&uuid))
+    }
+
+    #[doc(hidden)]
+    pub fn remove_completed_span_context(&mut self, uuid: Uuid) {
+        if let Some(context) = self.completed_span_contexts.remove(&uuid) {
+            self.remove_completed_span_expiry_index_entry(uuid, context.closed_at);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn remove_completed_span_expiry_index_entry(
+        &mut self,
+        uuid: Uuid,
+        closed_at: DateTime<Utc>,
+    ) {
+        let remove_bucket = self
+            .completed_span_expiry_index
+            .get_mut(&closed_at)
+            .is_some_and(|uuids| {
+                uuids.remove(&uuid);
+                uuids.is_empty()
+            });
+        if remove_bucket {
+            self.completed_span_expiry_index.remove(&closed_at);
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn record_completed_span_context(
+        &mut self,
+        uuid: Uuid,
+        closed_at: DateTime<Utc>,
+        span_context: SpanContext,
+        tracer: SdkTracer,
+    ) {
+        if let Some(previous) = self.completed_span_contexts.insert(
+            uuid,
+            CompletedSpanContext {
+                closed_at,
+                span_context,
+                tracer,
+            },
+        ) {
+            self.remove_completed_span_expiry_index_entry(uuid, previous.closed_at);
+        }
+        self.completed_span_expiry_index
+            .entry(closed_at)
+            .or_default()
+            .insert(uuid);
+    }
+
+    #[doc(hidden)]
+    pub fn expire_completed_span_contexts(&mut self, event_timestamp: DateTime<Utc>) {
+        let mut expired_count = 0_u64;
+        while let Some((closed_at, _)) = self.completed_span_expiry_index.first_key_value() {
+            let closed_at = closed_at.to_owned();
+            let expired = event_timestamp
+                .signed_duration_since(closed_at)
+                .to_std()
+                .is_ok_and(|age| age > self.completed_span_context_ttl);
+            if !expired {
+                break;
+            }
+            let uuids = self
+                .completed_span_expiry_index
+                .remove(&closed_at)
+                .expect("expiry index entry must exist after lookup");
+            for uuid in uuids {
+                if self.completed_span_contexts.remove(&uuid).is_some() {
+                    expired_count = expired_count.saturating_add(1);
+                }
+            }
+        }
+        if expired_count == 0 {
+            return;
+        }
+        let diagnostic_count = self.runtime_diagnostics.record(
+            "otel.completed_span_context_expired",
+            format!(
+                "OpenTelemetry trace lineage expired {expired_count} completed scope contexts after {} ms",
+                self.completed_span_context_ttl.as_millis()
+            ),
+            expired_count,
+        );
+        if should_relog_runtime_diagnostic(diagnostic_count) {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_completed_span_context_expired",
+                expired_count,
+                completed_span_context_ttl_millis = self.completed_span_context_ttl.as_millis();
+                "OpenTelemetry trace lineage expired completed scope contexts"
+            );
+        }
+    }
+}
+
+pub(crate) fn metadata_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+    event.metadata()?.get(key)?.as_str()
+}
+
+pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
+    match semantic_scope_type(event) {
+        Some(ScopeType::Llm) => SpanKind::Client,
+        Some(
+            ScopeType::Tool | ScopeType::Retriever | ScopeType::Embedder | ScopeType::Reranker,
+        ) => SpanKind::Client,
+        _ => SpanKind::Internal,
+    }
+}
+
+#[doc(hidden)]
+pub fn span_name(event: &EventView<'_>) -> String {
+    event.name().to_string()
+}
+
+pub(crate) fn semantic_scope_type(event: &EventView<'_>) -> Option<ScopeType> {
+    event.scope_type()
+}
+
+pub(crate) fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
+    match scope_type {
+        Some(ScopeType::Agent) => "agent",
+        Some(ScopeType::Function) => "function",
+        Some(ScopeType::Tool) => "tool",
+        Some(ScopeType::Llm) => "llm",
+        Some(ScopeType::Retriever) => "retriever",
+        Some(ScopeType::Embedder) => "embedder",
+        Some(ScopeType::Reranker) => "reranker",
+        Some(ScopeType::Guardrail) => "guardrail",
+        Some(ScopeType::Evaluator) => "evaluator",
+        Some(ScopeType::Custom) => "custom",
+        Some(ScopeType::Unknown) | None => "unknown",
+    }
+}
+
+#[doc(hidden)]
+pub fn start_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+    let mut attributes = common_attributes(event);
+    push_serialized_top_level_attributes(
+        &mut attributes,
+        "nemo_relay.handle_attributes",
+        event.attributes(),
+    );
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.start.data", event.data());
+    push_top_level_json_attributes(
+        &mut attributes,
+        "nemo_relay.start.metadata",
+        event.metadata(),
+    );
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.start.input", event.input());
+    attributes
+}
+
+#[doc(hidden)]
+pub fn end_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+    let mut attributes = Vec::new();
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.metadata", event.metadata());
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_tool_result_annotation_attribute(&mut attributes, event);
+    if event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm")
+        && let Some((cost, currency)) = cost_from_llm_event(event)
+    {
+        attributes.push(KeyValue::new("nemo_relay.llm.cost.total", cost));
+        attributes.push(KeyValue::new("nemo_relay.llm.cost.currency", currency));
+    }
+    if let Some(response) = event.annotated_response()
+        && let Some(summary) = response.optimization_summary.as_ref()
+    {
+        push_optimization_attributes(&mut attributes, summary);
+    }
+    attributes
+}
+
+pub(crate) fn push_optimization_attributes(
+    attributes: &mut Vec<KeyValue>,
+    summary: &nemo_relay_types::codec::optimization::LlmOptimizationSummary,
+) {
+    crate::push_common_optimization_attributes(attributes, summary);
+}
+
+pub(crate) fn cost_from_llm_event(event: &EventView<'_>) -> Option<(f64, String)> {
+    if let Some(response) = event.normalized_llm_response() {
+        let response = response.as_ref();
+        if let Some(usage) = response.usage.as_ref() {
+            if let Some(cost) = usage.cost.as_ref() {
+                return cost_total_and_currency(cost);
+            }
+            if let Some(cost) = estimate_cost_for_response_or_requested_model(
+                event,
+                response.model.as_deref(),
+                usage,
+            ) {
+                return cost_total_and_currency(&cost);
+            }
+        }
+    }
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::AnyCurrency)
+    {
+        return Some(cost);
+    }
+    let usage = manual::usage_from_manual_llm_output(event.output())?;
+    estimate_cost_for_response_or_model(
+        event.host.pricing_snapshot().as_ref(),
+        Some(event.name()),
+        event.model_name(),
+        manual::model_name_from_manual_llm_output(event.output()),
+        &usage,
+    )
+    .and_then(|cost| cost_total_and_currency(&cost))
+}
+
+pub(crate) fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
+    Some((cost.total_or_component_sum()?, cost.currency.clone()))
+}
+
+pub(crate) fn mark_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
+        KeyValue::new(
+            "nemo_relay.mark.parent_uuid",
+            event
+                .parent_uuid()
+                .map(|uuid| uuid.to_string())
+                .unwrap_or_default(),
+        ),
+    ];
+    push_serialized_top_level_attributes(
+        &mut attributes,
+        "nemo_relay.mark.attributes",
+        event.attributes(),
+    );
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.mark.data", event.data());
+    push_top_level_json_attributes(
+        &mut attributes,
+        "nemo_relay.mark.metadata",
+        event.metadata(),
+    );
+    if let Some(category) = event.category() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.mark.category",
+            category.as_str().to_string(),
+        ));
+    }
+    push_serialized_top_level_attributes(
+        &mut attributes,
+        "nemo_relay.mark.category_profile",
+        event.category_profile(),
+    );
+    attributes
+}
+
+pub(crate) fn common_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
+        KeyValue::new(
+            "nemo_relay.parent_uuid",
+            event
+                .parent_uuid()
+                .map(|uuid| uuid.to_string())
+                .unwrap_or_default(),
+        ),
+        KeyValue::new(
+            "nemo_relay.scope_type",
+            scope_type_name(semantic_scope_type(event)),
+        ),
+    ];
+
+    if let Some(model_name) = model_name_for_llm_event(event) {
+        attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
+    }
+    if let Some(tool_call_id) = event.tool_call_id() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.tool_call_id",
+            tool_call_id.to_string(),
+        ));
+    }
+
+    attributes
+}
+
+pub(crate) fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
+    SpanContext::new(
+        span_context.trace_id(),
+        span_context.span_id(),
+        span_context.trace_flags(),
+        false,
+        span_context.trace_state().clone(),
+    )
+}
+
+/// OTLP encodes timestamps as an unsigned 64-bit count of nanoseconds since Unix epoch.
+pub(crate) fn accept_otlp_timestamp(
+    event: &EventView<'_>,
+    diagnostics: &SignalRuntimeDiagnostics,
+) -> bool {
+    let timestamp = event.timestamp();
+    let valid = u64::try_from(timestamp.timestamp())
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+        .and_then(|nanos| nanos.checked_add(u64::from(timestamp.timestamp_subsec_nanos())))
+        .is_some();
+    if !valid {
+        let count = diagnostics.record(
+            "otel.timestamp_out_of_range",
+            format!("OpenTelemetry event {:?} was dropped: timestamp {timestamp} is outside the OTLP unsigned 64-bit nanosecond range", event.name()),
+            1,
+        );
+        if should_relog_runtime_diagnostic(count) {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_timestamp_out_of_range";
+                "OpenTelemetry event was dropped: timestamp {timestamp} is outside the OTLP unsigned 64-bit nanosecond range"
+            );
+        }
+    }
+    valid
+}
+
+pub(crate) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
+    let seconds = timestamp.timestamp();
+    let nanos = timestamp.timestamp_subsec_nanos();
+    if seconds >= 0 {
+        UNIX_EPOCH + Duration::new(seconds as u64, nanos)
+    } else if nanos == 0 {
+        UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
+    } else {
+        UNIX_EPOCH - Duration::new(seconds.unsigned_abs() - 1, 1_000_000_000 - nanos)
+    }
+}
+
+impl Inner {
+    pub fn host_ref(&self) -> Arc<dyn crate::host::ObservabilityHost> {
+        self.host.get()
+    }
+}
+
+impl OpenTelemetrySubscriber {
+    pub fn with_host(self, host: Arc<dyn crate::host::ObservabilityHost>) -> Self {
+        self.inner.runtime_diagnostics.bind_host(host.clone());
+        self.inner.host.bind(host);
+        self
+    }
+    pub fn host_ref(&self) -> Arc<dyn crate::host::ObservabilityHost> {
+        self.inner.host.get()
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/otel_automatic_configuration_tests.rs"]
+mod otel_automatic_configuration_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/otel_tests.rs"]
+mod otel_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/otel_detached_tests.rs"]
+mod otel_detached_tests;

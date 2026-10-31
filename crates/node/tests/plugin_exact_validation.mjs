@@ -20,3 +20,11 @@ test('exact validation rejects host diagnostics instead of discarding them', () 
 test('exact validation accepts static plugin configuration', () => {
   assert.deepEqual(plugin.validateExact(plugin.defaultConfig()).dynamic_plugins, []);
 });
+
+
+test('all built-in kinds are available without component helpers', () => {
+  const kinds = new Set(plugin.listKinds());
+  for (const kind of ['observability', 'pricing', 'resource_metrics', 'adaptive', 'pii_redaction']) {
+    assert.ok(kinds.has(kind), kind);
+  }
+});

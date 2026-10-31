@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use nemo_relay::api::runtime::LlmJsonStream;
+use nemo_relay_runtime::api::runtime::LlmJsonStream;
 use serde_json::json;
 use tokio::sync::{oneshot, watch};
 use tokio_stream::StreamExt;

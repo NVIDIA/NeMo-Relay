@@ -35,9 +35,9 @@ Use managed wrappers when the framework exposes a stable callable boundary.
 
 | Surface | Python | Node.js | Rust |
 |---|---|---|---|
-| Tool execute | `nemo_relay.tools.execute(...)` | `toolCallExecute(...)` | `nemo_relay::api::tool::tool_call_execute` |
-| LLM execute | `nemo_relay.llm.execute(...)` | `llmCallExecute(...)` | `nemo_relay::api::llm::llm_call_execute` |
-| LLM stream execute | `nemo_relay.typed.llm_stream_execute(...)` | `typedLlmStreamExecute(...)` | `nemo_relay::api::llm::llm_stream_call_execute` |
+| Tool execute | `nemo_relay.tools.execute(...)` | `toolCallExecute(...)` | `nemo_relay::tool::tool_call_execute` |
+| LLM execute | `nemo_relay.llm.execute(...)` | `llmCallExecute(...)` | `nemo_relay::llm::llm_call_execute` |
+| LLM stream execute | `nemo_relay.typed.llm_stream_execute(...)` | `typedLlmStreamExecute(...)` | `nemo_relay::llm::llm_stream_call_execute` |
 
 ## Fallback: Explicit API Calls
 
@@ -99,8 +99,8 @@ export function frameworkLlmFinished(handle: unknown, response: unknown): void {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
-use nemo_relay::api::tool::{
+use nemo_relay::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
+use nemo_relay::tool::{
     tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
 };
 use serde_json::{json, Value as Json};
@@ -166,8 +166,8 @@ await llmConditionalExecution(new LlmRequest({}, { messages: [] }));
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_conditional_execution, LlmRequest};
-use nemo_relay::api::tool::tool_conditional_execution;
+use nemo_relay::llm::{llm_conditional_execution, LlmRequest};
+use nemo_relay::tool::tool_conditional_execution;
 use serde_json::json;
 
 tool_conditional_execution("search", &json!({"query": "weather"}))?;
@@ -209,8 +209,8 @@ const rewrittenRequest = outcome.request;
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_request_intercepts, LlmRequest};
-use nemo_relay::api::tool::tool_request_intercepts;
+use nemo_relay::llm::{llm_request_intercepts, LlmRequest};
+use nemo_relay::tool::tool_request_intercepts;
 use serde_json::json;
 
 let rewritten_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
@@ -245,7 +245,7 @@ event('scheduler.retry', null, { attempt: 2 }, null);
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::scope::{event, EmitMarkEventParams};
+use nemo_relay::scope::{event, EmitMarkEventParams};
 use serde_json::json;
 
 event(

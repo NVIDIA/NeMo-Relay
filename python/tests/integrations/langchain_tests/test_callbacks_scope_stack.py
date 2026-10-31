@@ -917,7 +917,7 @@ async def test_propagated_stand_ins_keep_their_reserved_names(
     A propagated stack rebuilds scopes carrying an existing uuid, so the name is what
     separates a stand-in from the scope it represents. Those names are fixed in the
     runtime (``propagated-parent``/``propagated-root`` in
-    ``crates/core/src/api/runtime/scope_stack.rs``); if either changes, matching silently
+    ``crates/runtime/src/api/runtime/scope_stack.rs``); if either changes, matching silently
     starts closing the wrong scope, so fail here instead.
 
     Propagating an already-propagated stack yields stand-ins identical in both uuid and

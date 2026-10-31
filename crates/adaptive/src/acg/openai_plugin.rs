@@ -11,7 +11,7 @@
 //!
 //! Implements the [`ProviderPlugin`] trait with:
 //!
-//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`]
+//! - **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`](crate::acg::canonicalize::canonicalize_value)
 //!   for deterministic key ordering in function parameter schemas.
 //! - **Stable message content canonicalization**: Structured JSON content
 //!   blocks in the stable prefix are canonicalized for byte-identical output.
@@ -87,10 +87,10 @@ impl ProviderPlugin for OpenAICachePlugin {
 impl HintPlanApplier for OpenAICachePlugin {
     fn apply_hint_plan(
         &self,
-        request: &nemo_relay::api::llm::LlmRequest,
+        request: &nemo_relay_runtime::api::llm::LlmRequest,
         prompt_ir: &PromptIR,
         hint_plan: &HintPlan,
-    ) -> crate::acg::error::Result<nemo_relay::api::llm::LlmRequest> {
+    ) -> crate::acg::error::Result<nemo_relay_runtime::api::llm::LlmRequest> {
         crate::acg::request_surfaces::apply_request_surface(
             self.plugin_id(),
             request,

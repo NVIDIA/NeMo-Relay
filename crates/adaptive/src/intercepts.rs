@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use nemo_relay::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
-use nemo_relay::error::Result as FlowResult;
+use nemo_relay_runtime::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
+use nemo_relay_runtime::error::Result as FlowResult;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
@@ -152,7 +152,7 @@ pub(crate) fn create_tool_execution_intercept_with_mode(
                 Box<
                     dyn Future<
                             Output = FlowResult<
-                                nemo_relay::api::tool::ToolExecutionInterceptOutcome,
+                                nemo_relay_runtime::api::tool::ToolExecutionInterceptOutcome,
                             >,
                         > + Send,
                 >,

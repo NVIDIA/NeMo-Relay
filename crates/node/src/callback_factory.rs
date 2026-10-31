@@ -5,8 +5,8 @@
 
 use napi::bindgen_prelude::FromNapiValue;
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
-use nemo_relay::api::runtime::ScopeStackHandle;
-use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
+use nemo_relay_runtime::api::runtime::ScopeStackHandle;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 

@@ -3,11 +3,14 @@
 
 use std::collections::HashSet;
 
-use nemo_relay::api::registry::RuntimeRegistrationKind;
+use nemo_relay_runtime::api::registry::RuntimeRegistrationKind;
 
-use nemo_relay::plugin::{ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
+use {
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::ConfigPolicy,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::UnsupportedBehavior,
+};
 
 #[derive(Clone, Deserialize)]
 #[serde(default)]

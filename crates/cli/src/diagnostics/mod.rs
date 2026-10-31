@@ -28,18 +28,21 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::{SinkExt, future::join_all};
-use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
-use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
-use nemo_relay::observability::otel::resolve_http_trace_endpoint;
-use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_relay::plugin::dynamic::validate as validate_plugin_host;
-use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_static_plugin_config};
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_adaptive::{ResponseCacheConfig, response_cache};
+use nemo_relay_model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
+use nemo_relay_observability::otel::resolve_http_trace_endpoint;
+use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay_plugin_host::dynamic::validate as validate_plugin_host;
+use nemo_relay_runtime::api::event::{BaseEvent, Event, MarkEvent};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
+use {
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::validate_static_plugin_config,
+};
 
 use crate::agents::CodingAgent;
 use crate::configuration::{
@@ -1298,15 +1301,7 @@ async fn collect_observability_component_checks(
     }
     checks.extend(observability_http_exporter_checks(config, probe_mode).await);
     if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
-        if atof_streaming_supported() {
-            checks.extend(observability_atof_stream_checks(config, probe_mode).await);
-        } else {
-            checks.push(Check {
-                name: "ATOF stream sink",
-                status: Status::Fail,
-                details: "ATOF stream sinks are not available in this binary".into(),
-            });
-        }
+        checks.extend(observability_atof_stream_checks(config, probe_mode).await);
     }
 }
 
@@ -1603,10 +1598,6 @@ fn atof_stream_sinks(config: &Value) -> Vec<(usize, &Value)> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn atof_streaming_supported() -> bool {
-    cfg!(feature = "atof-streaming")
 }
 
 async fn observability_atof_stream_checks(

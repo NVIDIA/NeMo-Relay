@@ -144,7 +144,7 @@ fn daemon_preparation_preserves_its_logging_scope_and_retains_inputs() {
     assert!(prepared.collector.collect_workers);
     assert_eq!(
         prepared.logging().unwrap().level,
-        nemo_relay::logging::LogLevel::Warn
+        nemo_relay_logging::LogLevel::Warn
     );
     std::fs::write(file, "malformed[").unwrap();
     let resolved =

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-codecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider request, response, streaming codecs and normalization for NeMo Relay."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+log = { workspace = true, features = ["kv", "kv_serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio-stream.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

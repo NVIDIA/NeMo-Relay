@@ -14,17 +14,17 @@ use super::{
     ScopeAttributes, ScopeHandle, ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py,
     opt_json_to_py, py_to_json,
 };
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     CategoryProfile, DataSchema, EventCategory, LogSeverity, MetricKind, MetricMeasurement,
     MetricValueType, PendingMarkSpec,
 };
-use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionContext, LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
     ThreadScopeStackBinding, ToolExecutionContext,
 };
-use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+use nemo_relay_runtime::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 
 pub(crate) const TOOL_EXECUTION_INTERCEPT_RESULT_ERROR: &str =
     "ToolExecutionInterceptOutcome result must be the downstream payload, not ToolExecutionResult";
@@ -602,7 +602,7 @@ pub struct PyScopeStackEntry {
 /// Detached root-to-top scope identities, including implicit/synthetic roots.
 #[pyclass(name = "ScopeStackSnapshot", frozen)]
 pub struct PyScopeStackSnapshot {
-    pub inner: nemo_relay::api::runtime::ScopeStackSnapshot,
+    pub inner: nemo_relay_runtime::api::runtime::ScopeStackSnapshot,
 }
 
 #[pymethods]

@@ -10,7 +10,7 @@ use std::ptr;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nemo_relay::plugin::PluginRegistrationContext;
+use nemo_relay_plugin_host::HostPluginRegistrationContext;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 

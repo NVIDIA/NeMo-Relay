@@ -4,7 +4,7 @@
 //! Gateway response handling for forwarded lifecycle hooks.
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay::diagnostics::{CliFailureCode, DiagnosticClassifier, SuccessCode};
+use nemo_relay_diagnostics::{CliFailureCode, DiagnosticClassifier, SuccessCode};
 
 #[cfg(test)]
 use futures_util::StreamExt;

@@ -4,19 +4,21 @@
 //! Integration test support for the NeMo Relay FFI crate.
 
 use libc::c_char;
-use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
-use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay::error::FlowError;
 use nemo_relay_ffi::api::*;
 use nemo_relay_ffi::callable::*;
 use nemo_relay_ffi::convert::*;
 use nemo_relay_ffi::error::*;
 use nemo_relay_ffi::types::*;
 use nemo_relay_ffi::{api, convert, error};
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
+use nemo_relay_runtime::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use nemo_relay_runtime::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::error::FlowError;
 use serde_json::{Value as Json, json};
 use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};

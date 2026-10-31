@@ -192,7 +192,7 @@ class RaisingResponseCodec:
             let tool_exec = wrap_py_tool_exec_fn(tool_exec_py);
             assert_eq!(
                 tool_exec(json!({"x": 2})).await.unwrap(),
-                nemo_relay::api::tool::ToolExecutionResult::new(json!({"sync_tool": 3}))
+                nemo_relay_runtime::api::tool::ToolExecutionResult::new(json!({"sync_tool": 3}))
             );
 
             let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_py);
@@ -200,7 +200,10 @@ class RaisingResponseCodec:
                 Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]}).into()) }));
             assert_eq!(
                 tool_intercept(
-                    nemo_relay::api::runtime::ToolExecutionContext::new("tool", json!({"x": 3}),),
+                    nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
+                        "tool",
+                        json!({"x": 3}),
+                    ),
                     tool_next,
                 )
                 .await
@@ -222,7 +225,7 @@ class RaisingResponseCodec:
                 llm_intercept(
                     "llm",
                     make_request(),
-                    nemo_relay::api::runtime::LlmExecutionContext::new(
+                    nemo_relay_runtime::api::runtime::LlmExecutionContext::new(
                         Default::default(),
                         Some(Default::default()),
                     ),
@@ -297,7 +300,7 @@ class RaisingResponseCodec:
             runtime
                 .block_on(llm_response(
                     json!({"ok": true}),
-                    nemo_relay::api::runtime::LlmSanitizeResponseContext::default()
+                    nemo_relay_runtime::api::runtime::LlmSanitizeResponseContext::default()
                 ))
                 .is_err()
         );
@@ -627,10 +630,12 @@ async def collect_stream(awaitable):
                 let tool_next = PyToolNextFn {
                     inner: Arc::new(|args| {
                         Box::pin(async move {
-                            Ok(nemo_relay::api::tool::ToolExecutionResult::annotated(
-                                json!({"echo": args["x"]}),
-                                json!({"source": "next"}),
-                            ))
+                            Ok(
+                                nemo_relay_runtime::api::tool::ToolExecutionResult::annotated(
+                                    json!({"echo": args["x"]}),
+                                    json!({"source": "next"}),
+                                ),
+                            )
                         })
                     }),
                     context: continuation_context.clone(),
@@ -749,7 +754,7 @@ async def collect_stream(awaitable):
                 let stream_next = PyLlmStreamNextFn {
                     inner: Arc::new(|_| {
                         Box::pin(async move {
-                            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                            Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                                 tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
                             ))
                         })
@@ -818,7 +823,7 @@ async def collect_stream(awaitable):
 
 #[test]
 fn event_sanitize_wrapper_covers_conversion_success_and_error_propagation() {
-    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+    use nemo_relay_runtime::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
     let (_context_module, sanitized_fn, async_sanitizer, raises_fn, invalid_fn) =
@@ -898,7 +903,7 @@ def invalid(event, fields):
 
 #[test]
 fn event_metadata_injector_wrapper_covers_sync_async_and_invalid_results() {
-    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+    use nemo_relay_runtime::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
     let (_context_module, sync_injector, async_injector, invalid_injector) = Python::attach(|py| {
@@ -1032,10 +1037,11 @@ def llm_custom_awaitable(request):
 fn execution_next_context_restores_scope() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let scope_stack = nemo_relay::api::runtime::create_scope_stack();
-        let context = nemo_relay::api::runtime::with_scope_stack(scope_stack.clone(), || {
-            MiddlewareContinuationContext::capture()
-        });
+        let scope_stack = nemo_relay_runtime::api::runtime::create_scope_stack();
+        let context =
+            nemo_relay_runtime::api::runtime::with_scope_stack(scope_stack.clone(), || {
+                MiddlewareContinuationContext::capture()
+            });
 
         let observed =
             tokio::spawn(async move { context.run(async move { current_scope_stack() }).await })

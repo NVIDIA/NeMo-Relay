@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::test_support::EnvScope;
-use nemo_relay::diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
+use nemo_relay_diagnostics::{DiagnosticLimits, Diagnostics, DiagnosticsSettings};
 
 #[tokio::test]
 async fn inspection_reuses_tls_without_touching_gateway_activity_or_query_state() {

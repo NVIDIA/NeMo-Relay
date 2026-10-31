@@ -7,11 +7,14 @@ use std::process::Command;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginManifest, DynamicPluginManifestLoad, WorkerRuntime,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use {
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifestLoad,
+    nemo_relay_plugin_host::dynamic::WorkerRuntime,
+};
 
 pub(super) const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
 pub(super) const ENVIRONMENT_ATTESTATION_FILE: &str = ".nemo-relay-environment.sha256";

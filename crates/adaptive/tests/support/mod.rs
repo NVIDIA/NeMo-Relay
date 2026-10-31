@@ -10,3 +10,6 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
         .expect("test runtime should build")
         .block_on(future)
 }
+
+#[path = "plugin_host.rs"]
+pub(crate) mod plugin_host;

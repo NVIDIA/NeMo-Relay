@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-logging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Operational logging configuration, backends, rotation, and diagnostic projection."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-diagnostics.workspace = true
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+chrono = { workspace = true, features = ["serde"] }
+log = { workspace = true, features = ["kv", "kv_serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+spdlog-rs = { workspace = true, features = ["log", "multi-thread"] }
+toml.workspace = true
+# Forward third-party tracing diagnostics into the log facade.
+tracing = { workspace = true, features = ["std", "log"] }
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+# First-party crates.
+nemo-relay-plugin.workspace = true
+
+# Third-party dependencies.
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "internal-logs"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
