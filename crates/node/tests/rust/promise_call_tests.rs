@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use nemo_relay::api::runtime::current_scope_stack;
 
 #[test]
 fn execution_next_context_restores_scope() {

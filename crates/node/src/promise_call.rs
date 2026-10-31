@@ -5,36 +5,33 @@
 //!
 //! This module wraps JS middleware callbacks so Rust can call them from any thread
 //! and await either synchronous return values or Promise-returning callbacks.
-//!
-//! The previous implementation used a raw `napi_threadsafe_function` with a custom
-//! `call_js_cb`. That path was prone to lifecycle issues under `node --test`.
-//! This implementation keeps the same surface API but delegates the underlying
-//! TSFN lifecycle to `napi-rs`.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use napi::bindgen_prelude::ToNapiValue;
-use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction};
-use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
+use napi::Env;
+use napi::bindgen_prelude::{
+    External, FnArgs, FromNapiRef, Function, FunctionCallContext, JsValue, Unknown,
+    within_runtime_if_available,
+};
+use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
 use serde_json::Value as Json;
 
 use nemo_relay::api::runtime::subscriber_dispatcher::{
-    PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
-    with_task_nested_publication_buffer,
+    PublicationBuffer, with_nested_publication_buffer, with_task_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
-    LlmStreamInner, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
-    ScopeStackHandle, capture_propagation_context, current_scope_stack,
-};
+use nemo_relay::api::runtime::{LlmStreamInner, MiddlewareContinuationContext};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
-use crate::api::{PropagationContext, propagation_context_to_napi};
-use crate::callback_factory;
-use crate::types::ScopeStack;
+use crate::callback_factory::{self, CallbackScope, PromiseSettlers};
+use crate::convert::{HandledTsfn, JsArg, abort_tsfn, closure_function, detach, js_value};
+use crate::environment::{Liveness, create_promise, spawn_promise};
+use crate::error::{Error, Result};
 use tokio_stream::Stream;
 
 tokio::task_local! {
@@ -86,13 +83,19 @@ enum NextFn {
     Stream(JsonStreamNextFn),
 }
 
+struct NextState {
+    next: NextFn,
+    continuation_context: MiddlewareContinuationContext,
+    publication_context_id: Option<String>,
+}
+
 /// Builds the first JS callback argument on the Node main thread.
 ///
 /// Some callback arguments, such as `#[napi]` class instances, cannot cross the
 /// threadsafe-function boundary as plain JSON. This builder runs inside the
 /// threadsafe-function call (on the JS thread), so it can materialize those
 /// values directly instead of serializing them.
-pub type Arg0Builder = Box<dyn FnOnce(&Env) -> napi::Result<JsUnknown> + Send>;
+pub type Arg0Builder = Box<dyn FnOnce(&Env) -> napi::Result<JsArg> + Send>;
 
 /// The first argument passed to the wrapped JS callback.
 enum PrimaryArg {
@@ -102,22 +105,41 @@ enum PrimaryArg {
     Build(Arg0Builder),
 }
 
-struct CallArgs {
+struct InvokeArgs {
+    call_id: u64,
     arg0: PrimaryArg,
     spread: bool,
-    next: Option<NextFn>,
+    next: Option<NextState>,
     publication: bool,
     publication_context_id: Option<String>,
-    /// Scope stack captured when Relay invokes the middleware.
-    scope_stack: Option<ScopeStackHandle>,
-    propagation_parent_uuid: Option<String>,
-    propagation_context: Option<CorePropagationContext>,
-    publication_buffer: Option<PublicationBuffer>,
+    scope: CallbackScope,
     stream_result: bool,
-    continuation_context: Option<MiddlewareContinuationContext>,
-    cancellation: CallCancellation,
+}
+
+struct CallArgs {
+    invoke: InvokeArgs,
     completion: CallCompletion,
 }
+
+enum PromiseCall {
+    Invoke(Box<CallArgs>),
+    Abort(u64),
+}
+
+/// `(abort, callId, arg0, spread, next, publication, publicationContextId, scope, streamResult)`.
+type PromiseArgs = FnArgs<(
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+    JsArg,
+)>;
+
+type PromiseTsfn = HandledTsfn<PromiseCall, PromiseArgs>;
 
 #[derive(Clone, Copy)]
 struct CallMode {
@@ -140,139 +162,152 @@ impl CallMode {
     };
 }
 
-enum CallCompletionSender {
-    Json(tokio::sync::oneshot::Sender<FlowResult<Json>>),
-    Stream(Arc<StreamCompletion>),
+struct JsonCompletion {
+    sender: tokio::sync::oneshot::Sender<FlowResult<Json>>,
+    finished: Arc<AtomicBool>,
+}
+
+impl JsonCompletion {
+    fn settle(self, result: FlowResult<Json>) {
+        self.finished.store(true, Ordering::Release);
+        let _ = self.sender.send(result);
+    }
 }
 
 struct StreamCompletion {
-    ready: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<()>>>>,
-    chunks: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
-    terminal_error: std::sync::Mutex<Option<FlowError>>,
+    ready: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<()>>>>,
+    chunks: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
+    terminal_error: Mutex<Option<FlowError>>,
     closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
     finished: Arc<AtomicBool>,
-    parked: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    parked: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl StreamCompletion {
+    fn ready(&self) {
+        if let Some(ready) = self.ready.lock().unwrap().take() {
+            let _ = ready.send(Ok(()));
+        }
+    }
+
     fn finish(&self, result: FlowResult<()>) {
         self.finished.store(true, Ordering::Release);
         self.chunks.lock().unwrap().take();
         self.closed.send_replace(Some(result));
     }
+
+    fn fail(&self, error: FlowError) {
+        match self.ready.lock().unwrap().take() {
+            Some(ready) => {
+                let _ = ready.send(Err(error.clone()));
+            }
+            None => *self.terminal_error.lock().unwrap() = Some(error.clone()),
+        }
+        self.finish(Err(error));
+    }
 }
 
-#[derive(Clone)]
-struct CallCompletion {
-    sender: Arc<std::sync::Mutex<Option<CallCompletionSender>>>,
+enum CallCompletion {
+    Json(JsonCompletion),
+    Stream(Arc<StreamCompletion>),
 }
 
 impl CallCompletion {
-    fn json(sender: tokio::sync::oneshot::Sender<FlowResult<Json>>) -> Self {
-        Self {
-            sender: Arc::new(std::sync::Mutex::new(Some(CallCompletionSender::Json(
-                sender,
-            )))),
-        }
-    }
-
-    fn stream(
-        ready: tokio::sync::oneshot::Sender<FlowResult<()>>,
-        chunks: tokio::sync::mpsc::Sender<FlowResult<Json>>,
-    ) -> (
-        Self,
-        Arc<StreamCompletion>,
-        tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
-    ) {
-        let (closed, closed_rx) = tokio::sync::watch::channel(None);
-        let stream = Arc::new(StreamCompletion {
-            ready: std::sync::Mutex::new(Some(ready)),
-            chunks: std::sync::Mutex::new(Some(chunks)),
-            terminal_error: std::sync::Mutex::new(None),
-            closed,
-            finished: Arc::default(),
-            parked: std::sync::Mutex::new(None),
-        });
-        (
-            Self {
-                sender: Arc::new(std::sync::Mutex::new(Some(CallCompletionSender::Stream(
-                    stream.clone(),
-                )))),
-            },
-            stream,
-            closed_rx,
-        )
-    }
-
-    fn send_json(&self, value: FlowResult<Json>) {
-        if let Some(CallCompletionSender::Json(sender)) = self.sender.lock().unwrap().take() {
-            let _ = sender.send(value);
-        }
-    }
-
-    fn send_error(&self, error: FlowError) {
-        if let Some(sender) = self.sender.lock().unwrap().take() {
-            match sender {
-                CallCompletionSender::Json(sender) => {
-                    let _ = sender.send(Err(error));
-                }
-                CallCompletionSender::Stream(sender) => {
-                    if let Some(ready) = sender.ready.lock().unwrap().take() {
-                        let _ = ready.send(Err(error.clone()));
-                    } else {
-                        *sender.terminal_error.lock().unwrap() = Some(error.clone());
-                    }
-                    sender.finish(Err(error));
-                }
+    fn resolve(self, value: impl FnOnce() -> FlowResult<Json>) -> Option<Self> {
+        match self {
+            Self::Json(completion) => {
+                completion.settle(value());
+                None
+            }
+            Self::Stream(stream) => {
+                stream.ready();
+                Some(Self::Stream(stream))
             }
         }
     }
+
+    fn fail(self, error: FlowError) {
+        match self {
+            Self::Json(completion) => completion.settle(Err(error)),
+            Self::Stream(stream) => stream.fail(error),
+        }
+    }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
+struct CallRegistry {
+    next_id: AtomicU64,
+    calls: Mutex<HashMap<u64, CallCompletion>>,
+}
+
+impl CallRegistry {
+    fn allocate(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn insert(&self, call_id: u64, completion: CallCompletion) {
+        self.calls.lock().unwrap().insert(call_id, completion);
+    }
+
+    fn resolve(&self, call_id: u64, value: impl FnOnce() -> FlowResult<Json>) {
+        let mut calls = self.calls.lock().unwrap();
+        if let Some(completion) = calls.remove(&call_id)
+            && let Some(kept) = completion.resolve(value)
+        {
+            calls.insert(call_id, kept);
+        }
+    }
+
+    fn fail(&self, call_id: u64, error: FlowError) {
+        if let Some(completion) = self.calls.lock().unwrap().remove(&call_id) {
+            completion.fail(error);
+        }
+    }
+
+    fn stream(&self, call_id: u64) -> Option<Arc<StreamCompletion>> {
+        match self.calls.lock().unwrap().get(&call_id) {
+            Some(CallCompletion::Stream(stream)) => Some(Arc::clone(stream)),
+            Some(CallCompletion::Json(_)) | None => None,
+        }
+    }
+
+    fn end_stream(&self, call_id: u64) {
+        let mut calls = self.calls.lock().unwrap();
+        if let Entry::Occupied(entry) = calls.entry(call_id)
+            && let CallCompletion::Stream(stream) = entry.get()
+        {
+            stream.finish(Ok(()));
+            entry.remove();
+        }
+    }
+}
+
+#[derive(Clone)]
 struct CallCancellation {
+    call_id: u64,
     requested: Arc<AtomicBool>,
-    abort: Arc<std::sync::Mutex<Option<TeardownTsfn<()>>>>,
     finished: Arc<AtomicBool>,
+    tsfn: Arc<PromiseTsfn>,
 }
 
 impl CallCancellation {
-    fn for_stream(completion: &StreamCompletion) -> Self {
+    fn new(call_id: u64, tsfn: Arc<PromiseTsfn>, finished: Arc<AtomicBool>) -> Self {
         Self {
-            finished: completion.finished.clone(),
-            ..Self::default()
+            call_id,
+            requested: Arc::default(),
+            finished,
+            tsfn,
         }
-    }
-
-    fn register(&self, env: &Env, abort: &JsFunction) -> napi::Result<()> {
-        let mut abort = abort.create_threadsafe_function(0, |_ctx: ThreadSafeCallContext<()>| {
-            Ok(Vec::<JsUnknown>::new())
-        })?;
-        abort.unref(env)?;
-        let mut registered = self.abort.lock().unwrap();
-        *registered = Some(TeardownTsfn::new(env, abort)?);
-        if self.requested.load(Ordering::Acquire) {
-            Self::call_abort(registered.as_ref());
-        }
-        Ok(())
     }
 
     fn cancel(&self) {
-        if self.finished.load(Ordering::Acquire) {
+        if self.finished.load(Ordering::Acquire) || self.requested.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.requested.store(true, Ordering::Release);
-        Self::call_abort(self.abort.lock().unwrap().as_ref());
-    }
-
-    // A clone of a finalized threadsafe function panics, so call through the stored handle.
-    fn call_abort(abort: Option<&TeardownTsfn<()>>) {
-        if let Some(abort) = abort {
-            let _ = abort.call(
-                Ok(()),
-                napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
-            );
-        }
+        let _ = self.tsfn.call(
+            Ok(PromiseCall::Abort(self.call_id)),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
     }
 }
 
@@ -300,7 +335,7 @@ impl Drop for CallCancellationGuard {
 /// a collector blocks the forwarding task.
 #[derive(Clone, Default)]
 pub(crate) struct StreamCancellation {
-    state: Arc<std::sync::Mutex<StreamCancellationState>>,
+    state: Arc<Mutex<StreamCancellationState>>,
 }
 
 #[derive(Default)]
@@ -373,7 +408,7 @@ impl LlmStreamInner for JsCallbackStream {
                 .await
                 .map_err(|_| FlowError::Internal("JavaScript stream cleanup ended early".into()))?
                 .as_ref()
-                .is_some_and(Result::is_ok);
+                .is_some_and(|result| result.is_ok());
             let parked = completion.parked.lock().unwrap().take();
             if let Some(parked) = parked {
                 let _ = parked.await;
@@ -410,495 +445,236 @@ fn queue_status_result(status: napi::Status) -> FlowResult<()> {
     }
 }
 
-fn json_to_unknown(env: &Env, value: Json) -> napi::Result<JsUnknown> {
-    let raw = unsafe { <Json as ToNapiValue>::to_napi_value(env.raw(), value) }?;
-    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
+fn call_id_argument(ctx: &FunctionCallContext) -> napi::Result<u64> {
+    ctx.get::<f64>(0).map(|call_id| call_id as u64)
 }
 
-fn function_to_unknown(env: &Env, value: &JsFunction) -> JsUnknown {
-    unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) }
-}
-
-fn undefined_to_unknown(env: &Env) -> napi::Result<JsUnknown> {
-    let value = env.get_undefined()?;
-    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) })
-}
-
-fn build_next_unknown(
-    env: &Env,
-    next: NextFn,
-    continuation_context: MiddlewareContinuationContext,
-    publication_context_id: Option<String>,
-) -> napi::Result<JsUnknown> {
-    let next_fn = match next {
-        NextFn::Json(next) => {
-            env.create_function_from_closure("__nemo_relay_next", move |ctx| {
-                let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
-                let next = next.clone();
-                let scope_stack = match ctx.get::<&ScopeStack>(1) {
-                    Ok(scope_stack) => Some(scope_stack.inner.clone()),
-                    Err(_) => callback_factory::callback_scope_stack(ctx.env)?
-                        .map(|(scope_stack, _)| scope_stack),
-                };
-                let continuation_context = match scope_stack {
-                    Some(scope_stack) => {
-                        continuation_context.isolated_with_scope_stack(&scope_stack)
-                    }
-                    None => continuation_context.isolated(),
-                }
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-                let publication_context_id = publication_context_id.clone();
-                ctx.env.execute_tokio_future(
-                    async move {
-                        with_publication_callback_context(
-                            publication_context_id,
-                            None,
-                            async move {
-                                continuation_context
-                                    .invoke(move || async move {
-                                        next(arg).await.map_err(|error| {
-                                            napi::Error::from_reason(error.to_string())
-                                        })
-                                    })
-                                    .await
-                            },
-                        )
-                        .await
-                    },
-                    |_env, value| Ok(value),
-                )
-            })?
-        }
-        NextFn::Stream(next) => {
-            env.create_function_from_closure("__nemo_relay_next", move |ctx| {
-                let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
-                let next = next.clone();
-                let scope_stack = match ctx.get::<&ScopeStack>(1) {
-                    Ok(scope_stack) => Some(scope_stack.inner.clone()),
-                    Err(_) => callback_factory::callback_scope_stack(ctx.env)?
-                        .map(|(scope_stack, _)| scope_stack),
-                };
-                let continuation_context = match scope_stack {
-                    Some(scope_stack) => {
-                        continuation_context.isolated_with_scope_stack(&scope_stack)
-                    }
-                    None => continuation_context.isolated(),
-                }
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-                let publication_context_id = publication_context_id.clone();
-                let stream_context_id = publication_context_id.clone();
-                ctx.env.execute_tokio_future(
-                    async move {
-                        let stream = with_publication_callback_context(
-                            publication_context_id,
-                            None,
-                            async move {
-                                continuation_context
-                                    .invoke(move || async move {
-                                        next(arg).await.map_err(|error| {
-                                            napi::Error::from_reason(error.to_string())
-                                        })
-                                    })
-                                    .await
-                            },
-                        )
-                        .await?;
-                        Ok(crate::api::llm_stream_from_rust_stream(
-                            stream,
-                            stream_context_id,
-                        ))
-                    },
-                    |_env, value| Ok(value),
-                )
-            })?
-        }
-    };
-
-    Ok(function_to_unknown(env, &next_fn))
-}
-
-fn build_completion_unknowns(
-    env: &Env,
-    completion: CallCompletion,
-) -> napi::Result<(JsUnknown, JsUnknown, JsUnknown, JsUnknown)> {
-    let stream_completion = completion
-        .sender
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|sender| match sender {
-            CallCompletionSender::Stream(stream) => Some(stream.clone()),
-            CallCompletionSender::Json(_) => None,
-        });
-    let resolve_completion = completion.clone();
-    let resolve_stream = stream_completion.clone();
-    let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
-        if let Some(stream) = &resolve_stream {
-            if let Some(ready) = stream.ready.lock().unwrap().take() {
-                let _ = ready.send(Ok(()));
-            }
-            return ctx.env.get_undefined();
-        }
-        let sender = resolve_completion.sender.lock().unwrap().take();
-        if let Some(CallCompletionSender::Json(sender)) = sender {
-            let value = ctx.get::<Json>(0).map_err(|error| {
+fn call_settlers(env: &Env, calls: &Arc<CallRegistry>) -> napi::Result<PromiseSettlers> {
+    let resolve_calls = Arc::clone(calls);
+    let resolve = closure_function(env, "__nemo_relay_resolve", move |ctx| {
+        resolve_calls.resolve(call_id_argument(&ctx)?, || {
+            ctx.get::<Json>(1).map_err(|error| {
                 FlowError::Internal(format!(
                     "JavaScript callback result could not be converted to JSON: {error}"
                 ))
-            });
-            let _ = sender.send(value);
-        }
-        ctx.env.get_undefined()
-    })?;
-
-    let reject = env.create_function_from_closure("__nemo_relay_reject", move |ctx| {
-        // Do not invoke arbitrary `error.message` getters here. A throwing
-        // getter used to escape this callback and abort the N-API call rather
-        // than settling the middleware future as a rejection.
-        let message = ctx
-            .get::<String>(0)
-            .unwrap_or_else(|_| "unknown error".to_string());
-        let exception_type = ctx.get::<String>(1).unwrap_or_else(|_| "Error".to_string());
-        completion.send_error(FlowError::CallbackException {
-            message,
-            exception_type,
-            source: None,
+            })
         });
-        ctx.env.get_undefined()
+        Ok(())
     })?;
-
-    let push_stream = stream_completion.clone();
-    let push = env.create_function_from_closure("__nemo_relay_stream_push", move |ctx| {
-        let chunk = ctx.get::<Json>(0).map_err(|error| {
-            napi::Error::from_reason(format!("stream chunk is not JSON-compatible: {error}"))
+    let reject_calls = Arc::clone(calls);
+    let reject = closure_function(env, "__nemo_relay_reject", move |ctx| {
+        let call_id = call_id_argument(&ctx)?;
+        let exception = ctx.get::<Unknown>(1)?;
+        let message = ctx.get::<String>(2)?;
+        let exception_type = ctx.get::<String>(3)?;
+        reject_calls.fail(
+            call_id,
+            FlowError::CallbackException {
+                message,
+                exception_type,
+                source: Some(Arc::new(napi::Error::from_unknown_without_coercion(
+                    exception,
+                ))),
+            },
+        );
+        Ok(())
+    })?;
+    let push_calls = Arc::clone(calls);
+    let stream_push = closure_function(env, "__nemo_relay_stream_push", move |ctx| {
+        let call_id = call_id_argument(&ctx)?;
+        let chunk = ctx.get::<Json>(1).map_err(|error| {
+            Error::invalid_argument(format!("stream chunk is not JSON-compatible: {error}"))
         })?;
-        let Some(stream) = push_stream.as_ref() else {
-            return undefined_to_unknown(ctx.env);
-        };
-        let Some(chunks) = stream.chunks.lock().unwrap().as_ref().cloned() else {
-            return undefined_to_unknown(ctx.env);
-        };
-        // Skip a promise when the bridge can take the chunk at once.
-        match chunks.try_send(Ok(chunk)) {
-            Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                undefined_to_unknown(ctx.env)
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Full(chunk)) => {
-                let promise: JsFunction = ctx.env.get_global()?.get_named_property("Promise")?;
-                let parked = std::sync::Mutex::new(Some((chunks, chunk, Arc::clone(stream))));
-                let executor = ctx.env.create_function_from_closure(
-                    "__nemo_relay_stream_push_wait",
-                    move |ctx| {
-                        let Some((chunks, chunk, stream)) = parked.lock().unwrap().take() else {
-                            return ctx.env.get_undefined();
-                        };
-                        let resolve = ctx.get::<JsFunction>(0)?;
-                        let mut settle = resolve.create_threadsafe_function(
-                            0,
-                            |_ctx: ThreadSafeCallContext<()>| Ok(Vec::<JsUnknown>::new()),
-                        )?;
-                        settle.unref(ctx.env)?;
-                        let settle: TeardownTsfn<()> = TeardownTsfn::new(ctx.env, settle)?;
-                        let task = napi::bindgen_prelude::within_runtime_if_available(|| {
-                            tokio::spawn(async move {
-                                let _ = chunks.send(chunk).await;
-                                if !settle.torn_down() {
-                                    let _ = settle.call(
-                                        Ok(()),
-                                        napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
-                                    );
-                                }
-                            })
-                        });
-                        *stream.parked.lock().unwrap() = Some(task);
-                        ctx.env.get_undefined()
-                    },
-                )?;
-                promise
-                    .new_instance(&[executor])
-                    .map(|promise| promise.into_unknown())
-            }
-        }
+        push_stream_chunk(ctx.env, &push_calls, call_id, chunk)
     })?;
-
-    let end = env.create_function_from_closure("__nemo_relay_stream_end", move |ctx| {
-        if let Some(stream) = &stream_completion {
-            stream.finish(Ok(()));
-        }
-        ctx.env.get_undefined()
+    let end_calls = Arc::clone(calls);
+    let stream_end = closure_function(env, "__nemo_relay_stream_end", move |ctx| {
+        end_calls.end_stream(call_id_argument(&ctx)?);
+        Ok(())
     })?;
-
-    Ok((
-        function_to_unknown(env, &resolve),
-        function_to_unknown(env, &reject),
-        function_to_unknown(env, &push),
-        function_to_unknown(env, &end),
-    ))
+    let next = closure_function(env, "__nemo_relay_next", continue_call)?;
+    Ok(FnArgs::from((
+        detach(env, &resolve),
+        detach(env, &reject),
+        detach(env, &stream_push),
+        detach(env, &stream_end),
+        detach(env, &next),
+    )))
 }
 
-fn build_abort_registration_unknown(
-    env: &Env,
-    cancellation: CallCancellation,
-) -> napi::Result<JsUnknown> {
-    let register = env.create_function_from_closure("__nemo_relay_register_abort", move |ctx| {
-        let abort = ctx.get::<JsFunction>(0)?;
-        cancellation.register(ctx.env, &abort)?;
-        ctx.env.get_undefined()
-    })?;
-    Ok(function_to_unknown(env, &register))
-}
-
-thread_local! {
-    static ENV_TEARDOWN: std::cell::RefCell<Option<Arc<AtomicBool>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Flag raised by an environment cleanup hook. A hook registered after napi-rs's runtime
-/// hook runs before the runtime drops.
-pub(crate) fn env_teardown_flag(env: &Env) -> napi::Result<Arc<AtomicBool>> {
-    ENV_TEARDOWN.with(|slot| {
-        if let Some(flag) = slot.borrow().as_ref() {
-            return Ok(flag.clone());
+fn push_stream_chunk(env: &Env, calls: &CallRegistry, call_id: u64, chunk: Json) -> Result<JsArg> {
+    let Some(stream) = calls.stream(call_id) else {
+        return Ok(js_value(env, ())?);
+    };
+    let Some(chunks) = stream.chunks.lock().unwrap().as_ref().cloned() else {
+        return Ok(js_value(env, ())?);
+    };
+    match chunks.try_send(Ok(chunk)) {
+        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(js_value(env, ())?),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(chunk)) => {
+            let (pending, promise) = create_promise::<()>(env, Liveness::LetLoopExit)?;
+            let task = within_runtime_if_available(|| {
+                tokio::spawn(async move {
+                    let _ = chunks.send(chunk).await;
+                    pending.resolve_with(Box::new(|env| js_value(env, ())));
+                })
+            });
+            *stream.parked.lock().unwrap() = Some(task);
+            Ok(detach(env, &promise))
         }
-        let flag = Arc::new(AtomicBool::new(false));
-        let mut env = *env;
-        env.add_env_cleanup_hook(flag.clone(), |flag| flag.store(true, Ordering::Release))?;
-        slot.replace(Some(flag.clone()));
-        Ok(flag)
-    })
+    }
 }
 
-pub(crate) fn reset_env_teardown() {
-    ENV_TEARDOWN.with(|slot| slot.replace(None));
-}
-
-/// Threadsafe function left to Node once it is closing or its environment tears down.
-///
-/// A call on a closing function consumes its thread count, so a release that
-/// follows would assert inside napi-rs.
-pub(crate) struct TeardownTsfn<T: 'static, ES: ErrorStrategy::T = ErrorStrategy::CalleeHandled> {
-    tsfn: Option<ThreadsafeFunction<T, ES>>,
-    teardown: Arc<AtomicBool>,
-    closing: Arc<AtomicBool>,
-}
-
-impl<T: 'static, ES: ErrorStrategy::T> TeardownTsfn<T, ES> {
-    pub(crate) fn new(env: &Env, tsfn: ThreadsafeFunction<T, ES>) -> napi::Result<Self> {
-        Ok(Self {
-            tsfn: Some(tsfn),
-            teardown: env_teardown_flag(env)?,
-            closing: Arc::default(),
-        })
+fn continue_call(ctx: FunctionCallContext) -> Result<JsArg> {
+    let state: Unknown = ctx.get(0)?;
+    // SAFETY: the argument belongs to this call, and the external was created by
+    // `build_invoke_args` in this environment.
+    let state = unsafe { External::<NextState>::from_napi_ref(ctx.env.raw(), state.raw()) }?;
+    let arg = ctx.get::<Json>(1).unwrap_or(Json::Null);
+    let scope = callback_factory::callback_scope_from(ctx.env, ctx.get::<Unknown>(2)?)?;
+    let continuation = match &scope {
+        Some(scope) => state
+            .continuation_context
+            .isolated_with_scope_stack(&scope.scope_stack),
+        None => state.continuation_context.isolated(),
     }
-
-    pub(crate) fn torn_down(&self) -> bool {
-        self.teardown.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn teardown(&self) -> Arc<AtomicBool> {
-        self.teardown.clone()
-    }
-
-    fn released(&self) -> bool {
-        self.torn_down() || self.closing.load(Ordering::Acquire)
-    }
-
-    fn note(&self, status: napi::Status) -> napi::Status {
-        if status == napi::Status::Closing {
-            self.closing.store(true, Ordering::Release);
+    .map_err(Error::from)?;
+    let publication_context_id = state.publication_context_id.clone();
+    let promise = match &state.next {
+        NextFn::Json(next) => {
+            let next = next.clone();
+            spawn_promise::<Json, _, _, _, _>(
+                ctx.env,
+                async move {
+                    with_publication_callback_context(publication_context_id, None, async move {
+                        continuation
+                            .invoke(move || async move { next(arg).await.map_err(Error::from) })
+                            .await
+                    })
+                    .await
+                },
+                js_value,
+            )
         }
-        status
-    }
+        NextFn::Stream(next) => {
+            let next = next.clone();
+            let stream_context_id = publication_context_id.clone();
+            spawn_promise::<Json, _, Error, _, _>(
+                ctx.env,
+                async move {
+                    let stream = with_publication_callback_context(
+                        publication_context_id,
+                        None,
+                        async move {
+                            continuation
+                                .invoke(move || async move { next(arg).await.map_err(Error::from) })
+                                .await
+                        },
+                    )
+                    .await?;
+                    Ok(crate::api::llm_stream_from_rust_stream(
+                        stream,
+                        stream_context_id,
+                    ))
+                },
+                js_value,
+            )
+        }
+    }?;
+    Ok(detach(ctx.env, &promise))
+}
 
-    pub(crate) fn abort(mut self) -> napi::Result<()> {
-        match self.tsfn.take() {
-            Some(tsfn) if self.released() => {
-                std::mem::forget(tsfn);
-                Ok(())
+fn build_promise_args(
+    ctx: ThreadsafeCallContext<PromiseCall>,
+    calls: &CallRegistry,
+) -> napi::Result<PromiseArgs> {
+    let env = &ctx.env;
+    let undefined = js_value(env, ())?;
+    match ctx.value {
+        PromiseCall::Abort(call_id) => Ok(FnArgs::from((
+            js_value(env, true)?,
+            js_value(env, call_id as f64)?,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+        ))),
+        PromiseCall::Invoke(call) => {
+            let CallArgs { invoke, completion } = *call;
+            let call_id = invoke.call_id;
+            match build_invoke_args(env, invoke, undefined) {
+                Ok(args) => {
+                    calls.insert(call_id, completion);
+                    Ok(args)
+                }
+                Err(error) => {
+                    completion.fail(FlowError::Internal(format!(
+                        "failed to build JavaScript middleware callback arguments: {error}"
+                    )));
+                    Err(error)
+                }
             }
-            Some(tsfn) => tsfn.abort(),
-            None => Ok(()),
         }
     }
 }
 
-impl<T: 'static> TeardownTsfn<T, ErrorStrategy::CalleeHandled> {
-    pub(crate) fn call(
-        &self,
-        value: napi::Result<T>,
-        mode: napi::threadsafe_function::ThreadsafeFunctionCallMode,
-    ) -> napi::Status {
-        self.note((**self).call(value, mode))
-    }
-}
-
-impl<T: 'static> TeardownTsfn<T, ErrorStrategy::Fatal> {
-    pub(crate) fn call(
-        &self,
-        value: T,
-        mode: napi::threadsafe_function::ThreadsafeFunctionCallMode,
-    ) -> napi::Status {
-        self.note((**self).call(value, mode))
-    }
-}
-
-impl<T: 'static, ES: ErrorStrategy::T> Clone for TeardownTsfn<T, ES> {
-    fn clone(&self) -> Self {
-        Self {
-            tsfn: self.tsfn.clone(),
-            teardown: self.teardown.clone(),
-            closing: self.closing.clone(),
-        }
-    }
-}
-
-impl<T: 'static, ES: ErrorStrategy::T> std::ops::Deref for TeardownTsfn<T, ES> {
-    type Target = ThreadsafeFunction<T, ES>;
-
-    fn deref(&self) -> &Self::Target {
-        self.tsfn
-            .as_ref()
-            .expect("threadsafe function is present until drop")
-    }
-}
-
-impl<T: 'static, ES: ErrorStrategy::T> Drop for TeardownTsfn<T, ES> {
-    fn drop(&mut self) {
-        if self.released() {
-            std::mem::forget(self.tsfn.take());
-        }
-    }
+fn build_invoke_args(env: &Env, call: InvokeArgs, undefined: JsArg) -> napi::Result<PromiseArgs> {
+    let arg0 = match call.arg0 {
+        PrimaryArg::Json(value) => js_value(env, value)?,
+        PrimaryArg::Build(build) => build(env)?,
+    };
+    let next = match call.next {
+        Some(state) => js_value(env, External::new(state))?,
+        None => undefined,
+    };
+    let publication_context_id = match call.publication_context_id {
+        Some(context_id) => js_value(env, context_id)?,
+        None => undefined,
+    };
+    Ok(FnArgs::from((
+        js_value(env, false)?,
+        js_value(env, call.call_id as f64)?,
+        arg0,
+        js_value(env, call.spread)?,
+        next,
+        js_value(env, call.publication)?,
+        publication_context_id,
+        call.scope.into_js(env)?,
+        js_value(env, call.stream_result)?,
+    )))
 }
 
 /// A wrapper around a JS function that can be called from any thread and
 /// transparently handles both synchronous and Promise return values.
 pub struct PromiseAwareFn {
-    tsfn: std::sync::Mutex<Option<TeardownTsfn<CallArgs>>>,
+    tsfn: Mutex<Option<Arc<PromiseTsfn>>>,
+    calls: Arc<CallRegistry>,
 }
 
 impl PromiseAwareFn {
     /// Create a new `PromiseAwareFn` wrapping the given JS function.
     ///
     /// Must be called on the JS main thread (i.e., in a sync `#[napi]` function).
-    pub fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
-        let wrapper = callback_factory::wrap_promise_callback(env, func)?;
-        Self::from_wrapper(env, &wrapper)
-    }
-
-    fn from_wrapper(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
-        let mut tsfn =
-            env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
-                let completion = ctx.value.completion.clone();
-                let result = (|| {
-                    let next = match ctx.value.next {
-                        Some(next) => {
-                            let continuation_context = ctx
-                                .value
-                                .continuation_context
-                                .clone()
-                                .ok_or_else(|| {
-                                napi::Error::from_reason(
-                                    "middleware next callback is missing its captured Relay context",
-                                )
-                            })?;
-                            build_next_unknown(
-                                &ctx.env,
-                                next,
-                                continuation_context,
-                                ctx.value.publication_context_id.clone(),
-                            )?
-                        }
-                        None => undefined_to_unknown(&ctx.env)?,
-                    };
-                    let arg0 = match ctx.value.arg0 {
-                        PrimaryArg::Json(value) => json_to_unknown(&ctx.env, value)?,
-                        PrimaryArg::Build(build) => build(&ctx.env)?,
-                    };
-                    let spread = unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            ctx.env.raw(),
-                            ctx.env.get_boolean(ctx.value.spread)?.raw(),
-                        )
-                    };
-                    let publication = unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            ctx.env.raw(),
-                            ctx.env.get_boolean(ctx.value.publication)?.raw(),
-                        )
-                    };
-                    let publication_context_id = match ctx.value.publication_context_id {
-                        Some(context_id) => json_to_unknown(&ctx.env, Json::String(context_id))?,
-                        None => undefined_to_unknown(&ctx.env)?,
-                    };
-                    let scope_stack = match ctx.value.scope_stack {
-                        Some(scope_stack) => {
-                            let scope_stack = ScopeStack {
-                                inner: scope_stack,
-                                publication_buffer: ctx.value.publication_buffer,
-                            }
-                            .into_instance(ctx.env)?;
-                            unsafe {
-                                JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw())
-                            }
-                        }
-                        None => undefined_to_unknown(&ctx.env)?,
-                    };
-                    let propagation_parent_uuid = match ctx.value.propagation_parent_uuid {
-                        Some(parent_uuid) => json_to_unknown(&ctx.env, Json::String(parent_uuid))?,
-                        None => undefined_to_unknown(&ctx.env)?,
-                    };
-                    let propagation_context = match ctx.value.propagation_context {
-                        Some(context) => unsafe {
-                            JsUnknown::from_raw_unchecked(
-                                ctx.env.raw(),
-                                PropagationContext::to_napi_value(
-                                    ctx.env.raw(),
-                                    propagation_context_to_napi(context),
-                                )?,
-                            )
-                        },
-                        None => undefined_to_unknown(&ctx.env)?,
-                    };
-                    let (resolve, reject, stream_push, stream_end) =
-                        build_completion_unknowns(&ctx.env, ctx.value.completion)?;
-                    let register_abort =
-                        build_abort_registration_unknown(&ctx.env, ctx.value.cancellation)?;
-                    let stream_result = unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            ctx.env.raw(),
-                            ctx.env.get_boolean(ctx.value.stream_result)?.raw(),
-                        )
-                    };
-                    Ok(vec![
-                        arg0,
-                        spread,
-                        next,
-                        resolve,
-                        reject,
-                        publication,
-                        publication_context_id,
-                        scope_stack,
-                        propagation_parent_uuid,
-                        propagation_context,
-                        register_abort,
-                        stream_result,
-                        stream_push,
-                        stream_end,
-                    ])
-                })();
-                if let Err(error) = &result {
-                    completion.send_error(FlowError::Internal(format!(
-                        "failed to build JavaScript middleware callback arguments: {error}"
-                    )));
-                }
-                result
+    pub fn new(env: &Env, func: &Function<JsArg, JsArg>) -> napi::Result<Self> {
+        let calls = Arc::new(CallRegistry::default());
+        let settlers = call_settlers(env, &calls)?;
+        let wrapper: Function<PromiseArgs, ()> =
+            callback_factory::wrap_promise_callback(env, func, settlers)?;
+        let registry = Arc::clone(&calls);
+        // The callback must not keep the Node event loop alive.
+        let tsfn = wrapper
+            .build_threadsafe_function::<PromiseCall>()
+            .callee_handled::<true>()
+            .weak::<true>()
+            .build_callback(move |ctx: ThreadsafeCallContext<PromiseCall>| {
+                build_promise_args(ctx, &registry)
             })?;
-
-        // The callback should not keep the Node event loop alive on its own.
-        tsfn.unref(env)?;
-
         Ok(Self {
-            tsfn: std::sync::Mutex::new(Some(TeardownTsfn::new(env, tsfn)?)),
+            tsfn: Mutex::new(Some(Arc::new(tsfn))),
+            calls,
         })
     }
 
@@ -984,17 +760,6 @@ impl PromiseAwareFn {
         .await
     }
 
-    /// Call the JS function with a middleware-style `next(arg)` callback that
-    /// resolves to a lazy downstream stream.
-    pub async fn call_with_stream_next(
-        &self,
-        args: Json,
-        next: JsonStreamNextFn,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next), None)
-            .await
-    }
-
     /// Call a spread JavaScript callback with builder-constructed arguments
     /// followed by a middleware-style streaming `next(arg)` callback.
     pub async fn call_spread_with_arg0_and_stream_next(
@@ -1021,6 +786,23 @@ impl PromiseAwareFn {
         .await
     }
 
+    fn tsfn(&self) -> FlowResult<Arc<PromiseTsfn>> {
+        self.tsfn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or_else(closed_tsfn_error)
+    }
+
+    fn next_state(&self, next: Option<NextFn>) -> Option<NextState> {
+        next.map(|next| NextState {
+            next,
+            continuation_context: MiddlewareContinuationContext::capture(),
+            publication_context_id: publication_callback_context_id(),
+        })
+    }
+
     async fn call_with_stream_next_inner(
         &self,
         arg0: PrimaryArg,
@@ -1028,47 +810,42 @@ impl PromiseAwareFn {
         next: Option<JsonStreamNextFn>,
         stream_cancellation: Option<&StreamCancellation>,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        let tsfn = self.tsfn()?;
+        let call_id = self.calls.allocate();
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (chunk_sender, chunk_receiver) =
             tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
-        let (completion, stream_completion, closed) =
-            CallCompletion::stream(ready_sender, chunk_sender);
-        let cancellation = CallCancellation::for_stream(&stream_completion);
+        let (closed, closed_rx) = tokio::sync::watch::channel(None);
+        let completion = Arc::new(StreamCompletion {
+            ready: Mutex::new(Some(ready_sender)),
+            chunks: Mutex::new(Some(chunk_sender)),
+            terminal_error: Mutex::new(None),
+            closed,
+            finished: Arc::default(),
+            parked: Mutex::new(None),
+        });
+        let cancellation =
+            CallCancellation::new(call_id, tsfn.clone(), Arc::clone(&completion.finished));
         if let Some(stream_cancellation) = stream_cancellation {
             stream_cancellation.attach(&cancellation);
         }
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
-        let continuation_context = next
-            .as_ref()
-            .map(|_| MiddlewareContinuationContext::capture());
-        let propagation_context = capture_propagation_context().ok();
-        let propagation_parent_uuid = propagation_context
-            .as_ref()
-            .map(|context| context.parent_uuid.to_string());
-        let tsfn = self
-            .tsfn
-            .lock()
-            .unwrap()
-            .as_ref()
-            .cloned()
-            .ok_or_else(closed_tsfn_error)?;
+        let next = self.next_state(next.map(NextFn::Stream));
         let status = tsfn.call(
-            Ok(CallArgs {
-                arg0,
-                spread,
-                next: next.map(NextFn::Stream),
-                publication: false,
-                publication_context_id: publication_callback_context_id(),
-                scope_stack: Some(current_scope_stack()),
-                propagation_parent_uuid,
-                propagation_context,
-                publication_buffer: capture_nested_publication_buffer(),
-                stream_result: true,
-                continuation_context,
-                cancellation: cancellation.clone(),
-                completion,
-            }),
-            napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+            Ok(PromiseCall::Invoke(Box::new(CallArgs {
+                invoke: InvokeArgs {
+                    call_id,
+                    arg0,
+                    spread,
+                    next,
+                    publication: false,
+                    publication_context_id: publication_callback_context_id(),
+                    scope: CallbackScope::capture(),
+                    stream_result: true,
+                },
+                completion: CallCompletion::Stream(Arc::clone(&completion)),
+            }))),
+            ThreadsafeFunctionCallMode::NonBlocking,
         );
         queue_status_result(status)?;
         ready_receiver
@@ -1078,17 +855,18 @@ impl PromiseAwareFn {
         Ok(nemo_relay::api::runtime::LlmJsonStream::from_closeable(
             JsCallbackStream {
                 receiver: tokio_stream::wrappers::ReceiverStream::new(chunk_receiver),
-                completion: stream_completion,
-                closed,
+                completion,
+                closed: closed_rx,
                 cancellation,
             },
         ))
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.
-    pub fn close(&self) {
-        if let Some(tsfn) = self.tsfn.lock().unwrap().take() {
-            let _ = tsfn.abort();
+    pub fn close(&self) -> napi::Result<()> {
+        match self.tsfn.lock().unwrap().take() {
+            Some(tsfn) => abort_tsfn(&tsfn),
+            None => Ok(()),
         }
     }
 
@@ -1098,43 +876,33 @@ impl PromiseAwareFn {
         mode: CallMode,
         next: Option<NextFn>,
     ) -> FlowResult<Json> {
+        let tsfn = self.tsfn()?;
+        let call_id = self.calls.allocate();
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let cancellation = CallCancellation::default();
-        let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
-        let continuation_context = next
-            .as_ref()
-            .map(|_| MiddlewareContinuationContext::capture());
-        let propagation_context = capture_propagation_context().ok();
-        let propagation_parent_uuid = propagation_context
-            .as_ref()
-            .map(|context| context.parent_uuid.to_string());
-        let tsfn = self
-            .tsfn
-            .lock()
-            .unwrap()
-            .as_ref()
-            .cloned()
-            .ok_or_else(closed_tsfn_error)?;
+        let finished = Arc::new(AtomicBool::new(false));
+        let mut cancellation_guard = CallCancellationGuard::new(CallCancellation::new(
+            call_id,
+            tsfn.clone(),
+            Arc::clone(&finished),
+        ));
+        let next = self.next_state(next);
         let status = tsfn.call(
-            Ok(CallArgs {
-                arg0,
-                spread: mode.spread,
-                next,
-                publication: mode.publication,
-                publication_context_id: publication_callback_context_id(),
-                // Scope identity applies to every middleware callback.
-                // Publication context also lets queued tool/LLM observability
-                // sanitizers avoid waiting on their own publication.
-                scope_stack: Some(current_scope_stack()),
-                propagation_parent_uuid,
-                propagation_context,
-                publication_buffer: capture_nested_publication_buffer(),
-                stream_result: false,
-                continuation_context,
-                cancellation,
-                completion: CallCompletion::json(sender),
-            }),
-            napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+            Ok(PromiseCall::Invoke(Box::new(CallArgs {
+                invoke: InvokeArgs {
+                    call_id,
+                    arg0,
+                    spread: mode.spread,
+                    next,
+                    publication: mode.publication,
+                    publication_context_id: publication_callback_context_id(),
+                    // Queued tool and LLM sanitizers use the publication context to avoid
+                    // waiting on their own publication.
+                    scope: CallbackScope::capture(),
+                    stream_result: false,
+                },
+                completion: CallCompletion::Json(JsonCompletion { sender, finished }),
+            }))),
+            ThreadsafeFunctionCallMode::NonBlocking,
         );
         queue_status_result(status)?;
 
@@ -1143,14 +911,6 @@ impl PromiseAwareFn {
             .map_err(|e| FlowError::Internal(e.to_string()))?;
         cancellation_guard.disarm();
         result
-    }
-}
-
-impl Drop for PromiseAwareFn {
-    fn drop(&mut self) {
-        if let Some(tsfn) = self.tsfn.get_mut().unwrap().take() {
-            let _ = tsfn.abort();
-        }
     }
 }
 

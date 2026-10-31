@@ -10,16 +10,15 @@
 //! between the Rust async runtime and the Node.js event loop.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-use napi::bindgen_prelude::{FromNapiValue, ToNapiValue};
-use napi::threadsafe_function::{
-    ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
+use napi::bindgen_prelude::{
+    FnArgs, FromNapiValue, Function, FunctionCallContext, JsObjectValue, JsValuesTupleIntoVec,
+    Null, Object, Unknown,
 };
-use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
+use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
+use napi::{Env, ValueType};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollector,
@@ -45,12 +44,14 @@ use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 
-use crate::api::PersistentJsFunction;
 use crate::callback_factory;
-use crate::convert::{callback_json, record_callback_error, to_napi_err};
-use crate::promise_call::{
-    JsonNextFn, JsonStreamNextFn, PromiseAwareFn, StreamCancellation, TeardownTsfn,
+use crate::convert::{
+    HandledTsfn, JsArg, JsArgs2, JsArgs3, PersistentJsFunction, Tsfn, abort_tsfn, closure_function,
+    detach, js_value, record_callback_error,
 };
+use crate::environment::teardown_flag;
+use crate::error::Error;
+use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn, StreamCancellation};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
 
 #[derive(Default)]
@@ -169,142 +170,68 @@ pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMark
     marks.into_iter().map(Into::into).collect()
 }
 
-#[derive(Deserialize)]
-struct MiddlewareCallbackResult {
-    ok: bool,
-    #[serde(default)]
-    value: Json,
-    #[serde(default)]
-    error: String,
-    #[serde(default, rename = "exceptionType")]
-    exception_type: String,
+fn envelope_field<T: FromNapiValue>(envelope: &Object, key: &str) -> napi::Result<T> {
+    envelope.get::<T>(key)?.ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("callback envelope has no {key}"),
+        )
+    })
 }
 
-/// Wrap a middleware callback so exceptions cross the N-API boundary as data.
-///
-/// A raw `ThreadsafeFunction::call_with_return_value` aborts the Node process when
-/// a JavaScript callback throws. This wrapper preserves the callback signature and
-/// returns a JSON envelope that the Rust middleware adapters can decode safely.
-pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_relay_middleware_wrapper(...args) {
-  try {
-    const value = fn(...args);
-    return { ok: true, value: value === undefined ? null : value };
-  } catch (error) {
-    let message = 'JavaScript callback threw';
-    try {
-      message = String(error?.message ?? error);
-    } catch {}
-    return { ok: false, error: message };
-  }
-})"#,
-    )?;
-    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
-    let wrapper_unknown = factory.call(None, &[func_unknown])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
-}
-
-/// Wrap a conditional registration gate so throws and invalid return values
-/// cross N-API as a JSON-compatible error envelope.
-pub(crate) fn safe_conditional_gate_callback(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_relay_conditional_gate_wrapper(...args) {
-  try {
-    const returned = fn(...args);
-    const value = returned === undefined ? null : returned;
-    if (value === null || typeof value === 'string') {
-      return { ok: true, value };
+fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result<Json>> {
+    let envelope = Object::from_unknown(envelope)?;
+    if envelope_field::<bool>(&envelope, "ok")? {
+        return Ok(match envelope.get::<Unknown>("value")? {
+            Some(value) => Json::from_unknown(value).map_err(|error| {
+                FlowError::Internal(format!(
+                    "{error_prefix}: callback result could not be converted: {error}"
+                ))
+            }),
+            None => Ok(Json::Null),
+        });
     }
-    return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
-  } catch (error) {
-    let message = 'JavaScript callback threw';
-    try {
-      message = String(error?.message ?? error);
-    } catch {}
-    let exceptionType = 'Error';
-    try {
-      const name = String(error?.name ?? '').trim();
-      if (name) exceptionType = name;
-    } catch {}
-    return { ok: false, error: message, exceptionType };
-  }
-})"#,
-    )?;
-    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
-    let wrapper_unknown = factory.call(None, &[func_unknown])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+    if envelope.has_named_property("exception")? {
+        let exception = envelope.get_named_property::<Unknown>("exception")?;
+        let message: String = envelope_field(&envelope, "message")?;
+        let exception_type: String = envelope_field(&envelope, "exceptionType")?;
+        return Ok(Err(FlowError::CallbackException {
+            message: format!("{error_prefix}: {message}"),
+            exception_type,
+            source: Some(Arc::new(napi::Error::from_unknown_without_coercion(
+                exception,
+            ))),
+        }));
+    }
+    let error: String = envelope_field(&envelope, "error")?;
+    Ok(Err(FlowError::Internal(format!("{error_prefix}: {error}"))))
 }
 
-/// Wrap a synchronous execution callback so failures cross the N-API boundary as data.
-///
-/// The return value is validated before NAPI-RS attempts to convert it to JSON. This
-/// prevents unsupported values such as `BigInt` from reaching conversion paths that
-/// abort the Node process.
-pub(crate) fn safe_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
-    callback_factory::wrap_execution_callback(env, func)
-}
-
-pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Result<Json> {
-    let result: MiddlewareCallbackResult = serde_json::from_value(value).map_err(|error| {
-        FlowError::Internal(format!(
-            "{error_prefix}: invalid middleware callback result: {error}"
-        ))
-    })?;
-    if result.ok {
-        Ok(result.value)
-    } else if result.exception_type.is_empty() {
+pub(crate) fn unwrap_envelope(envelope: Unknown, error_prefix: &str) -> Result<Json> {
+    decode_envelope(envelope, error_prefix).unwrap_or_else(|error| {
         Err(FlowError::Internal(format!(
-            "{error_prefix}: {}",
-            result.error
+            "{error_prefix}: invalid middleware callback result: {error}"
         )))
-    } else {
-        Err(FlowError::CallbackException {
-            message: format!("{error_prefix}: {}", result.error),
-            exception_type: result.exception_type,
-            source: None,
-        })
-    }
+    })
 }
 
-async fn await_middleware_json_result(
-    rx: tokio::sync::oneshot::Receiver<Json>,
+pub(crate) fn tsfn_envelope(
+    env: &Env,
+    value: napi::Result<JsArg>,
     error_prefix: &str,
 ) -> Result<Json> {
-    let value = rx
-        .await
-        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?;
-    unwrap_middleware_result(value, error_prefix)
-}
-
-async fn await_middleware_json_or_value(
-    rx: tokio::sync::oneshot::Receiver<Json>,
-    error_prefix: &str,
-    fallback: Json,
-) -> Json {
-    match await_middleware_json_result(rx, error_prefix).await {
-        Ok(value) => value,
-        Err(error) => {
-            record_callback_error(error.to_string());
-            fallback
-        }
+    match value {
+        Ok(value) => unwrap_envelope(unsafe { value.into_unknown(env) }, error_prefix),
+        Err(error) => Err(FlowError::Internal(format!("{error_prefix}: {error}"))),
     }
 }
 
-async fn await_middleware_option_string_result(
-    rx: tokio::sync::oneshot::Receiver<Json>,
+async fn await_callback_result(
+    rx: tokio::sync::oneshot::Receiver<Result<Json>>,
     error_prefix: &str,
-) -> Result<Option<String>> {
-    match await_middleware_json_result(rx, error_prefix).await? {
-        Json::Null => Ok(None),
-        Json::String(value) => Ok(Some(value)),
-        other => Err(FlowError::Internal(format!(
-            "{error_prefix}: expected string or null, got {other:?}",
-        ))),
-    }
+) -> Result<Json> {
+    rx.await
+        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?
 }
 
 /// Wrap a Promise-aware JS `(name, args) => string | null` tool guardrail.
@@ -379,16 +306,11 @@ pub fn wrap_js_llm_sanitize_request_promise_fn(func: Arc<PromiseAwareFn>) -> Llm
                 })?;
                 let context = js_llm_sanitize_request_context(&context);
                 let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
-                    let mut args = env.create_array_with_length(2)?;
-                    let request = unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            env.raw(),
-                            Json::to_napi_value(env.raw(), request)?,
-                        )
-                    };
-                    args.set_element(0, request)?;
-                    args.set_element(1, js_llm_sanitize_request_context_to_napi(env, context)?)?;
-                    Ok(js_object_to_unknown(env, args))
+                    let mut args = env.create_array(2)?;
+                    let request = js_value(env, request)?;
+                    args.set(0, request)?;
+                    args.set(1, js_llm_sanitize_request_context_to_napi(env, context)?)?;
+                    Ok(detach(env, &args))
                 });
                 let value = if publication {
                     func.call_spread_with_arg0_for_publication(build_args).await
@@ -426,16 +348,11 @@ pub fn wrap_js_llm_sanitize_response_promise_fn(
         Box::pin(async move {
             let context = js_llm_sanitize_response_context(&context);
             let build_args: crate::promise_call::Arg0Builder = Box::new(move |env| {
-                let mut args = env.create_array_with_length(2)?;
-                let response = unsafe {
-                    JsUnknown::from_raw_unchecked(
-                        env.raw(),
-                        Json::to_napi_value(env.raw(), response)?,
-                    )
-                };
-                args.set_element(0, response)?;
-                args.set_element(1, js_llm_sanitize_response_context_to_napi(env, context)?)?;
-                Ok(js_object_to_unknown(env, args))
+                let mut args = env.create_array(2)?;
+                let response = js_value(env, response)?;
+                args.set(0, response)?;
+                args.set(1, js_llm_sanitize_response_context_to_napi(env, context)?)?;
+                Ok(detach(env, &args))
             });
             let value = if publication {
                 func.call_spread_with_arg0_for_publication(build_args).await
@@ -657,28 +574,16 @@ pub fn wrap_js_event_metadata_injector_promise_fn(
     })
 }
 
-fn recv_json_result(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Result<Json> {
-    rx.recv()
-        .map_err(|e| FlowError::Internal(format!("{error_prefix}: {e}")))
-}
-
-fn recv_option_string_result(
-    rx: std::sync::mpsc::Receiver<Json>,
+fn recv_json_result(
+    rx: std::sync::mpsc::Receiver<Result<Json>>,
     error_prefix: &str,
-) -> Result<Option<String>> {
-    match recv_json_result(rx, error_prefix)? {
-        Json::Null => Ok(None),
-        Json::String(value) => Ok(Some(value)),
-        other => Err(FlowError::Internal(format!(
-            "{error_prefix}: expected string or null, got {other:?}",
-        ))),
-    }
+) -> Result<Json> {
+    rx.recv()
+        .map_err(|e| FlowError::Internal(format!("{error_prefix}: {e}")))?
 }
 
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
-pub fn wrap_js_tool_fn(
-    func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> ToolSanitizeFn {
+pub fn wrap_js_tool_fn(func: Tsfn<(String, Json), JsArgs2, JsArg>) -> ToolSanitizeFn {
     let func = Arc::new(func);
     Arc::new(move |name: String, args: Json| {
         let func = func.clone();
@@ -686,9 +591,13 @@ pub fn wrap_js_tool_fn(
             let (tx, rx) = tokio::sync::oneshot::channel();
             let status = func.call_with_return_value(
                 (name, args),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
+                ThreadsafeFunctionCallMode::NonBlocking,
+                move |value: napi::Result<JsArg>, env| {
+                    let _ = tx.send(tsfn_envelope(
+                        &env,
+                        value,
+                        "nemo_relay: JS tool callback failed",
+                    ));
                     Ok(())
                 },
             );
@@ -697,61 +606,7 @@ pub fn wrap_js_tool_fn(
                     "failed to queue JS tool callback: {status:?}"
                 )));
             }
-            await_middleware_json_result(rx, "nemo_relay: JS tool callback failed").await
-        })
-    })
-}
-
-/// Wrap a JS function `(name: string, args: object) => string | null` for tool conditional guardrails.
-pub fn wrap_js_tool_conditional_fn(
-    func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> ToolConditionalFn {
-    let func = Arc::new(func);
-    Arc::new(move |name: String, args: Json| {
-        let func = func.clone();
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                (name, args),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS tool conditional callback: {status:?}",
-                )));
-            }
-            await_middleware_option_string_result(rx, "JS tool conditional callback failed").await
-        })
-    })
-}
-
-/// Wrap a JS function `(name: string, args: object) => object` for tool request intercepts.
-pub fn wrap_js_tool_request_intercept_fn(
-    func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> ToolInterceptFn {
-    let func = Arc::new(func);
-    Arc::new(move |name: String, args: Json| {
-        let func = func.clone();
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                (name, args),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS tool callback: {status:?}",
-                )));
-            }
-            await_middleware_json_result(rx, "JS tool callback failed").await
+            await_callback_result(rx, "nemo_relay: JS tool callback failed").await
         })
     })
 }
@@ -761,209 +616,6 @@ pub(crate) fn parse_tool_execution_result(value: Json) -> Result<ToolExecutionRe
         FlowError::InvalidArgument(format!(
             "tool execution callback must return ToolExecutionResult; return {{ result: payload }}, not a raw object: {error}"
         ))
-    })
-}
-
-/// Wrap a JS function `(args: object) => ToolExecutionResult` for tool execution.
-pub fn wrap_js_tool_exec_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<
-    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionResult>> + Send>> + Send + Sync,
-> {
-    let func = Arc::new(func);
-    Box::new(move |args: Json| {
-        let func = func.clone();
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                args,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS tool execution callback: {status:?}",
-                )));
-            }
-            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
-            parse_tool_execution_result(unwrap_middleware_result(
-                result,
-                "JS tool execution callback failed",
-            )?)
-        })
-    })
-}
-
-/// Wrap a JS function for unified LLM request intercepts (3-arg signature).
-///
-/// The JS callback receives a single JSON object
-/// `{ name: string, request: LlmRequest, annotated: AnnotatedLlmRequest | null }`
-/// and must return `{ request, annotated?, pendingMarks?, optimizationContributions? }`.
-/// When `annotated` is non-null, request content is read-only and provider-body
-/// edits must be made through the returned annotation; headers remain writable.
-pub fn wrap_js_llm_request_intercept_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> LlmRequestInterceptFn {
-    let func = Arc::new(func);
-    Arc::new(
-        move |name: String, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
-            let func = func.clone();
-            Box::pin(async move {
-                let req_json = serde_json::to_value(&request).map_err(|error| {
-                    let error = FlowError::Internal(format!(
-                        "failed to serialize JS LLM request intercept request: {error}"
-                    ));
-                    record_callback_error(error.to_string());
-                    error
-                })?;
-                let annotated_json = serde_json::to_value(annotated).map_err(|error| {
-                    let error = FlowError::Internal(format!(
-                        "failed to serialize JS LLM request intercept annotation: {error}"
-                    ));
-                    record_callback_error(error.to_string());
-                    error
-                })?;
-                let arg = serde_json::json!({
-                    "name": name,
-                    "request": req_json,
-                    "annotated": annotated_json,
-                });
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                let status = func.call_with_return_value(
-                    arg,
-                    ThreadsafeFunctionCallMode::Blocking,
-                    move |val: Option<Json>| {
-                        let _ = tx.send(callback_json(val));
-                        Ok(())
-                    },
-                );
-                if status != napi::Status::Ok {
-                    return Err(FlowError::Internal(format!(
-                        "failed to queue JS LLM request intercept callback: {status:?}",
-                    )));
-                }
-                let result =
-                    await_middleware_json_result(rx, "JS LLM request intercept callback failed")
-                        .await?;
-
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct JsOutcome {
-                    request: LlmRequest,
-                    #[serde(default)]
-                    annotated: Option<AnnotatedLlmRequest>,
-                    #[serde(default)]
-                    pending_marks: Vec<JsPendingMarkSpec>,
-                    #[serde(default)]
-                    optimization_contributions: Vec<LlmOptimizationContribution>,
-                }
-                let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
-                    FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
-                })?;
-                Ok(LlmRequestInterceptOutcome {
-                    request: outcome.request,
-                    annotated_request: outcome.annotated,
-                    pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
-                    optimization_contributions: outcome.optimization_contributions,
-                })
-            })
-        },
-    )
-}
-
-/// Wrap a JS function for LLM request sanitization. The callback receives
-/// `(request, context)`.
-pub fn wrap_js_llm_sanitize_request_fn(
-    func: ThreadsafeFunction<(Json, JsLlmSanitizeRequestContext), ErrorStrategy::Fatal>,
-) -> LlmSanitizeRequestFn {
-    let func = Arc::new(func);
-    Arc::new(
-        move |request: LlmRequest, context: LlmSanitizeRequestContext| {
-            let func = func.clone();
-            Box::pin(async move {
-                let context = js_llm_sanitize_request_context(&context);
-                let request = serde_json::to_value(request).map_err(|error| {
-                    let error = FlowError::Internal(format!(
-                        "failed to serialize JS LLM sanitize request: {error}"
-                    ));
-                    record_callback_error(error.to_string());
-                    error
-                })?;
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if func.call_with_return_value(
-                    (request, context),
-                    ThreadsafeFunctionCallMode::Blocking,
-                    move |value: Option<Json>| {
-                        let _ = tx.send(callback_json(value));
-                        Ok(())
-                    },
-                ) != napi::Status::Ok
-                {
-                    record_callback_error(
-                        "nemo_relay: failed to queue JS LLM sanitize request callback",
-                    );
-                    return Err(FlowError::Internal(
-                        "failed to queue JS LLM sanitize request callback".into(),
-                    ));
-                }
-                let value = await_middleware_json_result(
-                    rx,
-                    "nemo_relay: JS LLM request sanitizer callback failed",
-                )
-                .await
-                .inspect_err(|error| record_callback_error(error.to_string()))?;
-                if value.is_null() {
-                    return Ok(None);
-                }
-                serde_json::from_value(value)
-                .map(Some)
-                .map_err(|error| FlowError::Internal(format!(
-                    "JS LLM sanitize request callback failed: failed to deserialize LlmRequest: {error}"
-                )))
-                .inspect_err(|error| record_callback_error(error.to_string()))
-            })
-        },
-    )
-}
-
-/// Wrap a JS function for LLM response sanitization. The callback receives
-/// `(response, context)`; returning `null` omits the event payload.
-pub fn wrap_js_llm_sanitize_response_fn(
-    func: ThreadsafeFunction<(Json, JsLlmSanitizeResponseContext), ErrorStrategy::Fatal>,
-) -> LlmSanitizeResponseFn {
-    let func = Arc::new(func);
-    Arc::new(move |response: Json, context: LlmSanitizeResponseContext| {
-        let func = func.clone();
-        Box::pin(async move {
-            let context = js_llm_sanitize_response_context(&context);
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            if func.call_with_return_value(
-                (response, context),
-                ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
-                },
-            ) != napi::Status::Ok
-            {
-                record_callback_error(
-                    "nemo_relay: failed to queue JS LLM sanitize response callback",
-                );
-                return Err(FlowError::Internal(
-                    "failed to queue JS LLM sanitize response callback".into(),
-                ));
-            }
-            let value = await_middleware_json_result(
-                rx,
-                "nemo_relay: JS LLM response sanitizer callback failed",
-            )
-            .await
-            .inspect_err(|error| record_callback_error(error.to_string()))?;
-            Ok((!value.is_null()).then_some(value))
-        })
     })
 }
 
@@ -1006,47 +658,43 @@ fn js_llm_sanitize_response_context(
     }
 }
 
-fn js_object_to_unknown(env: &Env, object: JsObject) -> JsUnknown {
-    unsafe { JsUnknown::from_raw_unchecked(env.raw(), object.raw()) }
-}
-
-fn request_codec_object(env: &Env, codec: Arc<dyn LlmCodec>) -> napi::Result<JsObject> {
-    let mut object = env.create_object()?;
+fn request_codec_object(env: &Env, codec: Arc<dyn LlmCodec>) -> napi::Result<Object<'_>> {
+    let mut object = Object::new(env)?;
     let decode_codec = codec.clone();
-    let decode = env.create_function_from_closure("decode", move |ctx| {
+    let decode = closure_function(env, "decode", move |ctx| {
         let request = ctx.get::<Json>(0)?;
         let request = serde_json::from_value(request)
-            .map_err(|error| napi::Error::from_reason(format!("invalid LlmRequest: {error}")))?;
-        serde_json::to_value(decode_codec.decode(&request).map_err(to_napi_err)?)
-            .map_err(|error| napi::Error::from_reason(error.to_string()))
+            .map_err(|error| Error::invalid_argument(format!("invalid LlmRequest: {error}")))?;
+        serde_json::to_value(decode_codec.decode(&request).map_err(Error::from)?)
+            .map_err(Error::from)
     })?;
     let encode_codec = codec;
-    let encode = env.create_function_from_closure("encode", move |ctx| {
+    let encode = closure_function(env, "encode", move |ctx| {
         let annotated = ctx.get::<Json>(0)?;
         let original = ctx.get::<Json>(1)?;
         let annotated = serde_json::from_value(annotated).map_err(|error| {
-            napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {error}"))
+            Error::invalid_argument(format!("invalid AnnotatedLlmRequest: {error}"))
         })?;
         let original = serde_json::from_value(original)
-            .map_err(|error| napi::Error::from_reason(format!("invalid LlmRequest: {error}")))?;
+            .map_err(|error| Error::invalid_argument(format!("invalid LlmRequest: {error}")))?;
         serde_json::to_value(
             encode_codec
                 .encode(&annotated, &original)
-                .map_err(to_napi_err)?,
+                .map_err(Error::from)?,
         )
-        .map_err(|error| napi::Error::from_reason(error.to_string()))
+        .map_err(Error::from)
     })?;
     object.set_named_property("decode", decode)?;
     object.set_named_property("encode", encode)?;
     Ok(object)
 }
 
-fn response_codec_object(env: &Env, codec: Arc<dyn LlmResponseCodec>) -> napi::Result<JsObject> {
-    let mut object = env.create_object()?;
-    let decode = env.create_function_from_closure("decodeResponse", move |ctx| {
+fn response_codec_object(env: &Env, codec: Arc<dyn LlmResponseCodec>) -> napi::Result<Object<'_>> {
+    let mut object = Object::new(env)?;
+    let decode = closure_function(env, "decodeResponse", move |ctx| {
         let response = ctx.get::<Json>(0)?;
-        serde_json::to_value(codec.decode_response(&response).map_err(to_napi_err)?)
-            .map_err(|error| napi::Error::from_reason(error.to_string()))
+        serde_json::to_value(codec.decode_response(&response).map_err(Error::from)?)
+            .map_err(Error::from)
     })?;
     object.set_named_property("decodeResponse", decode)?;
     Ok(object)
@@ -1056,60 +704,36 @@ fn response_codec_object(env: &Env, codec: Arc<dyn LlmResponseCodec>) -> napi::R
 pub(crate) fn js_llm_sanitize_request_context_to_napi(
     env: &Env,
     context: JsLlmSanitizeRequestContext,
-) -> napi::Result<JsUnknown> {
-    let mut object = env.create_object()?;
-    let codec = unsafe {
-        JsUnknown::from_raw_unchecked(
-            env.raw(),
-            JsLlmCodecIdentity::to_napi_value(env.raw(), context.codec)?,
-        )
-    };
+) -> napi::Result<JsArg> {
+    let mut object = Object::new(env)?;
+    let codec = js_value(env, context.codec)?;
     object.set_named_property("codec", codec)?;
 
     let resolved = context.resolved;
-    let resolve_codec =
-        env.create_function_from_closure("resolveCodec", move |ctx| match resolved.clone() {
-            Some(codec) => Ok(js_object_to_unknown(
-                ctx.env,
-                request_codec_object(ctx.env, codec)?,
-            )),
-            None => ctx
-                .env
-                .get_null()
-                .map(|value| unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), value.raw()) }),
-        })?;
+    let resolve_codec = closure_function(env, "resolveCodec", move |ctx| match resolved.clone() {
+        Some(codec) => Ok(detach(ctx.env, &request_codec_object(ctx.env, codec)?)),
+        None => Ok(js_value(ctx.env, Null)?),
+    })?;
     object.set_named_property("resolveCodec", resolve_codec)?;
-    Ok(js_object_to_unknown(env, object))
+    Ok(detach(env, &object))
 }
 
 /// Convert a response sanitizer context into the JavaScript object passed to a callback.
 pub(crate) fn js_llm_sanitize_response_context_to_napi(
     env: &Env,
     context: JsLlmSanitizeResponseContext,
-) -> napi::Result<JsUnknown> {
-    let mut object = env.create_object()?;
-    let codec = unsafe {
-        JsUnknown::from_raw_unchecked(
-            env.raw(),
-            JsLlmCodecIdentity::to_napi_value(env.raw(), context.codec)?,
-        )
-    };
+) -> napi::Result<JsArg> {
+    let mut object = Object::new(env)?;
+    let codec = js_value(env, context.codec)?;
     object.set_named_property("codec", codec)?;
 
     let resolved = context.resolved;
-    let resolve_codec =
-        env.create_function_from_closure("resolveCodec", move |ctx| match resolved.clone() {
-            Some(codec) => Ok(js_object_to_unknown(
-                ctx.env,
-                response_codec_object(ctx.env, codec)?,
-            )),
-            None => ctx
-                .env
-                .get_null()
-                .map(|value| unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), value.raw()) }),
-        })?;
+    let resolve_codec = closure_function(env, "resolveCodec", move |ctx| match resolved.clone() {
+        Some(codec) => Ok(detach(ctx.env, &response_codec_object(ctx.env, codec)?)),
+        None => Ok(js_value(ctx.env, Null)?),
+    })?;
     object.set_named_property("resolveCodec", resolve_codec)?;
-    Ok(js_object_to_unknown(env, object))
+    Ok(detach(env, &object))
 }
 
 fn js_llm_execution_context_args(
@@ -1117,12 +741,12 @@ fn js_llm_execution_context_args(
     context: LlmExecutionContext,
 ) -> crate::promise_call::Arg0Builder {
     Box::new(move |env| {
-        let mut args = env.create_array_with_length(2)?;
+        let mut args = env.create_array(2)?;
         let request = serde_json::to_value(request)
             .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-        args.set_element(0, json_to_js_unknown(env, request)?)?;
+        args.set(0, js_value(env, request)?)?;
 
-        let mut execution = env.create_object()?;
+        let mut execution = Object::new(env)?;
         execution.set_named_property(
             "requestCodec",
             js_llm_sanitize_request_context_to_napi(
@@ -1135,123 +759,12 @@ fn js_llm_execution_context_args(
                 env,
                 js_llm_sanitize_response_context(context),
             )?,
-            None => {
-                let null = env.get_null()?;
-                unsafe { JsUnknown::from_raw_unchecked(env.raw(), null.raw()) }
-            }
+            None => js_value(env, Null)?,
         };
         execution.set_named_property("responseCodec", response)?;
-        args.set_element(1, js_object_to_unknown(env, execution))?;
-        Ok(js_object_to_unknown(env, args))
+        args.set(1, detach(env, &execution))?;
+        Ok(detach(env, &args))
     })
-}
-
-pub(crate) fn json_to_js_unknown(env: &Env, value: Json) -> napi::Result<JsUnknown> {
-    let raw = unsafe { Json::to_napi_value(env.raw(), value) }?;
-    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
-}
-
-/// Wrap a JS function for LLM conditional guardrails: `(request: object) => string | null`.
-pub fn wrap_js_llm_conditional_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> LlmConditionalFn {
-    let func = Arc::new(func);
-    Arc::new(move |request: LlmRequest| {
-        let func = func.clone();
-        Box::pin(async move {
-            let req_json = serde_json::to_value(request).map_err(|error| {
-                let error = FlowError::Internal(format!(
-                    "failed to serialize JS LLM conditional request: {error}"
-                ));
-                record_callback_error(error.to_string());
-                error
-            })?;
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                req_json,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS LLM conditional callback: {status:?}",
-                )));
-            }
-            await_middleware_option_string_result(rx, "JS LLM conditional callback failed").await
-        })
-    })
-}
-
-/// Wrap a JS function for LLM execution: `(request: object) => object`.
-///
-/// The JS callback receives the `LlmRequest` serialized as a plain JSON object
-/// and returns the response as JSON.
-pub fn wrap_js_llm_exec_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
-    let func = Arc::new(func);
-    Box::new(move |request: LlmRequest| {
-        let func = func.clone();
-        let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-        Box::pin(async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
-                req_json,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |val: Option<Json>| {
-                    let _ = tx.send(callback_json(val));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS LLM execution callback: {status:?}",
-                )));
-            }
-            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
-            unwrap_middleware_result(result, "JS LLM execution callback failed")
-        })
-    })
-}
-
-/// Reply slot for `complete(envelope)`, taken on its first call.
-type CompletionSender = Mutex<Option<tokio::sync::oneshot::Sender<Json>>>;
-
-pub(crate) struct JsCollectorCall {
-    chunk: Json,
-    complete: CompletionSender,
-}
-
-pub(crate) struct JsFinalizerCall {
-    complete: CompletionSender,
-}
-
-fn completion_envelope_callback(
-    env: &Env,
-    name: &str,
-    complete: CompletionSender,
-) -> napi::Result<JsUnknown> {
-    let callback = env.create_function_from_closure(name, move |ctx| {
-        let envelope = ctx.get::<Json>(0).unwrap_or_else(|error| {
-            serde_json::json!({
-                "ok": false,
-                "error": format!("completion envelope is not JSON-compatible: {error}"),
-            })
-        });
-        if let Some(complete) = complete
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            let _ = complete.send(envelope);
-        }
-        ctx.env.get_undefined()
-    })?;
-    // SAFETY: `callback` is a live handle just created in this same `env`.
-    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), callback.raw()) })
 }
 
 thread_local! {
@@ -1278,248 +791,204 @@ impl Drop for DirectStreamCallbacks {
     }
 }
 
-/// Direct call path for a stream callback on its own thread.
-///
-/// Calls are sequential per stream, so one completion function and one pending
-/// sender suffice.
-struct DirectStreamCallback {
-    function: PersistentJsFunction,
-    thread: std::thread::ThreadId,
-    complete: OnceLock<PersistentJsFunction>,
-    pending: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Json>>>>,
+/// Reply slot for `complete(envelope)`. Calls on one stream callback are sequential, so one
+/// slot serves both paths.
+type CompletionSlot = Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<Json>>>>>;
+
+pub(crate) struct JsCollectorCall {
+    chunk: Json,
 }
 
-impl DirectStreamCallback {
-    fn new(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
+pub(crate) struct JsFinalizerCall;
+
+/// Build the wrapper arguments from a call, its completion function, and the direct flag.
+type StreamCallArgs<T, Args> = fn(&Env, T, JsArg, JsArg) -> napi::Result<Args>;
+
+/// JS stream callback queued through a threadsafe function from other threads
+/// and called directly from a stream poll on its own thread.
+///
+/// The last argument is `true` for a direct call and `false` for a queued call. A direct
+/// call returns an envelope when the callback settles synchronously and `undefined` when it
+/// settles through `complete`.
+pub(crate) struct JsStreamCallback<T: 'static, Args: 'static + JsValuesTupleIntoVec> {
+    tsfn: Tsfn<T, Args, JsArg>,
+    teardown: Arc<AtomicBool>,
+    function: PersistentJsFunction<Args, JsArg>,
+    complete: Arc<PersistentJsFunction<JsArg, ()>>,
+    pending: CompletionSlot,
+    args: StreamCallArgs<T, Args>,
+    thread: std::thread::ThreadId,
+    direct: bool,
+    error_prefix: &'static str,
+}
+
+fn completion_function(
+    env: &Env,
+    name: &str,
+    pending: &CompletionSlot,
+    error_prefix: &'static str,
+) -> napi::Result<Arc<PersistentJsFunction<JsArg, ()>>> {
+    let pending = Arc::clone(pending);
+    let callback = closure_function(env, name, move |ctx| {
+        let envelope = unwrap_envelope(ctx.get::<Unknown>(0)?, error_prefix);
+        if let Some(sender) = pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = sender.send(envelope);
+        }
+        Ok(())
+    })?;
+    Ok(Arc::new(PersistentJsFunction::new(env, &callback)?))
+}
+
+impl<T: 'static, Args: 'static + JsValuesTupleIntoVec> JsStreamCallback<T, Args> {
+    fn new(
+        env: &Env,
+        wrapper: Function<Args, JsArg>,
+        completion_name: &str,
+        error_prefix: &'static str,
+        args: StreamCallArgs<T, Args>,
+    ) -> napi::Result<Self> {
+        let pending = CompletionSlot::default();
+        let complete = completion_function(env, completion_name, &pending, error_prefix)?;
+        let queued_complete = Arc::clone(&complete);
+        // An abandoned stream must not keep the Node event loop alive.
+        let tsfn = wrapper
+            .build_threadsafe_function::<T>()
+            .weak::<true>()
+            .build_callback(move |ctx: ThreadsafeCallContext<T>| {
+                let complete = queued_complete.function()?;
+                let complete = detach(&ctx.env, &complete);
+                args(&ctx.env, ctx.value, complete, js_value(&ctx.env, false)?)
+            })?;
         Ok(Self {
-            function: PersistentJsFunction::new(env, wrapper)?,
+            tsfn,
+            teardown: teardown_flag(env)?,
+            function: PersistentJsFunction::new(env, &wrapper)?,
+            complete,
+            pending,
+            args,
             thread: std::thread::current().id(),
-            complete: OnceLock::new(),
-            pending: Arc::new(Mutex::new(None)),
+            direct: true,
+            error_prefix,
         })
     }
 
-    fn complete_function(&self, env: &Env, name: &str) -> napi::Result<JsUnknown> {
-        if self.complete.get().is_none() {
-            let pending = Arc::clone(&self.pending);
-            let callback = env.create_function_from_closure(name, move |ctx| {
-                let envelope = ctx.get::<Json>(0).unwrap_or_else(|error| {
-                    serde_json::json!({
-                        "ok": false,
-                        "error": format!("completion envelope is not JSON-compatible: {error}"),
-                    })
-                });
-                if let Some(sender) = pending
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .take()
-                {
-                    let _ = sender.send(envelope);
-                }
-                ctx.env.get_undefined()
-            })?;
-            let _ = self
-                .complete
-                .set(PersistentJsFunction::new(env, &callback)?);
+    fn queue(&self, call: T, name: &str) -> Result<()> {
+        if self.teardown.load(Ordering::Acquire) {
+            return Err(FlowError::Internal(format!(
+                "JS {name} callback skipped: Node environment is shutting down"
+            )));
         }
-        let complete = self
-            .complete
-            .get()
-            .expect("completion function was just stored")
-            .function()?;
-        // SAFETY: `complete` is a live function handle in `env`.
-        Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), complete.raw()) })
+        let status = self
+            .tsfn
+            .call(call, ThreadsafeFunctionCallMode::NonBlocking);
+        if status == napi::Status::Ok {
+            return Ok(());
+        }
+        let message = format!("nemo_relay: failed to queue JS {name} callback: {status:?}");
+        record_callback_error(message.clone());
+        Err(FlowError::Internal(message))
     }
 
-    fn call(
-        &self,
-        name: &str,
-        sender: tokio::sync::oneshot::Sender<Json>,
-        args: impl FnOnce(&Env, JsUnknown, JsUnknown) -> napi::Result<Vec<JsUnknown>>,
-    ) -> napi::Result<()> {
+    pub(crate) fn without_direct(mut self) -> Self {
+        self.direct = false;
+        self
+    }
+
+    pub(crate) fn abort_tsfn(&self) -> napi::Result<()> {
+        abort_tsfn(&self.tsfn)
+    }
+
+    fn teardown(&self) -> Arc<AtomicBool> {
+        self.teardown.clone()
+    }
+
+    fn calls_directly(&self) -> bool {
+        self.direct && DirectStreamCallbacks::active() && std::thread::current().id() == self.thread
+    }
+
+    fn call_directly(&self, call: T) -> napi::Result<()> {
         let env = self.function.env();
-        *self
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sender);
-        let complete = self.complete_function(&env, name)?;
-        let direct = env.get_boolean(true)?.into_unknown();
-        let returned = self
-            .function
-            .call_unknowns(&args(&env, complete, direct)?)?;
-        if returned.get_type()? != ValueType::Undefined {
-            // SAFETY: `returned` is the live result of the call in `env`.
-            let envelope = unsafe { Json::from_napi_value(env.raw(), returned.raw())? };
-            if let Some(sender) = self
+        let complete = self.complete.function()?;
+        let args = (self.args)(&env, call, detach(&env, &complete), js_value(&env, true)?)?;
+        let envelope = self.function.function()?.call(args)?;
+        let envelope = unsafe { envelope.into_unknown(&env) };
+        if envelope.get_type()? != ValueType::Undefined
+            && let Some(sender) = self
                 .pending
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .take()
-            {
-                let _ = sender.send(envelope);
-            }
+        {
+            let _ = sender.send(unwrap_envelope(envelope, self.error_prefix));
         }
         Ok(())
     }
-}
 
-/// JS stream callback queued through a threadsafe function from other threads
-/// and called directly from a stream poll on its own thread.
-pub(crate) struct JsStreamCallback<T: 'static> {
-    tsfn: TeardownTsfn<T, ErrorStrategy::Fatal>,
-    direct: Option<DirectStreamCallback>,
-}
-
-impl<T: 'static> JsStreamCallback<T> {
-    fn new(
-        env: &Env,
-        wrapper: &JsFunction,
-        tsfn: ThreadsafeFunction<T, ErrorStrategy::Fatal>,
-    ) -> napi::Result<Self> {
-        Ok(Self {
-            tsfn: TeardownTsfn::new(env, tsfn)?,
-            direct: Some(DirectStreamCallback::new(env, wrapper)?),
-        })
-    }
-
-    pub(crate) fn without_direct(mut self) -> Self {
-        self.direct = None;
-        self
-    }
-
-    pub(crate) fn abort_tsfn(&self) {
-        let _ = ThreadsafeFunction::clone(&self.tsfn).abort();
-    }
-
-    fn teardown(&self) -> Arc<AtomicBool> {
-        self.tsfn.teardown()
-    }
-
-    fn direct(&self) -> Option<&DirectStreamCallback> {
-        self.direct.as_ref().filter(|direct| {
-            DirectStreamCallbacks::active() && std::thread::current().id() == direct.thread
-        })
-    }
-}
-
-fn direct_call_failed(name: &str, error: napi::Error) -> FlowError {
-    let message = format!("nemo_relay: JS {name} callback failed: {error}");
-    record_callback_error(message.clone());
-    FlowError::Internal(message)
-}
-
-impl JsStreamCallback<JsCollectorCall> {
-    fn invoke(&self, chunk: Json, sender: tokio::sync::oneshot::Sender<Json>) -> Result<()> {
-        let Some(direct) = self.direct() else {
-            return queue_js_stream_callback(
-                &self.tsfn,
-                JsCollectorCall {
-                    chunk,
-                    complete: Mutex::new(Some(sender)),
-                },
-                "collector",
-            );
-        };
-        direct
-            .call(
-                "__nemo_relay_collector_complete",
-                sender,
-                |env, complete, direct| Ok(vec![json_to_js_unknown(env, chunk)?, complete, direct]),
-            )
-            .map_err(|error| direct_call_failed("collector", error))
-    }
-}
-
-impl JsStreamCallback<JsFinalizerCall> {
-    fn invoke(&self, sender: tokio::sync::oneshot::Sender<Json>) -> Result<()> {
-        let Some(direct) = self.direct() else {
-            return queue_js_stream_callback(
-                &self.tsfn,
-                JsFinalizerCall {
-                    complete: Mutex::new(Some(sender)),
-                },
-                "finalizer",
-            );
-        };
-        direct
-            .call(
-                "__nemo_relay_finalizer_complete",
-                sender,
-                |_env, complete, direct| Ok(vec![complete, direct]),
-            )
-            .map_err(|error| direct_call_failed("finalizer", error))
+    fn invoke(
+        &self,
+        call: T,
+        sender: tokio::sync::oneshot::Sender<Result<Json>>,
+        name: &str,
+    ) -> Result<()> {
+        *self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sender);
+        if self.calls_directly() {
+            return self.call_directly(call).map_err(|error| {
+                let message = format!("nemo_relay: JS {name} callback failed: {error}");
+                record_callback_error(message.clone());
+                FlowError::Internal(message)
+            });
+        }
+        self.queue(call, name)
     }
 }
 
 pub(crate) fn js_collector_tsfn(
     env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsStreamCallback<JsCollectorCall>> {
+    func: &Function<JsArg, JsArg>,
+) -> napi::Result<JsStreamCallback<JsCollectorCall, JsArgs3>> {
     let wrapper = callback_factory::wrap_collector_callback(env, func)?;
-    let mut tsfn =
-        wrapper.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<JsCollectorCall>| {
-            let JsCollectorCall { chunk, complete } = ctx.value;
-            let chunk = json_to_js_unknown(&ctx.env, chunk)?;
-            let complete = completion_envelope_callback(
-                &ctx.env,
-                "__nemo_relay_collector_complete",
-                complete,
-            )?;
-            Ok(vec![chunk, complete])
-        })?;
-    // An abandoned stream must not keep the Node event loop alive.
-    tsfn.unref(env)?;
-    JsStreamCallback::new(env, &wrapper, tsfn)
+    JsStreamCallback::new(
+        env,
+        wrapper,
+        "__nemo_relay_collector_complete",
+        "JS collector callback failed",
+        |env, JsCollectorCall { chunk }, complete, direct| {
+            Ok(FnArgs::from((js_value(env, chunk)?, complete, direct)))
+        },
+    )
 }
 
 pub(crate) fn js_finalizer_tsfn(
     env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsStreamCallback<JsFinalizerCall>> {
+    func: &Function<JsArg, JsArg>,
+) -> napi::Result<JsStreamCallback<JsFinalizerCall, JsArgs2>> {
     let wrapper = callback_factory::wrap_finalizer_callback(env, func)?;
-    let mut tsfn =
-        wrapper.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<JsFinalizerCall>| {
-            let complete = completion_envelope_callback(
-                &ctx.env,
-                "__nemo_relay_finalizer_complete",
-                ctx.value.complete,
-            )?;
-            Ok(vec![complete])
-        })?;
-    // An abandoned stream must not keep the Node event loop alive.
-    tsfn.unref(env)?;
-    JsStreamCallback::new(env, &wrapper, tsfn)
-}
-
-fn queue_js_stream_callback<T: 'static>(
-    func: &TeardownTsfn<T, ErrorStrategy::Fatal>,
-    call: T,
-    name: &str,
-) -> Result<()> {
-    if func.torn_down() {
-        return Err(FlowError::Internal(format!(
-            "JS {name} callback skipped: Node environment is shutting down"
-        )));
-    }
-    let status = func.call(call, ThreadsafeFunctionCallMode::Blocking);
-    if status == napi::Status::Ok {
-        return Ok(());
-    }
-    let message = format!("nemo_relay: failed to queue JS {name} callback: {status:?}");
-    record_callback_error(message.clone());
-    Err(FlowError::Internal(message))
+    JsStreamCallback::new(
+        env,
+        wrapper,
+        "__nemo_relay_finalizer_complete",
+        "nemo_relay: JS finalizer callback failed",
+        |_env, JsFinalizerCall, complete, direct| Ok(FnArgs::from((complete, direct))),
+    )
 }
 
 /// Wrap a JS collector `(chunk: object) => void | Promise<void>` for a streaming LLM call.
 ///
 /// If the collector throws or rejects, the stream terminates with that error.
-pub fn wrap_js_collector_fn(callback: JsStreamCallback<JsCollectorCall>) -> LlmCollector {
+pub fn wrap_js_collector_fn(callback: JsStreamCallback<JsCollectorCall, JsArgs3>) -> LlmCollector {
     LlmCollector::Async(Box::new(move |chunk: Json| {
         let (sender, reply) = tokio::sync::oneshot::channel();
-        let queued = callback.invoke(chunk, sender);
+        let queued = callback.invoke(JsCollectorCall { chunk }, sender, "collector");
         Box::pin(async move {
             queued?;
-            await_middleware_json_result(reply, "JS collector callback failed")
+            await_callback_result(reply, "JS collector callback failed")
                 .await
                 .map(|_| ())
         })
@@ -1527,36 +996,35 @@ pub fn wrap_js_collector_fn(callback: JsStreamCallback<JsCollectorCall>) -> LlmC
 }
 
 /// Finalizer failure shared with the stream handle so `close()` can report it.
-pub(crate) type FinalizerError = Arc<std::sync::Mutex<Option<String>>>;
+pub(crate) type FinalizerError = Arc<std::sync::Mutex<Option<Error>>>;
 
 /// Wrap a JS finalizer `() => object | Promise<object>` for a streaming LLM call.
 ///
 /// If the finalizer throws, rejects, or returns a non-JSON value, the failure
 /// is returned, stored in `error`, and the END event carries no aggregate.
 pub fn wrap_js_finalizer_fn(
-    callback: JsStreamCallback<JsFinalizerCall>,
+    callback: JsStreamCallback<JsFinalizerCall, JsArgs2>,
     error: FinalizerError,
 ) -> LlmFinalizer {
     LlmFinalizer::Async(Box::new(move || {
         let (sender, reply) = tokio::sync::oneshot::channel();
-        let queued = callback.invoke(sender);
+        let queued = callback.invoke(JsFinalizerCall, sender, "finalizer");
         let teardown = callback.teardown();
         Box::pin(async move {
             let result = match queued {
                 Ok(()) => {
-                    await_middleware_json_result(reply, "nemo_relay: JS finalizer callback failed")
-                        .await
+                    await_callback_result(reply, "nemo_relay: JS finalizer callback failed").await
                 }
                 Err(failure) => Err(failure),
             };
             result.inspect_err(|failure| {
-                let message = failure.to_string();
                 if !teardown.load(Ordering::Acquire) {
-                    record_callback_error(message.clone());
+                    record_callback_error(failure.to_string());
                 }
                 *error
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    Some(Error::from(failure.clone()));
             })
         })
     }))
@@ -1567,41 +1035,17 @@ struct JsSubscriberCallbackCall {
     callback_id: u64,
 }
 
-fn safe_subscriber_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_relay_subscriber_wrapper(error, event, complete) {
-  const messageFor = (error) => {
-    try {
-      return String(error?.message ?? error);
-    } catch {
-      return 'JavaScript callback failed';
-    }
-  };
-  if (error != null) {
-    if (typeof complete === 'function') complete(messageFor(error));
-    return;
-  }
-  Promise.resolve()
-    .then(() => fn(event))
-    .then(() => complete(), (error) => complete(messageFor(error)));
-})"#,
-    )?;
-    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
-    let wrapper_unknown = factory.call(None, &[func_unknown])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
-}
-
 /// Wrap a JS function for event subscriber: `(event: JsEvent) => void | Promise<void>`.
 pub fn wrap_js_event_subscriber(
     env: &Env,
     name: String,
-    callback: JsFunction,
+    callback: &Function<JsArg, JsArg>,
 ) -> napi::Result<EventSubscriberFn> {
-    let callback = safe_subscriber_callback(env, &callback)?;
-    let queue_error_name = name.clone();
-    let mut func = create_js_event_subscriber_function(&callback, name)?;
-    func.unref(env)?;
-    let func = Arc::new(func);
+    let complete = create_js_subscriber_completion_callback(env, name.clone())?;
+    let callback: Function<JsArgs2, ()> =
+        callback_factory::wrap_subscriber_callback(env, callback, &complete)?;
+    let queue_error_name = name;
+    let func = Arc::new(create_js_event_subscriber_function(&callback)?);
     Ok(Arc::new(move |event: &Event| {
         let event_json = match JsEvent::try_from_event(event) {
             Ok(event) => event.into_json(),
@@ -1630,71 +1074,46 @@ pub fn wrap_js_event_subscriber(
 }
 
 fn create_js_event_subscriber_function(
-    callback: &JsFunction,
-    name: String,
-) -> napi::Result<ThreadsafeFunction<JsSubscriberCallbackCall, ErrorStrategy::CalleeHandled>> {
-    callback.create_threadsafe_function::<
-        JsSubscriberCallbackCall,
-        JsUnknown,
-        _,
-        ErrorStrategy::CalleeHandled,
-    >(0, move |ctx: ThreadSafeCallContext<JsSubscriberCallbackCall>| {
-        let JsSubscriberCallbackCall { event, callback_id } = ctx.value;
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_callback = Arc::clone(&completed);
-        let callback_name = name.clone();
-        let complete = complete_subscriber_callback_on_error(
-            callback_id,
-            create_js_subscriber_completion_callback(
-                &ctx.env,
-                callback_name,
-                callback_id,
-                completed_callback,
-            ),
-        )?;
-        let event = complete_subscriber_callback_on_error(callback_id, unsafe {
-            Ok(JsUnknown::from_raw_unchecked(
-                ctx.env.raw(),
-                Json::to_napi_value(ctx.env.raw(), event)?,
-            ))
-        })?;
-        let complete = unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), complete.raw()) };
-        Ok(vec![event, complete])
-    })
+    callback: &Function<JsArgs2, ()>,
+) -> napi::Result<HandledTsfn<JsSubscriberCallbackCall, JsArgs2>> {
+    callback
+        .build_threadsafe_function::<JsSubscriberCallbackCall>()
+        .callee_handled::<true>()
+        .weak::<true>()
+        .build_callback(|ctx: ThreadsafeCallContext<JsSubscriberCallbackCall>| {
+            let JsSubscriberCallbackCall { event, callback_id } = ctx.value;
+            let args = js_value(&ctx.env, event).and_then(|event| {
+                Ok(FnArgs::from((
+                    event,
+                    js_value(&ctx.env, callback_id as f64)?,
+                )))
+            });
+            args.inspect_err(|_| complete_js_subscriber_callback(callback_id))
+        })
 }
 
-fn complete_subscriber_callback_on_error<T>(
-    callback_id: u64,
-    result: napi::Result<T>,
-) -> napi::Result<T> {
-    result.inspect_err(|_| {
-        complete_js_subscriber_callback(callback_id);
-    })
-}
-
-fn create_js_subscriber_completion_callback(
-    env: &Env,
+/// `(callbackId, message?)`: finishes the callback. A message records a failure.
+fn create_js_subscriber_completion_callback<'env>(
+    env: &'env Env,
     callback_name: String,
-    callback_id: u64,
-    completed_callback: Arc<AtomicBool>,
-) -> napi::Result<JsFunction> {
-    env.create_function_from_closure("__nemo_relay_complete_subscriber_callback", move |ctx| {
-        if completed_callback
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+) -> napi::Result<Function<'env, JsArg, ()>> {
+    closure_function(
+        env,
+        "__nemo_relay_complete_subscriber_callback",
+        move |ctx| {
+            let callback_id = ctx.get::<f64>(0)? as u64;
             record_js_subscriber_callback_error(&ctx, &callback_name);
             complete_js_subscriber_callback(callback_id);
-        }
-        ctx.env.get_undefined()
-    })
+            Ok(())
+        },
+    )
 }
 
-fn record_js_subscriber_callback_error(ctx: &napi::CallContext, callback_name: &str) {
-    if ctx.length == 0 {
+fn record_js_subscriber_callback_error(ctx: &FunctionCallContext, callback_name: &str) {
+    if ctx.length() < 2 {
         return;
     }
-    match ctx.get::<String>(0) {
+    match ctx.get::<String>(1) {
         Ok(message) => record_callback_error(format!(
             "nemo_relay: JS event subscriber '{callback_name}' failed: {message}"
         )),
@@ -1719,8 +1138,8 @@ struct JsCodecEncodeArgument<'a> {
 ///
 /// A throw or an unreadable return value comes back as an error.
 pub(crate) struct JsCodecCallback {
-    direct: Arc<PersistentJsFunction>,
-    queued: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    direct: PersistentJsFunction<Json, JsArg>,
+    queued: Tsfn<Json, Json, JsArg>,
     registration_thread: std::thread::ThreadId,
     error_prefix: &'static str,
 }
@@ -1728,26 +1147,21 @@ pub(crate) struct JsCodecCallback {
 impl JsCodecCallback {
     pub(crate) fn new(
         env: &Env,
-        func: &JsFunction,
+        func: &Function<JsArg, JsArg>,
         error_prefix: &'static str,
     ) -> napi::Result<Self> {
-        let wrapper = callback_factory::wrap_execution_callback(env, func)?;
-        let direct = Arc::new(PersistentJsFunction::new(env, &wrapper)?);
-        let mut queued = wrapper
-            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<Json>| {
-                Ok(vec![ctx.value])
-            })?;
-        queued.unref(env)?;
+        let wrapper: Function<Json, JsArg> = callback_factory::wrap_execution_callback(env, func)?;
+        let direct = PersistentJsFunction::new(env, &wrapper)?;
+        let queued = wrapper
+            .build_threadsafe_function::<Json>()
+            .weak::<true>()
+            .build_callback(|ctx: ThreadsafeCallContext<Json>| Ok(ctx.value))?;
         Ok(Self {
             direct,
             queued,
             registration_thread: std::thread::current().id(),
             error_prefix,
         })
-    }
-
-    pub(crate) fn reference(&self) -> Arc<PersistentJsFunction> {
-        Arc::clone(&self.direct)
     }
 
     fn call<A: Serialize, T: DeserializeOwned>(&self, argument: &A, expected: &str) -> Result<T> {
@@ -1771,29 +1185,32 @@ impl JsCodecCallback {
     }
 
     fn invoke(&self, argument: Json) -> Result<Json> {
-        let envelope = if std::thread::current().id() == self.registration_thread {
-            self.direct
-                .call_json(argument)
-                .map_err(|error| FlowError::Internal(format!("{}: {error}", self.error_prefix)))?
-        } else {
-            let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            let status = self.queued.call_with_return_value(
-                argument,
-                ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
-                },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "{}: could not queue the callback: {status:?}",
-                    self.error_prefix
-                )));
-            }
-            recv_json_result(rx, self.error_prefix)?
-        };
-        unwrap_middleware_result(envelope, self.error_prefix)
+        if std::thread::current().id() == self.registration_thread {
+            let env = self.direct.env();
+            let envelope = self
+                .direct
+                .function()
+                .and_then(|function| function.call(argument))
+                .map_err(|error| FlowError::Internal(format!("{}: {error}", self.error_prefix)))?;
+            return unwrap_envelope(unsafe { envelope.into_unknown(&env) }, self.error_prefix);
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let error_prefix = self.error_prefix;
+        let status = self.queued.call_with_return_value(
+            argument,
+            ThreadsafeFunctionCallMode::NonBlocking,
+            move |value: napi::Result<JsArg>, env| {
+                let _ = tx.send(tsfn_envelope(&env, value, error_prefix));
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(FlowError::Internal(format!(
+                "{}: could not queue the callback: {status:?}",
+                self.error_prefix
+            )));
+        }
+        recv_json_result(rx, self.error_prefix)
     }
 }
 

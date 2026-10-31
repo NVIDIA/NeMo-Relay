@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
+use napi::Env;
 use napi::bindgen_prelude::*;
-use napi::{Env, JsDeferred, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::LlmJsonStream;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
@@ -23,26 +23,86 @@ use nemo_relay::error::{FlowError, Result as FlowResult};
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
-use crate::api::PersistentJsFunction;
-use crate::callable::{DirectStreamCallbacks, FinalizerError, json_to_js_unknown};
+use crate::callable::{DirectStreamCallbacks, FinalizerError};
 use crate::callback_factory;
-use crate::convert::to_napi_err;
+use crate::convert::{JsArg, closure_function, detach, js_value};
+use crate::environment::{
+    Liveness, PendingPromise, Rejection, Settler, create_promise, spawn_promise,
+};
+use crate::error::{Error, Result};
 use crate::promise_call::{
-    StreamCancellation, env_teardown_flag, with_publication_callback_context,
-    with_publication_callback_context_sync,
+    StreamCancellation, with_publication_callback_context, with_publication_callback_context_sync,
 };
 
 type CloseFuture = Pin<Box<dyn Future<Output = FlowResult<()>> + Send>>;
-type CloseResult = Arc<Mutex<Option<std::result::Result<(), String>>>>;
-type WakeResolver = Box<dyn FnOnce(Env) -> Result<Json> + Send>;
+type CloseResult = Arc<Mutex<Option<std::result::Result<(), CloseFailure>>>>;
 
-fn wake_value(value: Json) -> WakeResolver {
-    Box::new(move |_| Ok(value))
+struct CloseErrors {
+    first: Arc<Error>,
+    rest: Vec<(&'static str, Arc<Error>)>,
+}
+
+#[derive(Clone)]
+struct CloseFailure(Arc<CloseErrors>);
+
+impl CloseFailure {
+    fn into_js(self, env: &Env) -> napi::Result<JsArg> {
+        let CloseErrors { first, rest } = &*self.0;
+        if rest.is_empty() {
+            return js_value(env, first.to_napi());
+        }
+        let message = self.to_string();
+        let errors = std::iter::once(first)
+            .chain(rest.iter().map(|(_, error)| error))
+            .map(|error| error.to_napi())
+            .collect();
+        callback_factory::aggregate_error(env, errors, message)
+    }
+
+    fn throw_into(self, env: &Env) -> napi::Error {
+        if self.0.rest.is_empty() {
+            return crate::error::throw(env, self.0.first.to_napi());
+        }
+        let message = self.to_string();
+        match self.into_js(env).and_then(|value| env.throw(value)) {
+            Ok(()) => napi::Error::new(Status::PendingException, message),
+            Err(failure) => failure,
+        }
+    }
+}
+
+impl std::fmt::Display for CloseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.first)?;
+        for (label, error) in &self.0.rest {
+            write!(f, "; {label}: {error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Error> for CloseFailure {
+    fn from(error: Error) -> Self {
+        Self(Arc::new(CloseErrors {
+            first: Arc::new(error),
+            rest: Vec::new(),
+        }))
+    }
+}
+
+impl Rejection for CloseFailure {
+    fn settler(self) -> Settler {
+        Box::new(move |env| self.into_js(env))
+    }
+}
+
+fn settle_with(pending: PendingPromise, value: Json) {
+    pending.resolve_with(Box::new(move |env| js_value(env, value)));
 }
 
 enum WakeState {
     Idle,
-    Armed(JsDeferred<Json, WakeResolver>),
+    Armed(PendingPromise),
     Fired,
 }
 
@@ -52,45 +112,46 @@ enum WakeState {
 /// stream released while a poll waited.
 struct WakeSlot {
     state: Mutex<WakeState>,
-    teardown: Arc<AtomicBool>,
 }
 
 impl WakeSlot {
-    fn new(teardown: Arc<AtomicBool>) -> Arc<Self> {
+    fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(WakeState::Idle),
-            teardown,
         })
     }
 
     fn fire(&self) {
-        self.settle(Json::Null);
+        self.settle(|pending| settle_with(pending, Json::Null));
     }
 
-    fn settle(&self, value: Json) {
+    fn release(&self, outcome: std::result::Result<(), CloseFailure>) {
+        self.settle(|pending| match outcome {
+            Ok(()) => settle_with(pending, Json::Bool(true)),
+            Err(failure) => pending.reject_with(failure.settler()),
+        });
+    }
+
+    fn settle(&self, settle: impl FnOnce(PendingPromise)) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // A worker finalizer can wake a poll after Node has closed its promise's threadsafe
-        // function. Skip a resolve once the environment is tearing down.
-        if let WakeState::Armed(deferred) = std::mem::replace(&mut *state, WakeState::Fired)
-            && !self.teardown.load(Ordering::Acquire)
-        {
-            deferred.resolve(wake_value(value));
+        if let WakeState::Armed(pending) = std::mem::replace(&mut *state, WakeState::Fired) {
+            settle(pending);
         }
     }
 
     // A slot is armed after its poll. Resolve at once if a wake already happened.
-    fn arm(&self, deferred: JsDeferred<Json, WakeResolver>) {
+    fn arm(&self, pending: PendingPromise) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if matches!(*state, WakeState::Fired) {
-            deferred.resolve(wake_value(Json::Null));
+            settle_with(pending, Json::Null);
         } else {
-            *state = WakeState::Armed(deferred);
+            *state = WakeState::Armed(pending);
         }
     }
 }
@@ -110,8 +171,8 @@ struct Forwarded {
     requests: tokio::sync::mpsc::Sender<()>,
     producers: StreamCancellation,
     cancel: tokio::sync::watch::Sender<bool>,
-    closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
-    close_result: tokio::sync::Mutex<Option<std::result::Result<(), String>>>,
+    closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), CloseFailure>>>,
+    close_result: tokio::sync::Mutex<Option<std::result::Result<(), CloseFailure>>>,
 }
 
 impl Forwarded {
@@ -153,7 +214,10 @@ impl Forwarded {
         }
     }
 
-    async fn close(&self, finalizer_error: &FinalizerError) -> std::result::Result<(), String> {
+    async fn close(
+        &self,
+        finalizer_error: &FinalizerError,
+    ) -> std::result::Result<(), CloseFailure> {
         let mut close_result = self.close_result.lock().await;
         if let Some(result) = close_result.as_ref() {
             return result.clone();
@@ -165,7 +229,9 @@ impl Forwarded {
             .clone()
             .wait_for(Option::is_some)
             .await
-            .map_err(|_| "stream close task ended before releasing the producer".to_string())?
+            .map_err(|_| {
+                Error::generic_failure("stream close task ended before releasing the producer")
+            })?
             .clone()
             .expect("close state checked above");
         let mut receiver = self.receiver.lock().await;
@@ -183,10 +249,13 @@ impl Forwarded {
         let result = combine_close_errors([
             (
                 "stream failed",
-                undelivered_error.map(|error| error.to_string()),
+                undelivered_error.map(|error| CloseFailure::from(Error::from(error))),
             ),
             ("stream cleanup also failed", result.err()),
-            ("stream finalizer also failed", finalizer_error),
+            (
+                "stream finalizer also failed",
+                finalizer_error.map(CloseFailure::from),
+            ),
         ]);
         *close_result = Some(result.clone());
         result
@@ -198,7 +267,7 @@ async fn forward_stream_to_channel(
     tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
     mut requests: tokio::sync::mpsc::Receiver<()>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
-    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
+    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), CloseFailure>>>,
 ) {
     let mut undelivered_error = None;
     // One pull per `next()` keeps a forwarded stream as lazy as a pumped one. Reserve before
@@ -244,7 +313,7 @@ async fn forward_stream_to_channel(
 fn finish_forwarded_close(
     undelivered_error: Option<FlowError>,
     cleanup: FlowResult<()>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), CloseFailure> {
     match undelivered_error {
         Some(error) => {
             if let Err(cleanup) = cleanup {
@@ -254,9 +323,9 @@ fn finish_forwarded_close(
                     "LLM stream cleanup failed after the stream failed: {cleanup}"
                 );
             }
-            Err(error.to_string())
+            Err(CloseFailure::from(Error::from(error)))
         }
-        None => cleanup.map_err(|error| error.to_string()),
+        None => cleanup.map_err(|error| CloseFailure::from(Error::from(error))),
     }
 }
 
@@ -320,7 +389,6 @@ struct StreamState {
     next_wake: Option<Arc<WakeSlot>>,
     close_wake: Option<Arc<WakeSlot>>,
     producers: StreamCancellation,
-    codec_references: Vec<Arc<PersistentJsFunction>>,
     context_id: Option<String>,
     publication_buffer: Option<PublicationBuffer>,
 }
@@ -328,7 +396,7 @@ struct StreamState {
 fn finish_close(
     outcome: FlowResult<()>,
     finalizer_error: &FinalizerError,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), CloseFailure> {
     let finalizer_error = finalizer_error
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -336,9 +404,14 @@ fn finish_close(
     combine_close_errors([
         (
             "stream cleanup also failed",
-            outcome.err().map(|error| error.to_string()),
+            outcome
+                .err()
+                .map(|error| CloseFailure::from(Error::from(error))),
         ),
-        ("stream finalizer also failed", finalizer_error),
+        (
+            "stream finalizer also failed",
+            finalizer_error.map(CloseFailure::from),
+        ),
     ])
 }
 
@@ -374,7 +447,7 @@ impl StreamState {
         cx: &mut Context<'_>,
         finalizer_error: &FinalizerError,
         close_result: &CloseResult,
-    ) -> Poll<std::result::Result<(), String>> {
+    ) -> Poll<std::result::Result<(), CloseFailure>> {
         if let Some(result) = close_result
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -427,22 +500,14 @@ enum Path {
     Forwarded(Arc<Forwarded>),
 }
 
-/// Reference to a poll function, deleted by its finalizer while the environment is live.
-struct PollFunction(napi::sys::napi_ref);
-
-// SAFETY: the reference is created, called, and deleted on the JavaScript thread only.
-unsafe impl Send for PollFunction {}
-// SAFETY: as for `Send`, the handle is never used from another thread.
-unsafe impl Sync for PollFunction {}
-
 /// An async iterator over chunks from a streaming LLM response.
 ///
 /// Obtained from `llmStreamCallExecute()`. Call `next()` repeatedly to consume
 /// response chunks. Returns `null` when the stream is fully consumed.
-#[napi(custom_finalize)]
+#[napi]
 pub struct LlmStream {
     state: Weak<Mutex<StreamState>>,
-    poll: OnceLock<PollFunction>,
+    poll: OnceLock<FunctionRef<JsArg, JsArg>>,
     released: tokio::sync::watch::Sender<bool>,
     finalizer_error: FinalizerError,
     close_result: CloseResult,
@@ -453,7 +518,6 @@ pub struct LlmStream {
 impl LlmStream {
     pub(crate) fn new(
         stream: LlmJsonStream,
-        codec_references: Vec<Arc<PersistentJsFunction>>,
         finalizer_error: FinalizerError,
         producers: StreamCancellation,
         context_id: Option<String>,
@@ -465,7 +529,6 @@ impl LlmStream {
             next_wake: None,
             close_wake: None,
             producers,
-            codec_references,
             context_id: context_id.clone(),
             publication_buffer: publication_buffer.clone(),
         }));
@@ -499,7 +562,7 @@ impl LlmStream {
                 .next_wake
                 .take();
             if let Some(wake) = next_wake {
-                wake.settle(serde_json::json!({ "ended": true }));
+                wake.settle(|pending| settle_with(pending, serde_json::json!({ "ended": true })));
             }
             // Close a stream rather than drop it so a pending collector settles before END.
             let outcome = match mode {
@@ -534,24 +597,22 @@ impl LlmStream {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .get_or_insert_with(|| finish_close(outcome, &owner_finalizer_error));
             }
-            let (close_wake, codec_references) = {
-                let mut state = state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                (
-                    state.close_wake.take(),
-                    std::mem::take(&mut state.codec_references),
-                )
-            };
+            let close_wake = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .close_wake
+                .take();
             if let Some(wake) = close_wake {
-                let error = owner_close_result
+                let outcome = match owner_close_result
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone()
-                    .and_then(|result| result.err());
-                wake.settle(serde_json::json!({ "closed": true, "error": error }));
+                {
+                    Some(result) => result,
+                    None => Ok(()),
+                };
+                wake.release(outcome);
             }
-            drop(codec_references);
         });
         Self {
             state: handle,
@@ -599,67 +660,36 @@ impl LlmStream {
         }
     }
 
-    fn poll_function(&self, env: &Env) -> Result<JsFunction> {
+    fn poll_function<'env>(&self, env: &'env Env) -> Result<Function<'env, JsArg, JsArg>> {
         if self.poll.get().is_none() {
-            let function = self.create_poll_function(env)?;
-            let mut reference = std::ptr::null_mut();
-            // SAFETY: `function` is a live handle created in `env`, and `reference`
-            // is writable storage for the new reference.
-            let status = unsafe {
-                napi::sys::napi_create_reference(env.raw(), function.raw(), 1, &mut reference)
-            };
-            if status != napi::sys::Status::napi_ok {
-                return Err(napi::Error::from_reason(format!(
-                    "failed to reference the stream poll function: {:?}",
-                    napi::Status::from(status)
-                )));
-            }
-            let _ = self.poll.set(PollFunction(reference));
+            let _ = self.poll.set(self.create_poll_function(env)?.create_ref()?);
         }
-        let poll = self.poll.get().expect("poll function was just stored");
-        let mut value = std::ptr::null_mut();
-        // SAFETY: `poll.0` is a live reference created in `env`, and `value` is writable storage.
-        let status = unsafe { napi::sys::napi_get_reference_value(env.raw(), poll.0, &mut value) };
-        if status != napi::sys::Status::napi_ok {
-            return Err(napi::Error::from_reason(format!(
-                "failed to borrow the stream poll function: {:?}",
-                napi::Status::from(status)
-            )));
-        }
-        // SAFETY: `value` resolved from this handle's own reference, so it is a live function.
-        Ok(unsafe { JsFunction::from_raw_unchecked(env.raw(), value) })
+        Ok(self
+            .poll
+            .get()
+            .expect("poll function was just stored")
+            .borrow_back(env)?)
     }
 
-    fn create_poll_function(&self, env: &Env) -> Result<JsFunction> {
+    fn create_poll_function<'env>(&self, env: &'env Env) -> Result<Function<'env, JsArg, JsArg>> {
         let state = Weak::clone(&self.state);
         let finalizer_error = self.finalizer_error.clone();
         let close_result = Arc::clone(&self.close_result);
         let context_id = self.context_id.clone();
         let publication_buffer = self.publication_buffer.clone();
-        let function =
-            env.create_function_from_closure("__nemo_relay_stream_poll", move |ctx| {
-                let close: bool = ctx.get(0)?;
-                poll_step(
-                    ctx.env,
-                    &state,
-                    &finalizer_error,
-                    &close_result,
-                    context_id.clone(),
-                    publication_buffer.clone(),
-                    close,
-                )
-            })?;
+        let function = closure_function(env, "__nemo_relay_stream_poll", move |ctx| {
+            let close: bool = ctx.get(0)?;
+            poll_step(
+                ctx.env,
+                &state,
+                &finalizer_error,
+                &close_result,
+                context_id.clone(),
+                publication_buffer.clone(),
+                close,
+            )
+        })?;
         Ok(function)
-    }
-}
-
-impl ObjectFinalize for LlmStream {
-    fn finalize(mut self, env: Env) -> Result<()> {
-        if let Some(poll) = self.poll.take() {
-            // SAFETY: the reference was created in this environment and is deleted exactly once.
-            let _ = unsafe { napi::sys::napi_delete_reference(env.raw(), poll.0) };
-        }
-        Ok(())
     }
 }
 
@@ -669,18 +699,20 @@ impl LlmStream {
     ///
     /// Returns the next JSON chunk, or `null` when the stream is exhausted.
     /// Throws if the underlying stream encountered an error.
-    #[napi(ts_return_type = "Promise<Json | null>")]
-    pub fn next(&self, env: Env) -> Result<JsObject> {
+    #[napi(ts_return_type = "Promise<Json | null>", catch_unwind)]
+    pub fn next<'env>(&self, env: &'env Env, this: This<'env>) -> Result<Unknown<'env>> {
         let promise = match self.path() {
-            Path::Forwarded(forwarded) => env.execute_tokio_future(
-                async move { forwarded.next().await.map_err(to_napi_err) },
-                |_env, value| Ok(value),
-            ),
+            Path::Forwarded(forwarded) => spawn_promise::<Json, _, _, _, _>(
+                env,
+                async move { forwarded.next().await.map_err(Error::from) },
+                js_value,
+            )
+            .and_then(|promise| Ok(callback_factory::pin_while(env, &this.object, &promise)?)),
             Path::Pump => self
-                .poll_function(&env)
-                .and_then(|poll| callback_factory::stream_next(&env, &poll)),
+                .poll_function(env)
+                .and_then(|poll| Ok(callback_factory::stream_next(env, &poll, &this.object)?)),
         };
-        rejection_for_failure(&env, promise)
+        rejection_for_failure(env, promise)
     }
 
     /// Stop the producer and wait for its cleanup to complete.
@@ -688,37 +720,33 @@ impl LlmStream {
     /// Throws a stream error that `next()` has not yet thrown, then a cleanup
     /// error, then a finalizer failure. A cleanup failure after a stream error
     /// is logged. Further calls return the same result.
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn close(&self, env: Env) -> Result<JsObject> {
+    #[napi(ts_return_type = "Promise<void>", catch_unwind)]
+    pub fn close<'env>(&self, env: &'env Env, this: This<'env>) -> Result<Unknown<'env>> {
         let promise = match self.path() {
             Path::Forwarded(forwarded) => {
                 let finalizer_error = self.finalizer_error.clone();
-                env.execute_tokio_future(
-                    async move {
-                        forwarded
-                            .close(&finalizer_error)
-                            .await
-                            .map_err(napi::Error::from_reason)
-                    },
-                    |_env, ()| Ok(()),
+                spawn_promise::<(), _, _, _, _>(
+                    env,
+                    async move { forwarded.close(&finalizer_error).await },
+                    |env, ()| js_value(env, ()),
                 )
+                .and_then(|promise| Ok(callback_factory::pin_while(env, &this.object, &promise)?))
             }
             Path::Pump => self
-                .poll_function(&env)
-                .and_then(|poll| callback_factory::stream_close(&env, &poll)),
+                .poll_function(env)
+                .and_then(|poll| Ok(callback_factory::stream_close(env, &poll, &this.object)?)),
         };
-        rejection_for_failure(&env, promise)
+        rejection_for_failure(env, promise)
     }
 }
 
-fn rejection_for_failure(env: &Env, promise: Result<JsObject>) -> Result<JsObject> {
+fn rejection_for_failure<'env>(
+    env: &'env Env,
+    promise: Result<Unknown<'env>>,
+) -> Result<Unknown<'env>> {
     match promise {
         Ok(promise) => Ok(promise),
-        Err(error) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
-            deferred.reject(error);
-            Ok(promise)
-        }
+        Err(error) => Ok(PromiseRaw::<Json>::reject(env, error)?.to_unknown()),
     }
 }
 
@@ -738,18 +766,18 @@ fn poll_step(
     context_id: Option<String>,
     publication_buffer: Option<PublicationBuffer>,
     close: bool,
-) -> Result<JsUnknown> {
+) -> Result<JsArg> {
     let Some(state) = state.upgrade() else {
         if !close {
-            return env.get_null().map(|value| value.into_unknown());
+            return Ok(js_value(env, Null)?);
         }
         let result = close_result
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         return match result {
-            Some(Err(error)) => Err(napi::Error::from_reason(error)),
-            _ => env.get_undefined().map(|value| value.into_unknown()),
+            Some(Err(failure)) => Err(Error::Napi(failure.throw_into(env))),
+            _ => Ok(js_value(env, ())?),
         };
     };
     // A collector or finalizer may call back in from inside this poll. Resolve at once so
@@ -758,12 +786,10 @@ fn poll_step(
         Ok(state) => state,
         Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         Err(TryLockError::WouldBlock) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
-            deferred.resolve(wake_value(Json::Null));
-            return Ok(promise.into_unknown());
+            return Ok(detach(env, &PromiseRaw::<Json>::resolve(env, Json::Null)?));
         }
     };
-    let slot = WakeSlot::new(env_teardown_flag(env)?);
+    let slot = WakeSlot::new();
     let waker = Waker::from(Arc::clone(&slot));
     let mut cx = Context::from_waker(&waker);
     let _direct = DirectStreamCallbacks::enter();
@@ -773,29 +799,29 @@ fn poll_step(
                 if close {
                     state
                         .poll_close(&mut cx, finalizer_error, close_result)
-                        .map(|result| result.map(|()| None).map_err(napi::Error::from_reason))
+                        .map(|result| result.map(|()| None))
                 } else {
-                    state
-                        .poll_next(&mut cx)
-                        .map(|result| result.map_err(to_napi_err))
+                    state.poll_next(&mut cx).map(|result| {
+                        result.map_err(|error| CloseFailure::from(Error::from(error)))
+                    })
                 }
             }))
         })
     });
     match polled {
-        Err(panic) => Err(napi::Error::from_reason(format!(
+        Err(panic) => Err(Error::generic_failure(format!(
             "stream poll panicked: {}",
             panic_message(panic.as_ref())
         ))),
         Ok(Poll::Pending) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
-            slot.arm(deferred);
+            let (pending, promise) = create_promise::<Json>(env, Liveness::KeepLoopAlive)?;
+            slot.arm(pending);
             if close {
                 state.close_wake = Some(slot);
             } else {
                 state.next_wake = Some(slot);
             }
-            Ok(promise.into_unknown())
+            Ok(detach(env, &promise))
         }
         Ok(Poll::Ready(result)) => {
             if close {
@@ -803,11 +829,12 @@ fn poll_step(
             } else {
                 state.next_wake = None;
             }
-            match result? {
-                Some(chunk) => json_to_js_unknown(env, chunk),
-                None if close => env.get_undefined().map(|value| value.into_unknown()),
-                None => env.get_null().map(|value| value.into_unknown()),
-            }
+            Ok(match result {
+                Ok(Some(chunk)) => js_value(env, chunk)?,
+                Ok(None) if close => js_value(env, ())?,
+                Ok(None) => js_value(env, Null)?,
+                Err(failure) => return Err(Error::Napi(failure.throw_into(env))),
+            })
         }
     }
 }
@@ -821,17 +848,27 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
 }
 
 fn combine_close_errors(
-    errors: impl IntoIterator<Item = (&'static str, Option<String>)>,
-) -> std::result::Result<(), String> {
-    let mut errors = errors
+    failures: impl IntoIterator<Item = (&'static str, Option<CloseFailure>)>,
+) -> std::result::Result<(), CloseFailure> {
+    let mut errors = failures
         .into_iter()
-        .filter_map(|(label, error)| error.map(|error| (label, error)));
+        .filter_map(|(label, failure)| failure.map(|failure| (label, failure)))
+        .flat_map(|(label, failure)| {
+            let CloseErrors { first, rest } = &*failure.0;
+            std::iter::once((label, Arc::clone(first)))
+                .chain(
+                    rest.iter()
+                        .map(|(label, error)| (*label, Arc::clone(error))),
+                )
+                .collect::<Vec<_>>()
+        });
     let Some((_, first)) = errors.next() else {
         return Ok(());
     };
-    Err(errors.fold(first, |acc, (label, next)| {
-        format!("{acc}; {label}: {next}")
-    }))
+    Err(CloseFailure(Arc::new(CloseErrors {
+        first,
+        rest: errors.collect(),
+    })))
 }
 
 #[cfg(test)]

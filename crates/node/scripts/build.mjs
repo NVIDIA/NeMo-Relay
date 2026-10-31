@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
-const napiCli = fileURLToPath(
-  new URL('../node_modules/@napi-rs/cli/scripts/index.js', import.meta.url),
-);
+const require = createRequire(import.meta.url);
+const cliPackagePath = require.resolve('@napi-rs/cli/package.json');
+const napiCli = path.join(path.dirname(cliPackagePath), require(cliPackagePath).bin.napi);
 
 const build = spawnSync(
   process.execPath,

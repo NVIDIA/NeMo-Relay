@@ -75,7 +75,7 @@ fn forwarding_preserves_errors_when_cancel_arrives_during_a_poll() {
                 } else {
                     "cleanup boom"
                 };
-                assert_eq!(outcome, format!("internal error: {expected}"));
+                assert_eq!(outcome.to_string(), format!("internal error: {expected}"));
             }
         }
     });

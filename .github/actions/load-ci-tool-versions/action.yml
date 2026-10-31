@@ -38,6 +38,9 @@ outputs:
   cargo_about_version:
     description: cargo-about version
     value: ${{ steps.load.outputs.cargo_about_version }}
+  cargo_zigbuild_version:
+    description: cargo-zigbuild version
+    value: ${{ steps.load.outputs.cargo_zigbuild_version }}
 
 runs:
   using: composite
@@ -61,6 +64,7 @@ runs:
           NEMO_RELAY_CI_CARGO_NEXTEST_VERSION
           NEMO_RELAY_CI_CARGO_DENY_VERSION
           NEMO_RELAY_CI_CARGO_ABOUT_VERSION
+          NEMO_RELAY_CI_CARGO_ZIGBUILD_VERSION
         )
 
         for name in "${required[@]}"; do
@@ -82,4 +86,5 @@ runs:
           printf 'cargo_nextest_version=%s\n' "$NEMO_RELAY_CI_CARGO_NEXTEST_VERSION"
           printf 'cargo_deny_version=%s\n' "$NEMO_RELAY_CI_CARGO_DENY_VERSION"
           printf 'cargo_about_version=%s\n' "$NEMO_RELAY_CI_CARGO_ABOUT_VERSION"
+          printf 'cargo_zigbuild_version=%s\n' "$NEMO_RELAY_CI_CARGO_ZIGBUILD_VERSION"
         } >> "$GITHUB_OUTPUT"

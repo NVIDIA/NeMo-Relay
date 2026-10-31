@@ -174,6 +174,42 @@ describe('core plugins', () => {
     }
   });
 
+  it('reports plugin validation results that cannot be converted without terminating Node', async () => {
+    const pluginKind = `node.test.validate_unconvertible.${Date.now()}`;
+    plugin.register(pluginKind, {
+      validate() {
+        return [{ level: 'error', code: 'plugin.symbol', message: Symbol('not json') }];
+      },
+      register() {
+        assert.fail('registration must not run after validation fails');
+      },
+    });
+
+    try {
+      const config = {
+        version: 1,
+        components: [plugin.ComponentSpec(pluginKind, {})],
+      };
+      const unconvertible = /JS plugin validate failed: .*JS symbols cannot be represented/;
+      // initialize is asynchronous and validates through the threadsafe function.
+      await assert.rejects(() => pluginHost.initialize(config), unconvertible);
+      // validate is synchronous and calls the callback on this thread.
+      const report = pluginHost.validate(config);
+      assert.equal(report.diagnostics.length, 1);
+      assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
+      assert.match(report.diagnostics[0].message, unconvertible);
+      assert.deepEqual(
+        await lib.toolCallExecute('unconvertible_validation_survives', {}, (args) => ({ result: args })),
+        {
+          result: {},
+        },
+      );
+    } finally {
+      await pluginHost.close();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('invokes top-level plugin registration during plugin configuration', async () => {
     const pluginKind = `node.test.register.${Date.now()}`;
     let registerCalls = 0;
