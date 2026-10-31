@@ -337,6 +337,8 @@ impl ModelPricing {
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         let cache_read_tokens = usage.cache_read_tokens.unwrap_or(0);
         let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0);
+        let cache_write_1h_tokens = usage.cache_write_1h_tokens.unwrap_or(0);
+        let cache_write_5m_tokens = cache_write_tokens.checked_sub(cache_write_1h_tokens)?;
         let rates = self.rates_for(rate_tier_usage)?;
         let billable_prompt_tokens = self.billable_prompt_tokens(usage)?;
 
@@ -353,13 +355,28 @@ impl ModelPricing {
         let cache_read_cost = rates
             .cache_read_per_million
             .and_then(|price| cost_component_if_nonzero(cache_read_tokens, price));
-        let cache_write_cost = rates
+        let cache_write_5m_cost = rates
             .cache_write_per_million
-            .and_then(|price| cost_component_if_nonzero(cache_write_tokens, price));
-
+            .and_then(|price| cost_component_if_nonzero(cache_write_5m_tokens, price));
+        let cache_write_1h_cost = rates
+            .cache_write_1h_per_million
+            .and_then(|price| cost_component_if_nonzero(cache_write_1h_tokens, price));
         let has_unpriced_nonzero_usage = (cache_read_tokens > 0
             && rates.cache_read_per_million.is_none())
-            || (cache_write_tokens > 0 && rates.cache_write_per_million.is_none());
+            || (cache_write_5m_tokens > 0 && rates.cache_write_per_million.is_none())
+            || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
+        let has_unpriced_cache_write = (cache_write_5m_tokens > 0
+            && rates.cache_write_per_million.is_none())
+            || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
+        let cache_write_cost = if has_unpriced_cache_write {
+            None
+        } else {
+            match (cache_write_5m_cost, cache_write_1h_cost) {
+                (Some(short), Some(long)) => Some(short + long),
+                (Some(cost), None) | (None, Some(cost)) => Some(cost),
+                (None, None) => None,
+            }
+        };
         let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()
@@ -481,6 +498,12 @@ pub struct TokenPricingRates {
     /// Prompt cache write price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_per_million: Option<f64>,
+    /// One-hour prompt cache write price.
+    ///
+    /// Rust callers using exhaustive struct literals must set this to `None`
+    /// when no distinct one-hour rate is available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h_per_million: Option<f64>,
 }
 
 impl TokenPricingRates {
@@ -506,6 +529,13 @@ impl TokenPricingRates {
             validate_rate(
                 entry_index,
                 format!("{field_prefix}.cache_write_per_million"),
+                value,
+            )?;
+        }
+        if let Some(value) = self.cache_write_1h_per_million {
+            validate_rate(
+                entry_index,
+                format!("{field_prefix}.cache_write_1h_per_million"),
                 value,
             )?;
         }

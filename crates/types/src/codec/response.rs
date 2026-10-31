@@ -91,6 +91,9 @@ pub struct Usage {
     /// Tokens written to prompt cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
+    /// The subset of prompt-cache write tokens retained for one hour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h_tokens: Option<u64>,
     /// Input tokens that were neither served from nor written to a provider
     /// prompt cache.
     ///
