@@ -147,34 +147,44 @@ impl Settlement {
             pending,
             liveness,
         } = self;
-        let settled = match outcome {
-            Ok(resolve) => resolve(env).map(Ok),
-            Err(reject) => reject(env).map(Err),
-        };
-        let status = match settled {
-            // SAFETY: the deferred was created in `env` and is settled exactly once here.
-            Ok(Ok(value)) => unsafe {
-                let value = JsArg::to_napi_value(env.raw(), value)?;
-                napi::sys::napi_resolve_deferred(env.raw(), deferred.0, value)
-            },
-            Ok(Err(value)) => unsafe {
-                let value = JsArg::to_napi_value(env.raw(), value)?;
-                napi::sys::napi_reject_deferred(env.raw(), deferred.0, value)
-            },
-            // SAFETY: as above.
-            Err(error) => unsafe {
-                let error = napi::Error::to_napi_value(env.raw(), error)?;
-                napi::sys::napi_reject_deferred(env.raw(), deferred.0, error)
-            },
-        };
-        check_status!(status, "settle promise failed")?;
-        if matches!(liveness, Liveness::KeepLoopAlive)
+        let settled = settle_deferred(env, deferred, outcome);
+        let released = if matches!(liveness, Liveness::KeepLoopAlive)
             && pending.fetch_sub(1, Ordering::AcqRel) == 1
         {
-            settler_liveness(env, &settler, false)?;
-        }
-        Ok(())
+            settler_liveness(env, &settler, false)
+        } else {
+            Ok(())
+        };
+        settled.and(released)
     }
+}
+
+fn settle_deferred(
+    env: &Env,
+    deferred: Deferred,
+    outcome: std::result::Result<Settler, Settler>,
+) -> napi::Result<()> {
+    let settled = match outcome {
+        Ok(resolve) => resolve(env).map(Ok),
+        Err(reject) => reject(env).map(Err),
+    };
+    let status = match settled {
+        // SAFETY: the deferred was created in `env` and is settled exactly once here.
+        Ok(Ok(value)) => unsafe {
+            let value = JsArg::to_napi_value(env.raw(), value)?;
+            napi::sys::napi_resolve_deferred(env.raw(), deferred.0, value)
+        },
+        Ok(Err(value)) => unsafe {
+            let value = JsArg::to_napi_value(env.raw(), value)?;
+            napi::sys::napi_reject_deferred(env.raw(), deferred.0, value)
+        },
+        // SAFETY: as above.
+        Err(error) => unsafe {
+            let error = napi::Error::to_napi_value(env.raw(), error)?;
+            napi::sys::napi_reject_deferred(env.raw(), deferred.0, error)
+        },
+    };
+    check_status!(status, "settle promise failed")
 }
 
 pub(crate) struct PendingPromise {
