@@ -130,6 +130,11 @@ def _relative_archive_path_display(path: str) -> str:
     return p
 
 
+def _md_fence(text: str) -> str:
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
 def _md_inline_safe(s: str) -> str:
     """Wrap s in markdown inline code, using double-backtick delimiters if s contains a backtick."""
     if "`" in s:
@@ -1157,10 +1162,11 @@ def cmd_node() -> int:
         parts.append(f"**Repository URL**: {repo}\n")
         parts.append(f"**License Type(s)**: {lic}\n")
         parts.append(f"### License: {lic_url}\n")
-        parts.append(MARKDOWN_CODE_FENCE)
-        fallback = f"(No license file read from locked npm artifact for {name}; see npm metadata.)\n"
-        parts.append(text if text else fallback)
-        parts.append(MARKDOWN_CODE_BLOCK_END)
+        body = text if text else f"(No license file read from locked npm artifact for {name}; see npm metadata.)\n"
+        fence = _md_fence(body)
+        parts.append(f"{fence}\n")
+        parts.append(body if body.endswith("\n") else body + "\n")
+        parts.append(f"{fence}\n\n")
 
     out.write_text("".join(parts).rstrip("\n") + "\n", encoding="utf-8")
     print(f"Wrote {out.relative_to(ROOT)}", file=sys.stderr)
