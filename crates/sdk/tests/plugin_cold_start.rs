@@ -3,12 +3,15 @@
 
 //! SDK initialization composes built-ins and selects a process-owned diagnostic service.
 
+mod support;
+
 use nemo_relay::plugin::{
     self, ConfigPolicy, PluginComponentSpec, PluginConfig, UnsupportedBehavior,
 };
 
 #[tokio::test]
 async fn initialization_recognizes_builtins_and_keeps_diagnostics_after_close() {
+    support::require_isolated_plugin_config();
     use nemo_relay::diagnostics::{self, DiagnosticQuery, DiagnosticsSettings};
     assert_eq!(
         diagnostics::reader().unwrap_err().reason(),

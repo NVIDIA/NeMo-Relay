@@ -13,6 +13,18 @@ readme = "README.md"
 # These tests compile shared documentation source available only in the repository.
 exclude = ["tests/documentation_examples.rs"]
 
+[features]
+# Test-only isolation; requires NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1.
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
+
+[[test]]
+name = "plugin_cold_start"
+required-features = ["__skip-implicit-config"]
+
+[[test]]
+name = "plugin_contract"
+required-features = ["__skip-implicit-config"]
+
 [lints]
 workspace = true
 

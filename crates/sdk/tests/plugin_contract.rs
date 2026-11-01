@@ -3,6 +3,8 @@
 
 //! Applications can author, configure, activate, and clean up plugins through the SDK alone.
 
+mod support;
+
 use nemo_relay::Json;
 use nemo_relay::plugin::{
     self, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
@@ -92,6 +94,7 @@ fn emit_scope() {
 
 #[tokio::test]
 async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
+    support::require_isolated_plugin_config();
     use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
     let schema = ConfigPolicy::editor_schema();
     assert_eq!(
