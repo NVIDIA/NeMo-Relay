@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Run with `cargo run -p nemo-relay --example embedded_diagnostics`.
-use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings, embedded};
-use nemo_relay_plugin_host::dynamic::PluginHostConfig;
+use nemo_relay::{
+    diagnostics::{self, DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings},
+    plugin::PluginHostConfig,
+};
 
 use nemo_relay::plugin::{initialize, validate};
 
@@ -18,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     validate(config.clone(), None)?; // Does not start the diagnostics service.
     let mut activation = initialize(config, None).await?;
-    let reader = embedded::reader()?;
+    let reader = diagnostics::reader()?;
     let page = reader.snapshot(&DiagnosticQuery::default())?;
     let first: DiagnosticSnapshot = serde_json::from_str(page.as_str())?;
     assert_eq!(reader.info()?.binding_copy_concurrency, 2);

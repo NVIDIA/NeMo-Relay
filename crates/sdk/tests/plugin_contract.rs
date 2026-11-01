@@ -48,6 +48,12 @@ impl Plugin for AuditPlugin {
         let observed = self.observed.clone();
         let cleaned = self.cleaned.clone();
         Box::pin(async move {
+            let diagnostics = context
+                .diagnostics_context()
+                .unwrap()
+                .downcast_ref::<nemo_relay::diagnostics::Diagnostics>()
+                .unwrap();
+            assert_eq!(diagnostics.source().process_role, "sdk-injected");
             context.register_subscriber(
                 "events",
                 Arc::new(move |_| {
@@ -121,10 +127,13 @@ async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
     });
     assert_eq!(invalid.diagnostics[0].code, "audit.invalid_tag");
     component.config.insert("tag".into(), json!("audit"));
-    let diagnostics = nemo_relay::diagnostics::Diagnostics::from_settings(
+    let mut source: nemo_relay::diagnostics::SourceIdentity =
         nemo_relay::diagnostics::Diagnostics::default()
             .source()
-            .clone(),
+            .clone();
+    source.process_role = "sdk-injected".into();
+    let diagnostics = nemo_relay::diagnostics::Diagnostics::from_settings(
+        source.clone(),
         nemo_relay::diagnostics::DiagnosticsSettings {
             enabled: true,
             limits: nemo_relay::diagnostics::DiagnosticLimits::default(),
@@ -135,11 +144,21 @@ async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
         .snapshot(&nemo_relay::diagnostics::DiagnosticQuery::default())
         .unwrap();
     drop(snapshot);
-    let mut activation = plugin::initialize_exact(PluginConfig {
-        components: vec![component],
-        policy,
-        ..Default::default()
-    })
+    assert_eq!(
+        nemo_relay::diagnostics::reader().unwrap_err().reason(),
+        "not_initialized"
+    );
+    let configuration = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(configuration.path(), "version = 1\n").unwrap();
+    let mut activation = plugin::initialize_with_diagnostics(
+        PluginConfig {
+            components: vec![component],
+            policy,
+            ..Default::default()
+        },
+        Some(configuration.path().to_owned()),
+        &diagnostics,
+    )
     .await
     .unwrap();
     let report: plugin::PluginHostReport = activation.report();
@@ -150,6 +169,16 @@ async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
     assert_eq!(observed.load(Ordering::SeqCst), 2);
     assert!(!cleaned.load(Ordering::SeqCst));
     activation.close().unwrap();
+    // The caller owns diagnostics; plugin teardown does not release the evidence.
+    let reader = diagnostics.reader();
+    let snapshot = reader
+        .snapshot(&nemo_relay::diagnostics::DiagnosticQuery::default())
+        .unwrap();
+    assert_eq!(snapshot.to_snapshot().unwrap().source, source);
+    assert_eq!(
+        nemo_relay::diagnostics::reader().unwrap_err().reason(),
+        "not_initialized"
+    );
     assert!(cleaned.load(Ordering::SeqCst));
     emit_scope();
     assert_eq!(observed.load(Ordering::SeqCst), 2);

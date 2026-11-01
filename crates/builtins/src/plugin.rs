@@ -57,7 +57,11 @@ pub async fn initialize(
     crate::initialize_runtime();
     host::initialize(config, additional_plugins_toml).await
 }
-/// Initialize the host with explicitly selected runtime diagnostics.
+/// Initialize the host using an application-owned diagnostic service.
+///
+/// Configuration resolution and plugin components use this service. This does
+/// not select the process default used by independently constructed exporters
+/// and logging, or start the embedded diagnostics reader service.
 pub async fn initialize_with_diagnostics(
     config: PluginConfig,
     additional_plugins_toml: Option<PathBuf>,
@@ -65,11 +69,6 @@ pub async fn initialize_with_diagnostics(
 ) -> Result<PluginHostActivation> {
     crate::initialize_runtime();
     host::initialize_with_diagnostics(config, additional_plugins_toml, diagnostics).await
-}
-/// Activate an exact configuration without discovering additional files.
-pub async fn initialize_exact(config: PluginConfig) -> Result<PluginHostActivation> {
-    crate::initialize_runtime();
-    host::initialize_exact(config).await
 }
 /// Register an application plugin after reserving the default built-in kinds.
 pub fn register_plugin(

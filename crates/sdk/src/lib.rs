@@ -172,6 +172,14 @@ pub use nemo_relay_runtime::api::optimization;
 /// use nemo_relay::plugin::initialize_with_verified_specs;
 /// ```
 ///
+/// Use `initialize` for configuration-selected process diagnostics or
+/// `initialize_with_diagnostics` to inject an application-owned service.
+/// Exact activation is provided by `nemo-relay-plugin-host`:
+///
+/// ```compile_fail,E0432
+/// use nemo_relay::plugin::initialize_exact;
+/// ```
+///
 /// Initialize through the functions in this module so the SDK composes its
 /// built-in plugins before validation and activation. Host-only constructors
 /// are not available on the returned handle:
@@ -186,9 +194,8 @@ pub mod plugin {
     pub use nemo_relay_builtins::plugin::{
         ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
         PluginHostReport, deregister_plugin, ensure_builtin_plugins_registered, initialize,
-        initialize_exact, initialize_with_diagnostics, list_plugin_kinds, lookup_plugin,
-        plugin_config_schema, register_plugin, validate, validate_exact,
-        validate_static_plugin_config,
+        initialize_with_diagnostics, list_plugin_kinds, lookup_plugin, plugin_config_schema,
+        register_plugin, validate, validate_exact, validate_static_plugin_config,
     };
     pub use nemo_relay_plugin::component::{
         ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,

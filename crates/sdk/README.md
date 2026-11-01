@@ -254,7 +254,17 @@ Both exporter factory functions and associated constructors, such as
 internally. Applications configure destinations and manage subscriber lifecycle
 without supplying a host.
 
-The `diagnostics` module exposes diagnostic settings, collection, and inspection
-contracts. The `config_editor` module provides the metadata traits used by
+The `diagnostics` module exposes diagnostic settings, ownership, and inspection.
+Use `plugin::initialize` with `PluginHostConfig` for configuration-selected,
+process-owned diagnostics, and `diagnostics::reader()` to inspect that service.
+For explicit ownership, construct `diagnostics::Diagnostics`, pass it to
+`plugin::initialize_with_diagnostics`, and obtain a reader from that context.
+Injection selects diagnostics for the plugin host and its components. Independently
+constructed exporters and logging use the process default. To share evidence,
+create that context with `Diagnostics::install_process_default(source, settings)`
+before constructing those services, and inject the returned context into plugin
+initialization.
+
+The `config_editor` module provides the metadata traits used by
 `editor_config!`, and `plugin` exposes the report types returned by activation
 and validation.
