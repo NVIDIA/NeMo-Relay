@@ -30,6 +30,21 @@ pub use nemo_relay_logging as logging;
 ///
 /// Exporter pipeline state is private; use lifecycle methods and diagnostic snapshots.
 ///
+/// Diagnostic snapshots and their entries can be named through the SDK:
+///
+/// ```
+/// use nemo_relay::exporter::{ExporterRuntimeDiagnostic, ExporterRuntimeDiagnostics};
+/// use nemo_relay::exporter::otel::OpenTelemetrySubscriber;
+///
+/// fn diagnostics(subscriber: &OpenTelemetrySubscriber) -> ExporterRuntimeDiagnostics {
+///     subscriber.runtime_diagnostics()
+/// }
+///
+/// fn entries(snapshot: &ExporterRuntimeDiagnostics) -> &[ExporterRuntimeDiagnostic] {
+///     snapshot.entries()
+/// }
+/// ```
+///
 /// ```compile_fail,E0616
 /// use nemo_relay::exporter::otel::OpenTelemetrySubscriber;
 /// fn pipeline(subscriber: &OpenTelemetrySubscriber) { let _ = &subscriber.inner; }
@@ -47,7 +62,8 @@ pub use nemo_relay_logging as logging;
 pub mod exporter {
     pub use nemo_relay_builtins::exporter::*;
     pub use nemo_relay_observability::{
-        MarkProjection, OpenTelemetryTlsConfig, OpenTelemetryType, OtlpAttributeMapping,
+        ExporterRuntimeDiagnostic, ExporterRuntimeDiagnostics, MarkProjection,
+        OpenTelemetryTlsConfig, OpenTelemetryType, OtlpAttributeMapping,
     };
     pub use nemo_relay_observability::{atif, atof, otel, otel_file, otel_logs, otel_metrics};
 }
