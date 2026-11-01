@@ -19,18 +19,19 @@ workspace = true
 [dependencies]
 # First-party crates.
 nemo-relay-builtins.workspace = true
+nemo-relay-diagnostics.workspace = true
 nemo-relay-logging.workspace = true
 nemo-relay-observability.workspace = true
 nemo-relay-plugin.workspace = true
+nemo-relay-plugin-host.workspace = true
 nemo-relay-resource-metrics.workspace = true
 nemo-relay-runtime.workspace = true
 nemo-relay-types.workspace = true
 
-[dev-dependencies]
-# First-party crates.
-nemo-relay-diagnostics.workspace = true
-nemo-relay-plugin-host.workspace = true
-
 # Third-party dependencies.
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+
+[dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

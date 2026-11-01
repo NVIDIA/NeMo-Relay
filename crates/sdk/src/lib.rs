@@ -59,14 +59,7 @@ pub use nemo_relay_logging as logging;
 /// use nemo_relay::exporter::otel_metrics::OpenTelemetryMetricSubscriber;
 /// fn pipeline(subscriber: &OpenTelemetryMetricSubscriber) { let _ = &subscriber.inner; }
 /// ```
-pub mod exporter {
-    pub use nemo_relay_builtins::exporter::*;
-    pub use nemo_relay_observability::{
-        ExporterRuntimeDiagnostic, ExporterRuntimeDiagnostics, MarkProjection,
-        OpenTelemetryTlsConfig, OpenTelemetryType, OtlpAttributeMapping,
-    };
-    pub use nemo_relay_observability::{atif, atof, otel, otel_file, otel_logs, otel_metrics};
-}
+pub mod exporter;
 pub use nemo_relay_types::api::event::Event;
 pub use nemo_relay_types::api::llm::LlmRequest;
 pub use nemo_relay_types::codec::{
@@ -77,7 +70,10 @@ pub use nemo_relay_types::codec::{
     traits::{LlmCodec, LlmResponseCodec},
 };
 pub use nemo_relay_types::error::{FlowError, Result};
-pub use nemo_relay_types::{Json, codec, editor_config, error};
+pub use nemo_relay_types::{Json, codec, config_editor, editor_config, error};
+
+/// Diagnostic collection, configuration, inspection, and shared evidence contracts.
+pub mod diagnostics;
 
 /// Canonical lifecycle events and normalized LLM accessors.
 pub mod event {
@@ -85,17 +81,7 @@ pub mod event {
     pub use nemo_relay_types::api::event::*;
 }
 /// Task, thread, and distributed request context propagation.
-pub mod context {
-    pub use nemo_relay_runtime::api::runtime::scope_stack::snapshot_scope_stack;
-    pub use nemo_relay_runtime::api::runtime::{
-        PropagationContext, ScopeStackHandle, ThreadScopeStackBinding, capture_propagation_context,
-        capture_propagation_context_with_root, capture_rootless_propagation_context,
-        capture_thread_scope_stack, capture_traceparent, create_scope_stack,
-        create_scope_stack_from_propagation, current_scope_stack_snapshot, fork_scope_stack,
-        propagate_scope_to_thread, restore_thread_scope_stack, set_thread_scope_stack,
-        with_scope_stack, with_task_scope_stack,
-    };
-}
+pub mod context;
 /// Scope lifecycle and event emission.
 pub mod scope {
     pub use nemo_relay_runtime::api::scope::{
@@ -180,6 +166,12 @@ pub mod subscriber {
 pub use nemo_relay_runtime::api::optimization;
 /// Plugin contracts, configuration, and activation.
 ///
+/// Verified-artifact activation is provided by `nemo-relay-plugin-host`:
+///
+/// ```compile_fail,E0432
+/// use nemo_relay::plugin::initialize_with_verified_specs;
+/// ```
+///
 /// Initialize through the functions in this module so the SDK composes its
 /// built-in plugins before validation and activation. Host-only constructors
 /// are not available on the returned handle:
@@ -194,14 +186,18 @@ pub mod plugin {
     pub use nemo_relay_builtins::plugin::{
         ConfigReport, PluginConfig, PluginError, PluginHostActivation, PluginHostConfig,
         PluginHostReport, deregister_plugin, ensure_builtin_plugins_registered, initialize,
-        initialize_exact, initialize_with_diagnostics, initialize_with_verified_specs,
-        list_plugin_kinds, lookup_plugin, plugin_config_schema, register_plugin, validate,
-        validate_exact, validate_static_plugin_config,
+        initialize_exact, initialize_with_diagnostics, list_plugin_kinds, lookup_plugin,
+        plugin_config_schema, register_plugin, validate, validate_exact,
+        validate_static_plugin_config,
     };
     pub use nemo_relay_plugin::component::{
         ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
         PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result,
         RuntimeDiagnostic, UnsupportedBehavior, apply_global_config_policy,
+    };
+    pub use nemo_relay_plugin_host::{
+        DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginFailurePhase,
+        DynamicPluginKind, DynamicPluginValidationReport, DynamicPluginValidationStatus,
     };
 }
 /// Structured resource measurements and on-demand collection.

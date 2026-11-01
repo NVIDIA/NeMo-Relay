@@ -86,6 +86,12 @@ fn emit_scope() {
 
 #[tokio::test]
 async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
+    use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
+    let schema = ConfigPolicy::editor_schema();
+    assert_eq!(
+        schema.field("unknown_component").unwrap().kind,
+        EditorFieldKind::Enum
+    );
     let policy = ConfigPolicy {
         unknown_component: UnsupportedBehavior::Error,
         ..Default::default()
@@ -115,6 +121,20 @@ async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
     });
     assert_eq!(invalid.diagnostics[0].code, "audit.invalid_tag");
     component.config.insert("tag".into(), json!("audit"));
+    let diagnostics = nemo_relay::diagnostics::Diagnostics::from_settings(
+        nemo_relay::diagnostics::Diagnostics::default()
+            .source()
+            .clone(),
+        nemo_relay::diagnostics::DiagnosticsSettings {
+            enabled: true,
+            limits: nemo_relay::diagnostics::DiagnosticLimits::default(),
+        },
+    )
+    .unwrap();
+    let snapshot = diagnostics
+        .snapshot(&nemo_relay::diagnostics::DiagnosticQuery::default())
+        .unwrap();
+    drop(snapshot);
     let mut activation = plugin::initialize_exact(PluginConfig {
         components: vec![component],
         policy,
@@ -122,7 +142,10 @@ async fn sdk_plugin_contract_covers_policy_activation_delivery_and_cleanup() {
     })
     .await
     .unwrap();
-    assert!(!activation.report().config.has_errors());
+    let report: plugin::PluginHostReport = activation.report();
+    let dynamic_reports: &[plugin::DynamicPluginValidationReport] = &report.dynamic_plugins;
+    assert!(dynamic_reports.is_empty());
+    assert!(!report.config.has_errors());
     emit_scope();
     assert_eq!(observed.load(Ordering::SeqCst), 2);
     assert!(!cleaned.load(Ordering::SeqCst));

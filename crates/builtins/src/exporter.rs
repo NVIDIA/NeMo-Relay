@@ -75,3 +75,43 @@ pub fn opentelemetry_from_provider_with_type(
         projection,
     )
 }
+
+/// Create a runtime-bound ATIF exporter with an explicit trajectory identifier.
+pub fn atif_for_trajectory(
+    session_id: String,
+    trajectory_id: String,
+    agent_info: atif::AtifAgentInfo,
+) -> atif::AtifExporter {
+    crate::initialize_runtime();
+    nemo_relay_plugin_host::exporter::atif_for_trajectory(session_id, trajectory_id, agent_info)
+}
+
+/// Create a runtime-bound trace subscriber with composable projection options.
+pub fn opentelemetry_from_provider_with_options(
+    provider: opentelemetry_sdk::trace::SdkTracerProvider,
+    instrumentation_scope: impl Into<String>,
+    options: otel::OpenTelemetrySubscriberOptions,
+) -> otel::Result<otel::OpenTelemetrySubscriber> {
+    crate::initialize_runtime();
+    nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_options(
+        provider,
+        instrumentation_scope,
+        options,
+    )
+}
+
+/// Create a runtime-bound typed trace subscriber with projection options.
+pub fn opentelemetry_from_provider_with_type_and_options(
+    provider: opentelemetry_sdk::trace::SdkTracerProvider,
+    instrumentation_scope: impl Into<String>,
+    projection: nemo_relay_observability::OpenTelemetryType,
+    options: otel::OpenTelemetrySubscriberOptions,
+) -> otel::Result<otel::OpenTelemetrySubscriber> {
+    crate::initialize_runtime();
+    nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type_and_options(
+        provider,
+        instrumentation_scope,
+        projection,
+        options,
+    )
+}

@@ -58,7 +58,7 @@ Node.js bindings mirror the semantics exposed by this crate.
 ## Crate boundaries
 
 `nemo-relay` is a declarative Rust SDK over `nemo-relay-runtime`. Its flat
-modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, `exporter`, and `logging`.
+modules include `context`, `scope`, `llm`, `tool`, `registry`, `subscriber`, `exporter`, `diagnostics`, and `logging`.
 Shared request, response, error, and codec contracts are re-exported from
 `nemo-relay-types`; applications do not need an `api` module prefix.
 
@@ -244,3 +244,17 @@ across executor threads. Use `context::propagate_scope_to_thread()` and
 `context::set_thread_scope_stack()` when handing work to an OS thread, or
 `context::capture_propagation_context()` and
 `context::create_scope_stack_from_propagation()` across process boundaries.
+
+Scope-stack handles are opaque. Clone a handle to share its stack, use
+`context::fork_scope_stack()` for independent child work, and call
+`ScopeStackHandle::snapshot()` for an owned, read-only view of scope identities.
+
+Both exporter factory functions and associated constructors, such as
+`exporter::otel::OpenTelemetrySubscriber::new_file_sink`, bind the SDK runtime
+internally. Applications configure destinations and manage subscriber lifecycle
+without supplying a host.
+
+The `diagnostics` module exposes diagnostic settings, collection, and inspection
+contracts. The `config_editor` module provides the metadata traits used by
+`editor_config!`, and `plugin` exposes the report types returned by activation
+and validation.

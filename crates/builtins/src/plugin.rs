@@ -71,18 +71,6 @@ pub async fn initialize_exact(config: PluginConfig) -> Result<PluginHostActivati
     crate::initialize_runtime();
     host::initialize_exact(config).await
 }
-/// Activate CLI-verified artifacts under the runtime host's lease.
-pub async fn initialize_with_verified_specs<I>(
-    config: PluginConfig,
-    dynamic_plugins: I,
-) -> Result<(PluginHostActivation, ConfigReport)>
-where
-    I: IntoIterator<Item = host::VerifiedDynamicPluginSpec>,
-{
-    crate::initialize_runtime();
-    host::initialize_with_verified_specs(config, dynamic_plugins).await
-}
-
 /// Register an application plugin after reserving the default built-in kinds.
 pub fn register_plugin(
     plugin: std::sync::Arc<dyn nemo_relay_plugin::component::Plugin>,

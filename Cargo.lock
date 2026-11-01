@@ -1923,7 +1923,9 @@ dependencies = [
  "nemo-relay-resource-metrics",
  "nemo-relay-runtime",
  "nemo-relay-types",
+ "opentelemetry_sdk",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

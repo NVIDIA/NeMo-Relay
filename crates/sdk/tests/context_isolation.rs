@@ -81,3 +81,90 @@ async fn concurrent_requests_and_worker_threads_keep_their_parentage() {
         }
     }
 }
+
+#[test]
+fn opaque_handles_share_snapshots_and_restore_thread_bindings() {
+    let previous = context::capture_thread_scope_stack();
+    let previous_snapshot = context::current_scope_stack_snapshot().unwrap();
+    let stack = context::create_scope_stack();
+    let shared = stack.clone();
+    let baseline = stack.snapshot().unwrap();
+    context::with_scope_stack(stack.clone(), || {
+        let handle = scope::push_scope(
+            scope::PushScopeParams::builder()
+                .name("shared-stack")
+                .scope_type(scope::ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+        assert_eq!(
+            shared.snapshot().unwrap().scopes.last().unwrap().scope_id,
+            handle.uuid
+        );
+        let frozen = context::snapshot_scope_stack(&shared).unwrap();
+        assert_eq!(scope::get_handle().unwrap().uuid, handle.uuid);
+        scope::pop_scope(
+            scope::PopScopeParams::builder()
+                .handle_uuid(&handle.uuid)
+                .build(),
+        )
+        .unwrap();
+        assert_eq!(shared.snapshot().unwrap(), baseline);
+        assert_eq!(
+            frozen.snapshot().unwrap().scopes.last().unwrap().scope_id,
+            handle.uuid
+        );
+    });
+    assert_eq!(
+        context::current_scope_stack_snapshot().unwrap(),
+        previous_snapshot
+    );
+    context::set_thread_scope_stack(stack);
+    let captured = context::capture_thread_scope_stack();
+    context::set_thread_scope_stack(context::create_scope_stack());
+    context::restore_thread_scope_stack(captured.clone());
+    assert_eq!(captured.stack().snapshot().unwrap(), baseline);
+    assert_eq!(
+        context::current_scope_stack_snapshot().unwrap(),
+        Some(baseline)
+    );
+    context::restore_thread_scope_stack(previous.clone());
+    assert_eq!(
+        context::current_scope_stack_snapshot().unwrap(),
+        previous_snapshot
+    );
+}
+
+#[tokio::test]
+async fn forked_handles_isolate_child_mutations() {
+    let parent = context::create_scope_stack();
+    let parent_view = parent.clone();
+    context::with_task_scope_stack(parent, async {
+        let baseline = parent_view.snapshot().unwrap();
+        let child = context::fork_scope_stack().unwrap();
+        context::with_task_scope_stack(child, async {
+            let handle = scope::push_scope(
+                scope::PushScopeParams::builder()
+                    .name("isolated-child")
+                    .scope_type(scope::ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            tokio::task::yield_now().await;
+            assert_eq!(parent_view.snapshot().unwrap(), baseline);
+            assert_eq!(scope::get_handle().unwrap().uuid, handle.uuid);
+            scope::pop_scope(
+                scope::PopScopeParams::builder()
+                    .handle_uuid(&handle.uuid)
+                    .build(),
+            )
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            context::current_scope_stack_snapshot().unwrap().unwrap(),
+            baseline
+        );
+    })
+    .await;
+}
