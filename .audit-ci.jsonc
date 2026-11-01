@@ -10,6 +10,7 @@
   // an acceptable patch is available. These are exact paths emitted by audit-ci
   // for this workspace, without package-wide or wildcard exceptions.
   "allowlist": [
+    "GHSA-g3hv-75wg-m249|c8>test-exclude>minimatch",
     "GHSA-g3hv-75wg-m249|c8>test-exclude>glob>minimatch",
     "GHSA-g3hv-75wg-m249|minimatch>",
     "GHSA-g3hv-75wg-m249|openclaw>minimatch"
