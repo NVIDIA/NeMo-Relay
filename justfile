@@ -1937,6 +1937,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
                 ;;
             nemo-relay|nemo-relay-runtime)
                 if [[ "$package" == nemo-relay ]]; then

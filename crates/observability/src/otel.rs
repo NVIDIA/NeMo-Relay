@@ -16,6 +16,12 @@
 //! - [`OpenTelemetryConfig`] configures the OTLP exporter and resource metadata
 //! - [`OpenTelemetrySubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
+//!
+//! Internal event processing remains crate-owned:
+//!
+//! ```compile_fail,E0603
+//! use nemo_relay_observability::otel::OtelEventProcessor;
+//! ```
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -1221,19 +1227,19 @@ impl OpenTelemetrySubscriber {
             .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
         let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
         let processor = Arc::new(Mutex::new(
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
-                provider.clone(),
-                instrumentation_scope,
-                otel_type,
-                mark_projection,
-                mark_exclude_names,
-                attribute_mappings,
-                promote_metadata_prefixes,
-                completed_span_context_ttl,
-                runtime_diagnostics.clone(),
-                owned_config,
-                Arc::clone(&dynamic_pipelines),
-            ),
+            OtelEventProcessor::builder()
+                .provider(provider.clone())
+                .instrumentation_scope(instrumentation_scope)
+                .otel_type(otel_type)
+                .mark_projection(mark_projection)
+                .mark_exclude_names(mark_exclude_names)
+                .attribute_mappings(attribute_mappings)
+                .promote_metadata_prefixes(promote_metadata_prefixes)
+                .completed_span_context_ttl(completed_span_context_ttl)
+                .runtime_diagnostics(runtime_diagnostics.clone())
+                .owned_config(owned_config)
+                .dynamic_pipelines(Arc::clone(&dynamic_pipelines))
+                .build(),
         ));
         let processor_for_callback = Arc::clone(&processor);
         let pipelines_for_callback = Arc::clone(&dynamic_pipelines);
@@ -2125,12 +2131,12 @@ pub struct ActiveSpan {
     pub descendant_exception_type: Option<String>,
 }
 
-#[doc(hidden)]
-pub struct OtelEventProcessor {
+pub(super) struct OtelEventProcessor {
     pub active_spans: HashMap<Uuid, ActiveSpan>,
     pub completed_span_contexts: HashMap<Uuid, CompletedSpanContext>,
     pub completed_span_expiry_index: BTreeMap<DateTime<Utc>, HashSet<Uuid>>,
-    pub provider: SdkTracerProvider,
+    // Subscriber callbacks can outlive their wrapper; keep the provider alive.
+    _provider: SdkTracerProvider,
     pub tracer: SdkTracer,
     pub instrumentation_scope: String,
     pub otel_type: OpenTelemetryType,
@@ -2210,122 +2216,35 @@ pub(crate) fn ensure_dynamic_pipeline(
     Some(tracer)
 }
 
-impl OtelEventProcessor {
-    #[doc(hidden)]
-    pub fn new(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
-        Self::new_with_mark_projection(provider, instrumentation_scope, MarkProjection::default())
-    }
+#[derive(typed_builder::TypedBuilder)]
+#[builder(build_method(into = OtelEventProcessor))]
+pub(super) struct OtelEventProcessorConfig {
+    provider: SdkTracerProvider,
+    #[builder(setter(into))]
+    instrumentation_scope: String,
+    #[builder(default = OpenTelemetryType::Full)]
+    otel_type: OpenTelemetryType,
+    #[builder(default)]
+    mark_projection: MarkProjection,
+    #[builder(default = default_mark_exclude_names())]
+    mark_exclude_names: Vec<String>,
+    #[builder(default)]
+    attribute_mappings: Vec<OtlpAttributeMapping>,
+    #[builder(default)]
+    promote_metadata_prefixes: Vec<String>,
+    #[builder(default = DEFAULT_COMPLETED_SPAN_CONTEXT_TTL)]
+    completed_span_context_ttl: Duration,
+    #[builder(default = SignalRuntimeDiagnostics::new(None))]
+    runtime_diagnostics: SignalRuntimeDiagnostics,
+    #[builder(default)]
+    owned_config: Option<TraceConfig>,
+    #[builder(default)]
+    dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
+}
 
-    #[doc(hidden)]
-    pub fn new_openinference(provider: SdkTracerProvider, instrumentation_scope: String) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings(
-            provider,
-            instrumentation_scope,
-            OpenTelemetryType::OpenInference,
-            MarkProjection::default(),
-            default_mark_exclude_names(),
-            Vec::new(),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn new_openinference_with_mark_projection(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings(
-            provider,
-            instrumentation_scope,
-            OpenTelemetryType::OpenInference,
-            mark_projection,
-            default_mark_exclude_names(),
-            Vec::new(),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn new_openinference_with_mark_projection_and_exclusions(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings(
-            provider,
-            instrumentation_scope,
-            OpenTelemetryType::OpenInference,
-            mark_projection,
-            mark_exclude_names,
-            Vec::new(),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn new_with_mark_projection(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions(
-            provider,
-            instrumentation_scope,
-            mark_projection,
-            default_mark_exclude_names(),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn new_with_mark_projection_and_exclusions(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings(
-            provider,
-            instrumentation_scope,
-            OpenTelemetryType::Full,
-            mark_projection,
-            mark_exclude_names,
-            Vec::new(),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn new_with_mark_projection_and_exclusions_and_mappings(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        otel_type: OpenTelemetryType,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-        attribute_mappings: Vec<OtlpAttributeMapping>,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-            provider,
-            instrumentation_scope,
-            otel_type,
-            mark_projection,
-            mark_exclude_names,
-            attribute_mappings,
-            Vec::new(),
-            SignalRuntimeDiagnostics::new(None),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[doc(hidden)]
-    pub fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        otel_type: OpenTelemetryType,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-        attribute_mappings: Vec<OtlpAttributeMapping>,
-        promote_metadata_prefixes: Vec<String>,
-        runtime_diagnostics: SignalRuntimeDiagnostics,
-    ) -> Self {
-        Self::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
+impl From<OtelEventProcessorConfig> for OtelEventProcessor {
+    fn from(config: OtelEventProcessorConfig) -> Self {
+        let OtelEventProcessorConfig {
             provider,
             instrumentation_scope,
             otel_type,
@@ -2333,28 +2252,11 @@ impl OtelEventProcessor {
             mark_exclude_names,
             attribute_mappings,
             promote_metadata_prefixes,
-            DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
+            completed_span_context_ttl,
             runtime_diagnostics,
-            None,
-            Arc::new(Mutex::new(HashMap::new())),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[doc(hidden)]
-    pub fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
-        provider: SdkTracerProvider,
-        instrumentation_scope: String,
-        otel_type: OpenTelemetryType,
-        mark_projection: MarkProjection,
-        mark_exclude_names: Vec<String>,
-        attribute_mappings: Vec<OtlpAttributeMapping>,
-        promote_metadata_prefixes: Vec<String>,
-        completed_span_context_ttl: Duration,
-        runtime_diagnostics: SignalRuntimeDiagnostics,
-        owned_config: Option<TraceConfig>,
-        dynamic_pipelines: Arc<Mutex<HashMap<String, DynamicTracePipeline>>>,
-    ) -> Self {
+            owned_config,
+            dynamic_pipelines,
+        } = config;
         let tracer = provider.tracer(instrumentation_scope.clone());
         let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
             .as_ref()
@@ -2377,7 +2279,7 @@ impl OtelEventProcessor {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
             completed_span_expiry_index: BTreeMap::new(),
-            provider,
+            _provider: provider,
             tracer,
             instrumentation_scope,
             otel_type,
@@ -2394,13 +2296,18 @@ impl OtelEventProcessor {
             runtime_diagnostics,
         }
     }
+}
 
-    #[doc(hidden)]
+impl OtelEventProcessor {
+    pub(super) fn builder() -> OtelEventProcessorConfigBuilder {
+        OtelEventProcessorConfig::builder()
+    }
+
+    #[cfg(test)]
     pub fn process(&mut self, event: &EventView<'_>) {
         self.process_with_root_tracer(event, None);
     }
 
-    #[doc(hidden)]
     pub fn process_with_root_tracer(
         &mut self,
         event: &EventView<'_>,
@@ -2417,7 +2324,6 @@ impl OtelEventProcessor {
         }
     }
 
-    #[doc(hidden)]
     pub fn resource_pipeline_request(
         &self,
         event: &EventView<'_>,
@@ -2457,7 +2363,6 @@ impl OtelEventProcessor {
         })
     }
 
-    #[doc(hidden)]
     pub fn tracer_for_root(&mut self, event: &EventView<'_>) -> SdkTracer {
         let Some(config) = self.owned_config.as_ref() else {
             return self.tracer.clone();
@@ -2489,7 +2394,6 @@ impl OtelEventProcessor {
             .unwrap_or_else(|| self.tracer.clone())
     }
 
-    #[doc(hidden)]
     pub fn tracer_for_start(&mut self, event: &EventView<'_>, is_trace_root: bool) -> SdkTracer {
         if let Some(tracer) = self.find_parent_span(event).map(|span| span.tracer.clone()) {
             return tracer;
@@ -2507,7 +2411,6 @@ impl OtelEventProcessor {
         self.tracer.clone()
     }
 
-    #[doc(hidden)]
     pub fn tracer_for_mark(&self, event: &EventView<'_>) -> SdkTracer {
         self.find_parent_span(event)
             .map(|span| span.tracer.clone())
@@ -2520,14 +2423,13 @@ impl OtelEventProcessor {
             .unwrap_or_else(|| self.tracer.clone())
     }
 
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn force_flush(&self) -> Result<()> {
-        self.provider
+        self._provider
             .force_flush()
             .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
-    #[doc(hidden)]
     pub fn dynamic_providers(&self) -> Vec<SdkTracerProvider> {
         self.dynamic_pipelines
             .lock()
@@ -2540,7 +2442,6 @@ impl OtelEventProcessor {
             .unwrap_or_default()
     }
 
-    #[doc(hidden)]
     pub fn process_start(
         &mut self,
         event: &EventView<'_>,
@@ -2634,7 +2535,6 @@ impl OtelEventProcessor {
         );
     }
 
-    #[doc(hidden)]
     pub fn process_end(&mut self, event: &EventView<'_>) {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
@@ -2759,7 +2659,6 @@ impl OtelEventProcessor {
             .end_with_timestamp(to_system_time(*event.timestamp()));
     }
 
-    #[doc(hidden)]
     pub fn process_mark(&mut self, event: &EventView<'_>) {
         match classify_metric_mark(event) {
             MetricMarkClassification::NotMetric => {}
@@ -2839,7 +2738,6 @@ impl OtelEventProcessor {
         span.end_with_timestamp(timestamp);
     }
 
-    #[doc(hidden)]
     pub fn process_mark_as_tool(&mut self, event: &EventView<'_>) {
         let timestamp = to_system_time(*event.timestamp());
         let orphan = self.find_parent_span(event).is_none();
@@ -2874,7 +2772,6 @@ impl OtelEventProcessor {
 
     // Report unsupported metadata by key without exposing its value or
     // interrupting Event export.
-    #[doc(hidden)]
     pub fn promote_metadata(
         &self,
         attributes: &mut Vec<KeyValue>,
@@ -2893,7 +2790,6 @@ impl OtelEventProcessor {
         promoted_keys
     }
 
-    #[doc(hidden)]
     pub fn remove_promoted_metadata_attributes(
         &self,
         attributes: &mut Vec<KeyValue>,
@@ -2941,7 +2837,6 @@ impl OtelEventProcessor {
         }
     }
 
-    #[doc(hidden)]
     pub fn record_metadata_promotion_issues(
         &self,
         mut issues: Vec<super::MetadataPromotionIssue>,
@@ -2969,7 +2864,6 @@ impl OtelEventProcessor {
             }
         }
     }
-    #[doc(hidden)]
     pub fn mark_attributes(&self, event: &EventView<'_>) -> Vec<KeyValue> {
         match self.otel_type {
             OpenTelemetryType::Full => mark_attributes(event),
@@ -2978,7 +2872,6 @@ impl OtelEventProcessor {
         }
     }
 
-    #[doc(hidden)]
     pub fn parent_context(&self, event: &EventView<'_>) -> Context {
         if let Some(active_span) = self.find_parent_span(event) {
             return Context::new().with_remote_span_context(active_span.span_context.clone());
@@ -3015,7 +2908,6 @@ impl OtelEventProcessor {
         ))
     }
 
-    #[doc(hidden)]
     pub fn parent_span_uuid(&self, event: &EventView<'_>) -> Option<Uuid> {
         let parent_uuid = event.parent_uuid()?;
         self.active_spans
@@ -3023,26 +2915,22 @@ impl OtelEventProcessor {
             .then_some(parent_uuid)
     }
 
-    #[doc(hidden)]
     pub fn find_parent_span(&self, event: &EventView<'_>) -> Option<&ActiveSpan> {
         self.parent_span_uuid(event)
             .and_then(|uuid| self.active_spans.get(&uuid))
     }
 
-    #[doc(hidden)]
     pub fn find_parent_span_mut(&mut self, event: &EventView<'_>) -> Option<&mut ActiveSpan> {
         self.parent_span_uuid(event)
             .and_then(|uuid| self.active_spans.get_mut(&uuid))
     }
 
-    #[doc(hidden)]
     pub fn remove_completed_span_context(&mut self, uuid: Uuid) {
         if let Some(context) = self.completed_span_contexts.remove(&uuid) {
             self.remove_completed_span_expiry_index_entry(uuid, context.closed_at);
         }
     }
 
-    #[doc(hidden)]
     pub fn remove_completed_span_expiry_index_entry(
         &mut self,
         uuid: Uuid,
@@ -3060,7 +2948,6 @@ impl OtelEventProcessor {
         }
     }
 
-    #[doc(hidden)]
     pub fn record_completed_span_context(
         &mut self,
         uuid: Uuid,
@@ -3084,7 +2971,6 @@ impl OtelEventProcessor {
             .insert(uuid);
     }
 
-    #[doc(hidden)]
     pub fn expire_completed_span_contexts(&mut self, event_timestamp: DateTime<Utc>) {
         let mut expired_count = 0_u64;
         while let Some((closed_at, _)) = self.completed_span_expiry_index.first_key_value() {

@@ -34,7 +34,10 @@ fn local_unexported_parent_starts_a_root_trace() {
     let parent_uuid = Uuid::now_v7();
     let agent_uuid = Uuid::now_v7();
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider, "test".into());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test")
+        .build();
     let mut start = make_start_event(
         agent_uuid,
         Some(parent_uuid),
@@ -66,7 +69,10 @@ fn local_unexported_parent_starts_a_root_trace() {
 fn orphan_mark_with_a_local_unexported_parent_starts_a_new_trace() {
     let parent_uuid = Uuid::now_v7();
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider, "test".into());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test")
+        .build();
     let mut mark = make_mark_event(Some(parent_uuid), "detached", None);
     let mark_uuid = mark.uuid();
     mark.set_propagation_root_uuid(Some(Uuid::now_v7()));
@@ -86,17 +92,15 @@ fn orphan_mark_with_a_local_unexported_parent_starts_a_new_trace() {
 fn promotes_final_scope_and_mark_metadata_without_duplicate_span_keys() {
     for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "metadata-promotion-test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                vec!["nv.".to_string(), "nemo_relay.".to_string()],
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("metadata-promotion-test")
+            .otel_type(otel_type)
+            .promote_metadata_prefixes(vec!["nv.".to_string(), "nemo_relay.".to_string()])
+            .runtime_diagnostics(
                 SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host()),
-            );
+            )
+            .build();
         let uuid = Uuid::now_v7();
         processor.process(&crate::test_support::event_view(
             &make_start_event_with_metadata(
@@ -163,17 +167,14 @@ fn promotes_final_scope_and_mark_metadata_without_duplicate_span_keys() {
 fn removes_resource_promoted_metadata_from_all_otlp_event_projections() {
     for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "resource-metadata-filter-test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                Vec::new(),
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("resource-metadata-filter-test")
+            .otel_type(otel_type)
+            .runtime_diagnostics(
                 SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host()),
-        );
+            )
+            .build();
         processor.resource_metadata_prefixes = vec!["tenant.".to_string()];
         processor.resource_metadata_protected_keys = HashSet::from(["tenant.region".to_string()]);
         let uuid = Uuid::now_v7();
@@ -235,17 +236,16 @@ fn removes_resource_promoted_metadata_from_all_otlp_event_projections() {
 fn promotes_orphan_and_tool_projection_mark_metadata() {
     for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "metadata-promotion-mark-test".into(),
-                otel_type,
-                MarkProjection::Tool,
-                default_mark_exclude_names(),
-                Vec::new(),
-                vec!["nv.".to_string()],
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("metadata-promotion-mark-test")
+            .otel_type(otel_type)
+            .mark_projection(MarkProjection::Tool)
+            .promote_metadata_prefixes(vec!["nv.".to_string()])
+            .runtime_diagnostics(
                 SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host()),
-            );
+            )
+            .build();
         let parent_uuid = Uuid::now_v7();
         processor.process(&crate::test_support::event_view(&Event::Mark(
             MarkEvent::new(
@@ -310,17 +310,15 @@ fn promotes_final_scope_metadata_across_trace_projections() {
         OpenTelemetryType::OpenInference,
     ] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "metadata-promotion-projection-test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                vec!["nv.".to_string()],
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("metadata-promotion-projection-test")
+            .otel_type(otel_type)
+            .promote_metadata_prefixes(vec!["nv.".to_string()])
+            .runtime_diagnostics(
                 SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host()),
-            );
+            )
+            .build();
         let uuid = Uuid::now_v7();
         processor.process(&crate::test_support::event_view(
             &make_start_event_with_metadata(
@@ -360,17 +358,13 @@ fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections
         let (provider, exporter) = make_provider();
         let runtime_diagnostics =
             SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host());
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "unsupported-final-metadata-promotion-test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                vec!["nv.".to_string()],
-                runtime_diagnostics.clone(),
-            );
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("unsupported-final-metadata-promotion-test")
+            .otel_type(otel_type)
+            .promote_metadata_prefixes(vec!["nv.".to_string()])
+            .runtime_diagnostics(runtime_diagnostics.clone())
+            .build();
         let uuid = Uuid::now_v7();
         processor.process(&crate::test_support::event_view(
             &make_start_event_with_metadata(
@@ -409,17 +403,12 @@ fn reports_each_unsupported_metadata_key_with_a_deterministic_diagnostic_code() 
     let (provider, exporter) = make_provider();
     let runtime_diagnostics =
         SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host());
-    let mut processor =
-        OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-            provider,
-            "unsupported-metadata-promotion-keys-test".into(),
-            OpenTelemetryType::Full,
-            MarkProjection::default(),
-            default_mark_exclude_names(),
-            Vec::new(),
-            vec!["tenant.".to_string()],
-            runtime_diagnostics.clone(),
-        );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("unsupported-metadata-promotion-keys-test")
+        .promote_metadata_prefixes(vec!["tenant.".to_string()])
+        .runtime_diagnostics(runtime_diagnostics.clone())
+        .build();
     let uuid = Uuid::now_v7();
     let unsupported_metadata = json!({
         "tenant.plan": {"name": "enterprise"},
@@ -485,17 +474,15 @@ fn promotes_start_only_scope_metadata_across_trace_projections() {
         OpenTelemetryType::OpenInference,
     ] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                provider,
-                "start-metadata-promotion-projection-test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                vec!["nv.".to_string()],
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("start-metadata-promotion-projection-test")
+            .otel_type(otel_type)
+            .promote_metadata_prefixes(vec!["nv.".to_string()])
+            .runtime_diagnostics(
                 SignalRuntimeDiagnostics::new(None).with_host(crate::test_support::detached_host()),
-            );
+            )
+            .build();
         let uuid = Uuid::now_v7();
         processor.process(&crate::test_support::event_view(
             &make_start_event_with_metadata(
@@ -528,14 +515,13 @@ fn promotes_start_only_scope_metadata_across_trace_projections() {
 #[test]
 fn gen_ai_projection_is_fixed_and_preserves_all_scope_parentage() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-        provider,
-        "gen-ai-test".to_string(),
-        OpenTelemetryType::GenAi,
-        MarkProjection::Tool,
-        Vec::new(),
-        Vec::new(),
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("gen-ai-test")
+        .otel_type(OpenTelemetryType::GenAi)
+        .mark_projection(MarkProjection::Tool)
+        .mark_exclude_names(Vec::new())
+        .build();
     assert!(
         processor
             .mark_attributes(&crate::test_support::event_view(&make_mark_event(
@@ -1325,15 +1311,11 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
 fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
     for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::GenAi] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-                provider,
-                "error-propagation-test".to_string(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-            );
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("error-propagation-test")
+            .otel_type(otel_type)
+            .build();
         let agent_uuid = Uuid::now_v7();
         let function_uuid = Uuid::now_v7();
         let llm_uuid = Uuid::now_v7();
@@ -1434,14 +1416,11 @@ fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
 #[test]
 fn generic_function_error_propagates_to_agent_span() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-        provider,
-        "suppressed-error-propagation-test".to_string(),
-        OpenTelemetryType::GenAi,
-        MarkProjection::default(),
-        default_mark_exclude_names(),
-        Vec::new(),
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("suppressed-error-propagation-test")
+        .otel_type(OpenTelemetryType::GenAi)
+        .build();
     let agent_uuid = Uuid::now_v7();
     let function_uuid = Uuid::now_v7();
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1515,14 +1494,11 @@ fn generic_function_error_propagates_to_agent_span() {
 #[test]
 fn generic_parent_error_propagation_isolated_by_trace_id() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-        provider,
-        "error-trace-isolation-test".to_string(),
-        OpenTelemetryType::GenAi,
-        MarkProjection::default(),
-        default_mark_exclude_names(),
-        Vec::new(),
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("error-trace-isolation-test")
+        .otel_type(OpenTelemetryType::GenAi)
+        .build();
     let shared_span_id = [0xAB; 8];
     let mut first_agent_bytes = [0x11; 16];
     first_agent_bytes[8..].copy_from_slice(&shared_span_id);
@@ -1918,7 +1894,10 @@ fn gen_ai_projection_reads_nested_scalar_fallbacks() {
 #[test]
 fn records_span_start_mark_and_end() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .build();
     let root_uuid = Uuid::now_v7();
 
     let start = make_start_event(
@@ -1969,7 +1948,10 @@ fn records_span_start_mark_and_end() {
 #[test]
 fn metric_schema_marks_are_not_projected_to_direct_traces() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2061,11 +2043,11 @@ fn metric_schema_marks_are_not_projected_to_direct_traces() {
 #[test]
 fn derives_span_ids_from_relay_uuids() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .build();
 
     let root_uuid = Uuid::from_u128(0x018f_0f0f_0f0f_7000_8123_4567_89ab_cdef);
     let child_uuid = Uuid::from_u128(0x018f_0f0f_0f10_7000_8fed_cba9_8765_4321);
@@ -2158,7 +2140,10 @@ fn derives_span_ids_from_relay_uuids() {
 #[test]
 fn atif_lineage_correlates_with_otel_span_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .build();
 
     let agent_uuid = Uuid::now_v7();
     let llm_uuid = Uuid::now_v7();
@@ -2244,7 +2229,10 @@ fn atif_lineage_correlates_with_otel_span_attributes() {
 #[test]
 fn orphan_marks_become_zero_duration_spans() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .build();
     let mark = make_mark_event(None, "detached", Some(json!({"kind": "standalone"})));
 
     processor.process(&crate::test_support::event_view(&mark));
@@ -2266,11 +2254,11 @@ fn orphan_marks_become_zero_duration_spans() {
 #[test]
 fn tool_projection_emits_generic_mark_as_parented_zero_duration_span() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .build();
     let parent_uuid = Uuid::now_v7();
     let start = make_start_event(parent_uuid, None, "agent-turn", ScopeType::Agent, None);
     let mark = Event::Mark(MarkEvent::new(
@@ -2336,12 +2324,12 @@ fn tool_projection_emits_generic_mark_as_parented_zero_duration_span() {
 #[test]
 fn tool_projection_exclusion_keeps_custom_mark_as_native_event() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-        vec!["plugin.excluded".to_string()],
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .mark_exclude_names(vec!["plugin.excluded".to_string()])
+        .build();
     processor.process(&crate::test_support::event_view(&make_mark_event(
         None,
         "plugin.excluded",
@@ -2362,11 +2350,11 @@ fn tool_projection_exclusion_keeps_custom_mark_as_native_event() {
 #[test]
 fn tool_projection_reuses_completed_parent_context_for_late_marks() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .build();
     let parent_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2413,11 +2401,11 @@ fn tool_projection_reuses_completed_parent_context_for_late_marks() {
 #[test]
 fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new_with_mark_projection(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-    );
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .build();
     let parent_uuid = Uuid::now_v7();
     let start = make_start_event(parent_uuid, None, "llm", ScopeType::Llm, None);
     let chunk = make_mark_event(Some(parent_uuid), "llm.chunk", Some(json!({"delta": "x"})));
@@ -2449,7 +2437,10 @@ fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
 #[test]
 fn late_parented_marks_reuse_completed_parent_trace_context() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .build();
     let tool_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2501,7 +2492,10 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
 #[test]
 fn process_start_removes_completed_span_expiry_index_entry() {
     let (provider, _exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider, "test-scope".to_string());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test-scope")
+        .build();
     let tool_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2756,15 +2750,13 @@ fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
         OpenTelemetryType::OpenInference,
     ] {
         let (provider, exporter) = make_provider();
-        let mut processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
-                provider,
-                "timestamp-range-test".to_string(),
-                otel_type,
-                MarkProjection::Event,
-                Vec::new(),
-                Vec::new(),
-            );
+        let mut processor = OtelEventProcessor::builder()
+            .provider(provider)
+            .instrumentation_scope("timestamp-range-test")
+            .otel_type(otel_type)
+            .mark_projection(MarkProjection::Event)
+            .mark_exclude_names(Vec::new())
+            .build();
         let valid_uuid = Uuid::now_v7();
         let epoch = DateTime::from_timestamp(0, 0).unwrap();
         processor.process(&crate::test_support::event_view(&scope_at(
@@ -3157,7 +3149,10 @@ fn assert_otel_manual_cost_branches() {
         Some(&"unit".to_string())
     );
 
-    let mut processor = OtelEventProcessor::new(make_provider().0, "test".into());
+    let mut processor = OtelEventProcessor::builder()
+        .provider(make_provider().0)
+        .instrumentation_scope("test")
+        .build();
     processor.process(&crate::test_support::event_view(&make_end_event(
         Uuid::now_v7(),
         None,
@@ -3712,5 +3707,77 @@ struct ResetPricingResolverGuard;
 impl Drop for ResetPricingResolverGuard {
     fn drop(&mut self) {
         let _ = reset_active_pricing_resolver();
+    }
+}
+
+#[test]
+fn explicit_parent_lineage_survives_completed_context_expiry() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test-scope")
+        .build();
+    let parent_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let closed_at = chrono::Utc::now();
+    let scope_event = |uuid, parent, name, category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .parent_uuid_opt(parent)
+                .name(name)
+                .timestamp(timestamp)
+                .build(),
+            category,
+            Vec::new(),
+            ScopeType::Tool.into(),
+            None,
+        ))
+    };
+    for category in [ScopeCategory::Start, ScopeCategory::End] {
+        processor.process(&crate::test_support::event_view(&scope_event(
+            parent_uuid,
+            None,
+            "parent",
+            category,
+            closed_at,
+        )));
+    }
+    assert!(processor.completed_span_contexts.contains_key(&parent_uuid));
+    let propagate = |mut event: Event| {
+        event.set_propagation_parent_uuid(Some(parent_uuid));
+        event.set_propagation_root_uuid(Some(parent_uuid));
+        event
+    };
+    let after_ttl = closed_at + chrono::Duration::seconds(61);
+    processor.process(&crate::test_support::event_view(&propagate(Event::Mark(
+        MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name("late-mark")
+                .timestamp(after_ttl)
+                .build(),
+            None,
+            None,
+        ),
+    ))));
+    assert!(!processor.completed_span_contexts.contains_key(&parent_uuid));
+    for category in [ScopeCategory::Start, ScopeCategory::End] {
+        processor.process(&crate::test_support::event_view(&propagate(scope_event(
+            child_uuid,
+            Some(parent_uuid),
+            "late-child",
+            category,
+            after_ttl,
+        ))));
+    }
+    processor.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 3);
+    let parent = finished_span_named(&spans, "parent");
+    for name in ["mark:late-mark", "late-child"] {
+        let span = finished_span_named(&spans, name);
+        assert_eq!(span.span_context.trace_id(), parent.span_context.trace_id());
+        assert_eq!(span.parent_span_id, parent.span_context.span_id());
     }
 }

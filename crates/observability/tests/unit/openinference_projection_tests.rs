@@ -29,10 +29,11 @@ use uuid::Uuid;
 #[test]
 fn records_span_start_mark_and_end() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     let start = make_start_event(
@@ -83,10 +84,11 @@ fn records_span_start_mark_and_end() {
 #[test]
 fn openclaw_model_timing_marks_attach_to_parent_spans() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -177,10 +179,11 @@ fn openclaw_model_timing_marks_attach_to_parent_spans() {
 #[test]
 fn openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_usage() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let stripped_uuid = Uuid::now_v7();
     let partial_uuid = Uuid::now_v7();
 
@@ -324,10 +327,11 @@ fn un_annotated_anthropic_response_emits_codec_computed_total_tokens() {
     // The un-annotated path must surface that codec total rather than dropping
     // it the way the manual scraper does.
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -370,10 +374,11 @@ fn provider_shaped_empty_usage_falls_back_to_manual_token_usage() {
     // A provider-shaped response with an empty `usage` object yields an empty
     // codec usage; that must not mask the manual scraper's `token_usage`.
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -417,10 +422,11 @@ fn provider_shaped_partial_usage_merges_with_manual_token_usage() {
     // per-field merge must keep all three rather than letting partial codec usage
     // mask the scraper's fields.
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -462,10 +468,11 @@ fn provider_shaped_partial_usage_merges_with_manual_token_usage() {
 #[test]
 fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -561,10 +568,11 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
 #[test]
 fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_empty() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -624,10 +632,11 @@ fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_empty()
 #[test]
 fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_incomplete() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -691,10 +700,11 @@ fn openclaw_replay_payloads_fall_back_to_prompt_when_replay_messages_are_incompl
 #[test]
 fn openclaw_replay_tool_call_alias_fields_emit_openinference_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -778,10 +788,11 @@ fn openclaw_replay_tool_call_alias_fields_emit_openinference_attributes() {
 #[test]
 fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let parent_uuid = Uuid::now_v7();
     let nested_child_uuid = Uuid::now_v7();
     let fallback_child_uuid = Uuid::now_v7();
@@ -903,10 +914,11 @@ fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
 #[test]
 fn openclaw_placeholder_replay_falls_back_to_sanitized_json_input_value() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -979,10 +991,11 @@ fn openclaw_placeholder_replay_falls_back_to_sanitized_json_input_value() {
 #[test]
 fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1027,10 +1040,11 @@ fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs()
 #[test]
 fn llm_input_value_summarizes_tool_call_messages() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1083,10 +1097,11 @@ fn llm_input_value_summarizes_tool_call_messages() {
 #[test]
 fn output_value_prefers_display_content() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1134,10 +1149,11 @@ fn output_value_prefers_display_content() {
 #[test]
 fn output_value_extracts_chat_completion_display_text() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1199,10 +1215,11 @@ fn output_value_extracts_chat_completion_display_text() {
 #[test]
 fn output_value_extracts_openai_responses_display_text_and_usage() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(
@@ -1288,10 +1305,11 @@ fn output_value_extracts_openai_responses_display_text_and_usage() {
 #[test]
 fn tool_semantic_names_exist_without_input_payload() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let root_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1326,12 +1344,12 @@ fn tool_semantic_names_exist_without_input_payload() {
 #[test]
 fn derives_span_ids_from_relay_uuids() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
 
     let root_uuid = Uuid::from_u128(0x018f_0f0f_0f0f_7000_8123_4567_89ab_cdef);
     let child_uuid = Uuid::from_u128(0x018f_0f0f_0f10_7000_8fed_cba9_8765_4321);
@@ -1424,10 +1442,11 @@ fn derives_span_ids_from_relay_uuids() {
 #[test]
 fn atif_lineage_correlates_with_openinference_span_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
 
     let agent_uuid = Uuid::now_v7();
     let llm_uuid = Uuid::now_v7();
@@ -1513,10 +1532,11 @@ fn atif_lineage_correlates_with_openinference_span_attributes() {
 #[test]
 fn orphan_marks_become_zero_duration_spans() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let mark = make_mark_event(None, "detached", Some(json!({"kind": "standalone"})));
 
     processor.process(&crate::test_support::event_view(&mark));
@@ -1542,12 +1562,12 @@ fn orphan_marks_become_zero_duration_spans() {
 #[test]
 fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let parent_uuid = Uuid::now_v7();
     let start = make_start_event(parent_uuid, None, "agent-turn", ScopeType::Agent, None);
     let mark = Event::Mark(MarkEvent::new(
@@ -1584,12 +1604,12 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
 #[test]
 fn tool_projection_omits_standard_payload_attributes_when_mark_payload_is_absent() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     processor.process(&crate::test_support::event_view(&make_mark_event(
         None,
         "plugin.checkpoint",
@@ -1626,12 +1646,12 @@ fn tool_projection_omits_standard_payload_attributes_when_mark_payload_is_absent
 #[test]
 fn tool_projection_handles_data_and_metadata_independently() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     processor.process(&crate::test_support::event_view(&make_mark_event(
         None,
         "plugin.data_only",
@@ -1701,12 +1721,13 @@ fn tool_projection_handles_data_and_metadata_independently() {
 #[test]
 fn tool_projection_exclusion_keeps_custom_mark_as_native_event() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection_and_exclusions(
-        provider.clone(),
-        "test-scope".to_string(),
-        MarkProjection::Tool,
-        vec!["plugin.excluded".to_string()],
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .mark_exclude_names(vec!["plugin.excluded".to_string()])
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     processor.process(&crate::test_support::event_view(&make_mark_event(
         None,
         "plugin.excluded",
@@ -1727,12 +1748,12 @@ fn tool_projection_exclusion_keeps_custom_mark_as_native_event() {
 #[test]
 fn tool_projection_reuses_completed_parent_context_for_late_marks() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let parent_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1784,12 +1805,12 @@ fn tool_projection_reuses_completed_parent_context_for_late_marks() {
 #[test]
 fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::test_support::otel::OtelEventProcessor::new_openinference_with_mark_projection(
-            provider.clone(),
-            "test-scope".to_string(),
-            MarkProjection::Tool,
-        );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .mark_projection(MarkProjection::Tool)
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let parent_uuid = Uuid::now_v7();
     let start = make_start_event(parent_uuid, None, "llm", ScopeType::Llm, None);
     let chunk = make_mark_event(Some(parent_uuid), "llm.chunk", Some(json!({"delta": "x"})));
@@ -1821,10 +1842,11 @@ fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
 #[test]
 fn late_parented_marks_reuse_completed_parent_trace_context() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let tool_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -1880,10 +1902,11 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
 #[test]
 fn completed_span_context_ttl_retains_more_than_legacy_context_limit() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let span_count = 4_098;
     let mut completed_uuids = Vec::with_capacity(span_count);
     let timestamp = chrono::Utc::now();
@@ -1976,16 +1999,14 @@ fn completed_span_context_ttl_retains_more_than_legacy_context_limit() {
 fn completed_span_context_ttl_expires_after_the_boundary_and_reports_diagnostics() {
     let (provider, exporter) = make_provider();
     let runtime_diagnostics = crate::test_support::otel_signal::SignalRuntimeDiagnostics::new(None);
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-        provider.clone(),
-        "test-scope".to_string(),
-        crate::test_support::OpenTelemetryType::OpenInference,
-        crate::test_support::MarkProjection::default(),
-        crate::test_support::default_mark_exclude_names(),
-        Vec::new(),
-        Vec::new(),
-        runtime_diagnostics.clone(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(crate::test_support::OpenTelemetryType::OpenInference)
+        .mark_projection(crate::test_support::MarkProjection::default())
+        .mark_exclude_names(crate::test_support::default_mark_exclude_names())
+        .runtime_diagnostics(runtime_diagnostics.clone())
+        .build();
     let parent_uuid = Uuid::now_v7();
     let closed_at = chrono::Utc::now();
     let scope_event = |scope_category, timestamp| {
@@ -2058,16 +2079,14 @@ fn completed_span_context_ttl_expires_after_the_boundary_and_reports_diagnostics
 fn completed_span_context_ttl_expires_out_of_order_completed_contexts() {
     let (provider, exporter) = make_provider();
     let runtime_diagnostics = crate::test_support::otel_signal::SignalRuntimeDiagnostics::new(None);
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-        provider,
-        "test-scope".to_string(),
-        crate::test_support::OpenTelemetryType::OpenInference,
-        crate::test_support::MarkProjection::default(),
-        crate::test_support::default_mark_exclude_names(),
-        Vec::new(),
-        Vec::new(),
-        runtime_diagnostics.clone(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test-scope")
+        .otel_type(crate::test_support::OpenTelemetryType::OpenInference)
+        .mark_projection(crate::test_support::MarkProjection::default())
+        .mark_exclude_names(crate::test_support::default_mark_exclude_names())
+        .runtime_diagnostics(runtime_diagnostics.clone())
+        .build();
     let older_uuid = Uuid::now_v7();
     let newer_uuid = Uuid::now_v7();
     let closed_at = chrono::Utc::now();
@@ -2144,10 +2163,11 @@ fn completed_span_context_ttl_expires_out_of_order_completed_contexts() {
 #[test]
 fn process_start_removes_completed_span_expiry_index_entry() {
     let (provider, _exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider,
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider)
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let tool_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2270,10 +2290,11 @@ fn semantic_scope_type_and_input_value_follow_event_variants() {
 #[test]
 fn scope_end_output_payload_is_exported_to_openinference_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let scope_uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2325,10 +2346,11 @@ fn scope_end_metadata_sets_openinference_span_status() {
 
     for (metadata, expected_status) in cases {
         let (provider, exporter) = make_provider();
-        let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-            provider.clone(),
-            "test-scope".to_string(),
-        );
+        let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+            .provider(provider.clone())
+            .instrumentation_scope("test-scope")
+            .otel_type(OpenTelemetryType::OpenInference)
+            .build();
         let scope_uuid = Uuid::now_v7();
 
         processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2372,10 +2394,11 @@ fn helper_functions_cover_additional_openinference_branches() {
 #[test]
 fn llm_end_with_usage_emits_token_count_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2455,10 +2478,11 @@ fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
     install_test_pricing("priced-model");
     let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2513,10 +2537,11 @@ fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
     install_test_pricing("priced-model");
     let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2555,10 +2580,11 @@ fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
 #[test]
 fn llm_end_with_manual_component_cost_emits_cost_attribute() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2598,10 +2624,11 @@ fn llm_end_with_manual_component_cost_emits_cost_attribute() {
 #[test]
 fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2658,10 +2685,11 @@ fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
 #[test]
 fn llm_end_with_component_only_usd_usage_cost_emits_cost_attribute() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2721,10 +2749,11 @@ fn llm_end_with_non_usd_normalized_usage_cost_blocks_model_pricing_estimate() {
     install_test_pricing("priced-model");
     let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2784,10 +2813,11 @@ fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
     reset_active_pricing_resolver().unwrap();
     let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2831,10 +2861,11 @@ fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
 #[test]
 fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -2898,10 +2929,11 @@ fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
 #[test]
 fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(
@@ -3010,10 +3042,11 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
 #[test]
 fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(
@@ -3106,10 +3139,11 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
 #[test]
 fn annotated_llm_instructions_emit_leading_system_input_message() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(
@@ -3168,10 +3202,11 @@ fn annotated_llm_instructions_emit_leading_system_input_message() {
 #[test]
 fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
     let metadata = json!({
         "provider_payload_exact": true,
@@ -3275,10 +3310,11 @@ fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
 #[test]
 fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
     let start_metadata = json!({
         "provider_payload_exact": true,
@@ -3386,10 +3422,11 @@ fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
 #[test]
 fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -3437,10 +3474,11 @@ fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
 #[test]
 fn llm_end_without_usage_omits_token_count_attributes() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -3471,10 +3509,11 @@ fn llm_end_without_usage_omits_token_count_attributes() {
 #[test]
 fn llm_end_with_partial_usage_emits_only_present_fields() {
     let (provider, exporter) = make_provider();
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        provider.clone(),
-        "test-scope".to_string(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(provider.clone())
+        .instrumentation_scope("test-scope")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     let uuid = Uuid::now_v7();
 
     processor.process(&crate::test_support::event_view(&make_start_event(
@@ -3601,10 +3640,11 @@ fn assert_openinference_input_usage_and_time_branches() {
     assert_eq!(alias_usage.total_tokens, Some(18));
     assert_eq!(alias_usage.cache_read_tokens, Some(5));
 
-    let mut processor = crate::test_support::otel::OtelEventProcessor::new_openinference(
-        make_provider().0,
-        "test".into(),
-    );
+    let mut processor = crate::test_support::otel::OtelEventProcessor::builder()
+        .provider(make_provider().0)
+        .instrumentation_scope("test")
+        .otel_type(OpenTelemetryType::OpenInference)
+        .build();
     processor.process(&crate::test_support::event_view(&make_end_event(
         Uuid::now_v7(),
         None,

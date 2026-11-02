@@ -1472,9 +1472,12 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     .unwrap();
     set_thread_scope_stack(imported_stack);
 
-    let processor = OtelEventProcessor::new(make_provider().0, "test".into());
+    let (provider, exporter) = make_provider();
+    let subscriber = crate::exporter::opentelemetry_from_provider(provider, "test");
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
     let mut event = make_start_event(
-        Uuid::now_v7(),
+        uuid,
         Some(parent_uuid),
         "receiver-tool",
         ScopeType::Tool,
@@ -1482,13 +1485,21 @@ fn propagated_root_parent_projects_as_a_remote_otel_parent() {
     );
     event.set_propagation_root_uuid(Some(root_uuid));
     event.set_propagation_parent_uuid(Some(parent_uuid));
-    let parent_context =
-        processor.parent_context(&crate::observability_runtime::event_view(&event));
-    let parent_span = parent_context.span();
-    let span_context = parent_span.span_context();
-    assert!(span_context.is_remote());
-    assert_eq!(span_context.trace_id(), relay_trace_id(root_uuid));
-    assert_eq!(span_context.span_id(), relay_span_id(parent_uuid));
+    callback(&event);
+    callback(&make_end_event(
+        uuid,
+        Some(parent_uuid),
+        "receiver-tool",
+        ScopeType::Tool,
+        None,
+    ));
+    subscriber.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert!(span.parent_span_is_remote);
+    assert_eq!(span.span_context.trace_id(), relay_trace_id(root_uuid));
+    assert_eq!(span.parent_span_id, relay_span_id(parent_uuid));
 }
 
 #[test]
@@ -1522,7 +1533,8 @@ fn rootless_propagation_remains_rootless_when_forked() {
     assert_eq!(forked_context.root_uuid, None);
 
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider, "test".into());
+    let subscriber = crate::exporter::opentelemetry_from_provider(provider, "test-scope");
+    let callback = subscriber.subscriber();
     let mut start = make_start_event(
         local_uuid,
         Some(parent_uuid),
@@ -1532,15 +1544,15 @@ fn rootless_propagation_remains_rootless_when_forked() {
     );
     start.set_propagation_root_uuid(propagation_root_uuid);
     assert_eq!(start.propagation_root_uuid(), None);
-    processor.process(&crate::observability_runtime::event_view(&start));
-    processor.process(&crate::observability_runtime::event_view(&make_end_event(
+    callback(&start);
+    callback(&make_end_event(
         local_uuid,
         Some(parent_uuid),
         "receiver-tool",
         ScopeType::Tool,
         None,
-    )));
-    processor.force_flush().unwrap();
+    ));
+    subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
@@ -2732,20 +2744,19 @@ fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
     let _reset_guard = ResetPricingResolverGuard;
 
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let subscriber = crate::exporter::opentelemetry_from_provider(provider, "test-scope");
+    let callback = subscriber.subscriber();
     let uuid = Uuid::now_v7();
 
-    processor.process(&crate::observability_runtime::event_view(
-        &make_start_event(uuid, None, "other", ScopeType::Llm, None),
-    ));
-    processor.process(&crate::observability_runtime::event_view(&make_end_event(
+    callback(&make_start_event(uuid, None, "other", ScopeType::Llm, None));
+    callback(&make_end_event(
         uuid,
         None,
         "other",
         ScopeType::Llm,
         Some(openai_chat_provider_response("priced-model")),
-    )));
-    processor.force_flush().unwrap();
+    ));
+    subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
@@ -2765,10 +2776,68 @@ fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
 }
 
 #[test]
+fn propagated_w3c_parent_projects_trace_flags_and_tracestate() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        for (trace_flags, sampled) in [("00", false), ("01", true)] {
+            let parent_uuid = Uuid::now_v7();
+            let uuid = Uuid::now_v7();
+            let mut event = make_start_event(
+                uuid,
+                Some(parent_uuid),
+                "receiver-tool",
+                ScopeType::Tool,
+                None,
+            );
+            event.set_propagation_parent_uuid(Some(parent_uuid));
+            event.set_propagation_traceparent(Some(format!(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-{trace_flags}"
+            )));
+            event.set_propagation_tracestate(Some("vendor=value".into()));
+            let (provider, exporter) = make_provider();
+            let subscriber =
+                crate::exporter::opentelemetry_from_provider_with_type(provider, "test", otel_type);
+            let callback = subscriber.subscriber();
+            callback(&event);
+            callback(&make_end_event(
+                uuid,
+                Some(parent_uuid),
+                "receiver-tool",
+                ScopeType::Tool,
+                None,
+            ));
+            subscriber.force_flush().unwrap();
+            let spans = exporter.get_finished_spans().unwrap();
+            if !sampled {
+                assert!(
+                    spans.is_empty(),
+                    "unsampled remote parents must suppress export for {otel_type:?}"
+                );
+                continue;
+            }
+            assert_eq!(spans.len(), 1);
+            let span = &spans[0];
+            assert!(span.parent_span_is_remote);
+            assert_eq!(
+                span.span_context.trace_id().to_string(),
+                "4bf92f3577b34da6a3ce929d0e0e4736"
+            );
+            assert_eq!(span.parent_span_id.to_string(), "00f067aa0ba902b7");
+            assert!(span.span_context.is_sampled());
+            assert_eq!(span.span_context.trace_state().header(), "vendor=value");
+        }
+    }
+}
+
+#[test]
 fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry() {
     for w3c in [false, true] {
         let (provider, exporter) = make_provider();
-        let mut processor = OtelEventProcessor::new(provider, "test-scope".to_string());
+        let subscriber = crate::exporter::opentelemetry_from_provider(provider, "test-scope");
+        let callback = subscriber.subscriber();
         let parent_uuid = Uuid::now_v7();
         let child_uuid = Uuid::now_v7();
         let closed_at = chrono::Utc::now();
@@ -2787,15 +2856,16 @@ fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry
             ))
         };
         for category in [ScopeCategory::Start, ScopeCategory::End] {
-            processor.process(&crate::observability_runtime::event_view(&scope_event(
+            callback(&scope_event(
                 parent_uuid,
                 None,
                 "parent",
                 category,
                 closed_at,
-            )));
+            ));
         }
-        let context = processor.completed_span_contexts[&parent_uuid]
+        subscriber.force_flush().unwrap();
+        let context = exporter.get_finished_spans().unwrap()[0]
             .span_context
             .clone();
         let propagate = |mut event: Event| {
@@ -2812,30 +2882,25 @@ fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry
             event
         };
         let after_ttl = closed_at + chrono::Duration::seconds(61);
-        processor.process(&crate::observability_runtime::event_view(&propagate(
-            Event::Mark(MarkEvent::new(
-                BaseEvent::builder()
-                    .parent_uuid(parent_uuid)
-                    .name("late-mark")
-                    .timestamp(after_ttl)
-                    .build(),
-                None,
-                None,
-            )),
-        )));
-        assert!(!processor.completed_span_contexts.contains_key(&parent_uuid));
+        callback(&propagate(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name("late-mark")
+                .timestamp(after_ttl)
+                .build(),
+            None,
+            None,
+        ))));
         for category in [ScopeCategory::Start, ScopeCategory::End] {
-            processor.process(&crate::observability_runtime::event_view(&propagate(
-                scope_event(
-                    child_uuid,
-                    Some(parent_uuid),
-                    "late-child",
-                    category,
-                    after_ttl,
-                ),
+            callback(&propagate(scope_event(
+                child_uuid,
+                Some(parent_uuid),
+                "late-child",
+                category,
+                after_ttl,
             )));
         }
-        processor.force_flush().unwrap();
+        subscriber.force_flush().unwrap();
         let spans = exporter.get_finished_spans().unwrap();
         assert_eq!(spans.len(), 3);
         let parent = finished_span_named(&spans, "parent");
@@ -2844,53 +2909,5 @@ fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry
             assert_eq!(span.span_context.trace_id(), parent.span_context.trace_id());
             assert_eq!(span.parent_span_id, parent.span_context.span_id());
         }
-    }
-}
-
-#[test]
-fn propagated_w3c_parent_projects_trace_flags_and_tracestate() {
-    let parent_uuid = Uuid::now_v7();
-    let mut event = make_start_event(
-        Uuid::now_v7(),
-        Some(parent_uuid),
-        "receiver-tool",
-        ScopeType::Tool,
-        None,
-    );
-    event.set_propagation_parent_uuid(Some(parent_uuid));
-    event.set_propagation_traceparent(Some(
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00".to_string(),
-    ));
-    event.set_propagation_tracestate(Some("vendor=value".to_string()));
-
-    for otel_type in [
-        OpenTelemetryType::Full,
-        OpenTelemetryType::GenAi,
-        OpenTelemetryType::OpenInference,
-    ] {
-        let processor =
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
-                make_provider().0,
-                "test".into(),
-                otel_type,
-                MarkProjection::default(),
-                default_mark_exclude_names(),
-                Vec::new(),
-                Vec::new(),
-                SignalRuntimeDiagnostics::new(None).with_host(crate::observability_test_support::core_host()),
-            );
-        let span_context = processor
-            .parent_context(&crate::observability_runtime::event_view(&event))
-            .span()
-            .span_context()
-            .clone();
-        assert!(span_context.is_remote());
-        assert_eq!(
-            span_context.trace_id().to_string(),
-            "4bf92f3577b34da6a3ce929d0e0e4736"
-        );
-        assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
-        assert!(!span_context.is_sampled());
-        assert_eq!(span_context.trace_state().header(), "vendor=value");
     }
 }

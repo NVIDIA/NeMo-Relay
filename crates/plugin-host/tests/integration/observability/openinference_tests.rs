@@ -576,34 +576,33 @@ fn llm_end_with_unannotated_openai_response_without_usage_omits_cost_attribute()
 #[test]
 fn llm_input_value_omits_request_headers() {
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::observability_test_support::otel::OtelEventProcessor::new_openinference(
-            provider.clone(),
-            "test-scope".to_string(),
-        );
+    let subscriber = crate::exporter::opentelemetry_from_provider_with_type(
+        provider,
+        "test-scope",
+        nemo_relay_observability::OpenTelemetryType::OpenInference,
+    );
+    let callback = subscriber.subscriber();
     let root_uuid = Uuid::now_v7();
 
-    processor.process(&crate::observability_runtime::event_view(
-        &make_start_event(
-            root_uuid,
-            None,
-            "chat",
-            ScopeType::Llm,
-            Some(json!({
-                "headers": {"authorization": "Bearer secret-token"},
-                "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
-            })),
-        ),
+    callback(&make_start_event(
+        root_uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
     ));
-    processor.process(&crate::observability_runtime::event_view(&make_end_event(
+    callback(&make_end_event(
         root_uuid,
         None,
         "chat",
         ScopeType::Llm,
         Some(json!({"message": "hello"})),
-    )));
+    ));
 
-    processor.force_flush().unwrap();
+    subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
@@ -627,26 +626,25 @@ fn un_annotated_provider_response_decoded_through_codec() {
     // detected and decoded through the codec layer (tier 3), so OpenInference
     // emits structured output messages instead of nothing.
     let (provider, exporter) = make_provider();
-    let mut processor =
-        crate::observability_test_support::otel::OtelEventProcessor::new_openinference(
-            provider.clone(),
-            "test-scope".to_string(),
-        );
+    let subscriber = crate::exporter::opentelemetry_from_provider_with_type(
+        provider,
+        "test-scope",
+        nemo_relay_observability::OpenTelemetryType::OpenInference,
+    );
+    let callback = subscriber.subscriber();
     let uuid = Uuid::now_v7();
 
-    processor.process(&crate::observability_runtime::event_view(
-        &make_start_event(
-            uuid,
-            None,
-            "chat",
-            ScopeType::Llm,
-            Some(json!({
-                "headers": {},
-                "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
-            })),
-        ),
+    callback(&make_start_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
     ));
-    processor.process(&crate::observability_runtime::event_view(&make_end_event(
+    callback(&make_end_event(
         uuid,
         None,
         "chat",
@@ -657,9 +655,9 @@ fn un_annotated_provider_response_decoded_through_codec() {
                 "finish_reason": "stop"
             }]
         })),
-    )));
+    ));
 
-    processor.force_flush().unwrap();
+    subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
