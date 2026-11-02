@@ -95,6 +95,7 @@ def _serialize_dataclass_instance(value: DataclassInstance, *, preserve_null_fie
     return {
         dataclass_field.name: _serialize_value(field_value, preserve_null_fields=preserve_null_fields)
         for dataclass_field in dataclasses.fields(value)
+        if not preserve_null_fields or dataclass_field.init
         if (field_value := getattr(value, dataclass_field.name)) is not None or preserve_null_fields
     }
 

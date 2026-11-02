@@ -75,6 +75,12 @@ class DefaultedNullableArguments:
     value: str | None = "fallback"
 
 
+@dataclasses.dataclass
+class ConstructorExcludedArguments(DefaultedNullableArguments):
+    excluded_null: str | None = dataclasses.field(init=False, default=None)
+    excluded_text: str = dataclasses.field(init=False, default="derived")
+
+
 # Codec instances
 search_args_codec = DataclassCodec(SearchArgs)
 search_result_codec = DataclassCodec(SearchResult)
@@ -198,9 +204,12 @@ class TestDataclassCodec:
         restored = dc_result_codec.from_json(dc_result_codec.to_json(original))
         assert restored == original
 
-    @pytest.mark.parametrize("argument_type", [NullableArguments, DefaultedNullableArguments])
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
     def test_explicit_none_roundtrip(
-        self, argument_type: type[NullableArguments] | type[DefaultedNullableArguments]
+        self,
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
     ) -> None:
         codec = DataclassCodec(argument_type)
         original = argument_type(value=None)
@@ -221,6 +230,13 @@ class TestDataclassCodec:
         ("value", "expected"),
         [
             pytest.param(NullableArguments(None), {"value": None}, id="nested-dataclass"),
+            pytest.param(ConstructorExcludedArguments(None), {"value": None}, id="constructor-excluded-dataclass"),
+            pytest.param([ConstructorExcludedArguments(None)], [{"value": None}], id="constructor-excluded-list"),
+            pytest.param(
+                {"nested": ConstructorExcludedArguments(None)},
+                {"nested": {"value": None}},
+                id="constructor-excluded-dictionary",
+            ),
             pytest.param([NullableArguments(None)], [{"value": None}], id="nested-list"),
             pytest.param({"nested": NullableArguments(None)}, {"nested": {"value": None}}, id="nested-dictionary"),
         ],
@@ -286,16 +302,20 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
-    @pytest.mark.parametrize("argument_type", [NullableArguments, DefaultedNullableArguments])
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
     @pytest.mark.parametrize("value", [None, "control"])
     async def test_nullable_argument_reaches_tool(
         self,
-        argument_type: type[NullableArguments] | type[DefaultedNullableArguments],
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
         value: str | None,
     ) -> None:
         received_values: list[str | None] = []
 
-        def execute(arguments: NullableArguments | DefaultedNullableArguments) -> ToolExecutionResult[Json]:
+        def execute(
+            arguments: NullableArguments | DefaultedNullableArguments | ConstructorExcludedArguments,
+        ) -> ToolExecutionResult[Json]:
             received_values.append(arguments.value)
             return ToolExecutionResult({"value": arguments.value})
 
@@ -916,6 +936,11 @@ class TestBestEffortAnyCodec:
         ("value", "expected"),
         [
             pytest.param(DefaultedNullableArguments(None), {}, id="nullable-field"),
+            pytest.param(
+                ConstructorExcludedArguments(None),
+                {"excluded_text": "derived"},
+                id="constructor-excluded-fields",
+            ),
             pytest.param(NestedResult(NullableArguments(None)), {"value": {}}, id="nested-nullable-field"),
         ],
     )
