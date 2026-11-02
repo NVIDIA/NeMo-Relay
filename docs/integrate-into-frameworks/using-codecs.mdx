@@ -85,6 +85,12 @@ args_codec = DataclassCodec(SearchArgs)
 result_codec = PydanticCodec(SearchResult)
 passthrough = JsonPassthrough()
 ```
+
+`DataclassCodec` encodes fields set to `None` as JSON `null`, including fields
+in nested dataclasses, lists, and dictionaries. When decoding, an omitted field uses its
+dataclass default, while an omitted required field raises `TypeError`. Explicit
+`null` decodes to `None` without applying a default.
+
 </Tab>
 
 <Tab title="Node.js" language="node">
