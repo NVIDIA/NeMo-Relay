@@ -1,0 +1,40 @@
+---
+title: "Struct Resource Metrics Runtime"
+sidebar-title: "ResourceMetricsRuntime"
+description: "Owns the optional resource metrics polling thread for a built-in plugin activation."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ResourceMetricsRuntime { /* private fields */ }
+```
+
+Owns the optional resource metrics polling thread for a built-in plugin activation.
+
+## Implementations
+
+### `impl ResourceMetricsRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-resourcemetricsruntime\">ResourceMetricsRuntime</a>"}} /></pre>
+
+#### `configure_current_process`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_current_process(\n    config: <a href=\"../config/struct-resourcemetricsconfig\">ResourceMetricsConfig</a>,\n    emit: <a href=\"type-snapshotsink\">SnapshotSink</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+#### `configure_target`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_target(\n    config: <a href=\"../config/struct-resourcemetricsconfig\">ResourceMetricsConfig</a>,\n    target: CollectionTarget,\n    emit: <a href=\"type-snapshotsink\">SnapshotSink</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+## Trait Implementations
+
+### `impl Drop for ResourceMetricsRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-resourcemetricsruntime\">ResourceMetricsRuntime</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

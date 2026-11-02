@@ -1,0 +1,28 @@
+---
+title: "nemo-relay-runtime"
+sidebar-title: "nemo-relay-runtime"
+description: "Runtime execution, registries, scopes, and continuation handling for NeMo Relay. Component implementations are supplied by the embedding SDK or application."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Runtime execution, registries, scopes, and continuation handling for NeMo Relay. Component implementations are supplied by the embedding SDK or application.
+
+## Modules
+
+- [api](/reference/api/rust-library-reference/nemo-relay-runtime/api): Public API for the NeMo Relay runtime.
+- [codec](/reference/api/rust-library-reference/nemo-relay-runtime/codec): Runtime normalization composes provider codecs with the configured pricing service.
+- [composition](/reference/api/rust-library-reference/nemo-relay-runtime/composition): Services supplied by the SDK or an embedding application. Component services supplied by plugin-host or an embedding application.
+- [config_editor](/reference/api/rust-library-reference/nemo-relay-runtime/config_editor): Shared configuration editor metadata.
+- [error](/reference/api/rust-library-reference/nemo-relay-runtime/error): Shared runtime errors, preserved at the core import path.
+- [json](/reference/api/rust-library-reference/nemo-relay-runtime/json): JSON utilities for the NeMo Relay runtime.
+- [pricing](/reference/api/rust-library-reference/nemo-relay-runtime/pricing): Runtime pricing service adapters. Host-supplied model pricing without a dependency on a pricing implementation.
+- [registry](/reference/api/rust-library-reference/nemo-relay-runtime/registry): Priority-sorted named registry.
+- [stream](/reference/api/rust-library-reference/nemo-relay-runtime/stream): Streaming LLM response wrapper.
+
+## Macros
+
+- [editor_config](/reference/api/rust-library-reference/nemo-relay-runtime/macro-editor-config): Declare typed configuration editor metadata. Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay-runtime/config_editor/trait-editorconfig) for a configuration type.

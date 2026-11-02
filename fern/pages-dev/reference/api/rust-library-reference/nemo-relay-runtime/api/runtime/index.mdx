@@ -1,0 +1,113 @@
+---
+title: "Module runtime"
+sidebar-title: "runtime"
+description: "Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime state, callbacks, and scope-stack helpers."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime state, callbacks, and scope-stack helpers.
+
+## Re-exports
+
+- `pub use global::global_context;`
+- `pub use scope_stack::sync_thread_active_event_for_stack;`
+- `pub use scope_stack::PropagationContext;`
+- `pub use scope_stack::ScopeStack;`
+- `pub use scope_stack::ScopeStackHandle;`
+- `pub use scope_stack::TASK_SCOPE_STACK;`
+- `pub use scope_stack::ThreadScopeStackBinding;`
+- `pub use scope_stack::capture_propagation_context;`
+- `pub use scope_stack::capture_propagation_context_with_root;`
+- `pub use scope_stack::capture_rootless_propagation_context;`
+- `pub use scope_stack::capture_thread_scope_stack;`
+- `pub use scope_stack::capture_traceparent;`
+- `pub use scope_stack::create_scope_stack;`
+- `pub use scope_stack::create_scope_stack_from_propagation;`
+- `pub use scope_stack::current_scope_stack;`
+- `pub use scope_stack::current_scope_stack_override;`
+- `pub use scope_stack::current_scope_stack_snapshot;`
+- `pub use scope_stack::explicit_thread_scope_stack;`
+- `pub use scope_stack::fork_scope_stack;`
+- `pub use scope_stack::install_scope_stack_override;`
+- `pub use scope_stack::propagate_scope_to_thread;`
+- `pub use scope_stack::restore_scope_stack_override;`
+- `pub use scope_stack::restore_thread_scope_stack;`
+- `pub use scope_stack::scope_stack_active;`
+- `pub use scope_stack::set_thread_scope_stack;`
+- `pub use scope_stack::sync_thread_scope_stack;`
+- `pub use scope_stack::task_scope_push;`
+- `pub use scope_stack::task_scope_remove;`
+- `pub use scope_stack::task_scope_top;`
+- `pub use scope_stack::with_active_event_uuid;`
+- `pub use scope_stack::with_scope_stack;`
+- `pub use scope_stack::with_task_scope_stack;`
+- `pub use state::NemoRelayContextState;`
+- `pub use subscriber_dispatcher::flush_subscribers;`
+
+## Modules
+
+- [callbacks](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/callbacks): Shared middleware callback contracts and core registry aliases.
+- [global](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/global): Process-global access to the shared runtime context state.
+- [scope_stack](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/scope_stack): Scope stack storage and propagation helpers.
+- [state](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/state): Process-global runtime state and middleware-chain builders.
+- [subscriber_dispatcher](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/subscriber_dispatcher): Asynchronous subscriber delivery for native targets.
+
+## Structs
+
+- [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-llmexecutioncontext): Codec access for one LLM execution.
+- [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-llmjsonstream): Stream of JSON chunks produced by the managed streaming LLM pipeline.
+- [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-llmsanitizerequestcontext): Per-call codec identity and capability for an LLM request.
+- [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-llmsanitizeresponsecontext): Per-call codec identity and capability for an LLM response.
+- [MiddlewareContinuationLease](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-middlewarecontinuationlease): A continuation that remains valid while its owning interceptor is running.
+- [ScopeStackEntry](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-scopestackentry): Identity of one entry in the visible Relay scope stack.
+- [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-scopestacksnapshot): Owned root-to-top values from one coherent read of a visible scope stack.
+- [ToolExecutionContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/struct-toolexecutioncontext): Per-call context delivered to a tool execution intercept.
+
+## Enums
+
+- [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-builtinllmcodec): Relay's built-in LLM codec identities.
+- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitizer and SDK callbacks.
+- [LlmCollector](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmcollector): Collector used to accumulate streaming response chunks.
+- [LlmFinalizer](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmfinalizer): Finalizer used to synthesize the aggregate streaming response payload.
+
+## Traits
+
+- [LlmStreamInner](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/trait-llmstreaminner): Internal close-aware stream implementation.
+
+## Functions
+
+- [resolve_parent_uuid](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/fn-resolve-parent-uuid): Resolve the active parent for a lifecycle operation. Resolve an explicit scope or the current active event as the parent.
+
+## Type Aliases
+
+- [ConditionalMiddlewareGuardrailFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-conditionalmiddlewareguardrailfn): Decide whether matching global runtime registrations remain eligible.
+- [EventMetadataInjectorFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-eventmetadatainjectorfn): Add flat metadata attributes to a fully constructed event.
+- [EventSanitizeFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-eventsanitizefn): Sanitize mutable observability fields on a fully constructed event.
+- [EventSubscriberFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-eventsubscriberfn): Consume runtime lifecycle events after they are emitted.
+- [LlmAsyncCollectorFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmasynccollectorfn): Collector that is awaited; see [`LlmCollector`](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmcollector).
+- [LlmAsyncFinalizerFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmasyncfinalizerfn): Finalizer that is awaited; see [`LlmFinalizer`](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmfinalizer).
+- [LlmBorrowedCollectorFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmborrowedcollectorfn): Collector that reads each provider JSON chunk without copying it.
+- [LlmCollectorFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmcollectorfn): Per-chunk collector used by the streaming LLM runtime.
+- [LlmCollectorFuture](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmcollectorfuture): Future returned by an asynchronous collector.
+- [LlmConditionalFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmconditionalfn): Decide whether an LLM call is allowed to continue.
+- [LlmExecutionFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmexecutionfn): Wrap or replace non-streaming LLM execution.
+- [LlmExecutionNextFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmexecutionnextfn): Continuation type invoked by non-streaming LLM execution intercepts.
+- [LlmFallibleFinalizerFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmfalliblefinalizerfn): Finalizer that can fail; see [`LlmFinalizer`](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/enum-llmfinalizer).
+- [LlmFinalizerFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmfinalizerfn): Finalizer used to synthesize the aggregate streaming response payload.
+- [LlmFinalizerFuture](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmfinalizerfuture): Future returned by an asynchronous finalizer.
+- [LlmRequestContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmrequestcontext): Request codec context exposed to an LLM execution intercept.
+- [LlmRequestInterceptFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmrequestinterceptfn): Rewrite or annotate an LLM request before execution.
+- [LlmResponseContext](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmresponsecontext): Response codec context exposed to a non-streaming LLM execution intercept.
+- [LlmSanitizeRequestFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmsanitizerequestfn): Sanitize an LLM request before the runtime records it.
+- [LlmSanitizeResponseFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmsanitizeresponsefn): Sanitize an LLM response before the runtime records it.
+- [LlmStreamExecutionFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmstreamexecutionfn): Wrap or replace streaming LLM execution.
+- [LlmStreamExecutionNextFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-llmstreamexecutionnextfn): Continuation type invoked by streaming LLM execution intercepts.
+- [ToolConditionalFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-toolconditionalfn): Decide whether a tool call is allowed to continue.
+- [ToolExecutionFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-toolexecutionfn): Wrap or replace tool execution with access to the full call context.
+- [ToolExecutionNextFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-toolexecutionnextfn): Continuation type invoked by tool execution intercepts.
+- [ToolInterceptFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-toolinterceptfn): Rewrite tool arguments before execution.
+- [ToolSanitizeFn](/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/type-toolsanitizefn): Sanitize a tool request payload before the runtime records it.

@@ -1,0 +1,32 @@
+---
+title: "Module atof"
+sidebar-title: "atof"
+description: "ATOF JSONL destinations and a runtime-bound exporter."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+ATOF JSONL destinations and a runtime-bound exporter.
+
+## Structs
+
+- [AtofExporter](/reference/api/rust-library-reference/nemo-relay/exporter/atof/struct-atofexporter): ATOF exporter whose constructors bind the SDK runtime automatically.
+- [AtofExporterConfig](/reference/api/rust-library-reference/nemo-relay/exporter/atof/struct-atofexporterconfig): Configuration for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay-observability/atof/struct-atofexporter).
+- [AtofFileSinkConfig](/reference/api/rust-library-reference/nemo-relay/exporter/atof/struct-atoffilesinkconfig): Filesystem sink for raw ATOF JSONL events.
+- [AtofStreamSinkConfig](/reference/api/rust-library-reference/nemo-relay/exporter/atof/struct-atofstreamsinkconfig): Streaming sink for raw ATOF events.
+
+## Enums
+
+- [AtofEndpointFieldNamePolicy](/reference/api/rust-library-reference/nemo-relay/exporter/atof/enum-atofendpointfieldnamepolicy): Field name transformation policy used before sending events to an endpoint.
+- [AtofEndpointTransport](/reference/api/rust-library-reference/nemo-relay/exporter/atof/enum-atofendpointtransport): Streaming transport used by an ATOF endpoint.
+- [AtofExporterError](/reference/api/rust-library-reference/nemo-relay/exporter/atof/enum-atofexportererror): Errors produced while configuring or operating the ATOF JSONL exporter.
+- [AtofExporterMode](/reference/api/rust-library-reference/nemo-relay/exporter/atof/enum-atofexportermode): File write behavior for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay-observability/atof/struct-atofexporter).
+- [AtofSinkConfig](/reference/api/rust-library-reference/nemo-relay/exporter/atof/enum-atofsinkconfig): One destination for raw ATOF events.
+
+## Type Aliases
+
+- [AtofEndpointConfig](/reference/api/rust-library-reference/nemo-relay/exporter/atof/type-atofendpointconfig): Backward-compatible name for an ATOF stream sink.
+- [Result](/reference/api/rust-library-reference/nemo-relay/exporter/atof/type-result): Result type for the ATOF JSONL exporter.

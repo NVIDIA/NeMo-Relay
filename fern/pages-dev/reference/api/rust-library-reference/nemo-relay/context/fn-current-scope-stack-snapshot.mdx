@@ -1,0 +1,16 @@
+---
+title: "Function current_scope_stack_snapshot"
+sidebar-title: "current_scope_stack_snapshot"
+description: "Return detached identities from the calling context's explicitly active stack."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope_stack_snapshot() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt;, <a href=\"../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+Return detached identities from the calling context's explicitly active stack.
+
+Returns None without creating or activating a stack when no override, task, or explicit thread binding exists. Includes implicit and synthetic entries. Lock poisoning returns an error; no live handles escape the read.

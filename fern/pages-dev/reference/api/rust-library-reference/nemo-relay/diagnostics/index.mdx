@@ -1,58 +1,19 @@
 ---
 title: "Module diagnostics"
 sidebar-title: "diagnostics"
-description: "Bounded, process-local diagnostic evidence, independent of logger startup."
-position: 4
+description: "Diagnostic collection, configuration, inspection, and shared evidence contracts. Diagnostic ownership, collection, and inspection for Rust applications."
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Bounded, process-local diagnostic evidence, independent of logger startup.
+Diagnostic collection, configuration, inspection, and shared evidence contracts. Diagnostic ownership, collection, and inspection for Rust applications.
 
-Startup composition chooses collection once. Disabled handles skip lazy work; enabled components reserve summaries before recording. Recent evidence uses a shared circular history and a reclaimable detail pool. Neither history loss nor output delivery changes accepted numeric totals. Diagnostic evidence never assigns readiness, recovery, or deployment health.
+[`crate::plugin::initialize`](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize) selects the process-owned service from startup settings. [`reader`](/reference/api/rust-library-reference/nemo-relay/diagnostics/fn-reader) obtains its embedded reader without starting collection.
 
-The backing-storage budget excludes caller-owned inputs, producer handles, independently decoded snapshot copies, allocator overhead, and user callback captures. Existing operational output and legacy reports have separate budgets.
-
-## Startup and recording
-
-Select settings once before giving producers their handles. Install the chosen context with [`Diagnostics::install_process_default`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics) before using convenience constructors, or inject it explicitly into logging and plugin composition. Neither path requires logging to initialize first.
-
-```rust
-use nemo_relay::diagnostics::*;
-
-let diagnostics = Diagnostics::from_settings(
-    SourceIdentity {
-        instance_id: uuid::Uuid::now_v7(),
-        process_id: Some(std::process::id()),
-        process_role: "embedded".into(),
-        relay_version: env!("CARGO_PKG_VERSION").into(),
-    },
-    DiagnosticsSettings { enabled: true, ..Default::default() },
-)?;
-let code = BuiltinDiagnosticCode::Failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed));
-let recorder = diagnostics.register_component(ComponentRegistration::new("example", &[code]))?;
-recorder.record_lazy(|| Observation::new(
-    Classification::failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed), FailureClass::Io)
-        .expect("supported catalogue pair"),
-    "Producer-approved safe detail",
-    std::num::NonZeroU64::MIN, // occurrence delta, never a cumulative total
-))?;
-let page = diagnostics.snapshot(&DiagnosticQuery::default())?;
-let bounded_json: &[u8] = page.as_bytes();
-```
-
-Disabled contexts use the same producer calls and skip their lazy factories; reads return [`DiagnosticError::Disabled`](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticerror). Held snapshot leases use a reserved query workspace until dropped. Decoding [`SnapshotLease::to_snapshot`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-snapshotlease) instead creates an independent caller-owned DTO outside the service's memory budget.
-
-## Re-exports
-
-- `pub use classifiers::PluginErrorClassifier;`
-
-## Modules
-
-- [classifiers](/reference/api/rust-library-reference/nemo-relay/diagnostics/classifiers): Producer-owned pure mappings from existing typed errors to catalogue values. Pure classification for the integrated plugin-operation producer.
-- [embedded](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded): Configuration-driven service and bounded copies for embedded language runtimes. Configuration-driven embedded service and bounded language-adapter copies.
+Alternatively, construct [`Diagnostics`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics) and pass it to [`crate::plugin::initialize_with_diagnostics`](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-with-diagnostics). That host and its components use the supplied context; obtain its reader with [`Diagnostics::reader`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics). Injection does not select the process default for independent exporters and logging, or start the embedded reader service. To share the process default, create it with [`Diagnostics::install_process_default`](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics) before constructing those services and inject the returned context into plugin initialization.
 
 ## Structs
 
@@ -77,6 +38,8 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [DiagnosticDetail](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticdetail): Restricted optional recent evidence, independent of the accepted numeric summary.
 - [DiagnosticDiscovery](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticdiscovery): Side-effect-free discovery, available even when snapshot queries are disabled.
 - [DiagnosticEvent](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticevent): One recent observation with its actual class and original configuration attribution.
+- [DiagnosticHttpError](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostichttperror): Error envelope returned by diagnostic HTTP routes.
+- [DiagnosticHttpErrorDetails](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostichttperrordetails): Error details without query values, credentials, or retained evidence.
 - [DiagnosticLifetimeSummary](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticlifetimesummary): Fixed lifetime totals and monotonic timing for a context or component instance.
 - [DiagnosticLimits](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticlimits): Independent capacities of one diagnostic context. All backing allocations are admitted during startup; these limits are not a whole-process RSS ceiling.
 - [DiagnosticLoss](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticloss): Source loss state reserved independently of optional evidence capacity.
@@ -97,6 +60,9 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [Diagnostics](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnostics): Independent diagnostics context with immutable startup enablement.
 - [DiagnosticsReader](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticsreader): Read capability for one context, without recording or lifecycle authority.
 - [DiagnosticsSettings](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-diagnosticssettings): Startup-only runtime setting. Collection is compiled normally and off unless the owner enables this context explicitly.
+- [EmbeddedDiagnosticInfo](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-embeddeddiagnosticinfo): Independent budgets and coverage of the binding adapter; excludes language object overhead and caller-retained copies, and is not an RSS measurement.
+- [EmbeddedDiagnosticPage](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-embeddeddiagnosticpage): Adapter-owned page payload. Its permit is returned deterministically on drop. Foreign results are caller-owned copies and must never retain this object.
+- [EmbeddedDiagnosticsReader](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-embeddeddiagnosticsreader): Read-only embedded capability. Clones share the service's copy admission pool. Debug output deliberately contains no snapshot, query, or restricted detail.
 - [EntryMemoryFootprint](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-entrymemoryfootprint): Occupied backing for one retained observation; these quantities overlap.
 - [EntryMemoryUsage](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-entrymemoryusage): One retained entry, identified within the enclosing source incarnation.
 - [EntryMemoryView](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-entrymemoryview): Borrowed retained-entry footprint from copied query storage, without its text.
@@ -109,6 +75,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [MemorySelectionTotals](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-memoryselectiontotals): Whole-selection totals, distinct from the rows present in this page.
 - [Observation](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-observation): One observation. Its count is a positive input delta, never a cumulative total.
 - [OriginRecorder](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-originrecorder): An operation's bounded original configuration attribution.
+- [PluginErrorClassifier](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginerrorclassifier): Plugin-operation mapping before errors are flattened into reports or SDK strings.
 - [PluginExecutionName](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginexecutionname): A plugin execution mechanism name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
 - [PluginObservationContext](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginobservationcontext): Shared plugin-operation facts for producers, projections, and decoded evidence.
 - [PluginPhaseName](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginphasename): A plugin lifecycle phase name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
@@ -134,10 +101,12 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [DiagnosticDetailRef](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticdetailref): Borrowed producer-approved detail. A Display source is formatted into capped storage only when the enabled recorder invokes its lazy observation factory.
 - [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticdomain): Top-level owning subsystem, derived from its catalogue code.
 - [DiagnosticError](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticerror): Validation, admission, or availability failure, independent of operational logging.
+- [DiagnosticHttpReason](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnostichttpreason): Stable reasons for HTTP inspection, including snapshot, access, and lifecycle failures. This is separate from the transport-neutral [`DiagnosticReadReason`](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticreadreason). Unknown future reasons must not be inferred from HTTP status alone.
 - [DiagnosticOutcome](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticoutcome): Observed operation outcome; severity does not imply this value.
 - [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticreadreason): Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons.
 - [DiagnosticSeverity](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticseverity): Severity of evidence, independent of an operation's outcome.
 - [DiagnosticSummaryScope](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticsummaryscope): Scope of summary and outcome-window values in a filtered response.
+- [EmbeddedDiagnosticError](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-embeddeddiagnosticerror): Stable service/reader failure. Messages never contain retained evidence or query input.
 - [EvidenceDisposition](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-evidencedisposition): Evidence retention is independent of numeric acceptance.
 - [FailureClass](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-failureclass): Supported general cause, independent of health, retries, and operation outcome.
 - [FailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-failurecode): Failure event hierarchy for integrated producers.
@@ -164,6 +133,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [DIAGNOSTIC_DISCOVERY_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-discovery-version): Version of the side-effect-free discovery contract.
 - [DIAGNOSTIC_MEMORY_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-memory-version): Initial version of the separate memory inspection envelope.
 - [DIAGNOSTIC_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-schema-version): Initial version of the canonical diagnostic snapshot envelope.
+- [MAX_DIAGNOSTIC_HTTP_ERROR_BYTES](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-max-diagnostic-http-error-bytes): Maximum error envelope accepted by diagnostic HTTP consumers, in bytes. Error responses never contain retained diagnostic evidence or raw source errors.
 - [MAX_DIAGNOSTIC_QUERY_BYTES](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-max-diagnostic-query-bytes): Maximum canonical UTF-8 query size, before JSON parsing. HTTP applies this ceiling to the encoded URI query as well. Native helpers also bound conversion.
 
 ## Traits
@@ -173,6 +143,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 ## Functions
 
 - [decode_diagnostic_query](/reference/api/rust-library-reference/nemo-relay/diagnostics/fn-decode-diagnostic-query): Decode an optional schema selector and the shared query. Unknown selectors, duplicate fields (including nested ones), noncanonical numbers, and excessive nesting fail safely. No file lookup, service startup, or snapshot lease occurs.
+- [reader](/reference/api/rust-library-reference/nemo-relay/diagnostics/fn-reader): Obtain an inspection capability without initializing the service or logger. The service is selected by ordinary plugin-host initialization configuration.
 
 ## Type Aliases
 

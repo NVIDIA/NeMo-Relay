@@ -1,0 +1,36 @@
+---
+title: "Trait Registry Entry"
+sidebar-title: "RegistryEntry"
+description: "A named, priority-ordered registry entry."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait RegistryEntry &#123;\n    // Required methods\n    fn name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>;\n    fn priority(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>;\n&#125;"}} /></pre>
+
+A named, priority-ordered registry entry.
+
+Registry entries carry their own identity so snapshots can be cloned or copied without pairing a separately stored map key with the entry value.
+
+## Required Methods
+
+#### `name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Unique entry name within one registry.
+
+#### `priority`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn priority(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>
+
+Entry priority. Lower values run earlier.
+
+## Implementors
+
+### `impl<T> RegistryEntry for RegistryRecord<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"trait-registryentry\">RegistryEntry</a> for <a href=\"../api/registry/struct-registryrecord\">RegistryRecord</a>&lt;T&gt;"}} /></pre>

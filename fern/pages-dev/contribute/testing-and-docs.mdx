@@ -149,6 +149,18 @@ Rust-facing API surface.
 just test-rust
 ```
 
+SDK tests that initialize plugins require the test-only isolation feature and
+environment flag. The canonical recipe supplies both. For a focused run:
+
+```bash
+NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1 cargo test -p nemo-relay \
+  --features __skip-implicit-config --test plugin_cold_start --test plugin_contract
+```
+
+These targets are unavailable without the feature and reject a missing environment
+flag before resolving configuration. Explicit fixture files remain available;
+ambient user and operator-managed plugin configuration is excluded.
+
 ### Python
 
 Run the Python validation loop when a change touches the wrapper package, tests,

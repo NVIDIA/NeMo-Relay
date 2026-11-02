@@ -123,7 +123,7 @@ try {
 use std::path::PathBuf;
 
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
+use nemo_relay::plugin::{initialize, validate};
 
 let config = PluginConfig::default();
 let path = Some(PathBuf::from("path/to/plugins.toml"));
@@ -229,7 +229,7 @@ main().catch((error) => {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::plugin::initialize;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

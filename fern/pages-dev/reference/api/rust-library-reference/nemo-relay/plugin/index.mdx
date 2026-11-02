@@ -1,64 +1,83 @@
 ---
 title: "Module plugin"
 sidebar-title: "plugin"
-description: "Generic plugin infrastructure for NeMo Relay runtimes."
-position: 9
+description: "Plugin contracts, configuration, and activation."
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Generic plugin infrastructure for NeMo Relay runtimes.
+Plugin contracts, configuration, and activation.
 
-This module owns:
+Verified-artifact activation is provided by `nemo-relay-plugin-host`:
 
-- config diagnostics and policy enums used by plugin systems
-- a global plugin registry
-- plugin registration contexts for middleware/subscriber installation
-- rollback bookkeeping for registrations created during plugin setup
+```rust
+use nemo_relay::plugin::initialize_with_verified_specs;
+```
 
-## Re-exports
+Use `initialize` for configuration-selected process diagnostics or `initialize_with_diagnostics` to inject an application-owned service. Exact activation is provided by `nemo-relay-plugin-host`:
 
-- `pub use dynamic::*;`
+```rust
+use nemo_relay::plugin::initialize_exact;
+```
 
-## Modules
+Initialize through the functions in this module so the SDK composes its built-in plugins before validation and activation. Host-only constructors are not available on the returned handle:
 
-- [dynamic](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic): Dynamic plugin control-plane and registry model.
+```rust
+use nemo_relay::plugin::{PluginConfig, PluginHostActivation};
+async fn bypass_composition() {
+    let _ = PluginHostActivation::initialize_exact(PluginConfig::default()).await;
+}
+```
 
 ## Structs
 
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configdiagnostic): Structured diagnostic reported while validating or activating plugin configuration.
 - [ConfigPolicy](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configpolicy): Policy for how unsupported plugin/runtime config is handled.
 - [ConfigReport](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport): Structured configuration and activation report.
+- [DynamicPluginFailure](/reference/api/rust-library-reference/nemo-relay/plugin/struct-dynamicpluginfailure): One structured recent failure summary.
+- [DynamicPluginValidationReport](/reference/api/rust-library-reference/nemo-relay/plugin/struct-dynamicpluginvalidationreport): One validation result produced by core before dynamic code is loaded.
+- [DynamicPluginValidationStatus](/reference/api/rust-library-reference/nemo-relay/plugin/struct-dynamicpluginvalidationstatus): Decomposed validation results for one plugin record.
 - [PluginComponentSpec](/reference/api/rust-library-reference/nemo-relay/plugin/struct-plugincomponentspec): One configured plugin component.
 - [PluginConfig](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginconfig): Canonical plugin configuration document.
+- [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
+- [PluginHostConfig](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginhostconfig): Embedded startup configuration. Service settings are not plugin component configuration and never enter plugin fingerprints or legacy reports.
+- [PluginHostReport](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginhostreport): Combined static and dynamic host report.
 - [PluginRegistration](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistration): Bookkeeping for one middleware/subscriber registration.
-- [PluginRegistrationContext](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistrationcontext): Context provided to plugin handlers during runtime registration.
-- [PluginRollbackOutcome](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginrollbackoutcome): Result of rolling back a set of plugin registrations.
 - [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/struct-runtimediagnostic): Bounded aggregate for a runtime failure observed by an active plugin.
 
 ## Enums
 
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay/plugin/enum-diagnosticlevel): Severity of a plugin configuration or activation diagnostic.
+- [DynamicPluginCheckState](/reference/api/rust-library-reference/nemo-relay/plugin/enum-dynamicplugincheckstate): High-level verification state for one validation axis.
+- [DynamicPluginFailurePhase](/reference/api/rust-library-reference/nemo-relay/plugin/enum-dynamicpluginfailurephase): Recent failure phase or policy-gate context for diagnostics and operator UX.
+- [DynamicPluginKind](/reference/api/rust-library-reference/nemo-relay/plugin/enum-dynamicpluginkind): Plugin execution lane.
 - [PluginError](/reference/api/rust-library-reference/nemo-relay/plugin/enum-pluginerror): Error type for generic plugin operations.
+- [PluginRegistrationCleanupOutcome](/reference/api/rust-library-reference/nemo-relay/plugin/enum-pluginregistrationcleanupoutcome): Outcome of a tracked resource cleanup operation.
 - [UnsupportedBehavior](/reference/api/rust-library-reference/nemo-relay/plugin/enum-unsupportedbehavior): Per-policy behavior for unsupported configuration.
 
 ## Traits
 
 - [Plugin](/reference/api/rust-library-reference/nemo-relay/plugin/trait-plugin): Implemented by custom plugins that register runtime middleware.
+- [PluginRegistrationContext](/reference/api/rust-library-reference/nemo-relay/plugin/trait-pluginregistrationcontext): Host capabilities available to plugins during component activation.
 
 ## Functions
 
 - [apply_global_config_policy](/reference/api/rust-library-reference/nemo-relay/plugin/fn-apply-global-config-policy): Applies non-default global policy fields to a component policy.
-- [deregister_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-deregister-plugin): Removes a previously registered plugin.
-- [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Registers core-provided plugin kinds.
-- [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Lists registered plugin kinds in sorted order.
-- [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Looks up a registered plugin by kind.
-- [record_active_plugin_runtime_diagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/fn-record-active-plugin-runtime-diagnostic): Updates the existing active-only runtime report.
-- [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Registers a plugin by kind.
-- [rollback_registrations](/reference/api/rust-library-reference/nemo-relay/plugin/fn-rollback-registrations): Rolls back registrations in reverse order.
+- [deregister_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-deregister-plugin): Remove a component registration. Default components are restored on next lookup.
+- [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Make the default component implementations available to the runtime host.
+- [initialize](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize): Initialize the plugin host with the default components.
+- [initialize_with_diagnostics](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-with-diagnostics): Initialize the host using an application-owned diagnostic service.
+- [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Return component kinds after composing default components.
+- [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Look up a component after composing default components.
+- [plugin_config_schema](/reference/api/rust-library-reference/nemo-relay/plugin/fn-plugin-config-schema): Return the host configuration schema.
+- [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Register an application plugin after reserving the default built-in kinds.
+- [validate](/reference/api/rust-library-reference/nemo-relay/plugin/fn-validate): Validate host configuration with normal discovery and policy resolution.
+- [validate_exact](/reference/api/rust-library-reference/nemo-relay/plugin/fn-validate-exact): Validate an exact host configuration with default preflight checks.
+- [validate_static_plugin_config](/reference/api/rust-library-reference/nemo-relay/plugin/fn-validate-static-plugin-config): Validate configured components against the default's component implementations.
 
 ## Type Aliases
 
-- [Result](/reference/api/rust-library-reference/nemo-relay/plugin/type-result): Specialized [`Result`](https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html) type for plugin operations.
+- [Result](/reference/api/rust-library-reference/nemo-relay/plugin/type-result): Result of validating, activating, or cleaning up a component.

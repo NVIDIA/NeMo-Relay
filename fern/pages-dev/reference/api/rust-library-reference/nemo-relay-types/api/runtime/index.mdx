@@ -1,0 +1,22 @@
+---
+title: "Module runtime"
+sidebar-title: "runtime"
+description: "Middleware callback and invocation contracts. Shared middleware callbacks and invocation context."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Middleware callback and invocation contracts. Shared middleware callbacks and invocation context.
+
+## Re-exports
+
+- `pub use llm_execution_context::LlmExecutionContext;`
+- `pub use callbacks::*;`
+
+## Modules
+
+- [callbacks](/reference/api/rust-library-reference/nemo-relay-types/api/runtime/callbacks): Middleware callback and stream contracts. Callback type aliases used by the runtime middleware pipeline.
+- [llm_execution_context](/reference/api/rust-library-reference/nemo-relay-types/api/runtime/llm_execution_context): Invocation-scoped codec context. Invocation-scoped codec context for LLM execution intercepts.

@@ -7,7 +7,7 @@ position: 45
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ResourceMemoryMetrics &#123;Show 14 fields\n    pub system_used: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub system_total: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub system_available: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub resident: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub private: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub physical_footprint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub virtual_memory: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub peak_resident: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub limit: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub environment_accounted: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub some_pressure_stall_time: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub full_pressure_stall_time: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub out_of_memory_event_count: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n    pub limit_events: [<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-memorylimitevent\">MemoryLimitEvent</a>&gt;; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.array.html\">8</a>],\n&#125;"}} /></pre>
 
@@ -100,6 +100,26 @@ Retained limit events; unused slots are null, overcapacity rejects publication.
 #### `deserialize`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl JsonSchema for ResourceMemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl JsonSchema for <a href=\"struct-resourcememorymetrics\">ResourceMemoryMetrics</a>"}} /></pre>
+
+#### `schema_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_name() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `schema_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_id() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'static, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+#### `json_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn json_schema(generator: &amp;mut SchemaGenerator) -&gt; Schema"}} /></pre>
+
+#### `is_referenceable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn is_referenceable() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 ### `impl PartialEq for ResourceMemoryMetrics`
 

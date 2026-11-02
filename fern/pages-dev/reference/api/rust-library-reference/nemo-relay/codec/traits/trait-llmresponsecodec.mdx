@@ -7,13 +7,13 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseCodec: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required method\n    fn decode_response(&amp;self, response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;;\n&#8203;\n    // Provided methods\n    fn codec_identity(&amp;self) -&gt; <a href=\"../../api/runtime/enum-llmcodecidentity\">LlmCodecIdentity</a> &#123; ... &#125;\n    fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseCodec: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required method\n    fn decode_response(\n        &amp;self,\n        response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;;\n&#8203;\n    // Provided methods\n    fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a> &#123; ... &#125;\n    fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n&#125;"}} /></pre>
 
 Decode-only codec for LLM API responses.
 
-Unlike [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) (which is bidirectional for requests), response codecs are introspection-only: they parse a raw response into structured form but never need to encode back. This matches the pipeline design where responses are observed, not modified.
+Unlike [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/trait-llmcodec) (which is bidirectional for requests), response codecs are introspection-only: they parse a raw response into structured form but never need to encode back. This matches the pipeline design where responses are observed, not modified.
 
 ## Design
 
@@ -33,7 +33,7 @@ Implementations should use a two-phase decode pattern:
 
 #### `decode_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(&amp;self, response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 Parse a raw JSON response into normalized structured form.
 
@@ -43,38 +43,84 @@ Implementations should return `Err` only for genuinely unparseable input.
 
 #### `codec_identity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../api/runtime/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 Return this codec's identity for LLM sanitizer context.
 
-Custom codecs should keep the default [`LlmCodecIdentity::Opaque`](/reference/api/rust-library-reference/nemo-relay/api/runtime/enum-llmcodecidentity) unless they have a stable runtime registration ID.
+Custom codecs should keep the default [`LlmCodecIdentity::Opaque`](/reference/api/rust-library-reference/nemo-relay/middleware/enum-llmcodecidentity) unless they have a stable runtime registration ID.
 
 #### `allows_estimated_cost`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 Return whether aggregate response usage can be priced from its response model.
 
 Most providers report usage for one model, so the default permits model-based cost enrichment. A provider can opt out when its response combines usage from multiple models and no provider-reported cost is available.
 
-## Implementors
+## Implementations on Foreign Types
 
 ### `impl LlmResponseCodec for AnthropicMessagesCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../anthropic/struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../trait-llmresponsecodec\">LlmResponseCodec</a> for AnthropicMessagesCodec"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+#### `allows_estimated_cost`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_estimated_cost(&amp;self, response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 ### `impl LlmResponseCodec for GeminiGenerateContentCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../gemini_generate_content/struct-geminigeneratecontentcodec\">GeminiGenerateContentCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../trait-llmresponsecodec\">LlmResponseCodec</a> for GeminiGenerateContentCodec"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 ### `impl LlmResponseCodec for OCIGenAIChatCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../oci_genai/struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../trait-llmresponsecodec\">LlmResponseCodec</a> for OCIGenAIChatCodec"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 ### `impl LlmResponseCodec for OpenAIChatCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../openai_chat/struct-openaichatcodec\">OpenAIChatCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../trait-llmresponsecodec\">LlmResponseCodec</a> for OpenAIChatCodec"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 ### `impl LlmResponseCodec for OpenAIResponsesCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../openai_responses/struct-openairesponsescodec\">OpenAIResponsesCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../trait-llmresponsecodec\">LlmResponseCodec</a> for OpenAIResponsesCodec"}} /></pre>
+
+#### `codec_identity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; <a href=\"../../middleware/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(\n    &amp;self,\n    response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+## Implementors

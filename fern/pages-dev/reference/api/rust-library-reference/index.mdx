@@ -6,15 +6,24 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ## Crates
 
-- [nemo-relay](/reference/api/rust-library-reference/nemo-relay): Core Rust runtime APIs for NeMo Relay.
+- [nemo-relay-builtins](/reference/api/rust-library-reference/nemo-relay-builtins): Default plugin composition for SDKs and the CLI.
+- [nemo-relay-diagnostics](/reference/api/rust-library-reference/nemo-relay-diagnostics): Runtime diagnostics and failure aggregation.
+- [nemo-relay-logging](/reference/api/rust-library-reference/nemo-relay-logging): Operational logging setup and lifecycle.
+- [nemo-relay-plugin-host](/reference/api/rust-library-reference/nemo-relay-plugin-host): Plugin loading, validation, verification, and activation.
+- [nemo-relay-codecs](/reference/api/rust-library-reference/nemo-relay-codecs): Provider request, response, and streaming implementations.
+- [nemo-relay](/reference/api/rust-library-reference/nemo-relay): Public Rust SDK with flat instrumentation APIs and shared contracts.
+- [nemo-relay-runtime](/reference/api/rust-library-reference/nemo-relay-runtime): Execution engine, scope context, and middleware registries.
+- [nemo-relay-model-pricing](/reference/api/rust-library-reference/nemo-relay-model-pricing): Model pricing catalogs and cost estimation.
+- [nemo-relay-resource-metrics](/reference/api/rust-library-reference/nemo-relay-resource-metrics): System resource collection and measurement configuration.
+- [nemo-relay-observability](/reference/api/rust-library-reference/nemo-relay-observability): Observability exporters and projections.
 - [nemo-relay-adaptive](/reference/api/rust-library-reference/nemo-relay-adaptive): Adaptive runtime primitives and plugin components.
 - [nemo-relay-pii-redaction](/reference/api/rust-library-reference/nemo-relay-pii-redaction): PII redaction plugin components for NeMo Relay.
 - [nemo-relay-ffi](/reference/api/rust-library-reference/nemo-relay-ffi): C-compatible FFI surface for NeMo Relay.
-- [nemo-relay-types](/reference/api/rust-library-reference/nemo-relay-types): Shared serializable data model types for NeMo Relay.
+- [nemo-relay-types](/reference/api/rust-library-reference/nemo-relay-types): Shared data models and runtime contracts for NeMo Relay.
 - [nemo-relay-plugin](/reference/api/rust-library-reference/nemo-relay-plugin): Rust SDK and stable ABI for native NeMo Relay plugins.
 - [nemo-relay-worker-proto](/reference/api/rust-library-reference/nemo-relay-worker-proto): Versioned gRPC protocol definitions for NeMo Relay worker plugins.
 - [nemo-relay-worker](/reference/api/rust-library-reference/nemo-relay-worker): Rust SDK for NeMo Relay worker plugins.

@@ -192,8 +192,8 @@ try {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
-use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
+use nemo_relay::plugin::{initialize, validate};
+use nemo_relay_adaptive::plugin_component::ComponentSpec;
 use nemo_relay_adaptive::{
     AdaptiveConfig,
     BackendSpec,
@@ -226,7 +226,6 @@ adaptive.acg = Some(AcgComponentConfig {
 let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
-register_adaptive_component()?;
 let report = validate(plugin_config.clone(), None)?;
 assert!(!report.config.has_errors());
 

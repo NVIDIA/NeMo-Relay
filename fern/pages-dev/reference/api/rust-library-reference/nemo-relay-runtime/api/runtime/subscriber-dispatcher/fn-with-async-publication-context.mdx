@@ -1,0 +1,17 @@
+---
+title: "Function with_async_publication_context"
+sidebar-title: "with_async_publication_context"
+slug: "/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/subscriber_dispatcher/fn-with-async-publication-context"
+description: "Run asynchronous middleware as part of an already-registered publication, buffering the finalization publications explicitly assigned to its reserved FIFO position."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn with_async_publication_context&lt;F: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&gt;(\n    publication: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-asyncpublication\">AsyncPublication</a>&gt;,\n    future: F,\n) -&gt; F::<a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html#associatedtype.Output\">Output</a>"}} /></pre>
+
+Run asynchronous middleware as part of an already-registered publication, buffering the finalization publications explicitly assigned to its reserved FIFO position.
+
+Re-entrant subscriber flushes are no-ops in this context because the publication's FIFO barrier cannot complete until the middleware returns.

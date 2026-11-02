@@ -1,0 +1,22 @@
+---
+title: "nemo-relay-codecs"
+sidebar-title: "nemo-relay-codecs"
+description: "Provider request, response, and streaming codec implementations. Shared traits and normalized models live in `nemo-relay-types`."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Provider request, response, and streaming codec implementations. Shared traits and normalized models live in `nemo-relay-types`.
+
+## Modules
+
+- [anthropic](/reference/api/rust-library-reference/nemo-relay-codecs/anthropic): Built-in codec for the Anthropic Messages API.
+- [gemini_generate_content](/reference/api/rust-library-reference/nemo-relay-codecs/gemini_generate_content): Built-in codec for the Gemini generateContent API.
+- [oci_genai](/reference/api/rust-library-reference/nemo-relay-codecs/oci_genai): Built-in codec for the Oracle Cloud Infrastructure (OCI) Generative AI chat API.
+- [openai_chat](/reference/api/rust-library-reference/nemo-relay-codecs/openai_chat): Built-in codec for the OpenAI Chat Completions API.
+- [openai_responses](/reference/api/rust-library-reference/nemo-relay-codecs/openai_responses): Built-in codec for the OpenAI Responses API.
+- [resolve](/reference/api/rust-library-reference/nemo-relay-codecs/resolve): Provider-surface detection, best-effort normalization, and construction of the matching built-in codecs from a raw payload, surface, or codec name.
+- [streaming](/reference/api/rust-library-reference/nemo-relay-codecs/streaming): Server-sent event framing for provider streams.

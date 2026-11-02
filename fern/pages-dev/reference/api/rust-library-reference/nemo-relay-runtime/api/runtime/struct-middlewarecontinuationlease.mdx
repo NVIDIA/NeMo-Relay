@@ -1,0 +1,48 @@
+---
+title: "Struct Middleware Continuation Lease"
+sidebar-title: "MiddlewareContinuationLease"
+description: "A continuation that remains valid while its owning interceptor is running."
+position: 44
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct MiddlewareContinuationLease { /* private fields */ }
+```
+
+A continuation that remains valid while its owning interceptor is running.
+
+## Implementations
+
+### `impl MiddlewareContinuationLease`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-middlewarecontinuationlease\">MiddlewareContinuationLease</a>"}} /></pre>
+
+#### `capture`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capture() -&gt; (Self, MiddlewareContinuationGuard)"}} /></pre>
+
+Capture the current Relay context and create its callback-lifetime guard.
+
+#### `begin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn begin(&amp;self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;MiddlewareContinuationInvocation&gt;"}} /></pre>
+
+Begin a `next` call with an invocation-time scope-stack snapshot.
+
+## Trait Implementations
+
+### `impl Clone for MiddlewareContinuationLease`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-middlewarecontinuationlease\">MiddlewareContinuationLease</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; Self"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

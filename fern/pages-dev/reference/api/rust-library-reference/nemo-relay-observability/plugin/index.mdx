@@ -1,0 +1,261 @@
+---
+title: "Module plugin"
+sidebar-title: "plugin"
+description: "Built-in observability plugin configuration and lifecycle. Built-in observability plugin component."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Built-in observability plugin configuration and lifecycle. Built-in observability plugin component.
+
+This module packages NeMo Relay's first-party observability exporters behind the shared plugin configuration system. Each exporter section is opt-in: omitted sections and sections with `enabled = false` validate but do not register subscribers or construct exporters.
+
+The plugin intentionally infers subscriber names from the component namespace so configuration remains portable across bindings. Agent Trajectory Observability Format (ATOF) registers one global subscriber when enabled. Typed OpenTelemetry endpoints share one global fan-out subscriber. Agent Trajectory Interchange Format (ATIF) uses a global dispatcher that detects top-level agent or turn scopes and creates one scope-local exporter for each trajectory run. Coding-agent turns that need bounded traces carry role metadata; their declared scope type is preserved in the exported event stream.
+
+## Structs
+
+- [AtifCorrelation](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifcorrelation)
+- [AtifDispatcher](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifdispatcher)
+- [AtifFlushWork](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifflushwork)
+- [AtifOutputOptions](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifoutputoptions)
+- [AtifRemoteStorage](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifremotestorage): Remote storage handle for ATIF trajectory uploads.
+- [AtifSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifsectionconfig): Per-trajectory ATIF exporter config.
+- [AtifUploadRequest](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atifuploadrequest)
+- [AtofFileSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atoffilesinksectionconfig): File sink settings for the ATOF plugin section.
+- [AtofSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atofsectionconfig): Multi-sink ATOF JSONL exporter config.
+- [AtofStreamSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-atofstreamsinksectionconfig): Stream sink settings for the ATOF plugin section.
+- [AutomaticOtlpSignals](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-automaticotlpsignals)
+- [ComponentSpec](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-componentspec): Top-level observability component wrapper.
+- [HttpStorageConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-httpstorageconfig): HTTP endpoint settings for ATIF trajectory upload.
+- [HttpUploadConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-httpuploadconfig)
+- [IndexedOpenTelemetryResource](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-indexedopentelemetryresource)
+- [ManagedAtifExporter](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-managedatifexporter)
+- [ObservabilityConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-observabilityconfig): Canonical config document for the observability plugin component.
+- [ObservabilityPlugin](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-observabilityplugin): Built-in observability component.
+- [OpenTelemetryDestination](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrydestination)
+- [OpenTelemetryDestinationCollision](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrydestinationcollision)
+- [OpenTelemetryEndpointConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetryendpointconfig): One typed OTLP destination.
+- [OpenTelemetryFileSinkConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetryfilesinkconfig): One local file destination for projected OTLP spans.
+- [OpenTelemetryLogSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrylogsectionconfig): OTLP log pipeline settings.
+- [OpenTelemetryMetricSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrymetricsectionconfig): OTLP metric pipeline settings.
+- [OpenTelemetrySectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrysectionconfig): Multi-endpoint OpenTelemetry export settings.
+- [OpenTelemetryShutdownIssue](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetryshutdownissue)
+- [OpenTelemetrySignalEndpointConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrysignalendpointconfig): Signal-common OTLP destination fields used by logs and metrics.
+- [OpenTelemetrySignalSubscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-opentelemetrysignalsubscribers)
+- [PendingAtifExport](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-pendingatifexport)
+- [PendingAtifWrite](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-pendingatifwrite)
+- [ResolvedSignalEndpoints](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-resolvedsignalendpoints)
+- [S3BuilderOverrides](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-s3builderoverrides)
+- [S3StorageConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-s3storageconfig): S3-compatible storage settings for ATIF trajectory upload.
+- [SkippedResource](/reference/api/rust-library-reference/nemo-relay-observability/plugin/struct-skippedresource)
+
+## Enums
+
+- [AtifStorageConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-atifstorageconfig): Remote storage destination for ATIF trajectory files.
+- [AtofSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-atofsinksectionconfig): One plugin-managed destination for raw ATOF events.
+- [OpenTelemetryDestinationKey](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-opentelemetrydestinationkey)
+- [OpenTelemetryResource](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-opentelemetryresource)
+- [OpenTelemetryShutdownFailure](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-opentelemetryshutdownfailure)
+- [SinkLabel](/reference/api/rust-library-reference/nemo-relay-observability/plugin/enum-sinklabel): Identifier for a single output sink. `Local` is used when `storage` is empty (the legacy local-file path); `Remote(i)` indexes into the configured storage backends.
+
+## Constants
+
+- [AUTOMATIC_INSECURE_HTTP_HOSTS_VARIABLE](/reference/api/rust-library-reference/nemo-relay-observability/plugin/constant-automatic-insecure-http-hosts-variable)
+- [OBSERVABILITY_PLUGIN_KIND](/reference/api/rust-library-reference/nemo-relay-observability/plugin/constant-observability-plugin-kind): The plugin kind registered by the core crate.
+
+## Functions
+
+- [apply_otel_environment_headers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-apply-otel-environment-headers)
+- [apply_signal_common](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-apply-signal-common)
+- [atif_dispatcher_subscriber](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-atif-dispatcher-subscriber)
+- [atif_scope_subscriber](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-atif-scope-subscriber)
+- [atif_shutdown_cleanup](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-atif-shutdown-cleanup)
+- [atof_endpoint_transport_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-atof-endpoint-transport-schema)
+- [atof_mode_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-atof-mode-schema)
+- [automatic_exporter_failure](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-automatic-exporter-failure): Classify from typed evidence only; backend strings can contain credentials and flatten several causes, so they must neither be parsed nor copied into reports.
+- [automatic_otlp_signals](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-automatic-otlp-signals)
+- [automatic_plaintext_policy](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-automatic-plaintext-policy)
+- [automatic_subscriber](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-automatic-subscriber): Build one automatic subscriber without preventing healthy signals from activating.
+- [build_atif_storage](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-atif-storage)
+- [build_atof_sink_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-atof-sink-config)
+- [build_log_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-log-config)
+- [build_metric_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-metric-config)
+- [build_opentelemetry_file_sink_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-opentelemetry-file-sink-subscribers)
+- [build_opentelemetry_log_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-opentelemetry-log-subscribers)
+- [build_opentelemetry_metric_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-opentelemetry-metric-subscribers)
+- [build_opentelemetry_signal_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-opentelemetry-signal-subscribers)
+- [build_opentelemetry_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-opentelemetry-subscribers)
+- [build_otel_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-otel-config)
+- [build_otel_file_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-build-otel-file-config)
+- [canonical_opentelemetry_host](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-canonical-opentelemetry-host)
+- [canonicalize_opentelemetry_destination](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-canonicalize-opentelemetry-destination)
+- [default_agent_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-agent-name)
+- [default_agent_version](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-agent-version)
+- [default_atif_filename_template](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atif-filename-template)
+- [default_atif_include_payloads](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atif-include-payloads)
+- [default_atof_endpoint_field_name_policy](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atof-endpoint-field-name-policy)
+- [default_atof_endpoint_transport](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atof-endpoint-transport)
+- [default_atof_file_sink_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atof-file-sink-editor-value)
+- [default_atof_mode](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atof-mode)
+- [default_atof_stream_sink_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-atof-stream-sink-editor-value)
+- [default_completed_span_context_ttl_millis](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-completed-span-context-ttl-millis)
+- [default_http_storage_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-http-storage-editor-value)
+- [default_model_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-model-name)
+- [default_observability_config_version](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-observability-config-version)
+- [default_opentelemetry_endpoint_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-opentelemetry-endpoint-editor-value)
+- [default_opentelemetry_file_sink_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-opentelemetry-file-sink-editor-value)
+- [default_opentelemetry_signal_endpoint_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-opentelemetry-signal-endpoint-editor-value)
+- [default_otel_instrumentation_scope](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-instrumentation-scope)
+- [default_otel_log_max_export_batch_size](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-log-max-export-batch-size)
+- [default_otel_log_max_queue_size](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-log-max-queue-size)
+- [default_otel_log_minimum_severity](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-log-minimum-severity)
+- [default_otel_log_scheduled_delay_millis](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-log-scheduled-delay-millis)
+- [default_otel_metric_cardinality_limit](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-metric-cardinality-limit)
+- [default_otel_metric_export_interval_millis](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-metric-export-interval-millis)
+- [default_otel_metric_max_instruments](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-metric-max-instruments)
+- [default_otel_metric_temporality](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-metric-temporality)
+- [default_otel_service_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otel-service-name)
+- [default_otlp_file_sink_mode](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otlp-file-sink-mode)
+- [default_otlp_transport](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-otlp-transport)
+- [default_output_directory](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-output-directory)
+- [default_s3_storage_editor_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-s3-storage-editor-value)
+- [default_timeout_millis](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-default-timeout-millis)
+- [deliver_opentelemetry_callbacks](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-deliver-opentelemetry-callbacks)
+- [deliver_opentelemetry_event](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-deliver-opentelemetry-event)
+- [deliver_opentelemetry_metric_callbacks](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-deliver-opentelemetry-metric-callbacks)
+- [deregister_atif_shutdown_subscriber](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-deregister-atif-shutdown-subscriber)
+- [derive_http_signal_endpoint](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-derive-http-signal-endpoint)
+- [derive_signal_endpoint](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-derive-signal-endpoint)
+- [environment_has_nonblank_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-environment-has-nonblank-value)
+- [environment_signal_enabled](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-environment-signal-enabled)
+- [event_observation_key](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-event-observation-key)
+- [flush_atif_shutdown_work](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-flush-atif-shutdown-work)
+- [has_active_opentelemetry_resource](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-has-active-opentelemetry-resource)
+- [is_safe_atif_metadata_path](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-is-safe-atif-metadata-path)
+- [is_safe_atif_session_id](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-is-safe-atif-session-id)
+- [is_top_level_trajectory_start](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-is-top-level-trajectory-start)
+- [is_valid_atif_metadata_selector](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-is-valid-atif-metadata-selector)
+- [is_valid_atof_stream_url](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-is-valid-atof-stream-url)
+- [log_opentelemetry_resource_access](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-log-opentelemetry-resource-access)
+- [log_severity_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-log-severity-schema)
+- [mark_projection_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-mark-projection-schema)
+- [metric_temporality_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-metric-temporality-schema)
+- [no_active_opentelemetry_destination_error](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-no-active-opentelemetry-destination-error)
+- [normalize_opentelemetry_path](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-normalize-opentelemetry-path)
+- [normalize_storage_key_prefix](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-normalize-storage-key-prefix)
+- [observability_config_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-observability-config-schema): Returns the JSON Schema for the observability component configuration.
+- [observability_registration_error](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-observability-registration-error)
+- [omit_atif_llm_requests](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-omit-atif-llm-requests)
+- [opentelemetry_destination](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-opentelemetry-destination)
+- [opentelemetry_destination_collision_errors](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-opentelemetry-destination-collision-errors)
+- [opentelemetry_section_is_empty](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-opentelemetry-section-is-empty)
+- [opentelemetry_type_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-opentelemetry-type-name)
+- [otel_editor_field](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otel-editor-field)
+- [otel_list_editor_field](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otel-list-editor-field)
+- [otel_sdk_disabled](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otel-sdk-disabled)
+- [otel_tls_editor_field](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otel-tls-editor-field)
+- [otlp_file_format_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otlp-file-format-schema)
+- [otlp_file_sink_mode_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otlp-file-sink-mode-schema): A trace file sink defaults to `overwrite`, unlike the ATOF event sink: a run that reuses a filename should not read as one trajectory appended to another.
+- [otlp_transport_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-otlp-transport-schema)
+- [parse_atif_metadata_expression](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-parse-atif-metadata-expression)
+- [parse_observability_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-parse-observability-config)
+- [parse_signal_transport](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-parse-signal-transport)
+- [post_atif_http](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-post-atif-http)
+- [prepare_atif_file](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-prepare-atif-file)
+- [prepare_atif_payload](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-prepare-atif-payload)
+- [prepare_atif_shutdown_file](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-prepare-atif-shutdown-file)
+- [push_otel_signal_diagnostic](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-push-otel-signal-diagnostic)
+- [push_plaintext_preflight_diagnostic](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-push-plaintext-preflight-diagnostic)
+- [push_policy_diag](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-push-policy-diag)
+- [push_skipped_opentelemetry_endpoint_diagnostic](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-push-skipped-opentelemetry-endpoint-diagnostic)
+- [raw_opentelemetry_destination](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-raw-opentelemetry-destination)
+- [record_invalid_automatic_insecure_hosts](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-record-invalid-automatic-insecure-hosts)
+- [register_atif_dispatcher](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-atif-dispatcher)
+- [register_atof_exporter](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-atof-exporter)
+- [register_automatic_opentelemetry](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-automatic-opentelemetry)
+- [register_full_payload_policy](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-full-payload-policy)
+- [register_observability](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-observability)
+- [register_opentelemetry](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-opentelemetry)
+- [register_opentelemetry_resources](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-register-opentelemetry-resources)
+- [reject_opentelemetry_metric_mark](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-reject-opentelemetry-metric-mark)
+- [render_atif_filename](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-render-atif-filename)
+- [resolve_env_var_field](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-resolve-env-var-field)
+- [resolve_signal_endpoints](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-resolve-signal-endpoints)
+- [resolve_signal_headers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-resolve-signal-headers)
+- [sanitize_atif_metadata_fragment](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-sanitize-atif-metadata-fragment)
+- [shutdown_all_opentelemetry_subscribers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-shutdown-all-opentelemetry-subscribers)
+- [shutdown_failure_from_errors](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-shutdown-failure-from-errors)
+- [shutdown_indexed_opentelemetry_providers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-shutdown-indexed-opentelemetry-providers)
+- [signal_destination](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-signal-destination)
+- [signal_shutdown_issue](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-signal-shutdown-issue)
+- [skipped_opentelemetry_endpoints](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-skipped-opentelemetry-endpoints)
+- [string_enum_schema](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-string-enum-schema)
+- [validate_atif_file_export_support](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-file-export-support)
+- [validate_atif_filename_template](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-filename-template)
+- [validate_atif_http_endpoint](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-http-endpoint)
+- [validate_atif_http_header](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-http-header)
+- [validate_atif_http_header_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-http-header-name)
+- [validate_atif_section](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-section)
+- [validate_atif_storage_env_var](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-storage-env-var)
+- [validate_atif_storage_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-storage-values)
+- [validate_atif_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atif-values)
+- [validate_atof_section](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-section)
+- [validate_atof_sink](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-sink)
+- [validate_atof_stream_header](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-stream-header)
+- [validate_atof_stream_header_env](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-stream-header-env)
+- [validate_atof_stream_header_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-stream-header-name)
+- [validate_atof_stream_sink_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-stream-sink-name)
+- [validate_atof_stream_sink_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-stream-sink-values)
+- [validate_atof_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-atof-values)
+- [validate_automatic_plaintext_destinations](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-automatic-plaintext-destinations)
+- [validate_case_insensitive_header_duplicates](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-case-insensitive-header-duplicates)
+- [validate_case_insensitive_signal_header_duplicates](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-case-insensitive-signal-header-duplicates)
+- [validate_distinct_opentelemetry_destinations](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-distinct-opentelemetry-destinations)
+- [validate_distinct_opentelemetry_file_sinks](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-distinct-opentelemetry-file-sinks): Rejects two file sinks writing the same path.
+- [validate_distinct_signal_destinations](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-distinct-signal-destinations)
+- [validate_explicit_signal_endpoint](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-explicit-signal-endpoint)
+- [validate_http_headers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-http-headers)
+- [validate_observability_plaintext_destinations](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-observability-plaintext-destinations)
+- [validate_observability_plugin_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-observability-plugin-config)
+- [validate_observability_plugin_config_with_policy](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-observability-plugin-config-with-policy)
+- [validate_observability_section_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-observability-section-fields)
+- [validate_observability_section_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-observability-section-values)
+- [validate_opentelemetry_batch_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-batch-config)
+- [validate_opentelemetry_endpoint_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-endpoint-fields)
+- [validate_opentelemetry_feature_support](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-feature-support)
+- [validate_opentelemetry_file_sink_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-file-sink-fields): Reports unknown keys inside each `file_sinks` entry.
+- [validate_opentelemetry_file_sinks](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-file-sinks): Reports the file-sink settings that would otherwise fail only at activation.
+- [validate_opentelemetry_header_env](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-header-env)
+- [validate_opentelemetry_header_name](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-header-name)
+- [validate_opentelemetry_header_value](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-header-value)
+- [validate_opentelemetry_headers](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-headers)
+- [validate_opentelemetry_log_section](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-log-section)
+- [validate_opentelemetry_metric_section](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-metric-section)
+- [validate_opentelemetry_plaintext_destinations](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-plaintext-destinations)
+- [validate_opentelemetry_section](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-section)
+- [validate_opentelemetry_signal_endpoint_values](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-signal-endpoint-values)
+- [validate_opentelemetry_signal_endpoints](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-signal-endpoints)
+- [validate_opentelemetry_signal_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-opentelemetry-signal-fields)
+- [validate_otel_batch_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-otel-batch-config)
+- [validate_otel_file_sink_batch_config](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-otel-file-sink-batch-config): Returns the offending field alongside the error, so a static diagnostic can name the setting that failed rather than always naming `max_queue_size`.
+- [validate_otel_file_sink_filename](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-otel-file-sink-filename): Rejects a filename that would escape `output_directory`.
+- [validate_otel_header_env](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-otel-header-env)
+- [validate_policy_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-policy-fields)
+- [validate_section_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-section-fields)
+- [validate_top_level_observability_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-top-level-observability-fields)
+- [validate_unknown_fields](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-unknown-fields)
+- [validate_version](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-validate-version)
+- [warn_skipped_signal_endpoints](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-warn-skipped-signal-endpoints)
+- [write_atif](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-write-atif)
+- [write_atif_local](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-write-atif-local)
+- [write_atif_remote](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-write-atif-remote)
+- [write_atif_shutdown_export](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-write-atif-shutdown-export)
+- [write_atif_shutdown_exports](/reference/api/rust-library-reference/nemo-relay-observability/plugin/fn-write-atif-shutdown-exports)
+
+## Type Aliases
+
+- [AtifStorageList](/reference/api/rust-library-reference/nemo-relay-observability/plugin/type-atifstoragelist)
+- [MetricEventCallback](/reference/api/rust-library-reference/nemo-relay-observability/plugin/type-metriceventcallback)

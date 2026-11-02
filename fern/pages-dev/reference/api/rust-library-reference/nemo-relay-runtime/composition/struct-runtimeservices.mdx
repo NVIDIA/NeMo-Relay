@@ -1,0 +1,54 @@
+---
+title: "Struct Runtime Services"
+sidebar-title: "RuntimeServices"
+description: "Composition callbacks owned by the embedding host, independent from the runtime engine."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RuntimeServices &#123;\n    pub pricing_snapshot: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn CostEstimator&gt;,\n    pub infer_model_provider: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub attach_estimated_cost: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(&amp;mut AnnotatedLlmResponse, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;),\n&#125;"}} /></pre>
+
+Composition callbacks owned by the embedding host, independent from the runtime engine.
+
+## Fields
+
+### `pricing_snapshot: fn() -> Arc<dyn CostEstimator>`
+
+Capture the current immutable pricing resolver.
+
+### `infer_model_provider: fn(&str, Option<&str>) -> Option<String>`
+
+Infer the provider label used for price lookup.
+
+### `attach_estimated_cost: fn(&mut AnnotatedLlmResponse, Option<&str>)`
+
+Attach estimates without replacing provider-reported costs.
+
+## Trait Implementations
+
+### `impl Clone for RuntimeServices`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-runtimeservices\">RuntimeServices</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-runtimeservices\">RuntimeServices</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Default for RuntimeServices`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-runtimeservices\">RuntimeServices</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl Copy for RuntimeServices`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-runtimeservices\">RuntimeServices</a>"}} /></pre>

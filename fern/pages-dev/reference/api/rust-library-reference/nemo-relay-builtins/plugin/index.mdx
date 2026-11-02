@@ -1,0 +1,42 @@
+---
+title: "Module plugin"
+sidebar-title: "plugin"
+description: "Default composition and configuration for the independent plugin host."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Default composition and configuration for the independent plugin host.
+
+## Structs
+
+- [ConfigReport](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/struct-configreport): Structured configuration and activation report.
+- [PluginConfig](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/struct-pluginconfig): Canonical plugin configuration document.
+- [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
+- [PluginHostConfig](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/struct-pluginhostconfig): Embedded startup configuration. Service settings are not plugin component configuration and never enter plugin fingerprints or legacy reports.
+- [PluginHostReport](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/struct-pluginhostreport): Combined static and dynamic host report.
+
+## Enums
+
+- [PluginError](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/enum-pluginerror): Error type for generic plugin operations.
+
+## Functions
+
+- [deregister_plugin](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-deregister-plugin): Remove a component registration. Default components are restored on next lookup.
+- [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-ensure-builtin-plugins-registered): Make the default component implementations available to the runtime host.
+- [initialize](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-initialize): Initialize the plugin host with the default components.
+- [initialize_with_diagnostics](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-initialize-with-diagnostics): Initialize the host using an application-owned diagnostic service.
+- [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-list-plugin-kinds): Return component kinds after composing default components.
+- [lookup_plugin](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-lookup-plugin): Look up a component after composing default components.
+- [plugin_config_schema](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-plugin-config-schema): Return the host configuration schema.
+- [register_plugin](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-register-plugin): Register an application plugin after reserving the default built-in kinds.
+- [validate](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-validate): Validate host configuration with normal discovery and policy resolution.
+- [validate_exact](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-validate-exact): Validate an exact host configuration with default preflight checks.
+- [validate_static_plugin_config](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/fn-validate-static-plugin-config): Validate configured components against the default's component implementations.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay-builtins/plugin/type-result): Specialized [`Result`](https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html) type for plugin operations.

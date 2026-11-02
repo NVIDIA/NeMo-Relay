@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use nemo_relay::{
-    diagnostics::{DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings, embedded},
-    plugin::dynamic::{PluginHostConfig, initialize, validate},
+    diagnostics::{self, DiagnosticQuery, DiagnosticSnapshot, DiagnosticsSettings},
+    plugin::PluginHostConfig,
 };
+
+use nemo_relay::plugin::{initialize, validate};
 
 let config = PluginHostConfig {
     diagnostics: Some(DiagnosticsSettings {
@@ -15,7 +17,7 @@ let config = PluginHostConfig {
 };
 validate(config.clone(), None)?;
 let mut activation = initialize(config, None).await?;
-let reader = embedded::reader()?;
+let reader = diagnostics::reader()?;
 let page = reader.snapshot(&DiagnosticQuery::default())?;
 let snapshot: DiagnosticSnapshot = serde_json::from_str(page.as_str())?;
 let failures: u64 = snapshot.lifetime.totals.failures_total.value.get();

@@ -2,12 +2,12 @@
 title: "Struct Memory Inspection Lease"
 sidebar-title: "MemoryInspectionLease"
 description: "Memory inspection holds the same bounded permit as an ordinary snapshot. Borrowed iterators refer only to the copied page; dropping releases all storage."
-position: 52
+position: 54
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ```rust
 pub struct MemoryInspectionLease { /* private fields */ }
@@ -35,13 +35,13 @@ Explicit caller-owned decode, outside the service budget.
 
 #### `components`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn components(\n    &amp;self,\n) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/exact_size/trait.ExactSizeIterator.html\">ExactSizeIterator</a>&lt;Item = <a href=\"struct-componentmemoryview\">ComponentMemoryView</a>&lt;'_&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn components(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/exact_size/trait.ExactSizeIterator.html\">ExactSizeIterator</a>"}} /></pre>
 
 Allocation-free traversal of copied component rows.
 
 #### `entries`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn entries(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/exact_size/trait.ExactSizeIterator.html\">ExactSizeIterator</a>&lt;Item = <a href=\"struct-entrymemoryview\">EntryMemoryView</a>&lt;'_&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn entries(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/exact_size/trait.ExactSizeIterator.html\">ExactSizeIterator</a>"}} /></pre>
 
 Allocation-free traversal of copied entry rows.
 
@@ -77,4 +77,4 @@ Independently copied resource context; no collection or allocation.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>

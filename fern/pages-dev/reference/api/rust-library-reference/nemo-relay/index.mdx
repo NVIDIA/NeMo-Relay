@@ -1,67 +1,70 @@
 ---
 title: "nemo-relay"
 sidebar-title: "nemo-relay"
-description: "NeMo Relay Core"
-position: 1
+description: "The public Rust SDK for NeMo Relay."
+position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-## NeMo Relay Core
+The public Rust SDK for NeMo Relay.
 
-The core runtime library for the NeMo Relay multi-language agent framework. This crate provides execution scope management, lifecycle event tracking, and middleware pipelines (guardrails and intercepts) for tool and LLM calls.
+Instrument through [`scope`](/reference/api/rust-library-reference/nemo-relay/scope), [`tool`](/reference/api/rust-library-reference/nemo-relay/tool), and [`llm`](/reference/api/rust-library-reference/nemo-relay/llm), register middleware through [`registry`](/reference/api/rust-library-reference/nemo-relay/registry), and observe events through [`subscriber`](/reference/api/rust-library-reference/nemo-relay/subscriber) or [`exporter`](/reference/api/rust-library-reference/nemo-relay/exporter). Shared request, response, error, and codec contracts are re-exported directly. Bindings and component implementations use their owning crates and the execution engine in `nemo-relay-runtime` instead of depending on this SDK.
 
-### Architecture
+## Re-exports
 
-The runtime is organized around a **global context** ([`api::runtime::NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate)) that holds all registered middleware (guardrails, intercepts, subscribers) and a **scope stack** ([`api::runtime::ScopeStack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack)) that tracks the hierarchical execution context via task-local or thread-local storage.
-
-### Primary Entry Points
-
-Most integrations start with the high-level lifecycle helpers in [`api`](/reference/api/rust-library-reference/nemo-relay/api):
-
-- [`api::scope::push_scope`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-push-scope) / [`api::scope::pop_scope`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-pop-scope) create nested execution scopes.
-- [`api::tool::tool_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-execute) runs a complete tool middleware pipeline.
-- [`api::llm::llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-execute) and [`api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute) run non-streaming and streaming LLM middleware pipelines.
-- [`api::registry`](/reference/api/rust-library-reference/nemo-relay/api/registry) exposes global and scope-local middleware registration APIs.
-- [`api::subscriber`](/reference/api/rust-library-reference/nemo-relay/api/subscriber) exposes lifecycle event subscriber registration APIs.
-
-#### Modules
-
-- [`api`](/reference/api/rust-library-reference/nemo-relay/api) - Public API functions, handles, lifecycle event types, runtime helpers, and guardrail/intercept/subscriber registration. These are the primary entry points.
-- [`error`](/reference/api/rust-library-reference/nemo-relay/error) - Error types ([`error::FlowError`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror)) and the [`error::Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) type alias.
-- [`json`](/reference/api/rust-library-reference/nemo-relay/json) - JSON type alias ([`json::Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json)) and the [`json::merge_json`](/reference/api/rust-library-reference/nemo-relay/json/fn-merge-json) utility.
-- [`logging`](/reference/api/rust-library-reference/nemo-relay/logging) - Process operational logging (`log` facade + configurable stderr/file sinks).
-- [`observability`](/reference/api/rust-library-reference/nemo-relay/observability) - Built-in observability backends including [`atif::AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter), [`otel::OpenTelemetrySubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber), with full, GenAI, or OpenInference projection.
-- [`stream`](/reference/api/rust-library-reference/nemo-relay/stream) - [`stream::LlmStreamWrapper`](/reference/api/rust-library-reference/nemo-relay/stream/struct-llmstreamwrapper) - a stream adapter that applies per-chunk intercepts and aggregates streaming LLM responses.
-
-### Middleware Pipeline
-
-Both tool and LLM calls flow through a configurable middleware pipeline:
-
-1. **Request intercepts** - transform the request before execution
-2. **Sanitize request guardrails** - sanitize/normalize the request
-3. **Conditional execution guardrails** - gate execution (reject if criteria not met)
-4. **Execution intercepts** - optionally replace the execution function entirely
-5. **Sanitize response guardrails** - sanitize/normalize the response
-
-All middleware is priority-ordered (ascending) and registered by name for easy addition and removal at runtime.
+- `pub use nemo_relay_logging as logging;`
 
 ## Modules
 
-- [api](/reference/api/rust-library-reference/nemo-relay/api): Public API for the NeMo Relay runtime.
-- [codec](/reference/api/rust-library-reference/nemo-relay/codec): LLM codecs and the shared JSON format for tool results.
-- [config_editor](/reference/api/rust-library-reference/nemo-relay/config_editor): Typed configuration editor metadata.
-- [diagnostics](/reference/api/rust-library-reference/nemo-relay/diagnostics): Bounded, process-local diagnostic evidence, independent of logger startup.
-- [error](/reference/api/rust-library-reference/nemo-relay/error): Error types for the NeMo Relay runtime.
-- [json](/reference/api/rust-library-reference/nemo-relay/json): JSON utilities for the NeMo Relay runtime.
-- [logging](/reference/api/rust-library-reference/nemo-relay/logging): Operational process logging for Relay (stderr + optional file sinks).
-- [observability](/reference/api/rust-library-reference/nemo-relay/observability): Optional observability integrations for NeMo Relay Core.
-- [plugin](/reference/api/rust-library-reference/nemo-relay/plugin): Generic plugin infrastructure for NeMo Relay runtimes.
-- [plugins](/reference/api/rust-library-reference/nemo-relay/plugins): First-party plugin implementations for NeMo Relay Core.
-- [stream](/reference/api/rust-library-reference/nemo-relay/stream): Streaming LLM response wrapper.
+- [codec](/reference/api/rust-library-reference/nemo-relay/codec): Normalized LLM request and response data types. Shared normalized LLM request and response data types.
+- [config_editor](/reference/api/rust-library-reference/nemo-relay/config_editor): Typed configuration editor metadata. Typed configuration editor metadata.
+- [context](/reference/api/rust-library-reference/nemo-relay/context): Task, thread, and distributed request context propagation. Opaque scope ownership and propagation across tasks and threads.
+- [diagnostics](/reference/api/rust-library-reference/nemo-relay/diagnostics): Diagnostic collection, configuration, inspection, and shared evidence contracts. Diagnostic ownership, collection, and inspection for Rust applications.
+- [error](/reference/api/rust-library-reference/nemo-relay/error): Shared errors returned by the runtime and first-party components. Error types for the NeMo Relay runtime.
+- [event](/reference/api/rust-library-reference/nemo-relay/event): Canonical lifecycle events and normalized LLM accessors.
+- [exporter](/reference/api/rust-library-reference/nemo-relay/exporter): Runtime-bound exporter constructors and their configuration contracts.
+- [llm](/reference/api/rust-library-reference/nemo-relay/llm): Managed and manual LLM calls.
+- [middleware](/reference/api/rust-library-reference/nemo-relay/middleware): Shared middleware callback, stream, and invocation-context contracts.
+- [optimization](/reference/api/rust-library-reference/nemo-relay/optimization): Adaptive contribution recording for Rust integrations. Plugin-neutral evidence recording for managed LLM calls. Managed, bounded LLM optimization accounting.
+- [plugin](/reference/api/rust-library-reference/nemo-relay/plugin): Plugin contracts, configuration, and activation.
+- [registry](/reference/api/rust-library-reference/nemo-relay/registry): Global and scope-local middleware registration.
+- [resource_metrics](/reference/api/rust-library-reference/nemo-relay/resource_metrics): Structured resource measurements and on-demand collection.
+- [scope](/reference/api/rust-library-reference/nemo-relay/scope): Scope lifecycle and event emission.
+- [subscriber](/reference/api/rust-library-reference/nemo-relay/subscriber): Lifecycle event subscriptions and delivery barriers.
+- [tool](/reference/api/rust-library-reference/nemo-relay/tool): Managed and manual tool calls.
 
 ## Macros
 
 - [editor_config](/reference/api/rust-library-reference/nemo-relay/macro-editor-config): Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay/config_editor/trait-editorconfig) for a configuration type.
+
+## Structs
+
+- [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/struct-llmrequest) content.
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
+- [LlmRequest](/reference/api/rust-library-reference/nemo-relay/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
+- [Usage](/reference/api/rust-library-reference/nemo-relay/struct-usage): Token usage statistics from an LLM API response.
+
+## Enums
+
+- [Event](/reference/api/rust-library-reference/nemo-relay/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
+- [FlowError](/reference/api/rust-library-reference/nemo-relay/enum-flowerror): The error type for all NeMo Relay runtime operations.
+- [NormalizedStreamEvent](/reference/api/rust-library-reference/nemo-relay/enum-normalizedstreamevent): Provider-neutral incremental stream item used by cross-protocol transcoders.
+
+## Traits
+
+- [LlmCodec](/reference/api/rust-library-reference/nemo-relay/trait-llmcodec): A bidirectional translator between opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/struct-llmrequest) content and structured [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/struct-annotatedllmrequest).
+- [LlmNormalizer](/reference/api/rust-library-reference/nemo-relay/trait-llmnormalizer): Best-effort request and response normalization for observability projections.
+- [LlmResponseCodec](/reference/api/rust-library-reference/nemo-relay/trait-llmresponsecodec): Decode-only codec for LLM API responses.
+- [StreamingCodec](/reference/api/rust-library-reference/nemo-relay/trait-streamingcodec): Per-provider streaming codec used with the runtime streaming execution API.
+
+## Functions
+
+- [initialize_runtime](/reference/api/rust-library-reference/nemo-relay/fn-initialize-runtime): Install default services without activating configured plugins.
+
+## Type Aliases
+
+- [Json](/reference/api/rust-library-reference/nemo-relay/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
+- [Result](/reference/api/rust-library-reference/nemo-relay/type-result): A specialized [`Result`](https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html) type for NeMo Relay operations.

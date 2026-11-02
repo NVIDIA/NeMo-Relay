@@ -1,24 +1,31 @@
 ---
 title: "nemo-relay-types"
 sidebar-title: "nemo-relay-types"
-description: "Shared serializable data model types for NeMo Relay."
-position: 5
+description: "Shared data models and runtime contracts for NeMo Relay."
+position: 14
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Shared serializable data model types for NeMo Relay.
+Shared data models and runtime contracts for NeMo Relay.
 
-This crate contains DTOs and wire-compatible type definitions used by the runtime and native plugin SDK. It intentionally does not contain runtime registries, dynamic loading, codecs, exporters, or process-global state.
+This crate contains DTOs and wire-compatible type definitions used by the runtime and native plugin SDK. It intentionally does not contain runtime registries, dynamic loading, codec implementations, exporters, or process-global state.
 
 ## Modules
 
 - [api](/reference/api/rust-library-reference/nemo-relay-types/api): Public runtime API data types. Shared API data types.
 - [codec](/reference/api/rust-library-reference/nemo-relay-types/codec): Normalized LLM request and response data types. Shared normalized LLM request and response data types.
+- [config_editor](/reference/api/rust-library-reference/nemo-relay-types/config_editor): Typed configuration editor metadata. Typed configuration editor metadata.
 - [diagnostics](/reference/api/rust-library-reference/nemo-relay-types/diagnostics): Versioned runtime diagnostic models and inspection wire contracts. Portable diagnostic evidence shared by Relay runtimes, tools, and adapters.
+- [error](/reference/api/rust-library-reference/nemo-relay-types/error): Shared errors returned by the runtime and first-party components. Error types for the NeMo Relay runtime.
 - [plugin](/reference/api/rust-library-reference/nemo-relay-types/plugin): Plugin configuration diagnostic data types. Shared plugin diagnostic data types.
+- [trace](/reference/api/rust-library-reference/nemo-relay-types/trace): Deterministic W3C trace and span identity. Deterministic Relay trace and span identity.
+
+## Macros
+
+- [editor_config](/reference/api/rust-library-reference/nemo-relay-types/macro-editor-config): Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay-types/config_editor/trait-editorconfig) for a configuration type.
 
 ## Type Aliases
 

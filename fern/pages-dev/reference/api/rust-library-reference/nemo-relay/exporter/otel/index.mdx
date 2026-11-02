@@ -1,0 +1,34 @@
+---
+title: "Module otel"
+sidebar-title: "otel"
+description: "OpenTelemetry and OpenInference trace configuration and subscribers."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+OpenTelemetry and OpenInference trace configuration and subscribers.
+
+## Structs
+
+- [OpenTelemetryConfig](/reference/api/rust-library-reference/nemo-relay/exporter/otel/struct-opentelemetryconfig): Configuration for an OpenTelemetry subscriber exporting to a collector.
+- [OpenTelemetryFileSinkConfig](/reference/api/rust-library-reference/nemo-relay/exporter/otel/struct-opentelemetryfilesinkconfig): Configuration for an OpenTelemetry subscriber writing OTLP to a local file.
+- [OpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay/exporter/otel/struct-opentelemetrysubscriber): Trace subscriber bound to the SDK's runtime services.
+- [OpenTelemetrySubscriberOptions](/reference/api/rust-library-reference/nemo-relay/exporter/otel/struct-opentelemetrysubscriberoptions): Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+- [OtlpFileSinkSettings](/reference/api/rust-library-reference/nemo-relay/exporter/otel/struct-otlpfilesinksettings): A local file destination for exported spans.
+
+## Enums
+
+- [OpenTelemetryError](/reference/api/rust-library-reference/nemo-relay/exporter/otel/enum-opentelemetryerror): Errors produced while configuring or operating the OpenTelemetry subscriber.
+- [OtlpFileSinkMode](/reference/api/rust-library-reference/nemo-relay/exporter/otel/enum-otlpfilesinkmode): Open mode used when a trace file sink creates its output file.
+- [OtlpTransport](/reference/api/rust-library-reference/nemo-relay/exporter/otel/enum-otlptransport): Supported OTLP trace transports.
+
+## Constants
+
+- [DEFAULT_COMPLETED_SPAN_CONTEXT_TTL](/reference/api/rust-library-reference/nemo-relay/exporter/otel/constant-default-completed-span-context-ttl): Default period for attaching late marks to a completed scope's trace span.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/exporter/otel/type-result): Result type for the OpenTelemetry subscriber crate.

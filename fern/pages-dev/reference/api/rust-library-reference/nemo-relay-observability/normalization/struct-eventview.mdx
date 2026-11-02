@@ -1,0 +1,348 @@
+---
+title: "Struct Event View"
+sidebar-title: "EventView"
+description: "API documentation for the Rust `EventView` struct in crate `nemo_relay_observability`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EventView&lt;'a&gt; &#123;\n    pub event: &amp;'a Event,\n    pub host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>,\n&#125;"}} /></pre>
+
+## Fields
+
+### `event: &'a Event`
+
+### `host: &'a dyn ObservabilityHost`
+
+## Implementations
+
+### `impl<'a> EventView<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-eventview\">EventView</a>&lt;'a&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(event: &amp;'a Event, host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>) -&gt; Self"}} /></pre>
+
+#### `as_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_event(&amp;self) -&gt; &amp;'a Event"}} /></pre>
+
+#### `normalized_llm_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+
+#### `normalized_llm_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+
+## Methods from Deref &lt;Target = Event&gt;
+
+#### `kind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn kind(&amp;self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Return the ATOF event kind.
+
+##### Returns
+
+`"scope"` for [`Event::Scope`] and `"mark"` for [`Event::Mark`].
+
+#### `try_to_json_value`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_to_json_value(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+Try to return this event as the canonical JSON object delivered by language bindings to subscriber callbacks and ATOF exporters.
+
+#### `to_json_value`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_value(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+Return this event as the canonical JSON object delivered by language bindings to subscriber callbacks.
+
+#### `to_json_string`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_string(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+Return this event as canonical JSON.
+
+#### `scope_category`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;ScopeCategory&gt;"}} /></pre>
+
+Return the lifecycle phase for scope events.
+
+##### Returns
+
+`Some` lifecycle phase for scope events, otherwise `None`.
+
+#### `category`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;EventCategory&gt;"}} /></pre>
+
+Return the semantic category if present.
+
+##### Returns
+
+`Some` category for scope events and categorized mark events, otherwise `None`.
+
+#### `category_profile`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category_profile(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;CategoryProfile&gt;"}} /></pre>
+
+Return the category-specific profile if present.
+
+##### Returns
+
+`Some` profile when category-specific fields are present.
+
+#### `tool_result_annotation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_result_annotation(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Return an owned copy of the normalized tool result annotation.
+
+JSON null is normalized to absence.
+
+#### `parent_uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn parent_uuid(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;"}} /></pre>
+
+Return the parent scope UUID, if the event is nested under a scope.
+
+##### Returns
+
+`Some` parent UUID when the event has a parent scope, otherwise `None`.
+
+#### `propagation_root_uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_root_uuid(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;"}} /></pre>
+
+Return the stable causal root captured when this event was emitted.
+
+#### `propagation_parent_uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_parent_uuid(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;"}} /></pre>
+
+Return the synthetic parent imported with the propagation context.
+
+#### `propagation_traceparent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_traceparent(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return W3C traceparent captured when this event was emitted.
+
+#### `propagation_tracestate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagation_tracestate(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return W3C tracestate captured when this event was emitted.
+
+#### `uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn uuid(&amp;self) -&gt; <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
+
+Return the unique event or span UUID.
+
+##### Returns
+
+The event UUID.
+
+#### `timestamp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn timestamp(&amp;self) -&gt; &amp;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;"}} /></pre>
+
+Return the event timestamp.
+
+##### Returns
+
+The UTC event timestamp.
+
+#### `name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Return the human-readable event name.
+
+##### Returns
+
+The event name.
+
+#### `data`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Return the optional application payload attached to the event.
+
+##### Returns
+
+`Some` payload when event data is present, otherwise `None`.
+
+#### `sanitize_fields`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sanitize_fields(&amp;self) -&gt; EventSanitizeFields"}} /></pre>
+
+Snapshot the observability fields that sanitizers may rewrite.
+
+#### `data_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data_schema(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;DataSchema&gt;"}} /></pre>
+
+Return the optional data schema.
+
+##### Returns
+
+`Some` schema when the event payload declares one, otherwise `None`.
+
+#### `metadata`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn metadata(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Return the optional metadata attached to the event.
+
+##### Returns
+
+`Some` metadata when present, otherwise `None`.
+
+#### `attributes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn attributes(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;[<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>]&gt;"}} /></pre>
+
+Return attributes for scope events.
+
+##### Returns
+
+`Some` attributes for scope events, otherwise `None`.
+
+#### `scope_type`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_type(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;ScopeType&gt;"}} /></pre>
+
+Return the semantic scope category for scope events.
+
+##### Returns
+
+`Some` legacy [`ScopeType`] when the event has a category.
+
+#### `input`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn input(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Return the semantic input payload for start events.
+
+##### Returns
+
+`Some` payload for scope-start events with data, otherwise `None`.
+
+#### `output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn output(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Return the semantic output payload for end events.
+
+##### Returns
+
+`Some` payload for scope-end events with data, otherwise `None`.
+
+#### `model_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn model_name(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return the normalized model name for LLM events.
+
+##### Returns
+
+`Some` model name when the event profile includes one.
+
+#### `tool_call_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_call_id(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return the provider-specific tool-call correlation identifier.
+
+##### Returns
+
+`Some` tool call identifier when the event profile includes one.
+
+#### `annotated_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+
+Return the runtime-only annotated LLM request.
+
+##### Returns
+
+`Some` annotated request when the event profile includes one.
+
+#### `annotated_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+
+Return the runtime-only annotated LLM response.
+
+##### Returns
+
+`Some` annotated response when the event profile includes one.
+
+#### `time_to_first_chunk`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn time_to_first_chunk(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;"}} /></pre>
+
+Return the managed stream time to first received chunk, in seconds.
+
+##### Returns
+
+The measured duration on streaming LLM end events, when at least one chunk reached the managed stream wrapper.
+
+#### `is_scope_start`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_scope_start(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Return true for scope-start events.
+
+##### Returns
+
+`true` when the event is a scope-start event.
+
+#### `is_scope_end`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_scope_end(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Return true for scope-end events.
+
+##### Returns
+
+`true` when the event is a scope-end event.
+
+## Trait Implementations
+
+### `impl<'a> Clone for EventView<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-eventview\">EventView</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-eventview\">EventView</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Deref for EventView<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html\">Deref</a> for <a href=\"struct-eventview\">EventView</a>&lt;'_&gt;"}} /></pre>
+
+#### `Target`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#associatedtype.Target\">Target</a> = Event"}} /></pre>
+
+#### `deref`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#tymethod.deref\">deref</a>(&amp;self) -&gt; &amp;Event"}} /></pre>
+
+### `impl<'a> Copy for EventView<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-eventview\">EventView</a>&lt;'a&gt;"}} /></pre>

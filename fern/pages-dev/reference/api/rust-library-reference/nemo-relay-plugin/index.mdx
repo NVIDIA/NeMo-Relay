@@ -1,20 +1,21 @@
 ---
 title: "nemo-relay-plugin"
 sidebar-title: "nemo-relay-plugin"
-description: "Stable native plugin ABI and Rust authoring helpers for NeMo Relay."
-position: 6
+description: "Shared in-process plugin contracts, stable native ABI, and Rust authoring helpers."
+position: 15
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Stable native plugin ABI and Rust authoring helpers for NeMo Relay.
+Shared in-process plugin contracts, stable native ABI, and Rust authoring helpers.
 
 This crate intentionally does not depend on the `nemo-relay` runtime crate. Native plugins built with it communicate with a host through versioned C-compatible tables and host-owned string handles.
 
 ## Modules
 
+- [component](/reference/api/rust-library-reference/nemo-relay-plugin/component): In-process plugin contracts and host registration capabilities. In-process plugin contracts shared by built-in components and runtime hosts.
 - [diagnostics](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics): Native diagnostic authoring and authorized reads. Native diagnostic authoring and explicitly authorized canonical reads. Recording is synchronous, state-only, and independent of operational logs. Disabled/unsupported facades skip factories. Diagnostic errors must not be propagated as plugin execution failures unless the application chooses so.
 
 ## Macros

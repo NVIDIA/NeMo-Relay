@@ -1,0 +1,40 @@
+---
+title: "Module scope"
+sidebar-title: "scope"
+description: "Scope lifecycle and event emission."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Scope lifecycle and event emission.
+
+## Structs
+
+- [EmitMarkEventParams](/reference/api/rust-library-reference/nemo-relay/scope/struct-emitmarkeventparams): Builder parameters for [`event`](/reference/api/rust-library-reference/nemo-relay/scope/fn-event).
+- [EmitMetricEventParams](/reference/api/rust-library-reference/nemo-relay/scope/struct-emitmetriceventparams): Builder parameters for [`metric`](/reference/api/rust-library-reference/nemo-relay/scope/fn-metric).
+- [PopScopeParams](/reference/api/rust-library-reference/nemo-relay/scope/struct-popscopeparams): Builder parameters for [`pop_scope`](/reference/api/rust-library-reference/nemo-relay/scope/fn-pop-scope).
+- [PushScopeParams](/reference/api/rust-library-reference/nemo-relay/scope/struct-pushscopeparams): Builder parameters for [`push_scope`](/reference/api/rust-library-reference/nemo-relay/scope/fn-push-scope).
+- [ScopeAttributes](/reference/api/rust-library-reference/nemo-relay/scope/struct-scopeattributes): Bitflags that modify scope behavior and observability.
+- [ScopeHandle](/reference/api/rust-library-reference/nemo-relay/scope/struct-scopehandle): Runtime-owned handle identifying an active or completed scope.
+- [ScopeStackEntry](/reference/api/rust-library-reference/nemo-relay/scope/struct-scopestackentry): Identity of one entry in the visible Relay scope stack.
+- [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay/scope/struct-scopestacksnapshot): Owned root-to-top values from one coherent read of a visible scope stack.
+
+## Enums
+
+- [HandleAttributes](/reference/api/rust-library-reference/nemo-relay/scope/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
+- [ScopeType](/reference/api/rust-library-reference/nemo-relay/scope/enum-scopetype): Semantic category attached to a scope lifecycle span.
+
+## Constants
+
+- [COMPACTION_EVENT_NAME](/reference/api/rust-library-reference/nemo-relay/scope/constant-compaction-event-name): Canonical mark-event name used to indicate agent context compaction.
+
+## Functions
+
+- [event](/reference/api/rust-library-reference/nemo-relay/scope/fn-event): Emit a standalone mark event under the current or provided scope.
+- [get_handle](/reference/api/rust-library-reference/nemo-relay/scope/fn-get-handle): Return the current scope at the top of the active stack.
+- [metric](/reference/api/rust-library-reference/nemo-relay/scope/fn-metric): Emit a Relay metric mark under the current or provided scope.
+- [pop_scope](/reference/api/rust-library-reference/nemo-relay/scope/fn-pop-scope): Pop the current scope from the active scope stack.
+- [push_scope](/reference/api/rust-library-reference/nemo-relay/scope/fn-push-scope): Push a new scope onto the active scope stack.

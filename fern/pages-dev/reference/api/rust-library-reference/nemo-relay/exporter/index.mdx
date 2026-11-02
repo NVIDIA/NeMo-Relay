@@ -1,0 +1,78 @@
+---
+title: "Module exporter"
+sidebar-title: "exporter"
+description: "Runtime-bound exporter constructors and their configuration contracts."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Runtime-bound exporter constructors and their configuration contracts.
+
+Exporter pipeline state is private; use lifecycle methods and diagnostic snapshots.
+
+Diagnostic snapshots and their entries can be named through the SDK:
+
+```rust
+use nemo_relay::exporter::{ExporterRuntimeDiagnostic, ExporterRuntimeDiagnostics};
+use nemo_relay::exporter::otel::OpenTelemetrySubscriber;
+
+fn diagnostics(subscriber: &OpenTelemetrySubscriber) -> ExporterRuntimeDiagnostics {
+    subscriber.runtime_diagnostics()
+}
+
+fn entries(snapshot: &ExporterRuntimeDiagnostics) -> &[ExporterRuntimeDiagnostic] {
+    snapshot.entries()
+}
+```
+
+```rust
+use nemo_relay::exporter::otel::OpenTelemetrySubscriber;
+fn pipeline(subscriber: &OpenTelemetrySubscriber) { let _ = &subscriber.inner; }
+```
+
+```rust
+use nemo_relay::exporter::otel_logs::OpenTelemetryLogSubscriber;
+fn pipeline(subscriber: &OpenTelemetryLogSubscriber) { let _ = &subscriber.inner; }
+```
+
+```rust
+use nemo_relay::exporter::otel_metrics::OpenTelemetryMetricSubscriber;
+fn pipeline(subscriber: &OpenTelemetryMetricSubscriber) { let _ = &subscriber.inner; }
+```
+
+Runtime-bound exporters and their configuration contracts.
+
+## Modules
+
+- [atif](/reference/api/rust-library-reference/nemo-relay/exporter/atif): ATIF trajectories and a runtime-bound trajectory collector.
+- [atof](/reference/api/rust-library-reference/nemo-relay/exporter/atof): ATOF JSONL destinations and a runtime-bound exporter.
+- [otel](/reference/api/rust-library-reference/nemo-relay/exporter/otel): OpenTelemetry and OpenInference trace configuration and subscribers.
+- [otel_file](/reference/api/rust-library-reference/nemo-relay/exporter/otel_file): OTLP file encodings and file-export errors.
+- [otel_logs](/reference/api/rust-library-reference/nemo-relay/exporter/otel_logs): Runtime-bound logs export.
+- [otel_metrics](/reference/api/rust-library-reference/nemo-relay/exporter/otel_metrics): Runtime-bound metrics export.
+
+## Structs
+
+- [ExporterRuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay/exporter/struct-exporterruntimediagnostic): One runtime diagnostic recorded by an exporter.
+- [ExporterRuntimeDiagnostics](/reference/api/rust-library-reference/nemo-relay/exporter/struct-exporterruntimediagnostics): Snapshot of runtime diagnostics recorded by an exporter.
+- [OpenTelemetryTlsConfig](/reference/api/rust-library-reference/nemo-relay/exporter/struct-opentelemetrytlsconfig): Optional certificate and private key file paths for one OTLP endpoint.
+- [OtlpAttributeMapping](/reference/api/rust-library-reference/nemo-relay/exporter/struct-otlpattributemapping): Copies a projected OTLP attribute to a second attribute name.
+
+## Enums
+
+- [MarkProjection](/reference/api/rust-library-reference/nemo-relay/exporter/enum-markprojection): Export representation for point-in-time mark events.
+- [OpenTelemetryType](/reference/api/rust-library-reference/nemo-relay/exporter/enum-opentelemetrytype): Semantic projection emitted by an OpenTelemetry exporter.
+
+## Functions
+
+- [atif](/reference/api/rust-library-reference/nemo-relay/exporter/fn-atif): Create a runtime-bound exporter through the SDK.
+- [atof](/reference/api/rust-library-reference/nemo-relay/exporter/fn-atof): Create a runtime-bound exporter through the SDK.
+- [opentelemetry](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry): Create a runtime-bound exporter through the SDK.
+- [opentelemetry_file](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry-file): Create a runtime-bound exporter through the SDK.
+- [opentelemetry_from_provider](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry-from-provider): Create a runtime-bound exporter through the SDK.
+- [opentelemetry_from_provider_with_type](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry-from-provider-with-type): Create a runtime-bound exporter through the SDK.
+- [opentelemetry_logs](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry-logs): Create a runtime-bound exporter through the SDK.
+- [opentelemetry_metrics](/reference/api/rust-library-reference/nemo-relay/exporter/fn-opentelemetry-metrics): Create a runtime-bound exporter through the SDK.

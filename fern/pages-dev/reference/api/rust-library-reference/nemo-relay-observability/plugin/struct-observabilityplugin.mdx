@@ -1,0 +1,78 @@
+---
+title: "Struct Observability Plugin"
+sidebar-title: "ObservabilityPlugin"
+description: "Built-in observability component."
+position: 18
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ObservabilityPlugin { /* private fields */ }
+```
+
+Built-in observability component.
+
+## Implementations
+
+### `impl ObservabilityPlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-observabilityplugin\">ObservabilityPlugin</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(host: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>&gt;) -&gt; Self"}} /></pre>
+
+Create a component using the embedding runtime's scope and codec services.
+
+#### `plugin_kind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn plugin_kind(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Component behavior independent of its activation context.
+
+#### `allows_multiple_components`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Component behavior independent of its activation context.
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate(\n    &amp;self,\n    plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ConfigDiagnostic&gt;"}} /></pre>
+
+Component behavior independent of its activation context.
+
+#### `validate_with_policy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate_with_policy(\n    &amp;self,\n    plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;,\n    policy: &amp;ConfigPolicy,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ConfigDiagnostic&gt;"}} /></pre>
+
+Component behavior independent of its activation context.
+
+## Trait Implementations
+
+### `impl Plugin for ObservabilityPlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl Plugin for <a href=\"struct-observabilityplugin\">ObservabilityPlugin</a>"}} /></pre>
+
+#### `plugin_kind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn plugin_kind(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `allows_multiple_components`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate(&amp;self, plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ConfigDiagnostic&gt;"}} /></pre>
+
+#### `validate_with_policy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_with_policy(\n    &amp;self,\n    plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;,\n    policy: &amp;ConfigPolicy,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ConfigDiagnostic&gt;"}} /></pre>
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn register&lt;'a&gt;(\n    &amp;'a self,\n    plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;,\n    ctx: &amp;'a mut dyn PluginRegistrationContext,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = PluginResult&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>

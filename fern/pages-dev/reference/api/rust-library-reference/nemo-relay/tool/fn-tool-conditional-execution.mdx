@@ -1,0 +1,33 @@
+---
+title: "Function tool_conditional_execution"
+sidebar-title: "tool_conditional_execution"
+description: "Run only the tool conditional-execution guardrail chain."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn tool_conditional_execution(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    args: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+Run only the tool conditional-execution guardrail chain.
+
+This evaluates whether a tool call should be allowed to proceed without invoking request intercepts or execution. Each evaluated guardrail emits an automatic guardrail scope start/end pair for observability.
+
+## Parameters
+
+- `name`: Tool name used when resolving the guardrail chain.
+- `args`: Raw tool arguments to validate.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/type-result) that is `Ok(())` when all guardrails allow execution.
+
+## Errors
+
+Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/nemo-relay/enum-flowerror) when a guardrail blocks execution, or any error raised by the guardrail chain itself.
+
+## Notes
+
+This helper is useful for preflight checks when the caller needs the rejection result without starting a tool span. Guardrail scopes are still emitted for the conditional checks themselves.

@@ -1,0 +1,62 @@
+---
+title: "Struct Builtin LlmNormalizer"
+sidebar-title: "BuiltinLlmNormalizer"
+description: "Stateless provider normalization, preserving usage and provider-reported costs."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct BuiltinLlmNormalizer;
+```
+
+Stateless provider normalization, preserving usage and provider-reported costs.
+
+## Trait Implementations
+
+### `impl Clone for BuiltinLlmNormalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for BuiltinLlmNormalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for BuiltinLlmNormalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+### `impl LlmNormalizer for BuiltinLlmNormalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl LlmNormalizer for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+
+#### `normalize_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_request(\n    &amp;self,\n    request: &amp;LlmRequest,\n    provider_hint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;"}} /></pre>
+
+#### `normalize_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_response(&amp;self, raw: &amp;Json) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmResponse&gt;"}} /></pre>
+
+### `impl Copy for BuiltinLlmNormalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>

@@ -2,12 +2,12 @@
 title: "Struct Diagnostics"
 sidebar-title: "Diagnostics"
 description: "Independent diagnostics context with immutable startup enablement."
-position: 42
+position: 41
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ```rust
 pub struct Diagnostics { /* private fields */ }
@@ -25,7 +25,7 @@ Clones share this context only. State and budgets are independent of logger life
 
 #### `from_settings`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_settings(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_settings(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnostics\">Diagnostics</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
 
 Construct a context using the startup owner's selected mode and capacities.
 
@@ -33,19 +33,19 @@ Enabled mode validates arithmetic and admits backend storage before use. The cir
 
 #### `selected_process_default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn selected_process_default() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;'static Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn selected_process_default() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;'static <a href=\"struct-diagnostics\">Diagnostics</a>&gt;"}} /></pre>
 
 Inspect a selected context without consuming an uninitialized default.
 
 #### `install_process_default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn install_process_default(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&amp;'static Self, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn install_process_default(\n    source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    settings: <a href=\"struct-diagnosticssettings\">DiagnosticsSettings</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&amp;'static <a href=\"struct-diagnostics\">Diagnostics</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
 
 Install before handing out default handles. Once used, inert handles are never silently upgraded to a different startup mode.
 
 #### `process_default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn process_default() -&gt; &amp;'static Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn process_default() -&gt; &amp;'static <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>
 
 Return the installed process context or initialize a disabled default.
 
@@ -137,7 +137,7 @@ Inspection scans admitted slots and detail-block metadata without allocating. Di
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl Default for Diagnostics`
 
@@ -145,4 +145,4 @@ Inspection scans admitted slots and detail-block metadata without allocating. Di
 
 #### `default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-diagnostics\">Diagnostics</a>"}} /></pre>

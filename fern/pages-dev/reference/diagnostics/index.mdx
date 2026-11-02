@@ -27,7 +27,7 @@ is the part of Relay that records an operation's outcome. A *context* owns the
 shared diagnostic storage for those producers and their readers.
 
 The shared data types live in `nemo-relay-types`. Registration, storage, and queries
-live in `nemo_relay::diagnostics`. Producers can submit diagnostic observations
+live in `nemo_relay_diagnostics`. Producers can submit diagnostic observations
 directly to the in-memory diagnostics service, which updates counters and retains
 bounded recent evidence. This requires no configured logger, active plugin, Tokio
 runtime, or HTTP listener.
@@ -54,10 +54,18 @@ If you use process-wide convenience constructors, call
 components. Otherwise, the first `Diagnostics::process_default()` call installs
 a disabled context. Existing handles keep that context.
 
+Explicit context construction is available through `nemo_relay::diagnostics::Diagnostics`.
 For an explicitly owned plugin host, use
 `nemo_relay::plugin::initialize_with_diagnostics(config, additional_plugins_toml, &diagnostics)`.
 The host passes that same context through configuration resolution and common
-component activation. The `initialize` convenience API resolves the embedded
+component activation. It does not install the supplied context as the process
+default or start the embedded reader service. Obtain an explicit reader with
+`diagnostics.reader()`. To share the context with process-default exporters and
+logging, create the context with `Diagnostics::install_process_default(source, settings)`
+before constructing those services, and inject the returned context.
+
+The Rust SDK exposes process-owned readers through `nemo_relay::diagnostics::reader()`.
+Its `plugin::initialize` API resolves the embedded
 service settings in [Embedded Diagnostics](/reference/diagnostics/bindings)
 before plugin validation or activation.
 Standalone validation and discovery do not consume the process default.

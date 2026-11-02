@@ -7,7 +7,7 @@ position: 16
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticEvent &#123;\n    pub sequence: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub observed_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub component: <a href=\"struct-componentidentity\">ComponentIdentity</a>,\n    pub origin: <a href=\"struct-diagnosticorigin\">DiagnosticOrigin</a>,\n    pub remote: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-remotediagnosticorigin\">RemoteDiagnosticOrigin</a>&gt;,\n    pub classification: <a href=\"struct-classification\">Classification</a>,\n    pub context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticdetail\">DiagnosticDetail</a>&gt;,\n    pub count: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'static&gt;,\n&#125;"}} /></pre>
 
@@ -110,6 +110,26 @@ Borrow retained detail, when available.
 #### `deserialize`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl JsonSchema for DiagnosticEvent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl JsonSchema for <a href=\"struct-diagnosticevent\">DiagnosticEvent</a>"}} /></pre>
+
+#### `schema_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_name() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `schema_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_id() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'static, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+#### `json_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn json_schema(generator: &amp;mut SchemaGenerator) -&gt; Schema"}} /></pre>
+
+#### `is_referenceable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn is_referenceable() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 ### `impl PartialEq for DiagnosticEvent`
 
