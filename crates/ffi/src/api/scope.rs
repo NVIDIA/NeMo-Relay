@@ -480,7 +480,7 @@ pub unsafe extern "C" fn nemo_relay_metric(
 fn parse_metric_measurement(
     index: usize,
     measurement: &NemoRelayMetricMeasurement,
-) -> Result<nemo_relay::api::event::MetricMeasurement, NemoRelayStatus> {
+) -> Result<nemo_relay_runtime::api::event::MetricMeasurement, NemoRelayStatus> {
     let measurement_name = match c_str_to_string(measurement.name) {
         Ok(name) => name,
         Err(status) => {
@@ -509,13 +509,13 @@ fn parse_metric_measurement(
         return Err(NemoRelayStatus::InvalidArg);
     };
     let value = match value_type {
-        nemo_relay::api::event::MetricValueType::U64 => {
+        nemo_relay_runtime::api::event::MetricValueType::U64 => {
             serde_json::Value::from(measurement.u64_value)
         }
-        nemo_relay::api::event::MetricValueType::I64 => {
+        nemo_relay_runtime::api::event::MetricValueType::I64 => {
             serde_json::Value::from(measurement.i64_value)
         }
-        nemo_relay::api::event::MetricValueType::F64 => {
+        nemo_relay_runtime::api::event::MetricValueType::F64 => {
             let Some(number) = serde_json::Number::from_f64(measurement.f64_value) else {
                 set_last_error(&format!("measurements[{index}].f64_value must be finite"));
                 return Err(NemoRelayStatus::InvalidArg);
@@ -559,7 +559,7 @@ fn parse_metric_measurement(
             .to_vec(),
         )
     };
-    Ok(nemo_relay::api::event::MetricMeasurement {
+    Ok(nemo_relay_runtime::api::event::MetricMeasurement {
         name: measurement_name,
         kind,
         value_type,

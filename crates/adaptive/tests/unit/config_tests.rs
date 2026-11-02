@@ -4,7 +4,7 @@
 //! Unit tests for config in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
+use nemo_relay_runtime::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
 use crate::response_cache::config::{ResponseCacheKeyStrategy, ToolCacheConfig, ToolClass};
@@ -19,7 +19,7 @@ fn test_adaptive_config_defaults() {
     assert!(config.response_cache.is_none());
     assert_eq!(
         config.policy.unknown_component,
-        nemo_relay::plugin::UnsupportedBehavior::Warn
+        nemo_relay_plugin_host::UnsupportedBehavior::Warn
     );
 }
 
@@ -89,33 +89,6 @@ fn test_backend_spec_in_memory_helper_uses_empty_config() {
     assert!(default_backend.config.is_empty());
 }
 
-#[cfg(not(feature = "redis-backend"))]
-#[test]
-fn test_response_cache_redis_backend_requires_the_redis_feature() {
-    let mut response_cache = ResponseCacheConfig {
-        namespace: "cache-tests".to_string(),
-        ..ResponseCacheConfig::default()
-    };
-    response_cache.backend.kind = "redis".to_string();
-    response_cache
-        .backend
-        .config
-        .insert("url".to_string(), json!("redis://127.0.0.1/"));
-
-    let report = crate::runtime::features::AdaptiveRuntime::validate_config(&AdaptiveConfig {
-        response_cache: Some(response_cache),
-        ..AdaptiveConfig::default()
-    });
-
-    assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "response_cache.backend_unavailable")
-    );
-}
-
-#[cfg(feature = "redis-backend")]
 #[test]
 fn test_backend_spec_redis_helper_sets_expected_fields() {
     let backend = BackendSpec::redis("redis://127.0.0.1/", "adaptive:");
@@ -218,12 +191,7 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         response_cache_backend.field("kind").unwrap().kind,
         EditorFieldKind::Enum
     );
-    #[cfg(not(feature = "redis-backend"))]
-    assert_eq!(
-        response_cache_backend.field("kind").unwrap().enum_values,
-        &["in_memory"]
-    );
-    #[cfg(feature = "redis-backend")]
+
     assert_eq!(
         response_cache_backend.field("kind").unwrap().enum_values,
         &["in_memory", "redis"]

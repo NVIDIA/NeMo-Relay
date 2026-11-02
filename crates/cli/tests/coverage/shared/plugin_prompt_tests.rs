@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nemo_relay::config_editor::{
+use nemo_relay_runtime::config_editor::{
     EditorFieldKind, EditorFieldSpec, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec,
     EditorVariantSpec,
 };

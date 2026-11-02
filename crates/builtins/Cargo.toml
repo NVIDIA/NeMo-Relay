@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-builtins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Default NeMo Relay plugin composition for SDKs and the CLI."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+nemo-relay-adaptive.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-pii-redaction.workspace = true
+nemo-relay-plugin.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-types.workspace = true
+
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+
+[dev-dependencies]
+serde_json.workspace = true

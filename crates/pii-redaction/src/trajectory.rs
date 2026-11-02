@@ -8,21 +8,21 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value as Json};
 
-use nemo_relay::api::event::{
+use nemo_relay_codecs::resolve::{
+    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
+};
+use nemo_relay_runtime::api::event::{
     CategoryProfile, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME,
     METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
 };
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::optimization::LlmOptimizationSummary;
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_types::codec::optimization::LlmOptimizationSummary;
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, FunctionDefinition,
     GenerationParams, Message, MessageContent, OpenAiImageUrl, ProviderNativeComponent, ToolCall,
     ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
-use nemo_relay::codec::resolve::{
-    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
-};
-use nemo_relay::codec::response::{
+use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, FinishReason, ResponseToolCall, Usage,
 };
 
@@ -179,8 +179,8 @@ impl TrajectorySanitizer {
     pub(super) fn sanitize_event_fields(
         &self,
         event: &Event,
-        mut fields: nemo_relay::api::event::EventSanitizeFields,
-    ) -> nemo_relay::api::event::EventSanitizeFields {
+        mut fields: nemo_relay_runtime::api::event::EventSanitizeFields,
+    ) -> nemo_relay_runtime::api::event::EventSanitizeFields {
         let log_severity = valid_mark_log_severity(event, fields.metadata.as_ref());
         let category = event.category().map(|category| category.as_str());
         let unknown_custom_mark = matches!(event, Event::Mark(_))
@@ -242,11 +242,11 @@ impl TrajectorySanitizer {
     fn project_llm_event(
         &self,
         event: &Event,
-        fields: &nemo_relay::api::event::EventSanitizeFields,
+        fields: &nemo_relay_runtime::api::event::EventSanitizeFields,
     ) -> Option<ProjectedLlmEvent> {
         let profile = fields.category_profile.as_ref()?;
         match event.scope_category() {
-            Some(nemo_relay::api::event::ScopeCategory::Start) => {
+            Some(nemo_relay_runtime::api::event::ScopeCategory::Start) => {
                 let annotated = profile.annotated_request.as_deref()?;
                 let annotated_surface = request_surface_from_annotation(annotated);
                 let sanitized = self.sanitize_annotated_request(annotated.clone())?;
@@ -271,7 +271,7 @@ impl TrajectorySanitizer {
                     annotated_response: None,
                 })
             }
-            Some(nemo_relay::api::event::ScopeCategory::End) => {
+            Some(nemo_relay_runtime::api::event::ScopeCategory::End) => {
                 let annotated = profile.annotated_response.as_deref()?;
                 let sanitized = self.sanitize_annotated_response(annotated.clone())?;
                 let data = fields
@@ -1056,9 +1056,9 @@ fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<Log
 }
 
 fn restore_log_severity(
-    mut fields: nemo_relay::api::event::EventSanitizeFields,
+    mut fields: nemo_relay_runtime::api::event::EventSanitizeFields,
     severity: Option<LogSeverity>,
-) -> nemo_relay::api::event::EventSanitizeFields {
+) -> nemo_relay_runtime::api::event::EventSanitizeFields {
     if let Some(severity) = severity {
         let metadata = fields.metadata.get_or_insert_with(empty_object);
         if let Json::Object(metadata) = metadata {

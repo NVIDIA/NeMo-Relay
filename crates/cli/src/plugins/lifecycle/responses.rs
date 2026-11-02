@@ -10,12 +10,16 @@
 
 use std::collections::HashMap;
 
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailurePhase,
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginStartupClass,
-};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use {
+    nemo_relay_plugin_host::dynamic::DynamicPluginAttestationMode,
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::DynamicPluginFailurePhase,
+    nemo_relay_plugin_host::dynamic::DynamicPluginKind,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass,
+};
 
 use crate::configuration::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
 use crate::error::{CliError, PluginLifecycleFailureKind};

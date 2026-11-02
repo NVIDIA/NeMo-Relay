@@ -21,8 +21,7 @@ runtime behavior. Use it with `nemo-relay` when an agent runtime should learn
 from observed executions, inject runtime hints, persist adaptive state, or
 cache repeated LLM responses and classified tool results.
 
-Adaptive behavior is installed through the same plugin system used by the core
-runtime, so applications can enable it without changing their orchestration
+Adaptive behavior is installed through the shared NeMo Relay plugin system, so applications can enable it without changing their orchestration
 framework.
 
 ## Why Use It?
@@ -45,8 +44,7 @@ framework.
   adaptive hints, tool parallelism, the Adaptive Cache Governor, and response
   caching.
 - **Storage backends**: In-memory backends for adaptive state and opt-in
-  response caching, with Redis-backed storage behind the `redis-backend`
-  feature.
+  response caching, with built-in Redis-backed storage.
 - **Learning primitives**: Runtime helpers and learners built on NeMo Relay
   events.
 - **Adaptive Cache Governor (ACG) module surface**: The canonical
@@ -55,18 +53,14 @@ framework.
 
 ## Installation
 
-Install the published crate alongside the core runtime:
+Install the published crate alongside the Rust SDK:
 
 ```bash
 cargo add nemo-relay nemo-relay-adaptive
 ```
 
-Enable Redis-backed storage when adaptive state or the response cache needs
-shared persistence:
-
-```bash
-cargo add nemo-relay-adaptive --features redis-backend
-```
+Select Redis-backed storage through runtime configuration when adaptive state
+or the response cache needs shared persistence.
 
 The response cache is opt-in. Its required `namespace` identifies one trusted
 cache-sharing domain and must not be reused across mutually untrusted tenants
@@ -96,19 +90,9 @@ let config = AdaptiveConfig {
 };
 ```
 
-Register the adaptive plugin component before validating or initializing plugin
-configuration that includes an `adaptive` component:
-
-```rust
-nemo_relay_adaptive::plugin_component::register_adaptive_component()?;
-```
-
-## Feature Flags
-
-- `redis-backend`: Enables the Redis-backed storage implementation.
-
-Builds without `redis-backend` still support the in-memory backend and the rest
-of the adaptive pipeline.
+All SDKs and the CLI register `adaptive` automatically. Plugin configuration
+controls activation. Custom embeddings using `nemo-relay-plugin-host` directly
+can call this crate's component registration helper to choose their component set.
 
 ## Documentation
 

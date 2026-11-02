@@ -18,13 +18,20 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dependencies]
+nemo-relay-builtins.workspace = true
 # First-party crates.
-nemo-relay = { workspace = true, features = ["atof-streaming", "object-store", "worker-grpc"] }
-nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay-adaptive = { workspace = true }
+nemo-relay-codecs.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-logging.workspace = true
+nemo-relay-observability.workspace = true
 nemo-relay-pii-redaction.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 chrono = { workspace = true, default-features = true }
@@ -42,7 +49,6 @@ libc.workspace = true
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
 
 # Third-party dependencies.
 tempfile.workspace = true

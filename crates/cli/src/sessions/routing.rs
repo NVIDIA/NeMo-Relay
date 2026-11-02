@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nemo_relay::api::runtime::SubscriberDelivery;
+use nemo_relay_runtime::api::runtime::SubscriberDelivery;
 use serde_json::Value;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 

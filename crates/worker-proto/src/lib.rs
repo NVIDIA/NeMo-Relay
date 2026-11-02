@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 //!
 //! The protobuf schema owns transport control flow and the tool-result wrapper

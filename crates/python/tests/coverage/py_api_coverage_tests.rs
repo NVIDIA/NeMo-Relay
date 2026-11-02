@@ -227,7 +227,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             PyScopeType::Tool,
             Some(handle.clone()),
             Some(PyScopeAttributes {
-                inner: nemo_relay::api::scope::ScopeAttributes::PARALLEL,
+                inner: nemo_relay_runtime::api::scope::ScopeAttributes::PARALLEL,
             }),
             Some(&data),
             Some(&metadata),
@@ -255,7 +255,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             &py_dict(py, json!({"arg": 1})),
             Some(child.clone()),
             Some(PyToolAttributes {
-                inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
+                inner: nemo_relay_runtime::api::tool::ToolAttributes::REMOTE,
             }),
             Some(&py_dict(py, json!({"tool_data": true}))),
             Some(&py_dict(py, json!({"tool_meta": true}))),
@@ -268,7 +268,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             &tool,
             crate::py_types::PyToolExecutionResult::from_inner(
                 py,
-                nemo_relay::api::tool::ToolExecutionResult::new(json!({"result": 2})),
+                nemo_relay_runtime::api::tool::ToolExecutionResult::new(json!({"result": 2})),
             )
             .unwrap(),
             Some(&py_dict(py, json!({"done": true}))),
@@ -278,7 +278,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         .unwrap();
 
         let llm_request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
+            inner: nemo_relay_runtime::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [], "model": "demo"}),
             },
@@ -289,8 +289,8 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             llm_request,
             Some(child.clone()),
             Some(PyLLMAttributes {
-                inner: nemo_relay::api::llm::LlmAttributes::STATEFUL
-                    | nemo_relay::api::llm::LlmAttributes::STREAMING,
+                inner: nemo_relay_runtime::api::llm::LlmAttributes::STATEFUL
+                    | nemo_relay_runtime::api::llm::LlmAttributes::STREAMING,
             }),
             Some(&py_dict(py, json!({"llm_data": true}))),
             Some(&py_dict(py, json!({"llm_meta": true}))),
@@ -708,7 +708,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 .contains("requires an async caller")
             );
             let llm_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
                 },
@@ -730,7 +730,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 llm_conditional_execution(
                     py,
                     PyLLMRequest {
-                        inner: nemo_relay::api::llm::LlmRequest {
+                        inner: nemo_relay_runtime::api::llm::LlmRequest {
                             headers: serde_json::Map::new(),
                             content: json!({"messages": [], "model": "blocked"}),
                         },
@@ -768,7 +768,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                                 helpers.getattr("tool_exec").unwrap(),
                                 child.clone(),
                                 PyToolAttributes {
-                                    inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
+                                    inner: nemo_relay_runtime::api::tool::ToolAttributes::REMOTE,
                                 },
                             ))
                             .unwrap(),),
@@ -802,7 +802,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                                 helpers.getattr("llm_exec").unwrap(),
                                 child.clone(),
                                 PyLLMAttributes {
-                                    inner: nemo_relay::api::llm::LlmAttributes::STATEFUL,
+                                    inner: nemo_relay_runtime::api::llm::LlmAttributes::STATEFUL,
                                 },
                                 codec,
                                 response_codec,
@@ -834,7 +834,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                                 helpers.getattr("finalizer").unwrap(),
                                 child.clone(),
                                 PyLLMAttributes {
-                                    inner: nemo_relay::api::llm::LlmAttributes::STREAMING,
+                                    inner: nemo_relay_runtime::api::llm::LlmAttributes::STREAMING,
                                 },
                                 stream_codec,
                                 stream_response_codec,
@@ -1146,7 +1146,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
 #[test]
 fn flow_error_to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
     let _python = crate::test_support::init_python_test();
-    let err = flow_error_to_py_err(nemo_relay::error::FlowError::Internal("boom".into()));
+    let err = flow_error_to_py_err(nemo_relay_types::error::FlowError::Internal("boom".into()));
     assert!(err.to_string().contains("boom"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1174,7 +1174,7 @@ fn synchronous_middleware_bridge_avoids_tokio_runtime_reentry() {
         .build()
         .unwrap();
     let result = runtime.block_on(async {
-        block_on_sync_middleware(async { Ok::<_, nemo_relay::error::FlowError>(7) })
+        block_on_sync_middleware(async { Ok::<_, nemo_relay_types::error::FlowError>(7) })
     });
     assert_eq!(result.unwrap(), 7);
 }
@@ -1294,7 +1294,7 @@ async def run_stream(api, request, func, collector, finalizer, response_codec):
 "#,
         );
         let request = PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
+            inner: nemo_relay_runtime::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
             },

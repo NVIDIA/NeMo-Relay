@@ -5,7 +5,7 @@
 
 use super::*;
 use chrono::{TimeZone, Utc};
-use nemo_relay::codec::response::Usage;
+use nemo_relay_types::codec::response::Usage;
 use uuid::Uuid;
 
 fn assert_send_sync<T: Send + Sync>() {}

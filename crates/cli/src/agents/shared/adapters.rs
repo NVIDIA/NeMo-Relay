@@ -12,7 +12,7 @@ pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
 pub(crate) const SKILL_LOAD_SOURCE_PROMPT_EXPANSION: &str = "prompt_expansion";
 
 use axum::http::HeaderMap;
-use nemo_relay::api::scope::COMPACTION_EVENT_NAME;
+use nemo_relay_runtime::api::scope::COMPACTION_EVENT_NAME;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 

@@ -8,10 +8,10 @@ use super::*;
 use std::sync::{Mutex, OnceLock};
 
 use crate::trie::data_models::{LlmCallPrediction, PredictionMetrics};
-use nemo_relay::api::runtime::current_scope_stack;
-use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::scope::{pop_scope, push_scope};
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_runtime::api::runtime::current_scope_stack;
+use nemo_relay_runtime::api::scope::ScopeType;
+use nemo_relay_runtime::api::scope::{pop_scope, push_scope};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -155,14 +155,14 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
     let req_fn = intercept.into_request_fn();
 
     let agent_scope = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("scope-agent")
             .scope_type(ScopeType::Agent)
             .build(),
     )
     .unwrap();
     let function_scope = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("step")
             .scope_type(ScopeType::Function)
             .parent(&agent_scope)
@@ -229,13 +229,13 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
     assert_eq!(returned_annotated, expected_annotated);
 
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&function_scope.uuid)
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&agent_scope.uuid)
             .build(),
     )
@@ -424,8 +424,8 @@ fn test_inject_agent_hints_follows_body_path_and_header_flag() {
 
 #[test]
 fn test_inject_agent_hints_merges_into_modeled_metadata_through_a_codec() {
-    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-    use nemo_relay::codec::traits::LlmCodec;
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
 
     let hints = manual_agent_hints(4, "agent", 1);
     let original = LlmRequest {
@@ -461,8 +461,8 @@ fn test_inject_agent_hints_merges_into_modeled_metadata_through_a_codec() {
 
 #[test]
 fn test_inject_agent_hints_creates_modeled_metadata_through_a_codec() {
-    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-    use nemo_relay::codec::traits::LlmCodec;
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
 
     let hints = manual_agent_hints(4, "agent", 1);
     let original = LlmRequest {

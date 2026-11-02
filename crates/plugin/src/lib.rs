@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
-//! Stable native plugin ABI and Rust authoring helpers for NeMo Relay.
+//! Shared in-process plugin contracts, stable native ABI, and Rust authoring helpers.
 //!
 //! This crate intentionally does not depend on the `nemo-relay` runtime crate.
 //! Native plugins built with it communicate with a host through versioned
@@ -4223,3 +4221,6 @@ macro_rules! nemo_relay_plugin {
         }
     };
 }
+
+/// In-process plugin contracts and host registration capabilities.
+pub mod component;

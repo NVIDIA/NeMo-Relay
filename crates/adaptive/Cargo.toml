@@ -15,12 +15,16 @@ workspace = true
 
 [dependencies]
 # First-party crates.
-nemo-relay.workspace = true
+nemo-relay-codecs.workspace = true
+nemo-relay-model-pricing.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 chrono = { workspace = true, default-features = true, features = ["serde"] }
 log = { workspace = true, features = ["kv"] }
-redis = { workspace = true, features = ["tokio-comp", "connection-manager"], optional = true }
+redis = { workspace = true, features = ["tokio-comp", "connection-manager"] }
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -34,12 +38,11 @@ tokio-stream = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [features]
-redis-backend = ["redis"]
-__skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
 
 [dev-dependencies]
 # First-party crates.
-nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
+nemo-relay-logging.workspace = true
 
 # Third-party dependencies.
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }

@@ -13,7 +13,7 @@ use crate::acg::prompt_ir::{
 };
 use crate::acg::stability::StabilityAnalysisResult;
 use chrono::{Duration, TimeZone, Utc};
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::Map;
 use uuid::Uuid;
 

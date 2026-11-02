@@ -3970,7 +3970,7 @@ async fn doctor_warns_for_disabled_otlp_destinations_without_probing() {
 #[cfg(unix)]
 #[test]
 fn doctor_otlp_file_symlinks_match_exporter_rejection_without_changing_targets() {
-    use nemo_relay::observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
+    use nemo_relay_observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target.jsonl");
@@ -4073,7 +4073,7 @@ fn doctor_otlp_enablement_guidance_names_only_disabled_settings() {
 /// Reject parent-folder traversal even when it reaches a writable output file.
 #[test]
 fn doctor_otlp_files_reject_parent_traversal_before_probing() {
-    use nemo_relay::observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
+    use nemo_relay_observability::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 
     let _cwd = crate::test_support::CwdTestScope::locked();
     let temp = tempfile::tempdir_in(".").unwrap();

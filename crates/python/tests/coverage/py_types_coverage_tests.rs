@@ -6,20 +6,20 @@
 use super::*;
 use std::ffi::CString;
 
-use nemo_relay::api::event::{
+use nemo_relay_runtime::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, LogSeverity, MarkEvent, MetricKind,
     MetricValueType, ScopeCategory, ScopeEvent, llm_attributes_to_strings,
     scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
-use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
-use nemo_relay::api::scope::{PushScopeParams, pop_scope, push_scope};
-use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
-use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay_runtime::api::llm::{LlmCallParams, llm_call, llm_call_end};
+use nemo_relay_runtime::api::scope::{PushScopeParams, pop_scope, push_scope};
+use nemo_relay_runtime::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use nemo_relay_runtime::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
-use nemo_relay::codec::response::{
+use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, CostEstimate, CostSource,
     FinishReason, ResponseToolCall, Usage,
 };
@@ -73,7 +73,7 @@ fn py_mark_event(event: Event) -> PyMarkEvent {
 fn test_tool_execution_context_repr_excludes_arguments() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let context = nemo_relay::api::runtime::ToolExecutionContext::new(
+        let context = nemo_relay_runtime::api::runtime::ToolExecutionContext::new(
             "lookup",
             json!({"secret": "private"}),
         )
@@ -425,7 +425,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         )
         .unwrap();
         llm_call_end(
-            nemo_relay::api::llm::LlmCallEndParams::builder()
+            nemo_relay_runtime::api::llm::LlmCallEndParams::builder()
                 .handle(&handle)
                 .response(json!({"content": "world"}))
                 .build(),
@@ -450,7 +450,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         assert_eq!(cleared["steps"], json!([]));
 
         pop_scope(
-            nemo_relay::api::scope::PopScopeParams::builder()
+            nemo_relay_runtime::api::scope::PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .build(),
         )
@@ -710,7 +710,7 @@ fn test_request_and_handle_wrappers_cover_remaining_methods() {
     Python::attach(|py| {
         fn assert_remaining_handle_methods(py: Python<'_>) {
             let stack = PyScopeStack {
-                inner: nemo_relay::api::runtime::create_scope_stack(),
+                inner: nemo_relay_runtime::api::runtime::create_scope_stack(),
                 publication_buffer: None,
             };
             assert_eq!(stack.__repr__(), "<ScopeStack>");
@@ -1026,7 +1026,7 @@ async def next_item(stream):
 
                 let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
                 tx_err
-                    .blocking_send(Err(nemo_relay::error::FlowError::Internal(
+                    .blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
                         "stream boom".into(),
                     )))
                     .unwrap();
@@ -1918,7 +1918,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_openai_chat_codec(py: Python<'_>) {
             let chat_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "gpt-4o-mini",
@@ -1956,7 +1956,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_openai_responses_codec(py: Python<'_>) {
             let responses_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "gpt-4o-mini",
@@ -2003,7 +2003,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         fn assert_anthropic_messages_codec(py: Python<'_>) {
             let anthropic_request = PyLLMRequest {
-                inner: nemo_relay::api::llm::LlmRequest {
+                inner: nemo_relay_runtime::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({
                         "model": "claude-sonnet-4-20250514",
@@ -2082,22 +2082,24 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     },
                 ],
                 model: Some("demo-model".into()),
-                params: Some(nemo_relay::codec::request::GenerationParams {
+                params: Some(nemo_relay_types::codec::request::GenerationParams {
                     temperature: Some(0.1),
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
-                tools: Some(vec![nemo_relay::codec::request::ToolDefinition::Function {
-                    function: nemo_relay::codec::request::FunctionDefinition {
-                        name: "lookup".into(),
-                        description: None,
-                        parameters: Some(json!({"type": "object"})),
-                        strict: None,
+                tools: Some(vec![
+                    nemo_relay_types::codec::request::ToolDefinition::Function {
+                        function: nemo_relay_types::codec::request::FunctionDefinition {
+                            name: "lookup".into(),
+                            description: None,
+                            parameters: Some(json!({"type": "object"})),
+                            strict: None,
+                            extra: serde_json::Map::new(),
+                        },
                         extra: serde_json::Map::new(),
                     },
-                    extra: serde_json::Map::new(),
-                }]),
-                tool_choice: Some(nemo_relay::codec::request::ToolChoice::Auto),
+                ]),
+                tool_choice: Some(nemo_relay_types::codec::request::ToolChoice::Auto),
                 store: None,
                 previous_response_id: None,
                 truncation: None,
