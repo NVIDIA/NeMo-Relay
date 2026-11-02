@@ -91,21 +91,24 @@ class _RestrictedUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 
-def _serialize_dataclass_instance(value: DataclassInstance) -> Json:
+def _serialize_dataclass_instance(value: DataclassInstance, *, preserve_null_fields: bool = False) -> Json:
     return {
-        field_info.name: _serialize_value(field_value)
-        for field_info in dataclasses.fields(value)
-        if (field_value := getattr(value, field_info.name)) is not None
+        dataclass_field.name: _serialize_value(field_value, preserve_null_fields=preserve_null_fields)
+        for dataclass_field in dataclasses.fields(value)
+        if (field_value := getattr(value, dataclass_field.name)) is not None or preserve_null_fields
     }
 
 
-def _serialize_value(value: object) -> Json:
+def _serialize_value(value: object, *, preserve_null_fields: bool = False) -> Json:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _serialize_dataclass_instance(cast(DataclassInstance, value))
+        return _serialize_dataclass_instance(cast(DataclassInstance, value), preserve_null_fields=preserve_null_fields)
     if isinstance(value, list):
-        return [_serialize_value(item) for item in value]
+        return [_serialize_value(item, preserve_null_fields=preserve_null_fields) for item in value]
     if isinstance(value, dict):
-        return {cast(str, key): _serialize_value(item) for key, item in value.items()}
+        return {
+            cast(str, key): _serialize_value(item, preserve_null_fields=preserve_null_fields)
+            for key, item in value.items()
+        }
     if hasattr(value, "model_dump"):
         try:
             return cast(_SupportsModelDump, value).model_dump(mode="json")
@@ -243,7 +246,7 @@ class DataclassCodec(Codec[T]):
         Returns:
             Json: JSON-compatible dictionary representation of ``value``.
         """
-        return _serialize_dataclass_instance(cast(DataclassInstance, value))
+        return _serialize_dataclass_instance(cast(DataclassInstance, value), preserve_null_fields=True)
 
     def from_json(self, data: Json) -> T:
         """Deserialize JSON data into a dataclass instance.
