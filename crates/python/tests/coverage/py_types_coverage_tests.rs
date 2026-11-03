@@ -1002,6 +1002,7 @@ async def next_item(stream):
                         receiver: Arc::new(tokio::sync::Mutex::new(rx_ok)),
                         cancel: cancel_ok,
                         closed: closed_ok_rx,
+                        finalizer_error: None,
                     },
                 )
                 .unwrap();
@@ -1039,6 +1040,7 @@ async def next_item(stream):
                         receiver: Arc::new(tokio::sync::Mutex::new(rx_err)),
                         cancel: cancel_err,
                         closed: closed_err_rx,
+                        finalizer_error: None,
                     },
                 )
                 .unwrap();
@@ -1064,6 +1066,7 @@ async def next_item(stream):
                         receiver: Arc::new(tokio::sync::Mutex::new(rx_done)),
                         cancel: cancel_done,
                         closed: closed_done_rx,
+                        finalizer_error: None,
                     },
                 )
                 .unwrap();
