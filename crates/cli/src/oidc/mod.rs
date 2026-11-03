@@ -129,10 +129,23 @@ pub(crate) async fn current_token(
             Err(login_required(source.issuer()))
         };
     };
-    let client = OidcClient::discover(source).await?;
-    let renewed = client.refresh(&refresh_token, now).await?;
-    write_session(&path, &renewed)?;
-    Ok(renewed.access_token)
+    let attempt = async {
+        OidcClient::discover(source)
+            .await?
+            .refresh(&refresh_token, now)
+            .await
+    };
+    match attempt.await {
+        Ok(renewed) => {
+            write_session(&path, &renewed)?;
+            Ok(renewed.access_token)
+        }
+        // A temporary issuer failure must not drop a token that is still valid.
+        Err(error) if !matches!(error, CliError::SignInRequired(_)) && session.expires_at > now => {
+            Ok(session.access_token)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Signs in and stores the session.

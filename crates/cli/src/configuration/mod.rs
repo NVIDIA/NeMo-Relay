@@ -2630,9 +2630,11 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     )
             });
             for credential in credentials {
-                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
-                let helper = credential.ends_with("_api_key_helper");
-                let clear = if helper {
+                // Replace a helper or a sign-in as a whole, even when the endpoint is unchanged:
+                // mixing one layer's issuer with another layer's client ID names no real client.
+                let whole_section =
+                    credential.ends_with("_api_key_helper") || credential.ends_with("_oidc");
+                let clear = if whole_section {
                     endpoint_changed || override_upstream.contains_key(credential)
                 } else {
                     endpoint_changed && !override_upstream.contains_key(credential)

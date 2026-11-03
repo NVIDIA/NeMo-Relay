@@ -252,6 +252,9 @@ impl OidcClient {
         let access_token = reply
             .access_token
             .ok_or_else(|| auth_error("the issuer returned no access token".into()))?;
+        let expires_in = reply.expires_in.ok_or_else(|| {
+            auth_error("the issuer returned an access token without expires_in".into())
+        })?;
         Ok(Session {
             issuer: self.issuer.clone(),
             client_id: self.client_id.clone(),
@@ -259,7 +262,7 @@ impl OidcClient {
             refresh_token: reply
                 .refresh_token
                 .or_else(|| previous_refresh.map(str::to_owned)),
-            expires_at: now.saturating_add(reply.expires_in.unwrap_or(0)),
+            expires_at: now.saturating_add(expires_in),
         })
     }
 }

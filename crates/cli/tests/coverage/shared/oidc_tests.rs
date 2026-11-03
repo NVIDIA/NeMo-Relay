@@ -31,6 +31,7 @@ struct Issuer {
     device_replies: VecDeque<&'static str>,
     refresh_status: Option<StatusCode>,
     refresh_error: Option<&'static str>,
+    omit_expires_in: bool,
     grants: Vec<HashMap<String, String>>,
 }
 
@@ -117,6 +118,9 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
         "refresh_token" => match (state.refresh_status, state.refresh_error) {
             (Some(status), _) => (status, "upstream down").into_response(),
             (None, Some(error)) => refused(error),
+            (None, None) if form["refresh_token"] == "refresh-1" && state.omit_expires_in => {
+                Json(json!({ "access_token": "access-2", "token_type": "Bearer" })).into_response()
+            }
             (None, None) if form["refresh_token"] == "refresh-1" => issued("access-2", "refresh-2"),
             (None, None) => refused("invalid_grant"),
         },
@@ -490,4 +494,30 @@ async fn a_missing_sign_in_is_reported_as_sign_in_required() {
         .unwrap();
 
     assert!(matches!(error, CliError::SignInRequired(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_token_reply_without_expires_in_is_refused_and_keeps_the_old_sign_in() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().omit_expires_in = true;
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 0);
+
+    let error = error_text(current_token(dir.path(), &source, 1_000).await);
+
+    assert!(error.contains("expires_in"), "{error}");
+    assert_eq!(saved(dir.path(), &source).access_token, "access-1");
+}
+
+#[tokio::test]
+async fn a_temporary_refresh_failure_keeps_using_an_unexpired_token() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().refresh_status = Some(StatusCode::SERVICE_UNAVAILABLE);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 1_000 + 60);
+
+    let token = current_token(dir.path(), &source, 1_000).await.unwrap();
+
+    assert_eq!(token, "access-1");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
 }
