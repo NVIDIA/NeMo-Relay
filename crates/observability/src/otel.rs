@@ -48,12 +48,13 @@ use super::otel_signal::{
 };
 use super::{
     ExporterRuntimeDiagnostics, MarkProjection, OpenTelemetryType, OtlpAttributeMapping,
-    apply_attribute_mappings, attribute_mapping_aliases, attribute_mapping_inputs,
-    default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
+    apply_attribute_mappings, attribute_mapping_inputs, default_mark_exclude_names,
+    effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
     promote_event_metadata_attributes, push_serialized_top_level_attributes,
     push_session_identity_attributes, push_tool_result_annotation_attribute,
-    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
+    push_top_level_json_attributes, relay_span_id, relay_trace_id,
+    resolve_attribute_mapping_aliases, validate_attribute_mappings,
     validate_metadata_promotion_prefixes,
 };
 
@@ -2250,14 +2251,13 @@ impl From<OtelEventProcessorConfig> for OtelEventProcessor {
             otel_type,
             mark_projection,
             mark_exclude_names,
-            mut attribute_mappings,
+            attribute_mappings,
             promote_metadata_prefixes,
             completed_span_context_ttl,
             runtime_diagnostics,
             owned_config,
             dynamic_pipelines,
         } = config;
-        filter_attribute_mappings(&mut attribute_mappings, &runtime_diagnostics);
         let tracer = provider.tracer(instrumentation_scope.clone());
         let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
             .as_ref()
@@ -2488,15 +2488,10 @@ impl OtelEventProcessor {
         }
         // Snapshot keys claimed by the projection so promoted metadata cannot
         // replace them when the span completes.
-        let mut projection_attribute_keys = attributes
+        let projection_attribute_keys = attributes
             .iter()
             .map(|attribute| attribute.key.as_str().to_string())
             .collect::<HashSet<_>>();
-        projection_attribute_keys.extend(
-            self.attribute_mappings
-                .iter()
-                .map(|mapping| mapping.alias.clone()),
-        );
         let projected_attributes = if self.attribute_mappings.is_empty() {
             Vec::new()
         } else {
@@ -2504,11 +2499,19 @@ impl OtelEventProcessor {
             sources.extend(attributes.iter().cloned());
             attribute_mapping_inputs(&sources, &self.attribute_mappings)
         };
+        let mut metadata_protected_keys = Cow::Borrowed(&projection_attribute_keys);
+        if !self.attribute_mappings.is_empty() {
+            metadata_protected_keys.to_mut().extend(
+                self.attribute_mappings
+                    .iter()
+                    .map(|mapping| mapping.alias.clone()),
+            );
+        }
         let mut start_promoted_metadata = Vec::new();
         let promoted_metadata_keys = self.promote_metadata(
             &mut start_promoted_metadata,
             event,
-            &projection_attribute_keys,
+            &metadata_protected_keys,
         );
         self.remove_promoted_metadata_attributes(&mut attributes, event, promoted_metadata_keys);
         span.set_attributes(attributes);
@@ -2617,6 +2620,11 @@ impl OtelEventProcessor {
         {
             super::openinference::push_model_name(&mut attributes, model_name);
         }
+        active_span.projection_attribute_keys.extend(
+            attributes
+                .iter()
+                .map(|attribute| attribute.key.as_str().to_string()),
+        );
         if !self.attribute_mappings.is_empty() {
             let mut projected_attributes = active_span.projected_attributes;
             projected_attributes.extend(end_attributes(event));
@@ -2624,19 +2632,20 @@ impl OtelEventProcessor {
                 projected_attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
             }
             projected_attributes.extend(attributes.iter().cloned());
-            attributes.extend(attribute_mapping_aliases(
+            attributes.extend(resolve_attribute_mapping_aliases(
                 &projected_attributes,
                 &self.attribute_mappings,
+                &active_span.projection_attribute_keys,
             ));
         }
+        active_span.projection_attribute_keys.extend(
+            self.attribute_mappings
+                .iter()
+                .map(|mapping| mapping.alias.clone()),
+        );
         // Scope-end key presence is authoritative even when the final value
         // cannot be represented as an OTLP attribute. Do not restore a stale
         // promoted value retained from scope start.
-        active_span.projection_attribute_keys.extend(
-            attributes
-                .iter()
-                .map(|attribute| attribute.key.as_str().to_string()),
-        );
         let end_metadata = event.metadata().and_then(nemo_relay_types::Json::as_object);
         active_span.start_promoted_metadata.retain(|attribute| {
             let key = attribute.key.as_str();
@@ -3057,32 +3066,6 @@ pub(crate) fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
         Some(ScopeType::Custom) => "custom",
         Some(ScopeType::Unknown) | None => "unknown",
     }
-}
-
-fn filter_attribute_mappings(
-    mappings: &mut Vec<OtlpAttributeMapping>,
-    diagnostics: &SignalRuntimeDiagnostics,
-) {
-    mappings.retain(|mapping| {
-        if !super::is_reserved_otel_attribute_key(mapping.alias.trim()) {
-            return true;
-        }
-        diagnostics.record(
-            "otel.attribute_mapping_alias_reserved",
-            format!(
-                "OpenTelemetry attribute mapping alias {:?} was skipped: reserved namespace",
-                mapping.alias
-            ),
-            1,
-        );
-        log::warn!(
-            target: "nemo_relay.observability",
-            event = "otel_attribute_mapping_alias_reserved",
-            alias = mapping.alias.as_str();
-            "OpenTelemetry attribute mapping alias was skipped: reserved namespace"
-        );
-        false
-    });
 }
 
 #[doc(hidden)]

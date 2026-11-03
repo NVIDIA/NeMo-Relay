@@ -777,11 +777,19 @@ pub fn attribute_mapping_aliases(
         .iter()
         .map(|attribute| attribute.key.as_str().to_string())
         .collect::<std::collections::HashSet<_>>();
+    resolve_attribute_mapping_aliases(projected_attributes, mappings, &existing)
+}
+
+fn resolve_attribute_mapping_aliases(
+    sources: &[opentelemetry::KeyValue],
+    mappings: &[OtlpAttributeMapping],
+    protected_keys: &std::collections::HashSet<String>,
+) -> Vec<opentelemetry::KeyValue> {
     mappings
         .iter()
-        .filter(|mapping| !existing.contains(mapping.alias.as_str()))
+        .filter(|mapping| !protected_keys.contains(mapping.alias.as_str()))
         .filter_map(|mapping| {
-            projected_attributes
+            sources
                 .iter()
                 .rev()
                 .find(|attribute| attribute.key.as_str() == mapping.key)

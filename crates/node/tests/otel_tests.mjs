@@ -422,7 +422,7 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
         markExcludeNames: ['custom.mark'],
         attributeMappings: [
           { key: 'nemo_relay.scope_type', alias: 'scope.kind' },
-          { key: 'nemo_relay.scope_type', alias: 'gen_ai.unsupported' },
+          { key: 'nemo_relay.scope_type', alias: 'llm.system' },
         ],
         promoteMetadataPrefixes: ['nv.'],
         promoteResourceMetadataPrefixes: ['deployment.'],
@@ -454,11 +454,10 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
 
       // Asserted per option: a setting parsed but never applied must fail here.
       assert.ok(spanKeys.has('scope.kind'), 'attributeMappings should add the alias');
-      assert.equal(spanKeys.has('gen_ai.unsupported'), false);
-      const skipped = subscriber
-        .runtimeDiagnostics()
-        .find((entry) => entry.code === 'otel.attribute_mapping_alias_reserved');
-      assert.equal(skipped.count, 1);
+      const agent = spans.find((span) => span.name.endsWith('node-projection-agent'));
+      assert.deepEqual(agent.attributes.find((attribute) => attribute.key === 'llm.system').value, {
+        stringValue: 'agent',
+      });
       assert.ok(spanKeys.has('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
       assert.ok(
         resourceKeys.includes('deployment.environment'),

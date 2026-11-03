@@ -1053,7 +1053,7 @@ class TestOpenTelemetryTypes:
         config.mark_exclude_names = ["custom.mark"]
         config.attribute_mappings = [
             {"key": "nemo_relay.scope_type", "alias": "scope.kind"},
-            {"key": "nemo_relay.scope_type", "alias": "gen_ai.unsupported"},
+            {"key": "nemo_relay.scope_type", "alias": "llm.system"},
         ]
         config.promote_metadata_prefixes = ["nv."]
         config.promote_resource_metadata_prefixes = ["deployment."]
@@ -1095,9 +1095,9 @@ class TestOpenTelemetryTypes:
 
         # Asserted per option: a setting parsed but never applied must fail here.
         assert "scope.kind" in span_keys
-        assert "gen_ai.unsupported" not in span_keys
-        skipped = subscriber.runtime_diagnostics().get("otel.attribute_mapping_alias_reserved")
-        assert skipped is not None and skipped.count == 1
+        agent = next(span for span in spans if span["name"].endswith("py-projection-agent"))
+        agent_attributes = {entry["key"]: entry["value"] for entry in agent["attributes"]}
+        assert agent_attributes["llm.system"] == {"stringValue": "agent"}
         assert "nv.tenant" in span_keys
         assert "deployment.environment" in resource_keys
         assert ("mark:kept.mark" in span_names) == (projection != "gen_ai"), span_names
