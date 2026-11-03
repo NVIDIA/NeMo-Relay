@@ -102,3 +102,49 @@ fn login_reads_the_file_named_by_the_global_config_flag() {
     assert_eq!(selected.issuer, "https://team-issuer.example");
     assert_eq!(selected.client_id, "team");
 }
+
+#[test]
+fn the_openrouter_preset_needs_no_configuration() {
+    let selected = select_source(
+        ProviderArgs {
+            preset: Some(OidcPreset::Openrouter),
+            ..Default::default()
+        },
+        || panic!("the configuration must not be read"),
+    )
+    .unwrap();
+
+    assert_eq!(selected.issuer, "https://clerk.openrouter.ai");
+    assert_eq!(selected.client_id, "q3AE4KTq8gq6HlU3");
+    assert!(selected.scope.contains("inference"));
+}
+
+#[test]
+fn a_config_section_with_only_a_preset_is_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("team.toml");
+    std::fs::write(&path, "[upstream.openai_oidc]\npreset = \"openrouter\"\n").unwrap();
+    let server = ServerArgs {
+        config: Some(path),
+        ..Default::default()
+    };
+
+    let selected = select_source(args(None), || configured(&server)).unwrap();
+
+    assert_eq!(selected, OidcPreset::Openrouter.source());
+}
+
+#[test]
+fn explicit_fields_override_the_preset_and_missing_ones_fail_without_it() {
+    let parse = |text: &str| toml::from_str::<OidcSource>(text);
+
+    let custom = parse("preset = \"openrouter\"\nscope = \"openid\"").unwrap();
+    assert_eq!(custom.client_id, "q3AE4KTq8gq6HlU3");
+    assert_eq!(custom.scope, "openid");
+
+    let error = parse("client_id = \"relay\"").unwrap_err().to_string();
+    assert!(
+        error.contains("issuer is required unless preset is set"),
+        "{error}"
+    );
+}
