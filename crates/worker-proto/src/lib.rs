@@ -88,6 +88,11 @@ pub mod nvidia_worker_v1 {
     /// Initial stable worker/schema contract baseline, independent of crate versions.
     pub const CONTRACT_VERSION: &str = "1.0.0";
 
+    /// Diagnostic snapshot contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION: &str = "1.0.0";
+    /// Diagnostic provenance contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION: &str = "1.0.0";
+
     tonic::include_proto!("nvidia.nemo.relay.worker.v1");
 }
 
