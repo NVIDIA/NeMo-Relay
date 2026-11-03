@@ -3,9 +3,10 @@
 
 //! Typed conversions between shared domain values and protobuf values.
 //!
-//! The host and Rust worker use the same [`WireValue`] implementations so native
-//! and worker callbacks retain the types from `nemo_relay_types`. Generated
-//! protobuf types describe transport presence and alternatives separately.
+//! The host and Rust worker use the same
+//! [`WireValue`](crate::conversions::WireValue) implementations so native and
+//! worker callbacks retain the types from `nemo_relay_types`. Generated protobuf
+//! types describe transport presence and alternatives separately.
 //!
 //! `dto.rs` declares struct fields, enum mappings, and collection wrappers.
 //! Matching field names use `field: mode`; renames use `source => target: mode`.
