@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -246,6 +247,64 @@ class QuickstartExecutionTests(unittest.TestCase):
         with patch.dict(os.environ, {**dict.fromkeys(keys, "fake-test-credential"), "QUICKSTART_TEST_VISIBLE": "kept"}):
             result = RUNNER.run_case("nodejs", scenario, self.assets(), {}, self.root / "credentials")
         self.assertEqual(result["status"], "passed", result)
+
+    def test_source_build_commands_do_not_inherit_github_credentials(self):
+        source = self.root / "source"
+        source.mkdir()
+        (source / "Cargo.toml").write_text('[workspace.package]\nversion = "0.11.0-rc.2"\n')
+        packages = self.root / "packages"
+        packages.mkdir()
+        keys = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ACTIONS_RUNTIME_TOKEN")
+        program = (
+            f"import os; assert not set({keys!r}) & os.environ.keys(); "
+            "assert os.environ['QUICKSTART_TEST_VISIBLE'] == 'kept'"
+        )
+        commands = []
+
+        def execute(command, cwd, environment, stdout, stderr, timeout):
+            commands.append(command)
+            # Exercise a real child process: build tools and their descendants
+            # must receive the same filtered environment as guide commands.
+            RUNNER.execute(shell.command(sys.executable, "-c", program), cwd, environment, stdout, stderr, timeout)
+            wheels = packages / "wheels"
+            wheels.mkdir()
+            wheel = self.wheel()
+            shutil.copy2(wheel, wheels / wheel.name)
+
+        record = {"commit": "a" * 40, "profile": "dev"}
+        with patch.dict(os.environ, {**dict.fromkeys(keys, "fake-test-credential"), "QUICKSTART_TEST_VISIBLE": "kept"}):
+            build.prepare(ROOT, source, self.root, {"python"}, execute, record)
+            self.assertEqual(os.environ["GH_TOKEN"], "fake-test-credential")
+        self.assertEqual(record["status"], "built")
+        self.assertEqual(len(commands), 1)
+        self.assertIn("package-python", commands[0])
+        self.assertEqual(record["justfile_sha256"], ASSETS.sha256(ROOT / "justfile"))
+        # Canonical recipes use ecosystem subdirectories; reused artifacts must
+        # still be discoverable and verified against the build manifest.
+        assets = ASSETS.Assets("0.11.0-rc.2", self.root / "downloads", str(packages), "NVIDIA/NeMo-Relay")
+        self.assertEqual(assets.python().parent, (packages / "wheels").resolve())
+
+    def test_rust_workspace_resolves_the_public_crate_by_name(self):
+        root = self.root / "repo"
+        sdk = root / "crates/relocated-sdk"
+        (sdk / "src").mkdir(parents=True)
+        (root / "Cargo.toml").write_text(
+            '[workspace]\nmembers = ["crates/relocated-sdk"]\nresolver = "2"\n'
+            '[workspace.package]\nversion = "0.11.0-rc.2"\n'
+        )
+        (sdk / "Cargo.toml").write_text('[package]\nname = "nemo-relay"\nversion.workspace = true\nedition = "2021"\n')
+        (sdk / "src/lib.rs").write_text("")
+        for arguments in (
+            ["init"],
+            ["config", "user.email", "test@example.com"],
+            ["config", "user.name", "Test"],
+            ["add", "."],
+            ["commit", "-m", "fixture"],
+        ):
+            subprocess.run(["git", "-C", str(root), *arguments], check=True, capture_output=True, timeout=60)
+        assets = self.assets()
+        self.assertEqual(assets.rust(str(root)), {"nemo-relay": str(sdk.resolve())})
+        self.assertEqual(assets.source["rust_source"]["path"], str(sdk.resolve()))
 
     def test_malformed_rust_lock_is_a_recorded_case_failure(self):
         for label, content, error in (
@@ -512,6 +571,7 @@ class QuickstartExecutionTests(unittest.TestCase):
             subprocess.run(command, check=True, capture_output=True)
         manifest = root / "Cargo.toml"
         manifest.write_text('[workspace.package]\nversion = "0.11.0"\n')
+        shutil.copy2(ROOT / "justfile", root / "justfile")
         subprocess.run(["git", "-C", str(root), "add", "Cargo.toml"], check=True)
         subprocess.run(["git", "-C", str(root), "commit", "-m", "fixture"], check=True, capture_output=True)
         manifest.write_text("uncommitted work")

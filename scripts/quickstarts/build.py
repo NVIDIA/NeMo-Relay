@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -21,14 +20,19 @@ from quickstarts.assets import host_platform, sha256
 def checkout(root: Path, ref: str, output: Path) -> tuple[Path, str, dict[str, Any]]:
     """Pin and inspect source before selecting cases or starting expensive builds."""
     commit = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "--verify", ref + "^{commit}"], text=True
+        ["git", "-C", str(root), "rev-parse", "--verify", "--end-of-options", ref + "^{commit}"], text=True, timeout=60
     ).strip()
     source, packages = output / "source", output / "packages"
     packages.mkdir()
     subprocess.run(
-        ["git", "clone", "--shared", "--no-checkout", str(root), str(source)], check=True, capture_output=True
+        ["git", "clone", "--shared", "--no-checkout", str(root), str(source)],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
-    subprocess.run(["git", "-C", str(source), "checkout", "--detach", commit], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(source), "checkout", "--detach", commit], check=True, capture_output=True, timeout=120
+    )
     version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     record = {"commit": commit, "ref": ref, "profile": "dev", "status": "checked-out"}
     (output / "build.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -38,57 +42,53 @@ def checkout(root: Path, ref: str, output: Path) -> tuple[Path, str, dict[str, A
 def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute: Any, record: dict[str, Any]) -> None:
     packages = output / "packages"
     version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    environment = dict(os.environ)
-    environment.update(UV_PROJECT_ENVIRONMENT=str(source / ".venv"), npm_config_cache=str(output / "npm-cache"))
+    environment = shell.clean_environment()
+    environment.update(
+        UV_PROJECT_ENVIRONMENT=str(source / ".venv"),
+        UV_PYTHON=sys.executable,
+        npm_config_cache=str(output / "npm-cache"),
+    )
     environment.setdefault("CARGO_TARGET_DIR", str(root / "target" / "quickstart-build"))
     target = Path(environment["CARGO_TARGET_DIR"]).resolve()
     environment["CARGO_TARGET_DIR"] = str(target)
     record["status"] = "building"
     provenance = output / "build.json"
     provenance.write_text(json.dumps(record, indent=2) + "\n")
-    commands = []
-    if "cli" in surfaces:
-        commands.append(("cli", "cargo build --locked -p nemo-relay-cli"))
-    if "python" in surfaces:
-        commands.append(
-            (
-                "python",
-                shell.command(
-                    sys.executable,
-                    "-m",
-                    "maturin",
-                    "build",
-                    "--locked",
-                    "--profile",
-                    "dev",
-                    "--interpreter",
-                    sys.executable,
-                    "--out",
-                    packages,
-                ),
-            )
-        )
-    if "nodejs" in surfaces:
-        commands.extend(
-            [
-                ("node-install", "npm ci --workspace=nemo-relay-node --ignore-scripts"),
-                ("node-build", "npm run build-debug --workspace=nemo-relay-node"),
-                (
-                    "node-pack",
-                    shell.command(
-                        sys.executable,
-                        "scripts/package-node-bin.py",
-                        "--platform",
-                        host_platform(),
-                        "--version",
-                        version,
-                        "--output-dir",
-                        packages,
-                        "--metapackage",
-                    ),
-                ),
-            ]
-        )
+    # The harness's canonical recipes own build policy, including when testing
+    # an older source ref. Only their source root and output settings change;
+    # record the recipe hash alongside the tested source commit.
+    justfile = root / "justfile"
+    record["justfile_sha256"] = sha256(justfile)
+    arguments = (
+        "just",
+        "--justfile",
+        justfile,
+        "--set",
+        "REPO_ROOT",
+        source,
+        "--set",
+        "package_profile",
+        "dev",
+        "--set",
+        "ref_name",
+        version,
+        "--set",
+        "output_dir",
+        packages,
+        "--set",
+        "node_platform",
+        host_platform(),
+        "--set",
+        "node_metapackage",
+        "true",
+    )
+    commands = [
+        (surface, shell.command(*arguments, recipe))
+        for surface, recipe in (("cli", "build-cli"), ("python", "package-python"), ("nodejs", "package-node"))
+        if surface in surfaces
+    ]
+    record["commands"] = commands
+    provenance.write_text(json.dumps(record, indent=2) + "\n")
     for name, command in commands:
         print(f"Building {name} from {record['commit'][:12]}...", flush=True)
         execute(command, source, environment, output / (name + ".stdout.log"), output / (name + ".stderr.log"), 2400)
@@ -107,6 +107,6 @@ def prepare(root: Path, source: Path, output: Path, surfaces: set[str], execute:
     record.update(
         status="built",
         commands=commands,
-        files={path.name: sha256(path) for path in packages.iterdir() if path.is_file()},
+        files={path.name: sha256(path) for path in packages.rglob("*") if path.is_file()},
     )
     provenance.write_text(json.dumps(record, indent=2) + "\n")

@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import re
 import shutil
 import signal
@@ -127,29 +126,7 @@ def run_case(
     }
     started = time.monotonic()
     # Keep host credentials/configuration out of example discovery without changing the user's HOME.
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
-        and not key.startswith(
-            (
-                "ACTIONS_",
-                "NEMO_RELAY_",
-                "PYTHON",
-                "UV_PROJECT",
-                "VIRTUAL_ENV",
-                "CODEX_",
-                "CLAUDE_",
-                "ANTHROPIC_",
-                "OPENAI_",
-                "GOOGLE_",
-                "GEMINI_",
-                "NVIDIA_",
-                "HERMES_",
-                "PI_CODING_AGENT_",
-            )
-        )
-    }
+    environment = shell.clean_environment()
     environment.update(
         UV_PYTHON=sys.executable,
         PYTHONUTF8="1",
@@ -392,8 +369,12 @@ def main() -> int:
             cases=selected,
             not_selected=[name for name in scenarios if name not in selected],
             not_supported=[name for name in scenarios if name not in SURFACES],
-            source_commit=subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip(),
-            checkout_dirty=bool(subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True)),
+            source_commit=subprocess.check_output(
+                ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=60
+            ).strip(),
+            checkout_dirty=bool(
+                subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True, timeout=60)
+            ),
             checker_sha256=sha256(ROOT / "scripts/check-quickstarts.py"),
             runner_sha256=sha256(Path(__file__)),
             resolver_sha256=sha256(ROOT / "scripts/quickstarts/assets.py"),
@@ -409,7 +390,7 @@ def main() -> int:
         if source:
             assets.source["build"] = report["build"]
         rust_source = (
-            str(source / "crates/core")
+            str(source)
             if source
             else (assets.override(json.loads(args.overrides.read_text())) if args.overrides else "")
         )

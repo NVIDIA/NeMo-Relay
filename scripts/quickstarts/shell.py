@@ -19,6 +19,33 @@ WINDOWS = os.name == "nt"
 NAME = "powershell" if WINDOWS else "bash"
 
 
+def clean_environment() -> dict[str, str]:
+    """Keep host credentials and agent configuration out of builds and guide commands."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+        and not key.startswith(
+            (
+                "ACTIONS_",
+                "NEMO_RELAY_",
+                "PYTHON",
+                "UV_PROJECT",
+                "VIRTUAL_ENV",
+                "CODEX_",
+                "CLAUDE_",
+                "ANTHROPIC_",
+                "OPENAI_",
+                "GOOGLE_",
+                "GEMINI_",
+                "NVIDIA_",
+                "HERMES_",
+                "PI_CODING_AGENT_",
+            )
+        )
+    }
+
+
 def quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'" if WINDOWS else shlex.quote(str(value))
 

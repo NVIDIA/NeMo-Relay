@@ -131,6 +131,7 @@ class Fixture:
 
             def do_POST(self) -> None:
                 try:
+                    # rfile is the incoming HTTP body stream, not a disk fixture.
                     request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                     fixture.requests += 1
                     if fixture.requests > 16:

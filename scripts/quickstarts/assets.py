@@ -261,20 +261,28 @@ class Assets:
         if source:
             path = Path(source).expanduser().resolve()
             info = tomllib.loads((path / "Cargo.toml").read_text())
-            if info["package"]["name"] != "nemo-relay":
-                raise ValueError("Rust source override must point to the nemo-relay crate")
-            # Cargo metadata resolves inherited workspace versions and path dependencies.
+            if "package" in info and info["package"]["name"] != "nemo-relay":
+                raise ValueError("Rust source override must point to the nemo-relay crate or its workspace")
+            # Resolve the public crate by name: its directory can change between
+            # selected source refs (for example, crates/core became crates/sdk).
             metadata = run_json(
                 "cargo", "metadata", "--no-deps", "--format-version", "1", "--manifest-path", str(path / "Cargo.toml")
             )
-            package = next(item for item in metadata["packages"] if item["name"] == "nemo-relay")
+            package = next((item for item in metadata["packages"] if item["name"] == "nemo-relay"), None)
+            if package is None:
+                raise ValueError("Rust source workspace has no nemo-relay crate")
             if package["version"] != self.version:
                 raise ValueError("Rust source version does not match the requested version")
-            commit = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
-            dirty = subprocess.check_output(["git", "-C", str(path), "status", "--porcelain"], text=True)
+            path = Path(package["manifest_path"]).parent
+            commit = subprocess.check_output(
+                ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=60
+            ).strip()
+            dirty = subprocess.check_output(["git", "-C", str(path), "status", "--porcelain"], text=True, timeout=60)
             root = Path(metadata["workspace_root"])
             files = subprocess.check_output(
-                ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"], text=True
+                ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                text=True,
+                timeout=60,
             ).split("\0")
             digest = hashlib.sha256()
             for filename in sorted(set(files) - {""}):
