@@ -2748,3 +2748,26 @@ impl Drop for EnvironmentGuard {
         }
     }
 }
+
+#[test]
+fn attribute_mappings_accept_semantic_aliases_in_plugin_config() {
+    for projection in ["full", "openinference", "gen_ai"] {
+        for alias in ["app.cwd", "gen_ai.unsupported"] {
+            for destination in ["endpoints", "file_sinks"] {
+                let mut sink = json!({
+                    "type": projection,
+                    "attribute_mappings": [{"key": "nemo_relay.start.input.cwd", "alias": alias}]
+                });
+                if destination == "endpoints" {
+                    sink["endpoint"] = json!("http://localhost:4318/v1/traces");
+                } else {
+                    sink["output_directory"] = json!("traces");
+                }
+                let report = validate_component(&component_config(json!({
+                    "opentelemetry": {"enabled": true, destination: [sink]}
+                })));
+                assert!(!report.has_errors(), "{:?}", report.diagnostics);
+            }
+        }
+    }
+}
