@@ -1,0 +1,381 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines RelayHostRuntimeService and its dedicated RPC request and response messages.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/event.proto";
+import "nvidia/nemo/relay/worker/v1/llm.proto";
+import "nvidia/nemo/relay/worker/v1/runtime.proto";
+
+// Authenticated host runtime operations for scope, continuation, codec, and registration access.
+service RelayHostRuntimeService {
+  // Submits a process-log record to the host-owned sink and filtering policy.
+  rpc Log(LogRequest) returns (LogResponse);
+  // Materializes a pending mark under the selected host scope context.
+  rpc EmitMark(EmitMarkRequest) returns (EmitMarkResponse);
+  // Returns owned root-to-top scope identities or explicit absence of bound context.
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest) returns (GetCurrentScopeStackSnapshotResponse);
+  // Returns bounded operational diagnostic counters for the active host.
+  rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
+  // Creates and binds a scope under the selected stack and parent.
+  rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
+  // Closes an owned scope handle with optional output, metadata, and explicit time.
+  rpc PopScope(PopScopeRequest) returns (PopScopeResponse);
+  // Creates an isolated activation-owned scope stack.
+  rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
+  // Releases an isolated activation-owned scope stack.
+  rpc DropScopeStack(DropScopeStackRequest) returns (DropScopeStackResponse);
+  // Calls the current tool continuation and preserves its original downstream failure identity.
+  rpc ToolNext(ToolNextRequest) returns (ToolNextResponse);
+  // Calls the current unary LLM continuation and preserves its original downstream failure
+  // identity.
+  rpc LlmNext(LlmNextRequest) returns (LlmNextResponse);
+  // Opens the current streaming LLM continuation; one error item terminates delivery.
+  rpc LlmStreamNext(LlmStreamNextRequest) returns (stream LlmStreamNextResponse);
+  // Decodes a provider request through the current invocation's request codec capability.
+  rpc DecodeLlmCodecRequest(DecodeLlmCodecRequestRequest) returns (DecodeLlmCodecRequestResponse);
+  // Encodes a normalized annotation relative to the original provider request baseline.
+  rpc EncodeLlmCodecRequest(EncodeLlmCodecRequestRequest) returns (EncodeLlmCodecRequestResponse);
+  // Decodes a completed provider response through the invocation's response codec.
+  rpc DecodeLlmCodecResponse(DecodeLlmCodecResponseRequest) returns (DecodeLlmCodecResponseResponse);
+  // Lists visible runtime registrations, optionally filtered by recognized surfaces.
+  rpc ListRuntimeRegistrations(ListRuntimeRegistrationsRequest) returns (ListRuntimeRegistrationsResponse);
+  // Installs an activation-owned conditional middleware filter and returns its handle.
+  rpc RegisterConditionalMiddlewareGuardrail(RegisterConditionalMiddlewareGuardrailRequest) returns (RegisterConditionalMiddlewareGuardrailResponse);
+  // Idempotently removes an activation-owned conditional middleware filter.
+  rpc DeregisterConditionalMiddlewareGuardrail(DeregisterConditionalMiddlewareGuardrailRequest) returns (DeregisterConditionalMiddlewareGuardrailResponse);
+}
+
+// Submits an authenticated process-log record to the host-owned sink and threshold.
+message LogRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Recognized severity; an unspecified level is invalid for a submitted record.
+  LogSeverity level = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Process-log target selected by the plugin, subject to host validation and sink policy.
+  string target = 3;
+  // Human-readable description; consumers must not infer control flow from this text.
+  string message = 4;
+  // Open object entries with string keys and required lossless JSON values.
+  JsonObject fields = 5;
+}
+
+// Confirms the host accepted the log operation; failures use gRPC status.
+message LogResponse {}
+
+// Requests host materialization of a mark in the selected scope context.
+message EmitMarkRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 2;
+  // Uses the same typed fields as interceptor-scheduled marks.
+  PendingMarkSpec mark = 3 [(buf.validate.field).required = true];
+}
+
+// Confirms the mark operation completed; failures use gRPC status.
+message EmitMarkResponse {}
+
+// Queries the scope stack bound to an invocation or selected scope context.
+message GetCurrentScopeStackSnapshotRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 2;
+}
+
+// Selects a present snapshot or an explicit absence of bound context.
+message GetCurrentScopeStackSnapshotResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Required bounded canonical diagnostic page when snapshot reads are authorized.
+    ScopeStackSnapshot snapshot = 1;
+    // Distinct from a present snapshot with zero entries.
+    google.protobuf.Empty no_context = 2;
+  }
+}
+
+// Queries bounded operational counters for the active host.
+message GetRuntimeDiagnosticsRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+}
+
+// Returns bounded operational counters, independent of restricted evidence reads.
+message GetRuntimeDiagnosticsResponse {
+  // Bounded entries returned by this operation; an empty list is a successful empty result.
+  repeated RuntimeDiagnostic entries = 1;
+}
+
+// Creates and binds a scope under the selected parent context.
+message PushScopeRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 2;
+  // Identity within the enclosing declaration; preserve its exact case and spelling.
+  string name = 3;
+  // Required recognized runtime scope type for the new scope.
+  ScopeType scope_type = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Optional application-owned scope data, preserving its JSON type.
+  JsonValue data = 5;
+  // Optional application-owned scope metadata, preserving its JSON type.
+  JsonValue metadata = 6;
+  // Optional application-owned input recorded on the new scope.
+  JsonValue input = 7;
+  // Absence uses host time; epoch zero is a valid explicit timestamp.
+  google.protobuf.Timestamp time = 8;
+}
+
+// Returns the host-owned handle needed to close the newly pushed scope.
+message PushScopeResponse {
+  // Opaque activation-owned scope handle returned by PushScope.
+  string scope_handle_id = 1 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Closes a previously pushed scope with optional output, metadata, and time.
+message PopScopeRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque activation-owned scope handle returned by PushScope.
+  string scope_handle_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Optional application-owned output recorded when the scope closes.
+  JsonValue output = 3;
+  // Optional application-owned scope metadata, preserving its JSON type.
+  JsonValue metadata = 4;
+  // Optional explicit UTC time; absence uses host time and epoch zero remains a valid explicit
+  // value.
+  google.protobuf.Timestamp time = 5;
+}
+
+// Confirms scope closure; failures use gRPC status.
+message PopScopeResponse {}
+
+// Creates an isolated host-owned scope stack for this activation.
+message CreateScopeStackRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+}
+
+// Returns the new isolated stack's opaque binding identity.
+message CreateScopeStackResponse {
+  // Opaque host-issued scope-stack binding, owned by this activation.
+  string scope_stack_id = 1 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Releases an activation-owned isolated scope stack.
+message DropScopeStackRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque host-issued scope-stack binding, owned by this activation.
+  string scope_stack_id = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Confirms stack release; failures use gRPC status.
+message DropScopeStackResponse {}
+
+// Invokes a live tool continuation using a rewritten application value.
+message ToolNextRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required application-owned tool value; explicit JSON null is a valid payload.
+  JsonValue value = 3 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 4;
+}
+
+// Selects the downstream tool result or its original domain failure.
+message ToolNextResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful downstream canonical tool result.
+    ToolExecutionResult value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Invokes a live unary LLM continuation with a rewritten provider request.
+message LlmNextRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 3 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 4;
+}
+
+// Selects the downstream provider response or its original domain failure.
+message LlmNextResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful downstream provider-owned JSON response.
+    JsonValue value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Opens a live streaming LLM continuation with a rewritten provider request.
+message LlmStreamNextRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 3 [(buf.validate.field).required = true];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 4;
+}
+
+// One provider chunk or one terminal downstream domain failure.
+message LlmStreamNextResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof item {
+    option (buf.validate.oneof).required = true;
+    // Required downstream provider-owned JSON chunk; empty bytes are invalid.
+    JsonValue value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Requests normalized decoding through an invocation-bound request codec.
+message DecodeLlmCodecRequestRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque codec capability bound to this invocation and codec direction.
+  string codec_capability_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 4 [(buf.validate.field).required = true];
+}
+
+// Selects the normalized request or the codec's domain failure.
+message DecodeLlmCodecRequestResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful normalized request decoded by the host codec.
+    AnnotatedLlmRequest value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Requests provider encoding from an annotation and original request baseline.
+message EncodeLlmCodecRequestRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque codec capability bound to this invocation and codec direction.
+  string codec_capability_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Required normalized annotation whose provider content changes the codec must encode.
+  AnnotatedLlmRequest annotated_request = 4 [(buf.validate.field).required = true];
+  // Required original provider request used as the codec's rewrite baseline.
+  LlmRequest original_request = 5 [(buf.validate.field).required = true];
+}
+
+// Selects the encoded provider request or the codec's domain failure.
+message EncodeLlmCodecRequestResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful provider request encoded by the host codec.
+    LlmRequest value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Requests normalized decoding through an invocation-bound response codec.
+message DecodeLlmCodecResponseRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque codec capability bound to this invocation and codec direction.
+  string codec_capability_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Required opaque provider response to decode or sanitize.
+  JsonValue response = 4 [(buf.validate.field).required = true];
+}
+
+// Selects the normalized completed response or the codec's domain failure.
+message DecodeLlmCodecResponseResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful normalized completed response decoded by the host codec.
+    AnnotatedLlmResponse value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Lists runtime registrations, optionally restricted to selected surfaces.
+message ListRuntimeRegistrationsRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Registration surfaces selected by the filter; validate each surface before applying it.
+  repeated RegistrationSurface kinds = 2 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// Returns the matching visible runtime registrations.
+message ListRuntimeRegistrationsResponse {
+  // Ordered declarations returned by the plugin or visible in the host registry.
+  repeated RuntimeRegistrationIdentity registrations = 1;
+}
+
+// Installs an activation-owned conditional middleware guardrail.
+message RegisterConditionalMiddlewareGuardrailRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Conditional guardrail declaration to install for this activation.
+  ConditionalMiddlewareGuardrailRegistration registration = 2 [(buf.validate.field).required = true];
+}
+
+// Returns the opaque handle for the newly installed conditional guardrail.
+message RegisterConditionalMiddlewareGuardrailResponse {
+  // Opaque activation-owned conditional-guardrail handle.
+  string handle = 1 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Removes a conditional guardrail using its activation-owned handle.
+message DeregisterConditionalMiddlewareGuardrailRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Opaque activation-owned conditional-guardrail handle.
+  string handle = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Reports whether an owned conditional guardrail was removed.
+message DeregisterConditionalMiddlewareGuardrailResponse {
+  // True when the owned guardrail existed and was removed; false is an idempotent no-op.
+  bool removed = 1;
+}

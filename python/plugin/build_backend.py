@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
+import re
 import shutil
+import subprocess
+import tempfile
 from collections.abc import Generator
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
+_REPOSITORY_ROOT = _PROJECT_ROOT.parents[1] / "crates/worker-proto"
 
 
 def _project_file(relative_path: str) -> Path:
@@ -119,6 +124,46 @@ def _proto_source() -> Path:
     if _SDIST_PROTO.is_file():
         return _SDIST_PROTO
     raise FileNotFoundError("could not find the worker protobuf schema")
+
+
+def resolve_proto_dependencies(lock: Path | None = None) -> Path:
+    """Export the immutable Buf dependency into the project's ignored build cache."""
+    if lock is None:
+        lock = _REPOSITORY_ROOT / "buf.lock"
+    match = re.search(r"name: buf\.build/bufbuild/protovalidate\s+commit: ([0-9a-f]{32})", lock.read_text())
+    if match is None:
+        raise ValueError("buf.lock must pin an immutable Protovalidate commit")
+    cache = _PROJECT_ROOT / "build/proto-deps"
+    output = cache / match[1]
+    if not ((output / "buf/validate/validate.proto").is_file() and (output / "LICENSE").is_file()):
+        cache.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=cache) as temporary:
+            try:
+                subprocess.run(
+                    [
+                        os.environ.get("BUF", "buf"),
+                        "export",
+                        f"buf.build/bufbuild/protovalidate:{match[1]}",
+                        "--all",
+                        "--path",
+                        "buf/validate/validate.proto",
+                        "--output",
+                        temporary,
+                    ],
+                    check=True,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "Buf is required to build nemo-relay-plugin from source; install Buf or set BUF"
+                ) from exc
+            if output.exists() and not (output / "LICENSE").is_file():
+                shutil.rmtree(output)
+            try:
+                Path(temporary).rename(output)
+            except OSError:
+                if not (output / "buf/validate/validate.proto").is_file():
+                    raise
+    return output
 
 
 @contextlib.contextmanager

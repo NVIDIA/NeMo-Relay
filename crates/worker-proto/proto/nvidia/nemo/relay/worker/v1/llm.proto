@@ -1,0 +1,621 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines normalized LLM, provider, multimodal, and optimization transport models.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+
+// Headers and content are required; content remains provider-owned JSON.
+message LlmRequest {
+  // Provider-specific request headers.
+  JsonObject headers = 1 [(buf.validate.field).required = true];
+  // Provider-specific request body.
+  JsonValue content = 2 [(buf.validate.field).required = true];
+}
+
+// Normalized request structure with explicit provider-specific and extension fields.
+message AnnotatedLlmRequest {
+  // Parsed conversation messages.
+  repeated LlmMessage messages = 1;
+  // Provider-level instructions that are not part of the conversation array.  Anthropic encodes
+  // this as `system`; OpenAI Responses uses `instructions`.
+  MessageContent instructions = 2;
+  // Model identifier (e.g., `"gpt-4"`, `"claude-sonnet-4-20250514"`).
+  optional string model = 3;
+  // Common generation parameters, normalized.
+  GenerationParams params = 4;
+  // Tool definitions (function schemas) available to the model.
+  ToolDefinitionList tools = 5;
+  // Tool choice control.
+  ToolChoice tool_choice = 6;
+  // OpenAI Responses: whether to persist response state server-side.
+  optional bool store = 7;
+  // OpenAI Responses: prior response to continue from.
+  optional string previous_response_id = 8;
+  // OpenAI Responses: context truncation behavior.
+  JsonValue truncation = 9;
+  // OpenAI Responses: reasoning configuration object.
+  JsonValue reasoning = 10;
+  // OpenAI Responses: include filter for additional output/state items.
+  JsonValue include = 11;
+  // OpenAI user identifier.
+  optional string user = 12;
+  // OpenAI metadata map/object.
+  JsonValue metadata = 13;
+  // OpenAI service tier preference.
+  optional string service_tier = 14;
+  // OpenAI tool parallelism toggle.
+  optional bool parallel_tool_calls = 15;
+  // OpenAI Responses max output token limit.
+  optional uint64 max_output_tokens = 16;
+  // OpenAI Responses max tool calls.
+  optional uint64 max_tool_calls = 17;
+  // OpenAI logprob fanout count.
+  optional uint64 top_logprobs = 18;
+  // OpenAI streaming toggle.
+  optional bool stream = 19;
+  // Codec-owned request data; preserved as JSON and validated by the selected codec.
+  JsonValue api_specific = 20;
+  // Unknown provider fields, excluding modeled field names.
+  map<string, JsonValue> extra = 21;
+}
+
+// The role is the alternative; contradictory roles cannot be represented.
+message LlmMessage {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof role {
+    option (buf.validate.oneof).required = true;
+    // System instruction message with required content.
+    NamedMessage system = 1;
+    // User input message with required content.
+    NamedMessage user = 2;
+    // Developer instruction message with required content.
+    NamedMessage developer = 3;
+    // Assistant output with independently optional content and tool calls.
+    AssistantMessage assistant = 4;
+    // Tool result correlated to a provider-issued call identity.
+    ToolMessage tool = 5;
+    // Legacy function-result message with nullable text content.
+    FunctionMessage function = 6;
+    // Portable top-level tool-call item, including parsed arguments.
+    ToolCallItem tool_call = 7;
+    // Portable top-level tool-result item, including its open result payload.
+    ToolResultItem tool_result = 8;
+    // Provider-owned component preserved with its provider, native discriminator, and JSON value.
+    ProviderNativeComponent provider_native = 9;
+  }
+}
+
+// System, user, or developer message with required content and optional sender name.
+message NamedMessage {
+  // Required system, user, or developer content, including explicit empty content.
+  MessageContent content = 1 [(buf.validate.field).required = true];
+  // Optional sender name supplied by the provider.
+  optional string name = 2;
+}
+
+// Assistant output with independently optional content and tool calls.
+message AssistantMessage {
+  // Optional assistant content; absence is allowed for tool-call-only output.
+  MessageContent content = 1;
+  // Tool calls requested by the assistant.
+  ToolCallList tool_calls = 2;
+  // Optional assistant sender name supplied by the provider.
+  optional string name = 3;
+}
+
+// Tool result content correlated to a provider-issued tool call.
+message ToolMessage {
+  // Required tool result content associated with the correlated call.
+  MessageContent content = 1 [(buf.validate.field).required = true];
+  // The ID of the tool call this result corresponds to.
+  string tool_call_id = 2;
+}
+
+// Legacy function result; absent content represents explicit null in the runtime DTO.
+message FunctionMessage {
+  // Absence maps to the runtime's explicit null function content.
+  optional string content = 1;
+  // Tool/function name.
+  string name = 2;
+}
+
+// Portable top-level provider tool-call item with parsed arguments.
+message ToolCallItem {
+  // Optional provider item ID.
+  optional string id = 1;
+  // Provider call ID used to correlate the result.
+  string call_id = 2;
+  // Tool/function name.
+  string name = 3;
+  // Parsed tool arguments.
+  JsonValue arguments = 4 [(buf.validate.field).required = true];
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 5;
+}
+
+// Portable top-level provider tool-result item with an open result payload.
+message ToolResultItem {
+  // Optional provider item ID.
+  optional string id = 1;
+  // Provider call ID used to correlate the result.
+  string call_id = 2;
+  // Provider result payload.
+  JsonValue output = 3 [(buf.validate.field).required = true];
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 4;
+}
+
+// Selects plain text or a multimodal parts list, including explicit empty content.
+message MessageContent {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof content {
+    option (buf.validate.oneof).required = true;
+    // Plain text content; an explicitly empty string still selects this alternative.
+    string text = 1;
+    // Ordered multimodal parts; a present empty list differs from an absent content alternative.
+    ContentPartList parts = 2;
+  }
+}
+
+// Ordered multimodal content; a present empty list remains an explicit variant.
+message ContentPartList {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated ContentPart values = 1;
+}
+
+// Selects a normalized content block or a lossless provider-native block.
+message ContentPart {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof part {
+    option (buf.validate.oneof).required = true;
+    // The text content.
+    TextContentPart text = 1;
+    // Image URL payload.
+    ImageUrlContentPart image_url = 2;
+    // Provider-neutral image data object.
+    JsonContentPart image = 3;
+    // Provider-neutral audio data object.
+    JsonContentPart audio = 4;
+    // Provider-neutral file data object.
+    JsonContentPart file = 5;
+    // Refusal text.
+    TextContentPart refusal = 6;
+    // Tool invocation embedded in a content-block array.
+    ToolUseContentPart tool_use = 7;
+    // Portable top-level tool-result item, including its open result payload.
+    ToolResultContentPart tool_result = 8;
+    // Provider-owned component preserved with its provider, native discriminator, and JSON value.
+    ProviderNativeComponent provider_native = 9;
+  }
+}
+
+// Text or refusal content with provider-specific extension fields.
+message TextContentPart {
+  // Text or refusal content, according to the enclosing content-part alternative.
+  string text = 1;
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 2;
+}
+
+// Image URL input with portable URL options and provider extensions.
+message ImageUrlContentPart {
+  // Image URL payload.
+  ImageUrl image_url = 1 [(buf.validate.field).required = true];
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 2;
+}
+
+// Provider-neutral image/audio/file payload with open provider fields.
+message JsonContentPart {
+  // Provider-neutral image, audio, or file JSON payload selected by the enclosing variant.
+  JsonValue value = 1 [(buf.validate.field).required = true];
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 2;
+}
+
+// Tool invocation embedded in a provider content-block array.
+message ToolUseContentPart {
+  // Tool call identifier.
+  string id = 1;
+  // Tool name.
+  string name = 2;
+  // Parsed arguments.
+  JsonValue input = 3 [(buf.validate.field).required = true];
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 4;
+}
+
+// Tool result embedded in a provider content-block array.
+message ToolResultContentPart {
+  // Tool call identifier.
+  string tool_use_id = 1;
+  // Tool result payload.
+  JsonValue content = 2 [(buf.validate.field).required = true];
+  // Whether the tool failed.
+  optional bool is_error = 3;
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 4;
+}
+
+// Image URL and optional provider detail preference.
+message ImageUrl {
+  // URL for the image.
+  string url = 1;
+  // Optional provider-specific detail hint.
+  optional string detail = 2;
+}
+
+// Normalized request-side tool call; argument text remains provider-issued text.
+message ToolCall {
+  // Unique identifier for this tool call.
+  string id = 1;
+  // The type of tool call (typically `"function"`).
+  string call_type = 2;
+  // The function to call.
+  FunctionCall function = 3 [(buf.validate.field).required = true];
+}
+
+// Presence-bearing tool-call list, preserving absent versus explicitly empty.
+message ToolCallList {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated ToolCall values = 1;
+}
+
+// Function name and original argument text, which need not be complete JSON.
+message FunctionCall {
+  // The name of the function to call.
+  string name = 1;
+  // Provider-issued argument text, which may be partial or invalid JSON.
+  string arguments = 2;
+}
+
+// Presence-bearing tool-definition list, preserving absent versus explicitly empty.
+message ToolDefinitionList {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated ToolDefinition values = 1;
+}
+
+// Selects a normalized function definition or a provider-native tool definition.
+message ToolDefinition {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof definition {
+    option (buf.validate.oneof).required = true;
+    // The function definition.
+    FunctionToolDefinition function = 1;
+    // Provider-owned component preserved with its provider, native discriminator, and JSON value.
+    ProviderNativeComponent provider_native = 2;
+  }
+}
+
+// Function tool definition plus provider fields outside the normalized function.
+message FunctionToolDefinition {
+  // The function definition.
+  FunctionDefinition function = 1 [(buf.validate.field).required = true];
+  // Provider fields on the function-tool wrapper.
+  map<string, JsonValue> extra = 2;
+}
+
+// Function name, optional description and JSON Schema, strictness, and extensions.
+message FunctionDefinition {
+  // The name of the function.
+  string name = 1;
+  // A description of what the function does.
+  optional string description = 2;
+  // The JSON Schema for the function parameters.
+  JsonValue parameters = 3;
+  // Whether the provider should enforce the parameter schema strictly.
+  optional bool strict = 4;
+  // Provider fields without portable semantics.
+  map<string, JsonValue> extra = 5;
+}
+
+// Explicit automatic, disabled, required, named, or provider-native tool selection.
+message ToolChoice {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof choice {
+    option (buf.validate.oneof).required = true;
+    // Allows the provider to select tools automatically.
+    google.protobuf.Empty auto = 1;
+    // Explicitly selects no tool or no codec, according to the enclosing alternative.
+    google.protobuf.Empty none = 2;
+    // Requires tool selection without naming a particular tool.
+    google.protobuf.Empty required = 3;
+    // Selects a particular function using its provider discriminator and name.
+    ToolChoiceFunction specific = 4;
+    // Provider-owned component preserved with its provider, native discriminator, and JSON value.
+    ProviderNativeComponent provider_native = 5;
+  }
+}
+
+// Provider function-choice discriminator and the selected function identity.
+message ToolChoiceFunction {
+  // The type (typically `"function"`).
+  string choice_type = 1;
+  // The function to call.
+  ToolChoiceFunctionName function = 2 [(buf.validate.field).required = true];
+}
+
+// Identifies the function selected by a specific tool-choice rule.
+message ToolChoiceFunctionName {
+  // The function name.
+  string name = 1;
+}
+
+// Preserves provider-owned content with its provider and native discriminator.
+message ProviderNativeComponent {
+  // Provider surface that owns the value.
+  string provider = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Native discriminator or a descriptive fallback.
+  string kind = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Exact provider JSON value.
+  JsonValue value = 3 [(buf.validate.field).required = true];
+}
+
+// Portable generation controls with presence preserved for every optional value.
+message GenerationParams {
+  // Sampling temperature.
+  optional double temperature = 1 [(buf.validate.field).double.finite = true];
+  // Maximum number of tokens to generate.
+  optional uint64 max_tokens = 2;
+  // Nucleus sampling probability.
+  optional double top_p = 3 [(buf.validate.field).double.finite = true];
+  // Stop sequences.
+  StringList stop = 4;
+}
+
+// Normalized completed response, usage, pricing, and optimization evidence.
+message AnnotatedLlmResponse {
+  // Response ID from the API (e.g., "chatcmpl-abc123", "resp_abc123", "msg_abc123").
+  optional string id = 1;
+  // The model that actually served the request (may differ from requested model).
+  optional string model = 2;
+  // The assistant's response content, reusing `MessageContent` from request types.
+  MessageContent message = 3;
+  // Tool calls requested by the model, normalized across APIs.  Uses `ResponseToolCall` (arguments
+  // as `Json`) NOT the request-side `ToolCall` (arguments as `String`).
+  ResponseToolCallList tool_calls = 4;
+  // Why generation stopped, normalized across APIs.
+  FinishReason finish_reason = 5;
+  // Token usage statistics.
+  Usage usage = 6;
+  // Plugin-neutral optimization accounting computed by Relay at LLM close.
+  LlmOptimizationSummary optimization_summary = 7;
+  // API-specific response data that cannot be normalized across providers.
+  JsonValue api_specific = 8;
+  // Catch-all for unmodeled top-level fields, ensuring lossless round-trip.
+  map<string, JsonValue> extra = 9;
+}
+
+// Presence-bearing completed-response tool calls.
+message ResponseToolCallList {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated ResponseToolCall values = 1;
+}
+
+// Completed-response tool call with parsed JSON arguments.
+message ResponseToolCall {
+  // Unique identifier for this tool call.
+  string id = 1;
+  // The function/tool name.
+  string name = 2;
+  // The arguments as parsed JSON (not a string).
+  JsonValue arguments = 3 [(buf.validate.field).required = true];
+}
+
+// Normalized completion reason with an explicit lossless unknown-name alternative.
+message FinishReason {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof reason {
+    option (buf.validate.oneof).required = true;
+    // The provider completed generation normally.
+    google.protobuf.Empty complete = 1;
+    // The provider stopped because a generation length limit was reached.
+    google.protobuf.Empty length = 2;
+    // Tool invocation embedded in a content-block array.
+    google.protobuf.Empty tool_use = 3;
+    // The provider stopped because of content filtering.
+    google.protobuf.Empty content_filter = 4;
+    // Provider finish reason not represented by a known normalized alternative.
+    string unknown = 5;
+  }
+}
+
+// Optional provider token counts and cost; absent counts never imply zero.
+message Usage {
+  // Tokens consumed by the prompt/input.
+  optional uint64 prompt_tokens = 1;
+  // Tokens generated in the completion/output.
+  optional uint64 completion_tokens = 2;
+  // Total tokens (prompt + completion).
+  optional uint64 total_tokens = 3;
+  // Tokens served from prompt cache (read).
+  optional uint64 cache_read_tokens = 4;
+  // Tokens written to prompt cache.
+  optional uint64 cache_write_tokens = 5;
+  // The subset of prompt-cache write tokens retained for one hour.
+  optional uint64 cache_write_1h_tokens = 6;
+  // Input tokens that were neither served from nor written to a provider prompt cache.  This is
+  // present only when the provider's usage contract makes the split authoritative; its absence
+  // must not be interpreted as zero.
+  optional uint64 uncached_input_tokens = 7;
+  // Optional cost reported by provider data or estimated from Relay model pricing.
+  CostEstimate cost = 8;
+}
+
+// Origin of a cost value, separating pricing estimates from provider reports.
+enum CostSource {
+  // No value supplied; invalid where this contract requires an explicit value.
+  COST_SOURCE_UNSPECIFIED = 0;
+  // Cost was estimated using the model-pricing catalogue.
+  COST_SOURCE_MODEL_PRICING = 1;
+  // Cost was reported by the upstream provider or framework.
+  COST_SOURCE_PROVIDER_REPORTED = 2;
+}
+
+// Normalized monetary cost with provenance for estimates and provider-reported values.
+message CostEstimate {
+  // Total cost in `currency`.
+  optional double total = 1 [(buf.validate.field).double.finite = true];
+  // ISO 4217 currency code for the cost fields.
+  string currency = 2;
+  // Uncached prompt/input token cost in `currency`.
+  optional double input = 3 [(buf.validate.field).double.finite = true];
+  // Completion/output token cost in `currency`.
+  optional double output = 4 [(buf.validate.field).double.finite = true];
+  // Prompt cache read cost in `currency`.
+  optional double cache_read = 5 [(buf.validate.field).double.finite = true];
+  // Prompt cache write cost in `currency`.
+  optional double cache_write = 6 [(buf.validate.field).double.finite = true];
+  // Origin of this cost value.
+  CostSource source = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Provider associated with the cost or pricing estimate, if known.
+  optional string pricing_provider = 8;
+  // Model ID associated with the cost or pricing estimate, if known.
+  optional string pricing_model = 9;
+  // Date the pricing value was last verified, if known.
+  optional string pricing_as_of = 10;
+  // Source URL or label for the pricing value, if known.
+  optional string pricing_source = 11;
+}
+
+// Model and optional provider used in optimization accounting.
+message LlmOptimizationModel {
+  // Model identifier understood by Relay's pricing resolver.
+  string model = 1;
+  // Optional pricing-provider namespace.
+  optional string provider = 2;
+}
+
+// Optional baseline and effective model identities for an optimization.
+message LlmOptimizationModelTransition {
+  // Counterfactual model that would otherwise have served the request.
+  LlmOptimizationModel baseline = 1;
+  // Model selected by the optimization.
+  LlmOptimizationModel effective = 2;
+}
+
+// Optional token evidence; missing categories remain unknown rather than zero.
+message LlmOptimizationTokens {
+  // Input/prompt tokens.
+  optional uint64 prompt_tokens = 1;
+  // Output/completion tokens.
+  optional uint64 completion_tokens = 2;
+  // Tokens read from a provider prompt cache.
+  optional uint64 cache_read_tokens = 3;
+  // Tokens written to a provider prompt cache.
+  optional uint64 cache_write_tokens = 4;
+  // Total tokens when supplied by the producer.
+  optional uint64 total_tokens = 5;
+}
+
+// Whether token evidence was observed or estimated.
+enum LlmOptimizationEvidenceQuality {
+  // No value supplied; invalid where this contract requires an explicit value.
+  LLM_OPTIMIZATION_EVIDENCE_QUALITY_UNSPECIFIED = 0;
+  // Token evidence was directly observed.
+  LLM_OPTIMIZATION_EVIDENCE_QUALITY_OBSERVED = 1;
+  // Token evidence was estimated using the supplied method.
+  LLM_OPTIMIZATION_EVIDENCE_QUALITY_ESTIMATED = 2;
+}
+
+// Baseline, effective, and saved token evidence with its quality and method.
+message LlmOptimizationTokenImpact {
+  // Token counts before the optimization.
+  LlmOptimizationTokens baseline = 1;
+  // Token counts after the optimization.
+  LlmOptimizationTokens effective = 2;
+  // Explicit reduction retained for downstream repricing.
+  LlmOptimizationTokens saved = 3;
+  // Evidence quality for these counts.
+  optional LlmOptimizationEvidenceQuality quality = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Tokenizer, counter, or estimation method.
+  optional string estimation_method = 5;
+}
+
+// Plugin-neutral optimization evidence with an open kind and optional custom payload.
+message LlmOptimizationContribution {
+  option (buf.validate.message).cel = {
+    id: "optimization.payload_schema"
+    message: "payload requires its application schema identity"
+    expression: "!has(this.payload) || has(this.payload_schema)"
+  };
+
+  // Relay-assigned contribution identifier. Producer values are replaced on ingestion.
+  optional string id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Relay-assigned order within the LLM call. Producer values are replaced on ingestion.
+  optional uint64 sequence = 2;
+  // Stable producer or plugin identity.
+  string producer = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Intentionally open to third-party optimization kinds.
+  string kind = 4 [(buf.validate.field).string = {min_len: 1}];
+  // Whether the optimization affected the executed call.
+  bool applied = 5;
+  // Optional shared model transition.
+  LlmOptimizationModelTransition model_transition = 6;
+  // Optional shared token evidence.
+  LlmOptimizationTokenImpact token_impact = 7;
+  // Schema of `payload`; required whenever `payload` is present.
+  DataSchema payload_schema = 8;
+  // Application-owned; when present payload_schema is required.
+  JsonValue payload = 9;
+  // Unknown top-level fields from future producers.
+  map<string, JsonValue> extra = 10;
+}
+
+// Whether optimization accounting is complete or limited by missing evidence.
+enum LlmOptimizationSummaryStatus {
+  // No value supplied; invalid where this contract requires an explicit value.
+  LLM_OPTIMIZATION_SUMMARY_STATUS_UNSPECIFIED = 0;
+  // All required evidence is available for complete accounting.
+  LLM_OPTIMIZATION_SUMMARY_STATUS_COMPLETE = 1;
+  // Accounting has explicitly reported evidence limitations.
+  LLM_OPTIMIZATION_SUMMARY_STATUS_PARTIAL = 2;
+}
+
+// Host-computed optimization accounting at completed LLM scope closure.
+message LlmOptimizationSummary {
+  // Versions of the optimization report/calculation, not the worker protocol.
+  string schema_version = 1;
+  // Arithmetic implementation version.
+  string calculation_version = 2;
+  // Whether all accounting inputs were available.
+  LlmOptimizationSummaryStatus status = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Machine-readable reasons for partial accounting.
+  repeated string limitations = 4;
+  // Counterfactual model used for baseline pricing.
+  LlmOptimizationModel baseline_model = 5;
+  // Model that actually served the terminal response.
+  LlmOptimizationModel effective_model = 6;
+  // Usage observed on the effective response.
+  Usage effective_usage = 7;
+  // Counterfactual usage derived from observed usage plus explicit savings.
+  Usage baseline_usage = 8;
+  // Explicit aggregate token reductions, retained independently from pricing.
+  LlmOptimizationTokens tokens_saved = 9 [(buf.validate.field).required = true];
+  // Estimated cost for baseline model/usage.
+  CostEstimate baseline_cost = 10;
+  // Provider-reported or Relay-estimated actual cost.
+  CostEstimate actual_cost = 11;
+  // Baseline cost minus actual cost when both share a currency.
+  optional double estimated_cost_saved = 12 [(buf.validate.field).double.finite = true];
+  // Currency for `estimated_cost_saved`.
+  optional string currency = 13;
+  // Ordered, bounded source evidence used by the calculation.
+  repeated LlmOptimizationContribution contributions = 14;
+}

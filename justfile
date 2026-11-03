@@ -1171,6 +1171,23 @@ generate-python-worker-proto:
     cd "$NEMO_RELAY_REPO_ROOT"
     generate_python_worker_proto_files python/plugin/src/nemo_relay_plugin/_proto
 
+# Lint, format, and independently test the current worker contract.
+# Install Buf 1.75.0 or newer, or set BUF to its executable path.
+check-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    buf_executable="${BUF:-buf}"
+    "$buf_executable" lint crates/worker-proto
+    "$buf_executable" format crates/worker-proto --path crates/worker-proto/proto/nvidia/nemo/relay/worker/v1 --diff --exit-code
+    grpcio_tools_version="$(python_plugin_grpcio_tools_version)"
+    uvx --from "grpcio-tools==$grpcio_tools_version" --with pytest --with pytest-asyncio --with protovalidate==2.1.0 python -m pytest \
+        python/tests/plugin/test_nvidia_worker_proto_v1.py -q -o asyncio_default_fixture_loop_scope=function
+
+# Resolve the locked validation dependency into the ignored build cache.
+resolve-worker-proto-deps:
+    python3 scripts/proto_dependencies.py
+
 check-python-worker-proto:
     #!/usr/bin/env bash
     {{ bash_helpers }}

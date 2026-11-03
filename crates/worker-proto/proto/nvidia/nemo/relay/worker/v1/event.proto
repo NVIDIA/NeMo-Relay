@@ -1,0 +1,143 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines typed ATOF events, lifecycle profiles, sanitizer fields, and pending marks.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/llm.proto";
+
+// Exactly one kind is required. UUID strings use canonical hyphenated UUIDs.
+message Event {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // Optional host binding selecting the stack and parent for this operation.
+    ScopeEvent scope = 1;
+    // Point-in-time mark event with its required base envelope.
+    MarkEvent mark = 2;
+  }
+}
+
+// Common ATOF identity, propagation, timing, and application payload fields.
+message BaseEvent {
+  // ATOF's own version, independent of the transport contract.
+  string atof_version = 1;
+  // UUID of the parent scope, if any.
+  optional string parent_uuid = 2 [(buf.validate.field).string = {uuid: true}];
+  // Stable causal root imported or resolved when the event was emitted.
+  optional string propagation_root_uuid = 3 [(buf.validate.field).string = {uuid: true}];
+  // Synthetic parent imported with the propagation context.  This is runtime-only delivery state.
+  // It distinguishes an imported parent from ordinary Relay scope parentage without extending the
+  // ATOF wire format.
+  optional string propagation_parent_uuid = 4 [(buf.validate.field).string = {uuid: true}];
+  // W3C traceparent imported or derived from the local parent. Runtime-only.
+  optional string propagation_traceparent = 5;
+  // W3C tracestate imported or inherited from the local parent. Runtime-only.
+  optional string propagation_tracestate = 6;
+  // Unique identifier for the event or span.
+  string uuid = 7 [(buf.validate.field).string = {uuid: true}];
+  // Event timestamp in UTC.
+  google.protobuf.Timestamp time = 8 [(buf.validate.field).required = true];
+  // Human-readable event name.
+  string name = 9;
+  // Application-defined payload.
+  JsonValue data = 10;
+  // Optional schema identifier for `data`.
+  DataSchema data_schema = 11;
+  // Optional tracing/correlation metadata.
+  JsonValue metadata = 12;
+}
+
+// Scope lifecycle phase; unspecified is invalid for emitted scope events.
+enum ScopeCategory {
+  // No value supplied; invalid where this contract requires an explicit value.
+  SCOPE_CATEGORY_UNSPECIFIED = 0;
+  // The scope is starting.
+  SCOPE_CATEGORY_START = 1;
+  // The scope is ending.
+  SCOPE_CATEGORY_END = 2;
+}
+
+// An ATOF scope lifecycle event with an open semantic category.
+message ScopeEvent {
+  // Shared ATOF envelope.
+  BaseEvent base = 1 [(buf.validate.field).required = true];
+  // Scope lifecycle phase.
+  ScopeCategory scope_category = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Canonical lowercase behavioral flags.
+  repeated string attributes = 3;
+  // Open category, including application-defined names.
+  string category = 4;
+  // Category-specific typed fields.
+  CategoryProfile category_profile = 5;
+}
+
+// An ATOF point-in-time event with optional semantic categorization.
+message MarkEvent {
+  // Shared ATOF envelope.
+  BaseEvent base = 1 [(buf.validate.field).required = true];
+  // Optional semantic category for the checkpoint.
+  optional string category = 2;
+  // Optional category-specific typed fields.
+  CategoryProfile category_profile = 3;
+}
+
+// Known category-specific fields and lossless extensions attached to an event.
+message CategoryProfile {
+  // Normalized model identifier for LLM events.
+  optional string model_name = 1;
+  // LLM-provider correlation ID for Tool events.
+  optional string tool_call_id = 2;
+  // Vendor subtype required when `category == "custom"`.
+  optional string subtype = 3;
+  // Normalized tool result annotation for successful tool end events.
+  JsonValue tool_result_annotation = 4;
+  // Unknown category-profile keys preserved from newer producers.
+  map<string, JsonValue> extra = 5;
+  // Normalized request annotation for LLM start events.
+  AnnotatedLlmRequest annotated_request = 6;
+  // Normalized response annotation for LLM end events.
+  AnnotatedLlmResponse annotated_response = 7;
+  // Elapsed seconds from managed stream execution to its first received chunk.
+  optional double time_to_first_chunk_seconds = 8 [(buf.validate.field).double.finite = true];
+}
+
+// Sanitizer output replaces these fields; absence clears the corresponding field.
+message EventSanitizeFields {
+  // Application-defined event payload.
+  JsonValue data = 1;
+  // Category-specific typed fields.
+  CategoryProfile category_profile = 2;
+  // Tracing and correlation metadata.
+  JsonValue metadata = 3;
+}
+
+// Requests a mark whose UUID, timestamp, and parent are assigned by the host.
+message PendingMarkSpec {
+  // Human-readable mark name.
+  string name = 1;
+  // Optional semantic category for the mark.
+  optional string category = 2;
+  // Optional category-specific typed fields.
+  CategoryProfile category_profile = 3;
+  // Optional application payload attached to the mark.
+  JsonValue data = 4;
+  // Optional schema identifier for the mark data.
+  DataSchema data_schema = 5;
+  // Optional metadata attached to the mark.
+  JsonValue metadata = 6;
+  // Optional typed log severity applied authoritatively to mark metadata.
+  optional LogSeverity severity = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
