@@ -5,6 +5,12 @@ name: Load CI Tool Versions
 description: Load shared CI tool versions from .github/ci-tool-versions.env
 
 outputs:
+  protoc_version:
+    description: Protocol Buffers compiler version
+    value: ${{ steps.load.outputs.protoc_version }}
+  buf_version:
+    description: Buf version
+    value: ${{ steps.load.outputs.buf_version }}
   go_version:
     description: Go version
     value: ${{ steps.load.outputs.go_version }}
@@ -50,6 +56,8 @@ runs:
         source "${GITHUB_ACTION_PATH}/../../ci-tool-versions.env"
 
         required=(
+          NEMO_RELAY_CI_PROTOC_VERSION
+          NEMO_RELAY_CI_BUF_VERSION
           NEMO_RELAY_CI_GO_VERSION
           NEMO_RELAY_CI_DEFAULT_PYTHON_VER
           NEMO_RELAY_CI_RUST_VERSION
@@ -71,6 +79,8 @@ runs:
         done
 
         {
+          printf 'protoc_version=%s\n' "$NEMO_RELAY_CI_PROTOC_VERSION"
+          printf 'buf_version=%s\n' "$NEMO_RELAY_CI_BUF_VERSION"
           printf 'go_version=%s\n' "$NEMO_RELAY_CI_GO_VERSION"
           printf 'default_python_version=%s\n' "$NEMO_RELAY_CI_DEFAULT_PYTHON_VER"
           printf 'rust_version=%s\n' "$NEMO_RELAY_CI_RUST_VERSION"
