@@ -1997,6 +1997,7 @@ package-rust:
                 ;;
             nemo-relay-worker)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
             nemo-relay-resource-metrics|nemo-relay-model-pricing)
@@ -2004,7 +2005,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-plugin|nemo-relay-codecs)
+            nemo-relay-plugin|nemo-relay-codecs|nemo-relay-worker-proto)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 ;;
             nemo-relay-pii-redaction)

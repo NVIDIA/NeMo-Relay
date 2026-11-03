@@ -36,6 +36,8 @@ classifiers = [
 dependencies = [
     "grpcio>=1.81.1,<2",
     "protobuf>=6.33.5",
+    "protovalidate==2.1.0",
+    "grpcio-health-checking>=1.81.1,<2",
 ]
 
 [project.urls]
