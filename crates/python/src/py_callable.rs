@@ -26,10 +26,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, PublicationContext, capture_nested_publication_buffer, publication_context,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
     LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
     LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
@@ -38,7 +38,7 @@ use nemo_relay::api::runtime::{
     ToolExecutionContext, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
     capture_propagation_context, capture_traceparent, current_scope_stack,
 };
-use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -47,12 +47,12 @@ use serde_json::Value as Json;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
-use nemo_relay::api::event::{Event, EventSanitizeFields};
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
-use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_runtime::api::event::{Event, EventSanitizeFields};
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{flow_error_to_py_err, json_to_py, py_to_json};
 use crate::py_types::{
@@ -956,7 +956,8 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication_context = publication_context::<PythonPublicationContext>();
         let publication_buffer = capture_nested_publication_buffer();
-        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+        let publication =
+            nemo_relay_runtime::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = match publication_context.as_ref() {
@@ -1351,7 +1352,7 @@ where
 /// arguments entering this intercept, and the managed `tool_call_id`.
 pub fn wrap_py_tool_exec_intercept_fn(
     py_fn: Py<PyAny>,
-) -> nemo_relay::api::runtime::ToolExecutionFn {
+) -> nemo_relay_runtime::api::runtime::ToolExecutionFn {
     let py_fn = Arc::new(py_fn);
     let task_locals = capture_python_task_locals();
     Arc::new(
@@ -1511,7 +1512,7 @@ fn wrap_py_llm_sanitize_request_callback(py_fn: Py<PyAny>) -> LlmSanitizeRequest
             let publication_context = publication_context::<PythonPublicationContext>();
             let publication_buffer = capture_nested_publication_buffer();
             let publication =
-                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+                nemo_relay_runtime::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
             Box::pin(async move {
                 let result = resolve_py_object_or_future(Python::attach(|py| {
                     let (invocation_context, task_locals) = match publication_context.as_ref() {
@@ -1833,7 +1834,8 @@ fn wrap_py_llm_sanitize_response_callback(py_fn: Py<PyAny>) -> LlmSanitizeRespon
         let task_locals = task_locals_with_running_loop(task_locals.as_ref());
         let publication_context = publication_context::<PythonPublicationContext>();
         let publication_buffer = capture_nested_publication_buffer();
-        let publication = nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+        let publication =
+            nemo_relay_runtime::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
         Box::pin(async move {
             let result = resolve_py_object_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = match publication_context.as_ref() {

@@ -11,7 +11,7 @@ use super::{
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
     wrap_llm_exec_fn, wrap_llm_stream_exec_fn, wrap_stream_callbacks,
 };
-use nemo_relay::api::runtime::LlmFinalizer;
+use nemo_relay_runtime::api::runtime::LlmFinalizer;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio_stream::StreamExt;
 
@@ -338,8 +338,10 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
-        response_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
+        ),
     }))
 }
 
@@ -353,8 +355,10 @@ pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
-        response_codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_responses::OpenAIResponsesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
+        ),
     }))
 }
 
@@ -368,8 +372,10 @@ pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
-        response_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
+        codec: Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
+        ),
     }))
 }
 
@@ -383,9 +389,9 @@ pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHand
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec),
-        response_codec: Arc::new(
-            nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+        codec: Arc::new(nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
         ),
     }))
 }
@@ -393,13 +399,13 @@ pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCode
 struct ParsedExecuteInputs {
     name: String,
     request: LlmRequest,
-    parent_handle: Option<nemo_relay::api::scope::ScopeHandle>,
+    parent_handle: Option<nemo_relay_runtime::api::scope::ScopeHandle>,
     attrs: LlmAttributes,
     data: Option<serde_json::Value>,
     metadata: Option<serde_json::Value>,
     model_name: Option<String>,
-    codec: Option<Arc<dyn nemo_relay::codec::traits::LlmCodec>>,
-    response_codec: Option<Arc<dyn nemo_relay::codec::traits::LlmResponseCodec>>,
+    codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmCodec>>,
+    response_codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>>,
 }
 
 struct RawExecuteInputs {
@@ -592,11 +598,11 @@ pub struct FfiStream {
 }
 
 pub(crate) struct ForwarderParts {
-    pub(crate) stream: nemo_relay::api::runtime::LlmJsonStream,
+    pub(crate) stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
     pub(crate) tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     pub(crate) cancel_rx: tokio::sync::watch::Receiver<bool>,
     pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
-    pub(crate) scope_stack: nemo_relay::api::runtime::ScopeStackHandle,
+    pub(crate) scope_stack: nemo_relay_runtime::api::runtime::ScopeStackHandle,
 }
 
 impl FfiStream {
@@ -623,7 +629,7 @@ impl Drop for FfiStream {
 }
 
 async fn forward_stream_to_channel(
-    mut stream: nemo_relay::api::runtime::LlmJsonStream,
+    mut stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,

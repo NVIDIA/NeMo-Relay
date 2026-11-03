@@ -3,11 +3,12 @@
 
 """Tests for NeMo Relay typed wrappers with explicit Codec protocol."""
 
+import asyncio
 import base64
 import dataclasses
 import os
 import pickle
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from typing import Any, Never, SupportsIndex, cast
 
 import pytest
@@ -63,6 +64,73 @@ class StreamChunk:
 @dataclasses.dataclass
 class StreamResponse:
     chunks: list[str]
+
+
+@dataclasses.dataclass
+class NullableArguments:
+    value: str | None
+
+
+@dataclasses.dataclass
+class DefaultedNullableArguments:
+    value: str | None = "fallback"
+
+
+@dataclasses.dataclass
+class ConstructorExcludedArguments(DefaultedNullableArguments):
+    excluded_null: str | None = dataclasses.field(init=False, default=None)
+    excluded_text: str = dataclasses.field(init=False, default="derived")
+
+
+class StreamSourceWithoutClose(AsyncIterator[StreamChunk]):
+    def __init__(self, chunk_count: int | None = 2, *, iteration_error: ValueError | None = None) -> None:
+        self.chunk_count = chunk_count
+        self.iteration_error = iteration_error
+        self.produced_count = 0
+        self.iteration_started = asyncio.Event()
+        self.iteration_release = asyncio.Event()
+        self.iteration_release.set()
+
+    def __aiter__(self) -> "StreamSourceWithoutClose":
+        return self
+
+    async def __anext__(self) -> StreamChunk:
+        self.iteration_started.set()
+        await self.iteration_release.wait()
+        await asyncio.sleep(0)
+        if self.iteration_error is not None and self.produced_count == 1:
+            raise self.iteration_error
+        if self.chunk_count is not None and self.produced_count >= self.chunk_count:
+            raise StopAsyncIteration
+        chunk = StreamChunk(token=str(self.produced_count))
+        self.produced_count += 1
+        return chunk
+
+
+class StreamSourceWithClose(StreamSourceWithoutClose):
+    def __init__(
+        self,
+        chunk_count: int | None = 2,
+        *,
+        iteration_error: ValueError | None = None,
+        cleanup_error: ValueError | None = None,
+    ) -> None:
+        super().__init__(chunk_count, iteration_error=iteration_error)
+        self.cleanup_error = cleanup_error
+        self.cleanup_calls = 0
+        self.closed = False
+        self.cleanup_started = asyncio.Event()
+        self.cleanup_release = asyncio.Event()
+        self.cleanup_release.set()
+
+    async def aclose(self) -> None:
+        self.cleanup_calls += 1
+        self.cleanup_started.set()
+        await self.cleanup_release.wait()
+        await asyncio.sleep(0)
+        self.closed = True
+        if self.cleanup_error is not None:
+            raise self.cleanup_error
 
 
 # Codec instances
@@ -188,6 +256,46 @@ class TestDataclassCodec:
         restored = dc_result_codec.from_json(dc_result_codec.to_json(original))
         assert restored == original
 
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
+    def test_explicit_none_roundtrip(
+        self,
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
+    ) -> None:
+        codec = DataclassCodec(argument_type)
+        original = argument_type(value=None)
+
+        encoded = codec.to_json(original)
+
+        assert encoded == {"value": None}
+        assert codec.from_json(encoded) == original
+
+    def test_omitted_field_uses_default(self) -> None:
+        assert DataclassCodec(DefaultedNullableArguments).from_json({}).value == "fallback"
+
+    def test_omitted_required_field_raises(self) -> None:
+        with pytest.raises(TypeError, match="value"):
+            DataclassCodec(NullableArguments).from_json({})
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(NullableArguments(None), {"value": None}, id="nested-dataclass"),
+            pytest.param(ConstructorExcludedArguments(None), {"value": None}, id="constructor-excluded-dataclass"),
+            pytest.param([ConstructorExcludedArguments(None)], [{"value": None}], id="constructor-excluded-list"),
+            pytest.param(
+                {"nested": ConstructorExcludedArguments(None)},
+                {"nested": {"value": None}},
+                id="constructor-excluded-dictionary",
+            ),
+            pytest.param([NullableArguments(None)], [{"value": None}], id="nested-list"),
+            pytest.param({"nested": NullableArguments(None)}, {"nested": {"value": None}}, id="nested-dictionary"),
+        ],
+    )
+    def test_nested_dataclass_preserves_none(self, value: object, expected: Json) -> None:
+        assert DataclassCodec(NestedResult).to_json(NestedResult(value)) == {"value": expected}
+
 
 class TestCustomCodec:
     def test_custom_codec(self) -> None:
@@ -246,6 +354,34 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
+    @pytest.mark.parametrize("value", [None, "control"])
+    async def test_nullable_argument_reaches_tool(
+        self,
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
+        value: str | None,
+    ) -> None:
+        received_values: list[str | None] = []
+
+        def execute(
+            arguments: NullableArguments | DefaultedNullableArguments | ConstructorExcludedArguments,
+        ) -> ToolExecutionResult[Json]:
+            received_values.append(arguments.value)
+            return ToolExecutionResult({"value": arguments.value})
+
+        outcome = await typed.tool_execute(
+            "nullable_argument",
+            argument_type(value),
+            execute,
+            args_codec=DataclassCodec(argument_type),
+            result_codec=JsonPassthrough(),
+        )
+
+        assert received_values == [value]
+        assert outcome.result == {"value": value}
+
     async def test_best_effort_tool_result_envelope_reaches_events(self, subscribed_events) -> None:
         """Expose the normalized result in scope events while preserving opaque annotations."""
 
@@ -639,6 +775,25 @@ class TestTypedLlmExecute:
 
 
 class TestTypedLlmStreamExecute:
+    async def test_early_close_releases_source_through_native_stream(self) -> None:
+        source = StreamSourceWithClose(chunk_count=None)
+        stream = await typed.llm_stream_execute(
+            "source_cleanup",
+            make_request(),
+            lambda request: source,
+            lambda chunk: None,
+            lambda: {},
+            stream_chunk_codec,
+            passthrough,
+        )
+        try:
+            assert await asyncio.wait_for(anext(stream), 5) == {"token": "0"}
+            await asyncio.wait_for(stream.aclose(), 5)
+            assert source.closed
+            assert source.cleanup_calls == 1
+        finally:
+            await asyncio.wait_for(stream.aclose(), 5)
+
     async def test_stream_passthrough(self) -> None:
         def stream_func(request):
             async def gen():
@@ -791,6 +946,101 @@ class TestTypedLlmStreamExecute:
         assert [chunk.token for chunk in collected] == ["hello", "world"]
 
 
+class TestTypedStreamLifecycle:
+    @pytest.fixture(autouse=True)
+    def isolate_native_executor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def return_forwarding_iterator(name, request, source_factory, collector, finalizer, **options):
+            return source_factory(request)
+
+        monkeypatch.setattr(typed.llm, "stream_execute", return_forwarding_iterator)
+
+    async def _create_stream(
+        self,
+        source: AsyncIterator[StreamChunk],
+        chunk_codec: Codec[StreamChunk] = stream_chunk_codec,
+    ) -> AsyncGenerator[Json, None]:
+        return cast(
+            AsyncGenerator[Json, None],
+            await typed.llm_stream_execute(
+                "source_lifecycle",
+                make_request(),
+                lambda request: source,
+                lambda chunk: None,
+                lambda: {},
+                chunk_codec,
+                passthrough,
+            ),
+        )
+
+    @pytest.mark.parametrize("source_type", [StreamSourceWithoutClose, StreamSourceWithClose])
+    async def test_natural_exhaustion_preserves_chunks(self, source_type) -> None:
+        source = source_type()
+        stream = await self._create_stream(source)
+
+        assert [chunk async for chunk in stream] == [{"token": "0"}, {"token": "1"}]
+        if isinstance(source, StreamSourceWithClose):
+            assert source.closed
+            assert source.cleanup_calls == 1
+
+    async def test_early_close_awaits_cleanup_and_repeated_close_is_safe(self) -> None:
+        source = StreamSourceWithClose(chunk_count=None)
+        stream = await self._create_stream(source)
+        assert await anext(stream) == {"token": "0"}
+        source.cleanup_release.clear()
+        closing_task = asyncio.create_task(stream.aclose())
+        try:
+            await asyncio.wait_for(source.cleanup_started.wait(), 5)
+            assert not closing_task.done()
+            assert not source.closed
+        finally:
+            source.cleanup_release.set()
+            await asyncio.wait_for(closing_task, 5)
+
+        assert source.closed
+        await stream.aclose()
+        assert source.cleanup_calls == 1
+
+    @pytest.mark.parametrize("failure", ["iteration", "encoding", "cleanup"])
+    async def test_failure_attempts_cleanup_and_propagates(self, failure: str) -> None:
+        message = f"{failure} failed"
+        source = StreamSourceWithClose(
+            iteration_error=ValueError(message) if failure == "iteration" else None,
+            cleanup_error=ValueError(message) if failure == "cleanup" else None,
+        )
+
+        class FailingChunkCodec(Codec[StreamChunk]):
+            def to_json(self, value: StreamChunk) -> Json:
+                raise ValueError(message)
+
+        stream = await self._create_stream(source, FailingChunkCodec() if failure == "encoding" else stream_chunk_codec)
+        with pytest.raises(ValueError, match=message):
+            async for _chunk in stream:
+                pass
+
+        assert source.closed
+        assert source.cleanup_calls == 1
+
+    async def test_cancelled_iteration_awaits_source_cleanup(self) -> None:
+        source = StreamSourceWithClose(chunk_count=None)
+        stream = await self._create_stream(source)
+        assert await anext(stream) == {"token": "0"}
+        source.iteration_started.clear()
+        source.iteration_release.clear()
+        pending_chunk = asyncio.create_task(anext(stream))
+        try:
+            await asyncio.wait_for(source.iteration_started.wait(), 5)
+            pending_chunk.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending_chunk
+            assert source.closed
+            assert source.cleanup_calls == 1
+        finally:
+            pending_chunk.cancel()
+            source.iteration_release.set()
+            await asyncio.gather(pending_chunk, return_exceptions=True)
+            await stream.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Additional sync-function tests with custom codecs
 # ---------------------------------------------------------------------------
@@ -847,6 +1097,29 @@ class TestBestEffortAnyCodec:
 
     def setup_method(self) -> None:
         self.codec = BestEffortAnyCodec()
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(DefaultedNullableArguments(None), {}, id="nullable-field"),
+            pytest.param(
+                ConstructorExcludedArguments(None),
+                {"excluded_text": "derived"},
+                id="constructor-excluded-fields",
+            ),
+            pytest.param(NestedResult(NullableArguments(None)), {"value": {}}, id="nested-nullable-field"),
+        ],
+    )
+    def test_dataclass_none_omission_is_unchanged(self, value: object, expected: Json) -> None:
+        encoded = cast(JsonObject, self.codec.to_json(value))
+        assert encoded["data"] == expected
+
+    def test_omitted_dataclass_field_still_uses_default(self) -> None:
+        codec = BestEffortAnyCodec(allowed_types=[DefaultedNullableArguments])
+
+        restored = codec.from_json(codec.to_json(DefaultedNullableArguments(None)))
+
+        assert restored == DefaultedNullableArguments("fallback")
 
     # -- Round-trip: JSON-native types --
 

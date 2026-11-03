@@ -56,7 +56,7 @@ sanitizes emitted observability payloads through NeMo Relay sanitize guardrails.
 
 ## Installation
 
-Install the plugin crate alongside the core runtime:
+Install the plugin crate alongside the Rust SDK:
 
 ```bash
 cargo add nemo-relay nemo-relay-pii-redaction
@@ -71,12 +71,9 @@ cargo test -p nemo-relay-pii-redaction
 
 ## Getting Started
 
-Register the plugin component before validating or initializing plugin
-configuration that includes a `pii_redaction` component:
-
-```rust
-nemo_relay_pii_redaction::component::register_pii_redaction_component()?;
-```
+All SDKs and the CLI register `pii_redaction` automatically. Plugin configuration
+controls activation. Custom embeddings using `nemo-relay-plugin-host` directly
+can call this crate's component registration helper to choose their component set.
 
 A profile-array config can apply multiple policies across every supported
 sanitization surface:

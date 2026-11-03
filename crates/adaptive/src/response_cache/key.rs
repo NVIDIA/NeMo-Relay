@@ -16,11 +16,11 @@
 
 use std::collections::BTreeSet;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::resolve::{
+use nemo_relay_codecs::resolve::{
     ProviderSurface, detect_request_surface_with_hint, request_codec,
 };
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 

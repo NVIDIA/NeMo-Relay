@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Advanced runtime state, callbacks, and scope-stack helpers.
+
+pub mod callbacks;
+mod continuation_context;
+pub mod global;
+mod llm_execution_context;
+pub mod scope_stack;
+pub mod state;
+pub mod subscriber_dispatcher;
+
+pub use callbacks::{
+    BuiltinLlmCodec, ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn,
+    EventSubscriberFn, LlmAsyncCollectorFn, LlmAsyncFinalizerFn, LlmBorrowedCollectorFn,
+    LlmCodecIdentity, LlmCollector, LlmCollectorFn, LlmCollectorFuture, LlmConditionalFn,
+    LlmExecutionFn, LlmExecutionNextFn, LlmFallibleFinalizerFn, LlmFinalizer, LlmFinalizerFn,
+    LlmFinalizerFuture, LlmJsonStream, LlmRequestContext, LlmRequestInterceptFn,
+    LlmResponseContext, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionContext,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+};
+#[doc(hidden)]
+pub use continuation_context::MiddlewareContinuationContext;
+pub use continuation_context::MiddlewareContinuationLease;
+pub use global::global_context;
+pub use llm_execution_context::LlmExecutionContext;
+pub(crate) use scope_stack::capture_trace_context;
+pub use scope_stack::sync_thread_active_event_for_stack;
+pub use scope_stack::{
+    PropagationContext, ScopeStack, ScopeStackEntry, ScopeStackHandle, ScopeStackSnapshot,
+    TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_propagation_context,
+    capture_propagation_context_with_root, capture_rootless_propagation_context,
+    capture_thread_scope_stack, capture_traceparent, create_scope_stack,
+    create_scope_stack_from_propagation, current_scope_stack, current_scope_stack_override,
+    current_scope_stack_snapshot, explicit_thread_scope_stack, fork_scope_stack,
+    install_scope_stack_override, propagate_scope_to_thread, restore_scope_stack_override,
+    restore_thread_scope_stack, scope_stack_active, scope_stack_snapshot, set_thread_scope_stack,
+    sync_thread_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
+    with_active_event_uuid, with_scope_stack, with_task_scope_stack,
+};
+pub use state::NemoRelayContextState;
+#[doc(hidden)]
+pub use subscriber_dispatcher::SubscriberDelivery;
+pub use subscriber_dispatcher::flush_subscribers;
+
+/// Resolve the active parent for a lifecycle operation.
+pub use super::shared::resolve_parent_uuid;

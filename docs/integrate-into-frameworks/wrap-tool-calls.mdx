@@ -99,8 +99,8 @@ export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Prom
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::scope::get_handle;
-use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
+use nemo_relay::scope::get_handle;
+use nemo_relay::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
 use serde_json::json;
 use std::sync::Arc;
 

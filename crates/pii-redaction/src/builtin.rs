@@ -11,22 +11,22 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{CategoryProfile, Event, MetricEnvelope, ScopeCategory};
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
+use nemo_relay_codecs::resolve::{
+    ProviderSurface, detect_response_surface, request_codec as build_request_codec,
+};
+use nemo_relay_diagnostics::{
+    ComponentRecorder, DiagnosticDetailRef, DiagnosticOutcome, ExtensionHandle, Observation,
+};
+use nemo_relay_plugin_host::{PluginError, Result as PluginResult};
+use nemo_relay_runtime::api::event::{CategoryProfile, Event, MetricEnvelope, ScopeCategory};
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::resolve::{
-    ProviderSurface, detect_response_surface, request_codec as build_request_codec,
-    response_codec as build_response_codec,
-};
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::diagnostics::{
-    ComponentRecorder, DiagnosticDetailRef, DiagnosticOutcome, ExtensionHandle, Observation,
-};
-use nemo_relay::plugin::{PluginError, Result as PluginResult};
+use nemo_relay_runtime::codec::response_codec as build_response_codec;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use super::component::{
     BuiltinBackendConfig, DEFAULT_CUSTOM_MARK_PAYLOAD_POLICY,

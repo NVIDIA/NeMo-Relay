@@ -2311,7 +2311,7 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _cwd = crate::test_support::CwdTestScope::locked();
     let _env = EnvScope::without_managed_bootstrap();
-    nemo_relay::plugin::test_close_plugin_host().unwrap();
+    crate::test_support::plugin_host::test_close_plugin_host().unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -2694,12 +2694,11 @@ async fn resource_metrics_target_failure_terminates_child_and_stops_gateway() {
 #[cfg(any(unix, windows))]
 #[tokio::test]
 async fn supervised_resource_metrics_selects_the_owned_child_and_restores_target() {
-    use nemo_relay::api::resource_metrics;
-    use nemo_relay::plugin::dynamic::PluginHostActivation;
+    use nemo_relay_plugin_host::resource_metrics;
 
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let launch = resource_metrics::prepare_cli_resource_metrics_process_tree().unwrap();
-    let mut host = PluginHostActivation::initialize_exact(
+    let mut host = nemo_relay_plugin_host::initialize_exact(
         serde_json::from_value(json!({
             "components": [{"kind": "resource_metrics", "enabled": true, "config": {
                 "measurement_scope": "process_tree",

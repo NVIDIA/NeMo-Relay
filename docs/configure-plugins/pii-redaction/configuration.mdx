@@ -233,10 +233,8 @@ Refer to [Detector Matching](/configure-plugins/pii-redaction/redaction-behavior
 
 #### Setup and interactive editing
 
-The CLI and primary language bindings register the component. Direct Rust
-applications must call
-`nemo_relay_pii_redaction::component::register_pii_redaction_component()` before
-validating or initializing a `pii_redaction` component.
+All SDKs and the CLI register the component automatically. Configure a
+`pii_redaction` component to activate it.
 
 For file discovery, precedence, merge behavior, and gateway conflict rules,
 refer to [Configure](/configure-plugins/plugin-configuration-files).

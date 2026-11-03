@@ -5,12 +5,12 @@
 
 use std::path::PathBuf;
 
-use nemo_relay::error::FlowError;
-use nemo_relay::logging::{
+use nemo_relay_logging::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogRotationConfig,
     FileLogSinkConfig, FileLogSinkFailurePolicy, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES,
 };
+use nemo_relay_types::error::FlowError;
 use serde::Deserialize;
 
 use super::CliError;

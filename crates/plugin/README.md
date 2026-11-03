@@ -21,8 +21,15 @@ in-process NeMo Relay dynamic plugins. Use it to build a Rust `cdylib` that
 Relay loads through the versioned native plugin interface.
 
 Native plugins run in the Relay process and are not sandboxed. They should
-depend on this crate rather than the host `nemo-relay` runtime crate, keeping
+depend on this crate rather than `nemo-relay-plugin-host`, keeping
 the dynamic-library boundary on the stable C-compatible ABI.
+
+The `component` module owns the `Plugin` contract, the object-safe
+`PluginRegistrationContext` interface, configuration policy, errors, and registration
+cleanup. Middleware callback and codec contracts live in `nemo-relay-types`.
+`nemo-relay-plugin-host` implements the registration context and owns registry
+mutation, activation diagnostics, and rollback.
+
 
 ## Authoring Surface
 

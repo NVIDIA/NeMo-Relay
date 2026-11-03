@@ -32,7 +32,6 @@ pub mod intercepts;
 /// Learning primitives and built-in learner implementations.
 pub mod learner;
 pub mod plugin_component;
-#[cfg(feature = "redis-backend")]
 pub mod redis;
 /// Opt-in exact-match LLM response and tool-result cache.
 pub mod response_cache;
@@ -55,7 +54,6 @@ pub use context_helpers::{
     resolve_agent_id, resolve_shared_parent_scope_identity, set_latency_sensitivity,
 };
 pub use error::{AdaptiveError, Result};
-#[cfg(feature = "redis-backend")]
 pub use redis::RedisBackend;
 pub use response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
 pub use response_cache::{RESPONSE_CACHE_MARK, ResponseCacheKeyStrategy};

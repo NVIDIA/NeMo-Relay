@@ -57,7 +57,7 @@ toolCallEnd(handle, { result }, null, null);
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::tool::{
+use nemo_relay::tool::{
     tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
 };
 use serde_json::json;
@@ -126,7 +126,7 @@ const response = await llmCallExecute(
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -246,10 +246,10 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{
+use nemo_relay::llm::{
     llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
 };
-use nemo_relay::api::runtime::LlmJsonStream;
+use nemo_relay::middleware::LlmJsonStream;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -413,7 +413,7 @@ try {
 ```rust
 use std::collections::BTreeSet;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use nemo_relay::api::registry::{
+use nemo_relay::registry::{
     RuntimeRegistrationKind,
     deregister_conditional_middleware_guardrail,
     list_runtime_registrations,
@@ -494,8 +494,8 @@ await llmConditionalExecution(outcome.request);
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
-use nemo_relay::api::tool::{tool_conditional_execution, tool_request_intercepts};
+use nemo_relay::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
+use nemo_relay::tool::{tool_conditional_execution, tool_request_intercepts};
 use serde_json::json;
 
 let tool_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
@@ -551,16 +551,15 @@ await withScope('request', ScopeType.Agent, async (handle) => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK};
-use nemo_relay::api::scope::{event, EmitMarkEventParams};
+use nemo_relay::context::{create_scope_stack, set_thread_scope_stack, with_task_scope_stack};
+use nemo_relay::scope::{event, EmitMarkEventParams};
 use serde_json::json;
 
 let stack = create_scope_stack();
-TASK_SCOPE_STACK
-    .scope(stack.clone(), async {
-        event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
-    })
-    .await?;
+with_task_scope_stack(stack.clone(), async {
+    event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
+})
+.await?;
 
 std::thread::spawn(move || {
     set_thread_scope_stack(stack);
@@ -589,7 +588,7 @@ Every family also has a scope-local surface:
 - Python: `nemo_relay.scope_local.register_*`
 - Node.js: `scopeRegister*`
 - Rust: middleware `scope_register_*` functions under
-  `nemo_relay::api::registry`; subscriber scope registration under
-  `nemo_relay::api::subscriber`
+  `nemo_relay::registry`; subscriber scope registration under
+  `nemo_relay::subscriber`
 
 Use [Add Middleware](/instrument-applications/advanced-guide) for an end-to-end policy example and [API Reference](/reference/api) for symbol-level details.

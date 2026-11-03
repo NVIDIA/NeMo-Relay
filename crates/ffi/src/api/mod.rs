@@ -4,7 +4,7 @@
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`] to retrieve
+//! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`](crate::error::nemo_relay_last_error) to retrieve
 //! the error message.
 
 use std::any::Any;
@@ -71,7 +71,7 @@ pub unsafe extern "C" fn nemo_relay_resource_metrics_collect_start(
     unsafe { *out_collection = std::ptr::null_mut() };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let task = tokio_runtime().spawn(async move {
-        let result = match nemo_relay::api::resource_metrics::collect().await {
+        let result = match nemo_relay_plugin_host::resource_metrics::collect().await {
             Ok(snapshot) => serde_json::to_string(&snapshot).map_err(|error| {
                 FlowError::Internal(format!(
                     "failed to serialize resource metrics snapshot: {error}"
@@ -156,28 +156,32 @@ pub unsafe extern "C" fn nemo_relay_resource_metrics_collect_free(
 }
 
 use libc::c_char;
-use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_relay::api::runtime::{
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_plugin_host::dynamic::PluginHostActivation;
+use nemo_relay_runtime::api::llm as core_llm_api;
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_runtime::api::registry as core_registry_api;
+use nemo_relay_runtime::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
+use nemo_relay_runtime::api::runtime::{
     ScopeStackHandle, TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack,
     current_scope_stack, explicit_thread_scope_stack, restore_thread_scope_stack,
     scope_stack_active, set_thread_scope_stack,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::PluginHostActivation;
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
-    PluginRegistrationContext, deregister_plugin, list_plugin_kinds, register_plugin,
-};
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_runtime::api::scope as core_scope_api;
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::subscriber as core_subscriber_api;
+use nemo_relay_runtime::api::tool as core_tool_api;
+use nemo_relay_runtime::api::tool::ToolAttributes;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use tokio::runtime::Runtime;
+use {
+    nemo_relay_builtins::plugin::deregister_plugin, nemo_relay_builtins::plugin::list_plugin_kinds,
+    nemo_relay_builtins::plugin::register_plugin, nemo_relay_plugin_host::ConfigDiagnostic,
+    nemo_relay_plugin_host::DiagnosticLevel, nemo_relay_plugin_host::Plugin,
+    nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::PluginError,
+};
 
 mod adaptive;
 mod diagnostics;
@@ -287,8 +291,14 @@ fn ignore_sigpipe() {}
 pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     clear_last_error();
     ignore_sigpipe();
-    let result = nemo_relay::shared_runtime::initialize_shared_runtime_binding("go")
-        .and_then(|()| nemo_relay::logging::initialize_default_logging());
+    nemo_relay_builtins::initialize_runtime();
+    if let Err(error) = nemo_relay_builtins::plugin::ensure_builtin_plugins_registered() {
+        return status_from_error(&nemo_relay_types::error::FlowError::Internal(
+            error.to_string(),
+        ));
+    }
+    let result = nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding("go")
+        .and_then(|()| nemo_relay_logging::initialize_default_logging());
     match result {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
@@ -302,7 +312,7 @@ pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_shutdown_default_logging() -> NemoRelayStatus {
     clear_last_error();
-    match nemo_relay::logging::shutdown_default_logging() {
+    match nemo_relay_logging::shutdown_default_logging() {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
     }
@@ -352,7 +362,7 @@ pub unsafe extern "C" fn nemo_relay_log(
         } else {
             format!("nemo_relay.go.{target}")
         };
-        nemo_relay::logging::emit_str(level, &target, message, fields)
+        nemo_relay_logging::emit_str(level, &target, message, fields)
     };
     match parse() {
         Ok(()) => NemoRelayStatus::Ok,

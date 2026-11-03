@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 
 use super::*;
 

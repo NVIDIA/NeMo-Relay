@@ -37433,7 +37433,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## pulldown-cmark - 0.13.5
+## pulldown-cmark - 0.13.6
 
 **Repository URL**: https://github.com/raphlinus/pulldown-cmark
 **License Type(s)**: MIT
@@ -68056,7 +68056,7 @@ Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 ```
 
-## zip - 9.0.4
+## zip - 9.0.5
 
 **Repository URL**: https://github.com/zip-rs/zip2
 **License Type(s)**: MIT

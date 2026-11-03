@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Availability of the latest-memory projection, independent of diagnostic reads.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceMemoryAvailability {
     /// Collection or projection is disabled.
@@ -33,8 +32,7 @@ pub enum ResourceMemoryAvailability {
     Unsupported,
 }
 /// Independent baseline series producing this sample.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceSampleStream {
     /// Configured polling.
@@ -43,8 +41,7 @@ pub enum ResourceSampleStream {
     OnDemand,
 }
 /// Relationship between the diagnostic process and measured target.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceAssociation {
     /// Verified host application process.
@@ -59,8 +56,7 @@ pub enum ResourceAssociation {
     Unverified,
 }
 /// Field-level scope; snapshot scope does not relabel system/environment data.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryFieldScope {
     /// System-visible measurement.
@@ -71,8 +67,7 @@ pub enum MemoryFieldScope {
     Environment,
 }
 /// Exact integers and finite converted decimals retain distinct numeric kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ResourceMemoryNumber {
     /// Exact integral value in its declared unit.
@@ -83,20 +78,18 @@ pub enum ResourceMemoryNumber {
     NonFinite,
 }
 /// Original unit family and canonical unit. Inspection performs no conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "dimension", content = "name", rename_all = "snake_case")]
 pub enum ResourceMemoryUnit {
     /// Memory capacity.
-    Capacity(#[cfg_attr(feature = "schema", schemars(with = "String"))] CapacityUnit),
+    Capacity(#[schemars(with = "String")] CapacityUnit),
     /// Cumulative pressure duration.
-    Duration(#[cfg_attr(feature = "schema", schemars(with = "String"))] DurationUnit),
+    Duration(#[schemars(with = "String")] DurationUnit),
     /// Cumulative events.
-    Count(#[cfg_attr(feature = "schema", schemars(with = "String"))] CountUnit),
+    Count(#[schemars(with = "String")] CountUnit),
 }
 /// One available measurement; an absent field means not reported (unsupported or unreadable).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ResourceMemoryMeasurement {
     /// Original precision and numeric kind.
     pub value: ResourceMemoryNumber,
@@ -108,21 +101,19 @@ pub struct ResourceMemoryMeasurement {
     pub sampled_processes: Option<DiagnosticNumber>,
 }
 /// One cumulative environment limit event.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryLimitEvent {
     /// Resource whose limit generated the event.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    #[schemars(with = "String")]
     pub resource: ResourceLimitResource,
     /// OS event kind.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    #[schemars(with = "String")]
     pub event: ResourceLimitEventKind,
     /// Cumulative count or absent coverage.
     pub count: Option<ResourceMemoryMeasurement>,
 }
 /// Memory-only projection; fixed fields and eight limit slots bound all copies.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ResourceMemoryMetrics {
     /// Original `system_used` resource measurement; absent means not reported.
     pub system_used: Option<ResourceMemoryMeasurement>,
@@ -154,8 +145,7 @@ pub struct ResourceMemoryMetrics {
     pub limit_events: [Option<MemoryLimitEvent>; 8],
 }
 /// Verified root incarnation from the same collection, never PID alone.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ResourceProcessIdentity {
     /// OS process identifier.
     pub process_id: u32,
@@ -163,8 +153,7 @@ pub struct ResourceProcessIdentity {
     pub start_identity: DiagnosticNumber,
 }
 /// Collection identity and memory values, copied without an unbounded retained graph.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ResourceMemorySample {
     /// Collector incarnation; multiple diagnostic sources may share this sample.
     pub collector_instance_id: Uuid,
@@ -183,10 +172,10 @@ pub struct ResourceMemorySample {
     /// Collection duration measured monotonically.
     pub collection_millis: DiagnosticNumber,
     /// Collector operating system.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    #[schemars(with = "String")]
     pub operating_system: ResourceOperatingSystem,
     /// Selected measurement boundary, independent of individual system fields.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    #[schemars(with = "String")]
     pub measurement_scope: ResourceMeasurementScope,
     /// Root verified during this collection, or absent for system/unverified context.
     pub root: Option<ResourceProcessIdentity>,
@@ -198,8 +187,7 @@ pub struct ResourceMemorySample {
     pub memory: ResourceMemoryMetrics,
 }
 /// Independent resource result joined after diagnostic capture releases its lock.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ResourceMemoryView {
     /// Latest attempt availability; prior valid samples may remain after failure.
     pub availability: ResourceMemoryAvailability,

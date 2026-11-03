@@ -4,7 +4,7 @@
 //! Status and privacy regression tests for trajectory context redaction.
 
 use super::*;
-use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use opentelemetry::trace::Status;
 
 #[tokio::test]
@@ -110,8 +110,9 @@ fn trajectory_redaction_preserves_exported_success_and_error_status() {
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber =
-            OpenTelemetrySubscriber::from_tracer_provider_with_type(provider, "test", projection);
+        let subscriber = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
+            provider, "test", projection,
+        );
         subscriber.register(name).unwrap();
         (name, subscriber, exporter)
     })

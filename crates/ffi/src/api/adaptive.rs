@@ -3,13 +3,13 @@
 
 use chrono::{DateTime, Utc};
 use libc::c_char;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::Usage;
 use nemo_relay_adaptive::acg::{
     AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
 };
 use nemo_relay_adaptive::context_helpers::set_latency_sensitivity;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::Usage;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use uuid::Uuid;

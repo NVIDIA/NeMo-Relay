@@ -13,8 +13,9 @@ pub const MAX_DIAGNOSTIC_HTTP_ERROR_BYTES: usize = 1024;
 /// Stable reasons for HTTP inspection, including snapshot, access, and lifecycle failures.
 /// This is separate from the transport-neutral [`DiagnosticReadReason`].
 /// Unknown future reasons must not be inferred from HTTP status alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DiagnosticHttpReason {
@@ -102,8 +103,9 @@ impl From<DiagnosticReadReason> for DiagnosticHttpReason {
 }
 
 /// Error envelope returned by diagnostic HTTP routes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticHttpError {
     /// Safe machine-readable error details.
     #[serde(deserialize_with = "deserialize_object")]
@@ -111,8 +113,9 @@ pub struct DiagnosticHttpError {
 }
 
 /// Error details without query values, credentials, or retained evidence.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticHttpErrorDetails {
     /// Stable operation failure reason.
     #[serde(deserialize_with = "deserialize_reason")]
