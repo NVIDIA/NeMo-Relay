@@ -211,6 +211,30 @@ Json: TypeAlias = JsonValue
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 """Policy used by config helpers when unknown fields or values are encountered."""
 
+def log(level: str, message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a structured operational record through Relay."""
+    ...
+
+def trace(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a trace record through Relay."""
+    ...
+
+def debug(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a debug record through Relay."""
+    ...
+
+def info(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit an info record through Relay."""
+    ...
+
+def warn(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a warning record through Relay."""
+    ...
+
+def error(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit an error record through Relay."""
+    ...
+
 class DataSchema(TypedDict):
     """Schema identifier attached to an event's opaque data payload."""
 
