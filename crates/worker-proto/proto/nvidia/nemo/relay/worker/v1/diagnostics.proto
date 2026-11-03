@@ -149,9 +149,9 @@ message DiagnosticComponentRegistration {
 // Records a positive occurrence delta using admitted component and code handles.
 message DiagnosticObservation {
   // One-based component handle admitted in this diagnostic session.
-  uint32 component = 1;
+  uint32 component = 1 [(buf.validate.field).uint32.gt = 0];
   // One-based code handle admitted for this component.
-  uint32 code = 2;
+  uint32 code = 2 [(buf.validate.field).uint32.gt = 0];
   // Optional admitted failure-class name for this observation.
   optional string failure_class = 3;
   // Explicit observed operation outcome.

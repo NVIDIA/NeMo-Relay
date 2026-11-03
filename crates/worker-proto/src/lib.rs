@@ -3,7 +3,7 @@
 
 //! Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 //!
-//! The active [`nvidia_worker_v1`] contract models Relay-owned DTOs in protobuf
+//! The [`nvidia_worker_v1`] contract models Relay-owned DTOs in protobuf
 //! and keeps application/provider fields as lossless JSON.
 
 /// Legacy worker protocol identifier, retained until the consumer cutover.
@@ -80,10 +80,10 @@ pub mod conversions;
 /// Runtime enforcement of the namespaced protobuf contract.
 pub mod validation;
 
-/// Active worker contract used by the host and maintained SDKs.
+/// Typed worker contract introduced alongside the legacy API.
 #[allow(missing_docs)]
 pub mod nvidia_worker_v1 {
-    /// Active negotiation identifier, incompatible with legacy grpc-v1.
+    /// Negotiation identifier for this contract, incompatible with legacy grpc-v1.
     pub const WORKER_PROTOCOL: &str = "nvidia.nemo.relay.worker.v1";
     /// Initial stable worker/schema contract baseline, independent of crate versions.
     pub const CONTRACT_VERSION: &str = "1.0.0";

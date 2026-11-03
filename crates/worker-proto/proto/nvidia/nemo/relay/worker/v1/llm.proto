@@ -189,7 +189,7 @@ message ContentPart {
     TextContentPart refusal = 6;
     // Tool invocation embedded in a content-block array.
     ToolUseContentPart tool_use = 7;
-    // Portable top-level tool-result item, including its open result payload.
+    // Tool result embedded in a provider content-block array.
     ToolResultContentPart tool_result = 8;
     // Provider-owned component preserved with its provider, native discriminator, and JSON value.
     ProviderNativeComponent provider_native = 9;
@@ -418,7 +418,7 @@ message FinishReason {
     google.protobuf.Empty complete = 1;
     // The provider stopped because a generation length limit was reached.
     google.protobuf.Empty length = 2;
-    // Tool invocation embedded in a content-block array.
+    // The provider stopped generation to request tool use.
     google.protobuf.Empty tool_use = 3;
     // The provider stopped because of content filtering.
     google.protobuf.Empty content_filter = 4;

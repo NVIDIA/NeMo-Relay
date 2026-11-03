@@ -461,6 +461,16 @@ def test_current_descriptors_include_the_complete_import_graph(contract):
         (
             "DiagnosticObservation",
             {"component": 1, "code": 1, "severity": 3, "count": 1},
+            {"component": 0, "code": 1, "severity": 3, "count": 1},
+        ),
+        (
+            "DiagnosticObservation",
+            {"component": 1, "code": 1, "severity": 3, "count": 1},
+            {"component": 1, "code": 0, "severity": 3, "count": 1},
+        ),
+        (
+            "DiagnosticObservation",
+            {"component": 1, "code": 1, "severity": 3, "count": 1},
             {"component": 1, "code": 1, "severity": 3, "count": 0},
         ),
         (

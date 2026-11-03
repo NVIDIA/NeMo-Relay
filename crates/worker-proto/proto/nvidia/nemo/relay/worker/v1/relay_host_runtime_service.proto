@@ -100,7 +100,7 @@ message GetCurrentScopeStackSnapshotResponse {
   // Exactly one recognized alternative is required when this message is present.
   oneof result {
     option (buf.validate.oneof).required = true;
-    // Required bounded canonical diagnostic page when snapshot reads are authorized.
+    // Owned scope identities ordered from root to the current top of the bound stack.
     ScopeStackSnapshot snapshot = 1;
     // Distinct from a present snapshot with zero entries.
     google.protobuf.Empty no_context = 2;

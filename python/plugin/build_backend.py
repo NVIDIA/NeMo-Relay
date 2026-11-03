@@ -151,7 +151,10 @@ def resolve_proto_dependencies(lock: Path | None = None) -> Path:
                         temporary,
                     ],
                     check=True,
+                    timeout=120,
                 )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("Buf dependency export timed out after 120 seconds") from exc
             except FileNotFoundError as exc:
                 raise RuntimeError(
                     "Buf is required to build nemo-relay-plugin from source; install Buf or set BUF"

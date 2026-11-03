@@ -377,10 +377,10 @@ When changing a shared type or its transport representation:
 
 ## NVIDIA API standards review
 
-This contract follows the [NVIDIA gRPC API Standards and Guidance](https://api-guidelines-api-standards-b5865fa98cf73e14806faef48869971598.gitlab-master-pages.nvidia.com/grpc-standards.html),
-including its linked channel-based versioning principles. The schema review was
-performed on November 2, 2026. AEP references in that standard are optional design
-references; this contract does not claim blanket AEP conformance.
+This contract follows NVIDIA gRPC API Standards and Guidance, including its
+channel-based versioning principles. The table below records the applicable
+requirements and their enforcement. AEP references in that standard are optional
+design references; this contract does not claim blanket AEP conformance.
 
 | Guideline area | Contract decision and enforcement |
 | --- | --- |

@@ -42,6 +42,20 @@ fn validates_required_fields_and_json_syntax() {
 }
 
 #[test]
+fn diagnostic_observations_require_positive_handles() {
+    for (component, code) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        let observation = pb::DiagnosticObservation {
+            component,
+            code,
+            severity: pb::DiagnosticObservationSeverity::Info as i32,
+            count: 1,
+            ..Default::default()
+        };
+        assert_eq!(validate(&observation).is_ok(), component > 0 && code > 0);
+    }
+}
+
+#[test]
 fn enforces_result_oneofs_and_enum_constraints() {
     assert!(validate(&pb::InvokeResponse::default()).is_err());
     validate(&pb::InvokeResponse {

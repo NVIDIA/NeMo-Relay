@@ -17,7 +17,7 @@ message Event {
   // Exactly one recognized alternative is required when this message is present.
   oneof kind {
     option (buf.validate.oneof).required = true;
-    // Optional host binding selecting the stack and parent for this operation.
+    // Scope lifecycle event with its required base envelope.
     ScopeEvent scope = 1;
     // Point-in-time mark event with its required base envelope.
     MarkEvent mark = 2;
