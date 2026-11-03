@@ -40,6 +40,6 @@ Sets whether hints are added as a request header and the dot-separated body path
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_request_fn(self) -&gt; LlmRequestInterceptFn"}} /></pre>
 
-Converts this intercept into an [`LlmRequestInterceptFn`] suitable for registration with `register_llm_request_intercept`.
+Converts this intercept into an [`LlmRequestInterceptFn`] suitable for registration with [`register_llm_request_intercept`](/reference/api/rust-library-reference/nemo-relay-runtime/api/registry/fn-register-llm-request-intercept).
 
 The returned closure reads the HotCache trie, builds AgentHints, injects them into the request headers and body, and returns the transformed request.
