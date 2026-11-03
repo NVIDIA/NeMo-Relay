@@ -1719,8 +1719,9 @@ pub(crate) fn canonical_resource_key(attributes: &[KeyValue]) -> String {
 }
 
 /// Inspect TLS failures before the OTLP HTTP exporter replaces them with a
-/// generic network error. Only static classifications and URL origins are safe
-/// to report; error strings can contain credentials or collector response data.
+/// generic network error, and report collector partial success. Only static
+/// classifications and URL origins are safe to report; error strings can
+/// contain credentials or collector response data.
 #[derive(Debug)]
 #[doc(hidden)]
 pub struct DiagnosticTraceHttpClient<C> {
@@ -1742,8 +1743,19 @@ impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
         if let Some(reason) = self.diagnostics.trace_tls_failure() {
             return Err(std::io::Error::other(reason).into());
         }
-        let endpoint = trace_endpoint_log_identity(&request.uri().to_string());
+        let uri = request.uri().to_string();
+        let endpoint = trace_endpoint_log_identity(&uri);
+        let json = super::otel_signal::otlp_request_is_json(&request);
         let result = self.inner.send_bytes(request).await;
+        if let Ok(response) = &result {
+            super::otel_signal::record_otlp_partial_success(
+                super::otel_signal::OtlpSignal::Traces,
+                &uri,
+                json,
+                response,
+                &self.diagnostics,
+            );
+        }
         if let Err(error) = &result
             && let Some(reason) = safe_tls_failure_reason(error.as_ref())
             && self

@@ -1993,3 +1993,72 @@ fn attribute_mappings_use_the_completed_model_name() {
         }
     }
 }
+
+#[test]
+fn http_trace_export_reports_collector_partial_success_as_runtime_diagnostic() {
+    use opentelemetry_proto::tonic::collector::trace::v1::{
+        ExportTracePartialSuccess, ExportTraceServiceResponse,
+    };
+
+    let _guard = crate::test_mutex().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let body = ExportTraceServiceResponse {
+        partial_success: Some(ExportTracePartialSuccess {
+            rejected_spans: 1,
+            error_message: "span rejected by collector policy".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (request_tx, request_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&body).unwrap();
+        request_tx.send(request).unwrap();
+    });
+
+    let subscriber = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::http_binary("partial-success-test").with_endpoint(endpoint),
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
+    callback(&make_start_event_with_metadata(
+        uuid,
+        None,
+        "rejected-span",
+        json!({}),
+    ));
+    callback(&make_end_event(
+        uuid,
+        None,
+        "rejected-span",
+        ScopeType::Agent,
+        None,
+    ));
+    subscriber.force_flush().unwrap();
+    request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected an OTLP trace export");
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let rejected = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.partial_success")
+        .unwrap_or_else(|| panic!("no otel.partial_success in {diagnostics:?}"));
+    assert_eq!(rejected.count, 1);
+    assert!(!rejected.message.contains("collector policy"));
+    assert!(
+        rejected.message.contains("rejected 1 spans"),
+        "{}",
+        rejected.message
+    );
+    subscriber.shutdown().unwrap();
+}

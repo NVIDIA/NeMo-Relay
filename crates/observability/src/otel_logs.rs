@@ -46,11 +46,11 @@ use super::otel::{
     OpenTelemetryError, OtlpTransport, Result, normalize_shutdown_result,
 };
 use super::otel_signal::{
-    MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, SignalExporterRuntime,
-    SignalResourceLineage, SignalRuntimeDiagnostics, automatic_otlp_http_client,
-    automatic_protocol_is_grpc, automatic_protocol_is_unset, automatic_signal_endpoint,
-    build_grpc_metadata, build_in_owned_runtime, classify_metric_mark, drain_startup_queue,
-    promoted_signal_resource_attributes, record_resource_pipeline_limit,
+    MAX_DYNAMIC_SIGNAL_PIPELINES, MetricMarkClassification, OtlpSignal, PartialSuccessHttpClient,
+    SignalExporterRuntime, SignalResourceLineage, SignalRuntimeDiagnostics,
+    automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
+    automatic_signal_endpoint, build_grpc_metadata, build_in_owned_runtime, classify_metric_mark,
+    drain_startup_queue, promoted_signal_resource_attributes, record_resource_pipeline_limit,
     reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
     telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
@@ -624,14 +624,20 @@ pub(crate) fn shutdown_log_providers(
     dynamic_errors.into_iter().next().map_or(Ok(()), Err)
 }
 
-pub(crate) fn build_automatic_log_exporter() -> ExporterInitializationResult<OtlpLogExporter> {
+pub(crate) fn build_automatic_log_exporter(
+    diagnostics: &SignalRuntimeDiagnostics,
+) -> ExporterInitializationResult<OtlpLogExporter> {
     let builder = OtlpLogExporter::builder();
     Ok(
         if automatic_protocol_is_unset("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client("LOGS")?)
+                .with_http_client(PartialSuccessHttpClient {
+                    inner: automatic_otlp_http_client("LOGS")?,
+                    signal: OtlpSignal::Logs,
+                    diagnostics: diagnostics.clone(),
+                })
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") {
@@ -645,7 +651,11 @@ pub(crate) fn build_automatic_log_exporter() -> ExporterInitializationResult<Otl
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client("LOGS")?)
+                .with_http_client(PartialSuccessHttpClient {
+                    inner: automatic_otlp_http_client("LOGS")?,
+                    signal: OtlpSignal::Logs,
+                    diagnostics: diagnostics.clone(),
+                })
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         },
@@ -654,9 +664,10 @@ pub(crate) fn build_automatic_log_exporter() -> ExporterInitializationResult<Otl
 
 pub(crate) fn build_log_exporter(
     config: &OpenTelemetryLogConfig,
+    diagnostics: &SignalRuntimeDiagnostics,
 ) -> ExporterInitializationResult<OtlpLogExporter> {
     let exporter = if config.automatic {
-        build_automatic_log_exporter()?
+        build_automatic_log_exporter(diagnostics)?
     } else {
         match config.transport {
             OtlpTransport::HttpBinary => {
@@ -671,13 +682,21 @@ pub(crate) fn build_log_exporter(
                     .unwrap_or_default()
                     .http_client(&config.endpoint, Some(config.timeout))?;
                 builder = if config.header_file.is_empty() {
-                    builder.with_http_client(client)
+                    builder.with_http_client(PartialSuccessHttpClient {
+                        inner: client,
+                        signal: OtlpSignal::Logs,
+                        diagnostics: diagnostics.clone(),
+                    })
                 } else {
-                    builder.with_http_client(HeaderFileHttpClient::new(
-                        client,
-                        HeaderFileResolver::new(config.header_file.clone()),
-                        config.plaintext.clone(),
-                    ))
+                    builder.with_http_client(PartialSuccessHttpClient {
+                        inner: HeaderFileHttpClient::new(
+                            client,
+                            HeaderFileResolver::new(config.header_file.clone()),
+                            config.plaintext.clone(),
+                        ),
+                        signal: OtlpSignal::Logs,
+                        diagnostics: diagnostics.clone(),
+                    })
                 };
                 if !config.headers.is_empty() {
                     builder = builder.with_headers(config.headers.clone());
@@ -730,7 +749,7 @@ pub(crate) fn build_log_provider(
     diagnostics: Arc<LogDeliveryDiagnostics>,
     resource_attributes: Option<Vec<KeyValue>>,
 ) -> ExporterInitializationResult<SdkLoggerProvider> {
-    let exporter = build_log_exporter(config)?;
+    let exporter = build_log_exporter(config, &diagnostics.runtime_diagnostics)?;
 
     let mut batch_config = BatchConfigBuilder::default();
     if !config.automatic {
