@@ -18,27 +18,23 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-worker` is the Rust authoring SDK for out-of-process NeMo Relay
 dynamic worker plugins. Use it when plugin code needs process isolation and
-communicates with Relay through the versioned `grpc-v1` worker protocol.
+communicates with Relay through the versioned `nvidia.nemo.relay.worker.v1` worker protocol.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers built
-for an earlier release must rebuild with this SDK and declare `compat.relay` beginning at
-`0.8.0`. The protocol identifier remains `grpc-v1`, but `ToolNext` now returns
-`ToolExecutionResult`, which keeps an optional opaque annotation beside the application
-result.
+The active contract is `nvidia.nemo.relay.worker.v1` at `1.0.0`. Upgrade the host
+and worker SDK together, rebuild workers, and update `compat.worker_protocol` in
+worker manifests. Legacy `grpc-v1` workers are incompatible. Package release
+versions remain tied to Relay releases.
 
-Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
-execution callbacks. Workers that register either surface must rebuild with the
-0.10 SDK and set `compat.relay` to begin at `0.10.0`. The context provides
-request decode and encode operations when Relay selected a codec. Non-streaming
-callbacks can also decode the completed response; streaming callbacks cannot
-decode incomplete chunks. The wire protocol remains `grpc-v1`.
+Callbacks retain shared domain types. Private converters model Relay-owned
+structures in protobuf while preserving open application/provider JSON, canonical
+tool annotations, pending marks, codec capabilities, cancellation, and scope ownership.
 
 ## Authoring Surface
 
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
-| `PluginContext` | Installs typed handlers for all 16 supported registration surfaces. |
+| `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |

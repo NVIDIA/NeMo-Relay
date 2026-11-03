@@ -13,7 +13,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 ## Rules
 
 - Keep the stable boundary explicit: native plugins cross a C ABI; worker
-  plugins cross `grpc-v1`.
+  plugins cross `nvidia.nemo.relay.worker.v1` (contract `1.0.0`).
 - Do not pass Rust runtime types, trait objects, futures, or allocator-owned
   strings across the native dynamic-library boundary.
 - Typed native middleware futures run on the SDK-owned Tokio executor. Keep
@@ -24,15 +24,13 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
   components. Enabled dynamic records may synthesize internal component specs;
   disabled records stay inspectable but unloaded.
-- Relay 0.8 establishes the native API 1 and `grpc-v1` canonical
-  `ToolExecutionResult` baseline. Require every dynamic plugin to rebuild and
-  declare a `compat.relay` range that excludes versions before 0.8. Recommend
-  `>=0.8.0,<1.0`; open-ended or narrower 0.8-or-newer ranges are valid.
+- Require migrated worker plugins to regenerate their bindings, rebuild, and
+  declare a `compat.relay` range covering the new contract. Recommend
+  `>=1.0.0,<2.0` for the current worker SDK.
 - Treat `compat.relay` as the plugin author's compatibility assertion, not
   proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
-- Relay 0.8 retains the `grpc-v1` identifier and
-  `nemo.relay.worker.v1` package while changing the tool-result protobuf types;
-  every worker must regenerate its bindings and rebuild. Native ABI v4 permits
+- The worker contract uses `nvidia.nemo.relay.worker.v1` and protocol `1.0.0`.
+  Native ABI v4 permits
   append-only host-table extensions guarded by `struct_size`; existing fields
   must remain frozen at their original offsets. Incompatible native JSON,
   reordered or replaced native fields, or incompatible worker protobuf changes
@@ -59,7 +57,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - [ ] Top-level `doctor` reports resolved dynamic plugin and host configuration
       status.
 - [ ] When detailed dynamic plugin guides exist, they keep Rust native, Python
-      worker, and `grpc-v1` protocol details on separate pages.
+      worker, and `nvidia.nemo.relay.worker.v1` protocol details on separate pages.
 - [ ] `justfile`, Codecov, and CI package/test workflows include new plugin
       crates and packages.
 
@@ -82,7 +80,7 @@ fixtures inside an individual test case.
 
 ## References
 
-- `crates/core/src/plugin/dynamic/`
+- `crates/plugin-host/src/dynamic/`
 - `crates/plugin`
 - `crates/worker`
 - `crates/worker-proto`

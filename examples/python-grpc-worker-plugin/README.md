@@ -7,12 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 This package is the complete Python worker used by the plugin authoring guide.
 It validates the shared documentation configuration, registers every safe
-`grpc-v1` surface, preserves annotations and Relay-owned accounting, uses
-invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
+`nvidia.nemo.relay.worker.v1` surface, preserves annotations and Relay-owned
+accounting, uses invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
 scopes, isolated stacks, and cancelled tasks.
 
-The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name. Its tool
-continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive codec
+The worker targets Relay 1.x using the `nvidia.nemo.relay.worker.v1` protocol
+(contract `1.0.0`). Its manifest requires `compat.relay = ">=1.0.0,<2.0"`.
+Its tool continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive codec
 context before the continuation; non-streaming execution can decode a completed response,
 while streaming execution exposes request codec operations only.
 

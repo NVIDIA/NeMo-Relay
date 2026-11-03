@@ -80,7 +80,7 @@ for callback timing and Agent-lifetime limitations.
 
 ## Control a Registration from a Background Task
 
-Worker gates are callback-based. Relay invokes the callback through `grpc-v1` while it
+Worker gates are callback-based. Relay invokes the callback through `nvidia.nemo.relay.worker.v1` while it
 constructs a middleware or publication snapshot. Callback, transport, and timeout
 failures leave the target enabled. Keep callbacks fast and side-effect free.
 

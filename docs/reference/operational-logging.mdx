@@ -288,9 +288,8 @@ await runtime.error("cache request failed", target="payments.client", fields={"e
 </Tab>
 </Tabs>
 
-Rust native plugins require a host with native ABI v6 or newer. The worker
-`Log` operation is additive to `grpc-v1`; a worker must use a host that exposes
-that operation.
+Rust native plugins require a host with native ABI v6 or newer. Workers use the typed `Log` operation in
+`nvidia.nemo.relay.worker.v1.RelayHostRuntimeService`.
 
 ## TOML Configuration
 

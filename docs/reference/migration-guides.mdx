@@ -1,17 +1,40 @@
 ---
 title: "Migration Guides"
-description: "Upgrade from NeMo Relay 0.10.0 to 0.11.0."
+description: "Migrate worker plugins to NeMo Relay 1.0.0 and review the 0.11.0 upgrade."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to upgrade from NeMo Relay 0.10.0 to 0.11.0.
+Use this page to migrate worker plugins to NeMo Relay 1.0.0 or review the upgrade
+from NeMo Relay 0.10.0 to 0.11.0.
 
-This guide covers the 0.11.0 release. It includes fixes from the 0.10
+The historical 0.11.0 guide below includes fixes from the 0.10
 patch releases. Configuration changes from earlier patch upgrades still apply.
 
 Start with the package updates. Then review the sections for the features you use.
+
+## Migrate Worker Plugins to NeMo Relay 1.0.0
+
+Upgrade the Rust host, `nemo-relay-worker`, and Python `nemo-relay-plugin` together.
+The active protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
+Crate and wheel releases follow the Relay package version independently of the contract version.
+
+1. Rebuild SDK workers or regenerate custom bindings from
+   `crates/worker-proto/proto/nvidia/nemo/relay/worker/v1/`.
+2. Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in each worker
+   manifest and declare `compat.relay = ">=1.0.0,<2.0"`.
+3. Recalculate artifact digests, reinstall workers, and validate activation.
+
+Custom workers must implement the new service names, nested credentials,
+surface-specific invocation oneofs, dedicated response types, and executable
+validation rules. JSON remains only for application and provider-owned values.
+An explicit `no_context` snapshot result means no scope stack is bound; an empty
+result oneof is invalid. Runtime failures use standard gRPC statuses.
+
+The old `grpc-v1` schema and generated bindings have been removed. Historical
+definitions remain in Git history, and no automatic adapter is provided. Refer to the
+[gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol) for the contract.
 
 ## Upgrade to NeMo Relay 0.11.0
 

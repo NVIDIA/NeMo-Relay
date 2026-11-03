@@ -1,6 +1,6 @@
 ---
 title: "Rust Worker"
-description: "Build, digest, activate, verify, and stop the checked Rust grpc-v1 worker."
+description: "Build, digest, activate, verify, and stop the checked Rust gRPC worker."
 position: 32
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -10,7 +10,7 @@ The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to th
 [Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 1.0.0,
 implements `WorkerPlugin`, registers all
 16 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
-create the authenticated `grpc-v1` server from the
+create the authenticated `nvidia.nemo.relay.worker.v1` server from the
 activation environment Relay provides.
 
 ## Internal Diagnostic Observations
@@ -104,8 +104,8 @@ name and digest placeholders:
 
 <Code src="../_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-The manifest targets Relay 1.0.0 and uses the context-aware tool execution
-contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext::call` returns
+The manifest requires Relay 1.0 and the typed `nvidia.nemo.relay.worker.v1`
+protocol. `ToolNext::call` returns
 `ToolExecutionResult`, preserving an application payload and optional opaque annotation
 separately from Relay-owned pending marks. Rebuild the worker when adopting this SDK
 release.
@@ -113,7 +113,7 @@ release.
 The artifact and entrypoint paths must identify the same executable. Relay verifies the
 artifact digest before it starts the command, and the worker
 [handshake](/build-plugins/workers/grpc-v1-protocol) must return the
-same plugin identity and `grpc-v1` protocol.
+same plugin identity and `nvidia.nemo.relay.worker.v1` protocol.
 
 ## Register and Start the Worker
 
@@ -129,7 +129,7 @@ Use the following procedure to register the manifest and inspect worker activati
 
 2. Start Relay from the repository root. Inspect the activation report
    and confirm the handshake reports plugin identity, SDK and runtime metadata,
-   `grpc-v1`, multiple-component behavior, and all 16 surfaces.
+   `nvidia.nemo.relay.worker.v1`, multiple-component behavior, and all 16 surfaces.
 
    ```bash
    nemo-relay --bind 127.0.0.1:4040

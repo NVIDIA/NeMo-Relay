@@ -147,8 +147,8 @@ the installed module. Calculate the `<worker-source-sha256>` placeholder from th
 
 <Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
-The manifest targets Relay 1.0.0 and uses the context-aware tool execution
-contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
+The manifest requires Relay 1.0 and the typed `nvidia.nemo.relay.worker.v1`
+protocol. `ToolNext.call()` returns
 `ToolExecutionResult`, whose `result` contains the application payload and whose optional
 `annotation` remains adjacent opaque metadata. See the
 [protocol reference](/build-plugins/workers/grpc-v1-protocol) for the complete boundary.

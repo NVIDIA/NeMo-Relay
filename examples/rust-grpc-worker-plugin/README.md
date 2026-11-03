@@ -7,10 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 
 This project is the checked Rust worker used by the NeMo Relay plugin authoring
 guide. It validates the shared documentation configuration, registers every
-safe `grpc-v1` surface, exercises continuations and lazy streams, uses
-invocation-scoped codecs, and demonstrates marks and scope-stack cleanup.
+safe `nvidia.nemo.relay.worker.v1` surface, exercises continuations and lazy streams,
+uses invocation-scoped codecs, and demonstrates marks and scope-stack cleanup.
 
-The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name.
+The worker targets Relay 1.x using the `nvidia.nemo.relay.worker.v1` protocol
+(contract `1.0.0`). Its manifest requires `compat.relay = ">=1.0.0,<2.0"`.
 Non-streaming and streaming LLM execution callbacks receive request codec
 context before their continuation. Non-streaming callbacks also receive
 completed-response codec context; streaming callbacks do not because chunks
@@ -18,8 +19,9 @@ are not complete provider responses.
 
 Run `cargo test --locked` and `cargo build --locked --target-dir target` from this directory. The configuration and
 schema tests are order-independent. The lifecycle test builds a fresh worker,
-materializes a digest-checked manifest, activates it through `grpc-v1`, runs
-managed middleware, observes a host-runtime mark, and verifies shutdown. Copy
+materializes a digest-checked manifest, activates it through
+`nvidia.nemo.relay.worker.v1`, runs managed middleware, observes a host-runtime
+mark, and verifies shutdown. Copy
 `relay-plugin.toml` to `relay-plugin.local.toml`, replace the platform worker
 placeholder with the built executable name, and replace only `<artifact-sha256>`
 with the lowercase hexadecimal digest of the built executable. The manifest value

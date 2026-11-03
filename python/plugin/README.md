@@ -18,19 +18,17 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-plugin` is the Python authoring SDK for NeMo Relay out-of-process
 dynamic worker plugins. Use it when plugin code should run in its own Python
-process and communicate with Relay through the versioned `grpc-v1` worker
+process and communicate with Relay through the versioned `nvidia.nemo.relay.worker.v1` worker
 protocol.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers and
-custom bindings built for earlier releases must regenerate protobuf bindings, rebuild,
-and declare `compat.relay` beginning at `0.8.0`. `ToolNext.call()` returns
-`ToolExecutionResult`, preserving opaque annotation metadata independently of the
-application result JSON.
+The active contract is `nvidia.nemo.relay.worker.v1` at `1.0.0`. Upgrade the host
+and worker SDK together, rebuild workers, and update `compat.worker_protocol` in
+worker manifests. Legacy `grpc-v1` workers are incompatible. Package release
+versions remain tied to Relay releases.
 
-Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
-execution callbacks. Workers that register either surface must update their
-callback signatures, rebuild with the 0.10 SDK, and set `compat.relay` to begin
-at `0.10.0`. The protocol remains `grpc-v1`.
+Callbacks retain shared domain types. Private converters model Relay-owned
+structures in protobuf while preserving open application/provider JSON, canonical
+tool annotations, pending marks, codec capabilities, cancellation, and scope ownership.
 
 ## Authoring Surface
 
@@ -38,7 +36,7 @@ The following rows describe the plugin authoring surfaces available through this
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 17 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
@@ -62,6 +60,13 @@ error text and execution behavior are preserved. Older SDKs may discard this
 additive provenance; absent identity retains the existing attribution behavior.
 
 ## Installation
+
+Prebuilt wheels contain generated protobuf bindings and need neither Buf nor
+protoc. Source and editable builds require [Buf](https://buf.build/docs/installation/)
+1.75.0 or newer on PATH, or an executable selected with `BUF`. They resolve the
+validation schema from the immutable commit in the packaged `buf.lock`; the first
+resolution needs access to the Buf Schema Registry. No upstream schema is vendored.
+
 
 Add the SDK to the Python worker project's dependencies:
 
@@ -125,7 +130,7 @@ async def main() -> None:
 ```
 
 Marks can also declare a typed data schema, exported-log severity, and semantic category without
-changing the stable `grpc-v1` protocol identifier:
+changing the `nvidia.nemo.relay.worker.v1` protocol identifier:
 
 ```python
 from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
@@ -217,7 +222,7 @@ task cancellation. A blocking synchronous callback can delay both the
 cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
-`grpc-v1` workers are expected to implement this best-effort cancellation
+Worker v1 implementations are expected to implement this best-effort cancellation
 contract. Relay remains compatible with older workers that return
 `accepted = false`; in that case it still drops the transport request, but it
 cannot guarantee worker-side interruption.

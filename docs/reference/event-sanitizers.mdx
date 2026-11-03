@@ -220,14 +220,14 @@ convention.
 ## Dynamic Plugins
 
 Rust native plugins receive the three registration methods on their typed
-plugin context. Python `grpc-v1` workers receive the same methods on
+plugin context. Python `nvidia.nemo.relay.worker.v1` workers receive the same methods on
 `PluginContext`, and their callbacks can be synchronous or asynchronous. The
-worker protocol is `grpc-v1` and defines the following stable registration
+worker protocol is `nvidia.nemo.relay.worker.v1` and defines the following stable registration
 surface values:
 
-- `MARK_SANITIZE_GUARDRAIL = 30`
-- `SCOPE_SANITIZE_START_GUARDRAIL = 31`
-- `SCOPE_SANITIZE_END_GUARDRAIL = 32`
+- `REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL = 30`
+- `REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL = 31`
+- `REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL = 32`
 
 Declare only the surfaces that your dynamic plugin installs. Register them
 through the plugin context so the runtime rolls back every registration if

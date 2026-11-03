@@ -8,10 +8,10 @@ SPDX-License-Identifier: Apache-2.0
 The new protobuf package is `nvidia.nemo.relay.worker.v1`. Workers use the same
 name to identify the protocol during handshake. Its contract version is `1.0.0`.
 Crates and wheels have separate release versions.
-This change adds the schema, generated messages, converters, validation, and tests.
-The host and SDKs still use `grpc-v1`. The old schema, Rust `v1` module, and JSON
-helpers remain available until the host and SDKs switch together. The requirements
-below describe that planned change. They do not describe the live protocol yet.
+The host, Rust worker SDK, and Python worker SDK use this contract. Upgrade and
+rebuild them together. The old `grpc-v1` schema and generated bindings have been
+removed. Old definitions remain in Git history. Live workers must use the new
+package and protocol identity.
 Diagnostic read access is disabled by default.
 
 A domain type is an application data type from the shared runtime. A wire message
@@ -264,10 +264,10 @@ protobuf messages, gRPC statuses, credentials, and capability IDs out of callbac
 signatures. Each backend keeps its own startup settings and raw ABI APIs. Native
 and worker adapters convert values at their boundaries.
 
-During adoption, replace the worker diagnostic API's protobuf re-exports with
-shared declarations, queries, and results. Both Rust SDKs will re-export the same
-`ToolExecutionContext` type. Keep its native fields and worker accessor methods.
-The following table lists the shared contracts and their adoption requirements:
+Both Rust SDKs use shared diagnostic declarations, queries, and results. They
+re-export the same `ToolExecutionContext` type. Its native fields and worker
+accessor methods remain available. The following table lists the shared contracts
+and required behavior:
 
 | Authoring Capability | Shared Domain Contract | New Worker Wire Format | Adoption Requirements |
 | --- | --- | --- | --- |
@@ -406,7 +406,7 @@ This contract does not claim to follow every AEP.
 | Guideline Area | Contract Decision and Checks |
 | --- | --- |
 | Package naming and versioning | `nvidia.nemo.relay.worker.v1`, matching directories, stable major suffix; all Buf STANDARD rules apply without an exception. |
-| Retired namespace | `nemo.relay.worker.v1` remains available until the separate consumer cutover. The Rust module is `nvidia_worker_v1`; its negotiation identity is the fully qualified current package name. |
+| Retired namespace | `nemo.relay.worker.v1` has been removed. The Rust module is `nvidia_worker_v1`; its negotiation identity is the fully qualified current package name. |
 | Compatible evolution | Additive updates remain in the same major namespace. After the first release, compatibility checks should compare wire, source, JSON, and validation constraints against that released schema. New breaking changes require a new namespace. |
 | Source layout | Open-source SPDX license, file overview, `proto3` syntax, package, alphabetized imports, then declarations; Buf formats files with two-space indentation. No public or weak imports. |
 | Service organization | One service per matching `_service.proto`, service first, dedicated request/response pairs in RPC order in that file. Supporting DTOs are in separate files. |
@@ -442,9 +442,9 @@ protocol/lifecycle state to `FAILED_PRECONDITION`. Preserve `CANCELLED`,
 `DEADLINE_EXCEEDED`, and other applicable standard statuses. Both SDKs
 validate messages before callback dispatch or state mutation.
 
-The adoption layer will move both SDKs and the Rust host to this namespace and
-remove the legacy sources. Existing workers must then rebuild and update their
-manifests; no adapter is provided. Namespace collision review is limited to
+Both SDKs and the Rust host use this namespace for live traffic. Legacy sources
+are available only in Git history. Existing workers must rebuild and update
+their manifests; no adapter is provided. Namespace collision review is limited to
 this repository; no external namespace registration or governance approval is claimed.
 
 ## Current-Contract Checks
@@ -478,7 +478,7 @@ source builds require Buf on PATH (or selected with `BUF`) and export that exact
 commit into an ignored build directory. Buf manages its download cache; an initial
 build needs BSR access. `just resolve-worker-proto-deps` resolves the include path
 for standalone generation and policy tests. No upstream schema is committed.
-After SDK adoption, Python source distributions carry the canonical schema and lockfile; building a
+Python source distributions carry the canonical schema and lockfile; building a
 wheel from them also requires Buf. Prebuilt wheels include private generated
 bindings and the upstream license, and require neither Buf nor protoc to install.
 
