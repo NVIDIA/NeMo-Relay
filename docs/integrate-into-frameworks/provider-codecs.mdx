@@ -264,6 +264,7 @@ import {
 import {
   JsonPassthrough,
   typedLlmExecute,
+  type JsonArray,
 } from 'nemo-relay-node/typed';
 
 registerLlmRequestIntercept(
@@ -275,13 +276,14 @@ registerLlmRequestIntercept(
       return { request, annotated };
     }
 
+    const annotatedRequest = annotated as { messages: JsonArray };
     return {
       request,
       annotated: {
-        ...annotated,
+        ...annotatedRequest,
         messages: [
           { role: 'system', content: 'Answer with concise technical detail.' },
-          ...annotated.messages,
+          ...annotatedRequest.messages,
         ],
       },
     };

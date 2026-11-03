@@ -38,25 +38,6 @@ class JsonPassthrough {
   }
 }
 
-/**
- * Encode an annotated LLM payload with the caller-provided codec.
- *
- * Supports both plain request payloads and the `{ annotated, original }`
- * wrapper used by annotated-aware intercept pipelines.
- *
- * @param {{ encode(annotated: *, original: *): * }} codec - Codec used to re-encode the payload.
- * @param {*} payload - Plain or annotated payload to encode.
- * @returns {*} The payload produced by `codec.encode`.
- * @remarks Plain payloads are forwarded as `annotated` with `original = null`;
- * annotated payloads preserve both values for intercept-aware codecs.
- */
-function encodeWithCodec(codec, payload) {
-  if (payload && typeof payload === 'object' && 'annotated' in payload && 'original' in payload) {
-    return codec.encode(payload.annotated, payload.original);
-  }
-  return codec.encode(payload, null);
-}
-
 function collectCodecReturn(value) {
   return value === undefined ? null : value;
 }
@@ -185,7 +166,7 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
     opts.metadata ?? null,
     opts.modelName ?? null,
     opts.codec ? opts.codec.decode.bind(opts.codec) : null,
-    opts.codec ? (payload) => encodeWithCodec(opts.codec, payload) : null,
+    opts.codec ? (payload) => opts.codec.encode(payload.annotated, payload.original) : null,
     opts.responseCodec ? (response) => decodeResponseWithCodec(opts.responseCodec, response) : null,
   );
 
@@ -259,7 +240,7 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     opts.metadata ?? null,
     opts.modelName ?? null,
     opts.codec ? opts.codec.decode.bind(opts.codec) : null,
-    opts.codec ? (payload) => encodeWithCodec(opts.codec, payload) : null,
+    opts.codec ? (payload) => opts.codec.encode(payload.annotated, payload.original) : null,
     opts.responseCodec ? (response) => decodeResponseWithCodec(opts.responseCodec, response) : null,
   );
 }
@@ -271,7 +252,6 @@ async function* encodeChunks(source, chunkJsonCodec) {
 }
 
 module.exports = {
-  __testEncodeWithCodec: encodeWithCodec,
   JsonPassthrough,
   typedToolExecute,
   typedLlmExecute,

@@ -7,9 +7,11 @@ import type {
   EventMetadata,
   EventSanitizeFields,
   Json,
+  JsonObject,
   LlmExecutionContext,
   LlmRequestInterceptOutcome,
   LlmRequestContext,
+  LlmRequestShape,
   LlmResponseContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
@@ -170,30 +172,30 @@ export interface PluginContext {
    * Register an event subscriber for this component. Callback failures are isolated and reported
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
    */
-  registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
+  registerSubscriber(name: string, callback: (event: JsonObject) => void | Promise<void>): void;
   /** Register an event metadata injector for this component. */
   registerEventMetadataInjector(
     name: string,
     priority: number,
-    callback: (event: Json) => EventMetadata | Promise<EventMetadata>,
+    callback: (event: JsonObject) => EventMetadata | Promise<EventMetadata>,
   ): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a scope-start event sanitizer for this component. */
   registerScopeSanitizeStartGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a scope-end event sanitizer for this component. */
   registerScopeSanitizeEndGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a tool sanitize-request guardrail for this component. */
   registerToolSanitizeRequestGuardrail(
@@ -217,7 +219,10 @@ export interface PluginContext {
   registerLlmSanitizeRequestGuardrail(
     name: string,
     priority: number,
-    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmSanitizeRequestContext,
+    ) => LlmRequestShape | null | Promise<LlmRequestShape | null>,
   ): void;
   /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
   registerLlmSanitizeResponseGuardrail(
@@ -229,7 +234,7 @@ export interface PluginContext {
   registerLlmConditionalExecutionGuardrail(
     name: string,
     priority: number,
-    callback: (request: Json) => string | null | Promise<string | null>,
+    callback: (request: LlmRequestShape) => string | null | Promise<string | null>,
   ): void;
   /** Register an LLM request intercept for this component. */
   registerLlmRequestIntercept(
@@ -238,7 +243,7 @@ export interface PluginContext {
     breakChain: boolean,
     callback: (args: {
       name: string;
-      request: Json;
+      request: LlmRequestShape;
       annotated: Json | null;
     }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
   ): void;
@@ -247,9 +252,9 @@ export interface PluginContext {
     name: string,
     priority: number,
     callback: (
-      request: Json,
+      request: LlmRequestShape,
       context: LlmExecutionContext,
-      next: (request: Json) => Json | Promise<Json>,
+      next: (request: LlmRequestShape) => Json | Promise<Json>,
     ) => Json | Promise<Json>,
   ): void;
   /**
@@ -262,9 +267,9 @@ export interface PluginContext {
     name: string,
     priority: number,
     callback: (
-      request: Json,
+      request: LlmRequestShape,
       context: LlmExecutionContext,
-      next: (request: Json) => Promise<AsyncIterable<Json>>,
+      next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>,
     ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
   ): void;
   /** Register a tool request intercept for this component. */

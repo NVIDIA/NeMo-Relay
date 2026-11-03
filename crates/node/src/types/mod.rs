@@ -445,7 +445,10 @@ pub struct LlmRequest {
 impl LlmRequest {
     /// Create a new LLM request from headers and content.
     #[napi(constructor, catch_unwind)]
-    pub fn new(headers: serde_json::Value, content: serde_json::Value) -> Self {
+    pub fn new(
+        #[napi(ts_arg_type = "JsonObject")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "Json")] content: serde_json::Value,
+    ) -> Self {
         let headers = match headers {
             Json::Object(m) => m,
             _ => serde_json::Map::new(),
@@ -456,13 +459,13 @@ impl LlmRequest {
     }
 
     /// The metadata headers as a JSON object.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "JsonObject")]
     pub fn headers(&self) -> serde_json::Value {
         Json::Object(self.inner.headers.clone())
     }
 
     /// The request payload as a JSON value.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json")]
     pub fn content(&self) -> serde_json::Value {
         self.inner.content.clone()
     }
@@ -548,13 +551,20 @@ macro_rules! builtin_codec {
 
             /// Decode an opaque LLM request into structured form.
             #[napi(catch_unwind)]
-            pub fn decode(&self, request: Json) -> Result<Json> {
+            pub fn decode(
+                &self,
+                #[napi(ts_arg_type = "LlmRequestShape")] request: Json,
+            ) -> Result<Json> {
                 decode_request(&self.codec, request)
             }
 
             /// Encode structured changes back into an opaque LLM request.
-            #[napi(catch_unwind)]
-            pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
+            #[napi(catch_unwind, ts_return_type = "LlmRequestShape")]
+            pub fn encode(
+                &self,
+                annotated: Json,
+                #[napi(ts_arg_type = "LlmRequestShape")] original: Json,
+            ) -> Result<Json> {
                 encode_request(&self.codec, annotated, original)
             }
 
@@ -601,7 +611,7 @@ builtin_codec! {
     pub fn decode_response(
         &self,
         env: Env,
-        #[napi(ts_arg_type = "any")] response: Unknown,
+        #[napi(ts_arg_type = "Json")] response: Unknown,
     ) -> Result<Json> {
         decode_response(&*self.response_codec, &checked_json(&env, response)?)
     }

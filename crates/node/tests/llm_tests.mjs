@@ -4118,7 +4118,7 @@ describe('LLM intercepts', () => {
 
     assert.match(
       declarations,
-      /llmStreamCallExecute\([^\n]*func: \(request: Json, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
+      /llmStreamCallExecute\([^\n]*func: \(request: LlmRequestShape, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
     );
     assert.match(declarations, /llmStreamCallExecute\([^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
     assert.match(declarations, /llmStreamCallExecute\([^\n]*finalizer\?: \(\) => Json \| Promise<Json>/);
@@ -4160,7 +4160,7 @@ describe('LLM intercepts', () => {
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
     }
     assert.equal(
-      declarations.split('next: (request: Json) => Promise<AsyncIterable<Json>>').length - 1,
+      declarations.split('next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>').length - 1,
       2,
       'global and scope-local stream intercept declarations must expose the lazy next contract',
     );
@@ -4202,7 +4202,7 @@ describe('LLM intercepts', () => {
     assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
     assert.match(
       declarations,
-      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<AsyncIterable<Json>>/,
+      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: LlmRequestShape\) => Promise<AsyncIterable<Json>>/,
     );
   });
 

@@ -1,6 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonObject = { [Key in string]: JsonValue };
+export type JsonArray = JsonValue[] | readonly JsonValue[];
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
+export type Json = JsonValue;
+export type LlmRequestShape = {
+  headers: JsonObject;
+  content: Json;
+};
+
 export type ResourceOperatingSystem = 'linux' | 'macos' | 'windows' | 'unsupported';
 export type ResourceMeasurementScope = 'global' | 'application_process' | 'process_tree';
 
@@ -240,12 +250,17 @@ export interface LlmOptimizationContribution {
   token_impact?: LlmOptimizationTokenImpact;
   payload_schema?: LlmOptimizationDataSchema;
   payload?: Json;
-  [key: string]: Json | undefined;
+  [key: string]:
+    | Json
+    | LlmOptimizationModelTransition
+    | LlmOptimizationTokenImpact
+    | LlmOptimizationDataSchema
+    | undefined;
 }
 
 /** Canonical result returned by an LLM request intercept. */
 export interface LlmRequestInterceptOutcome {
-  request: Json;
+  request: LlmRequestShape;
   annotated?: Json | null;
   pendingMarks?: PendingMarkSpec[];
   optimizationContributions?: LlmOptimizationContribution[];

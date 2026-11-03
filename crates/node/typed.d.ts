@@ -9,29 +9,14 @@
  * boundary.
  */
 
-import { ScopeHandle, LlmStream } from './index';
+import type { JsonValue, LlmRequestShape, LlmStream, ScopeHandle } from './index';
 
-/** One JSON scalar value accepted by the typed wrapper APIs. */
-export type JsonPrimitive = string | number | boolean | null;
-/** A JSON object with recursively JSON-serializable values. */
-export interface JsonObject {
-  [key: string]: JsonValue;
-}
-/** A JSON array with recursively JSON-serializable values. */
-export interface JsonArray extends Array<JsonValue> {}
-/** Any JSON-serializable value accepted by the typed wrapper APIs. */
-export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
+export type { Json, JsonArray, JsonObject, JsonPrimitive, JsonValue, LlmRequestShape } from './index';
 
 /** Canonical application-visible result of tool execution. */
 export interface ToolExecutionResult<TResult> {
   result: TResult;
   annotation?: JsonValue;
-}
-
-/** Canonical JSON shape for an opaque LLM request payload. */
-export interface LlmRequestShape {
-  headers: JsonObject;
-  content: JsonValue;
 }
 
 /**
@@ -49,7 +34,7 @@ export interface LlmCodec {
    * @param request - The raw request payload as a JSON-serializable value.
    * @returns The decoded or normalized JSON request representation.
    */
-  decode(request: JsonValue): JsonValue;
+  decode(request: LlmRequestShape): JsonValue;
   /**
    * Encode an annotated request payload back into the JSON shape expected by
    * the underlying LLM implementation.
@@ -58,7 +43,7 @@ export interface LlmCodec {
    * @param original - The original JSON request payload before annotation.
    * @returns A JSON payload ready to pass to the underlying LLM implementation.
    */
-  encode(annotated: JsonValue, original: JsonValue): JsonValue;
+  encode(annotated: JsonValue, original: LlmRequestShape): LlmRequestShape;
 }
 
 /**
@@ -101,25 +86,6 @@ export declare class JsonPassthrough implements Codec<JsonValue> {
   toJson(value: JsonValue): JsonValue;
   fromJson(data: JsonValue): JsonValue;
 }
-
-/**
- * Encode a plain or annotated payload with a request codec.
- *
- * Exposes the small dispatch helper used by the typed wrappers so tests can
- * verify how annotated intercept payloads are re-encoded.
- *
- * @param codec - Codec with an `encode` implementation.
- * @param payload - Plain request payload or `{ annotated, original }` wrapper.
- * @returns The value returned by `codec.encode`.
- * @remarks Plain payloads are forwarded as `annotated` with `original = null`;
- * annotated payloads preserve both values for intercept-aware codecs.
- */
-export declare function __testEncodeWithCodec(
-  codec: {
-    encode(annotated: unknown, original: unknown): unknown;
-  },
-  payload: unknown,
-): unknown;
 
 /** Options for `typedToolExecute`. */
 export interface TypedToolExecuteOptions {

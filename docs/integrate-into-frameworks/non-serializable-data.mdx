@@ -85,10 +85,11 @@ frameworkClients.set('client-1', {});
 const result = await toolCallExecuteAsync(
   'search',
   { clientId: 'client-1', query: 'weather' },
-  async (args: SearchArgs) => {
-    const client = frameworkClients.get(args.clientId);
+  async (args) => {
+    const { clientId } = args as SearchArgs;
+    const client = frameworkClients.get(clientId);
     if (!client) {
-      throw new Error(`missing client ${args.clientId}`);
+      throw new Error(`missing client ${clientId}`);
     }
     return { result: { hits: 2 } };
   },

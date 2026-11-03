@@ -36,7 +36,6 @@ const nodeEntries = [
   {
     file: 'crates/node/typed.js',
     functions: [
-      { name: 'encodeWithCodec', params: ['codec', 'payload'] },
       { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
       { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseJsonCodec', 'options'] },
       {
@@ -73,7 +72,6 @@ const nodeEntries = [
   {
     file: 'crates/node/typed.d.ts',
     functions: [
-      { name: '__testEncodeWithCodec', params: ['codec', 'payload'] },
       { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
       { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseCodec', 'options'] },
       {
