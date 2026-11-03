@@ -286,9 +286,15 @@ class RaisingResponseCodec:
         let mut collector = wrap_py_collector_fn(module.getattr("collector_ok").unwrap().unbind());
         collector(json!({"chunk": 1})).unwrap();
 
-        let finalizer =
+        let (finalizer, finalizer_error) =
             wrap_py_finalizer_fn(module.getattr("finalizer_bad_json").unwrap().unbind());
-        assert_eq!(finalizer(), serde_json::Value::Null);
+        let nemo_relay::api::runtime::LlmFinalizer::Fallible(finalizer) = finalizer else {
+            panic!("expected a fallible Python finalizer");
+        };
+        let error = finalizer().unwrap_err();
+        assert!(error.to_string().contains("Failed to convert to JSON"));
+        assert!(matches!(error, FlowError::CallbackException { .. }));
+        assert!(finalizer_error.lock().unwrap().is_some());
 
         let llm_response =
             wrap_py_llm_sanitize_response_fn(module.getattr("llm_resp_bad_json").unwrap().unbind())
