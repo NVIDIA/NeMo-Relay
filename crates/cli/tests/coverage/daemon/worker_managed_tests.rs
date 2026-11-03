@@ -1365,10 +1365,11 @@ async fn cancelled_provider_dispatch_releases_sessions_in_both_worker_paths() {
             .unwrap(),
         );
         let dispatch_runtime = Arc::clone(&runtime);
+        let client = pooled_client().unwrap();
         let dispatch = tokio::spawn(async move {
             dispatch_runtime
                 .proxy_provider(
-                    pooled_client().unwrap(),
+                    client,
                     Request::post("/v1/responses")
                         .body(Body::from(
                             r#"{"model":"test","input":"test","stream":true}"#,

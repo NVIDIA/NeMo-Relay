@@ -46,9 +46,10 @@ async fn forwarding_waits_for_cancellation_unless_a_deadline_is_configured() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let destination = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = pooled_client().unwrap();
         let task = tokio::spawn(async move {
             forward(
-                &pooled_client().unwrap(),
+                &client,
                 Request::post("/").body(Body::empty()).unwrap(),
                 &destination,
                 None,
