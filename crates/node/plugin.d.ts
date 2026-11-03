@@ -3,25 +3,10 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type {
-  EventMetadata,
-  EventSanitizeFields,
-  Json,
-  JsonObject,
-  LlmExecutionContext,
-  LlmRequestInterceptOutcome,
-  LlmRequestContext,
-  LlmRequestShape,
-  LlmResponseContext,
-  LlmSanitizeRequestContext,
-  LlmSanitizeResponseContext,
-  PendingMarkSpec,
-  RuntimeRegistrationKind,
-  ToolExecutionContext,
-  ToolExecutionResult,
-} from './index';
+import type { ConfigDiagnostic, Json, PluginContext } from './index';
 
 export type {
+  ConfigDiagnostic,
   EventMetadata,
   EventMetadataScalar,
   EventMetadataValue,
@@ -38,6 +23,8 @@ export type {
   LlmResponseContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
+  PluginContext,
+  ToolExecutionInterceptOutcome,
 } from './index';
 
 /** Policy behavior for unsupported configuration. */
@@ -48,15 +35,6 @@ export interface ConfigPolicy {
   unknown_component?: UnsupportedBehavior;
   unknown_field?: UnsupportedBehavior;
   unsupported_value?: UnsupportedBehavior;
-}
-
-/** One validation or compatibility diagnostic produced by the plugin system. */
-export interface ConfigDiagnostic {
-  level: 'warning' | 'error';
-  code: string;
-  component?: string;
-  field?: string;
-  message: string;
 }
 
 /** Validation or activation report for a plugin configuration. */
@@ -144,153 +122,6 @@ export interface DynamicPluginValidationReport {
   status: DynamicPluginValidationStatus;
   failure?: DynamicPluginFailure | null;
   selected: boolean;
-}
-
-/**
- * Canonical result returned by a tool execution intercept.
- *
- * `result` is passed to the remaining middleware and application. `pendingMarks`
- * are Relay-owned lifecycle metadata emitted after the tool-end event and are
- * not included in the application-visible result.
- */
-export interface ToolExecutionInterceptOutcome {
-  result: Json;
-  annotation?: Json;
-  pendingMarks?: PendingMarkSpec[];
-}
-
-/** Component-scoped registration context passed to plugin handlers. */
-export interface PluginContext {
-  /** Register an activation-owned eligibility gate for a global runtime registration. */
-  registerConditionalMiddlewareGuardrail(
-    name: string,
-    kinds: RuntimeRegistrationKind[],
-    registrationName: string,
-    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
-  ): void;
-  /**
-   * Register an event subscriber for this component. Callback failures are isolated and reported
-   * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
-   */
-  registerSubscriber(name: string, callback: (event: JsonObject) => void | Promise<void>): void;
-  /** Register an event metadata injector for this component. */
-  registerEventMetadataInjector(
-    name: string,
-    priority: number,
-    callback: (event: JsonObject) => EventMetadata | Promise<EventMetadata>,
-  ): void;
-  /** Register a mark event sanitizer for this component. */
-  registerMarkSanitizeGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a scope-start event sanitizer for this component. */
-  registerScopeSanitizeStartGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a scope-end event sanitizer for this component. */
-  registerScopeSanitizeEndGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a tool sanitize-request guardrail for this component. */
-  registerToolSanitizeRequestGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
-  ): void;
-  /** Register a tool sanitize-response guardrail for this component. */
-  registerToolSanitizeResponseGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, result: Json) => Json | Promise<Json>,
-  ): void;
-  /** Register a tool conditional-execution guardrail for this component. */
-  registerToolConditionalExecutionGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, args: Json) => string | null | Promise<string | null>,
-  ): void;
-  /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
-  registerLlmSanitizeRequestGuardrail(
-    name: string,
-    priority: number,
-    callback: (
-      request: LlmRequestShape,
-      context: LlmSanitizeRequestContext,
-    ) => LlmRequestShape | null | Promise<LlmRequestShape | null>,
-  ): void;
-  /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
-  registerLlmSanitizeResponseGuardrail(
-    name: string,
-    priority: number,
-    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>,
-  ): void;
-  /** Register an LLM conditional-execution guardrail for this component. */
-  registerLlmConditionalExecutionGuardrail(
-    name: string,
-    priority: number,
-    callback: (request: LlmRequestShape) => string | null | Promise<string | null>,
-  ): void;
-  /** Register an LLM request intercept for this component. */
-  registerLlmRequestIntercept(
-    name: string,
-    priority: number,
-    breakChain: boolean,
-    callback: (args: {
-      name: string;
-      request: LlmRequestShape;
-      annotated: Json | null;
-    }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
-  ): void;
-  /** Register an LLM execution intercept for this component. */
-  registerLlmExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      request: LlmRequestShape,
-      context: LlmExecutionContext,
-      next: (request: LlmRequestShape) => Json | Promise<Json>,
-    ) => Json | Promise<Json>,
-  ): void;
-  /**
-   * Register an LLM streaming execution intercept for this component.
-   *
-   * The `next` callback resolves to a lazy stream. Return that stream to
-   * preserve incremental downstream delivery.
-   */
-  registerLlmStreamExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      request: LlmRequestShape,
-      context: LlmExecutionContext,
-      next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>,
-    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
-  ): void;
-  /** Register a tool request intercept for this component. */
-  registerToolRequestIntercept(
-    name: string,
-    priority: number,
-    breakChain: boolean,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
-  ): void;
-  /**
-   * Register tool execution middleware that returns a canonical outcome.
-   * The `next` callback resolves to the canonical downstream result.
-   */
-  registerToolExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      context: ToolExecutionContext,
-      next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
-    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
-  ): void;
 }
 
 /** Plugin callback contract. */

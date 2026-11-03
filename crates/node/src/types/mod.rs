@@ -333,13 +333,13 @@ impl ScopeHandle {
     }
 
     /// Optional user-defined data associated with this scope.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn data(&self) -> Option<serde_json::Value> {
         self.inner.data.clone()
     }
 
     /// Optional metadata associated with this scope.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn metadata(&self) -> Option<serde_json::Value> {
         self.inner.metadata.clone()
     }

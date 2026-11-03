@@ -4106,8 +4106,16 @@ describe('LLM intercepts', () => {
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
 
-    assert.equal(declarations.split('context: LlmSanitizeRequestContext').length - 1, 2);
-    assert.equal(declarations.split('context: LlmSanitizeResponseContext').length - 1, 2);
+    assert.equal(
+      declarations.split('context: LlmSanitizeRequestContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the request codec context',
+    );
+    assert.equal(
+      declarations.split('context: LlmSanitizeResponseContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the response codec context',
+    );
     assert.match(declarations, /export type EventMetadata = Record<string, EventMetadataValue>/);
     assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\./);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
@@ -4161,23 +4169,23 @@ describe('LLM intercepts', () => {
     }
     assert.equal(
       declarations.split('next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>').length - 1,
-      2,
-      'global and scope-local stream intercept declarations must expose the lazy next contract',
+      3,
+      'global, scope-local, and plugin-context stream intercept declarations must expose the lazy next contract',
     );
     assert.equal(
       declarations.split('next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>').length - 1,
-      2,
-      'global and scope-local tool intercept declarations must expose canonical tool results',
+      3,
+      'global, scope-local, and plugin-context tool intercept declarations must expose canonical tool results',
     );
     assert.equal(
       declarations.split('context: ToolExecutionContext').length - 1,
-      2,
-      'global and scope-local context intercept declarations must expose the tool execution context',
+      3,
+      'global, scope-local, and plugin-context intercept declarations must expose the tool execution context',
     );
     assert.equal(
       declarations.split('context: LlmExecutionContext').length - 1,
-      4,
-      'global and scope-local unary and streaming LLM intercept declarations must expose the execution codec context',
+      6,
+      'global, scope-local, and plugin-context unary and streaming LLM intercept declarations must expose the execution codec context',
     );
     assert.match(declarations, /export type LlmRequestContext = LlmSanitizeRequestContext/);
     assert.match(declarations, /export type LlmResponseContext = LlmSanitizeResponseContext/);
@@ -4189,19 +4197,27 @@ describe('LLM intercepts', () => {
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {
-    const declarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const context = declarations.match(/export interface PluginContext \{[\s\S]*?\n\}/)?.[0];
+    assert.ok(context, 'index.d.ts must declare PluginContext');
 
-    assert.match(declarations, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
-    assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(pluginDeclarations, /export type \{[\s\S]*?\bPluginContext,[\s\S]*?\} from '\.\/index'/);
     assert.match(
       declarations,
+      /registerPlugin\([^\n]*register: \(pluginConfig: JsonObject, context: PluginContext\) => void/,
+    );
+    assert.match(context, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(context, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(context, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
+    assert.match(context, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
+    assert.match(context, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
+    assert.match(context, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<LlmRequestShape \| null>/);
+    assert.match(context, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
+    assert.match(context, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
+    assert.match(context, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(
+      context,
       /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: LlmRequestShape\) => Promise<AsyncIterable<Json>>/,
     );
   });

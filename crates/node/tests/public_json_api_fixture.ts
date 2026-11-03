@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  createScopeStack,
   LlmRequest,
   llmCall,
   registerSubscriber,
+  ScopeType,
   toolCall,
+  withScope,
+  withScopeStack,
   type Json,
   type JsonValue,
   type LlmRequestShape,
+  type ScopeHandle,
 } from '../index.js';
 import type { JsonValue as TypedJsonValue } from '../typed.js';
 
@@ -28,6 +33,12 @@ registerSubscriber('typed', (event) => {
   void name;
 });
 
+const scoped: Promise<{ ok: boolean }> = withScope('run', ScopeType.Agent, (handle: ScopeHandle) => ({
+  ok: handle.name === 'run',
+}));
+const voided: Promise<null> = withScope('run', ScopeType.Agent, async () => {});
+const passthrough: Promise<string> = withScopeStack(createScopeStack(), async () => 'done');
+
 // @ts-expect-error Request headers must be a JSON object.
 new LlmRequest('headers', null);
 
@@ -37,4 +48,15 @@ llmCall('provider', { content: {} });
 // @ts-expect-error Tool arguments must be JSON.
 toolCall('search', () => 'weather');
 
-export const checked = [jsonIsJsonValue, typedSharesJson, requestShapeIsJson, requestAsJson];
+// @ts-expect-error A scope callback must return JSON.
+withScope('run', ScopeType.Agent, () => new Map());
+
+export const checked = [
+  jsonIsJsonValue,
+  typedSharesJson,
+  requestShapeIsJson,
+  requestAsJson,
+  scoped,
+  voided,
+  passthrough,
+];

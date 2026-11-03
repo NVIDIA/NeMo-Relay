@@ -1388,11 +1388,11 @@ pub fn create_scope_stack_from_propagation(context: PropagationContext) -> Resul
 /// Promise until it settles and is then expired for inherited detached work.
 /// Use this helper instead of `setThreadScopeStack` to isolate concurrent async
 /// branches.
-#[napi(catch_unwind)]
+#[napi(ts_generic_types = "T", ts_return_type = "T", catch_unwind)]
 pub fn with_scope_stack<'env>(
     env: &'env Env,
     stack: &ScopeStack,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] callback: Callback,
+    #[napi(ts_arg_type = "() => T")] callback: Callback,
 ) -> Result<Unknown<'env>> {
     let scope = CallbackScope {
         scope_stack: stack.inner.clone(),
@@ -1664,12 +1664,16 @@ pub fn pop_scope(
 ///
 /// Returns a Promise that resolves with the callback's return value.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<Json>", catch_unwind)]
+#[napi(
+    ts_generic_types = "T extends Json | void = Json",
+    ts_return_type = "Promise<T extends void ? null : T>",
+    catch_unwind
+)]
 pub fn with_scope<'env>(
     env: &'env Env,
     name: String,
     scope_type: ScopeType,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] callback: Callback,
+    #[napi(ts_arg_type = "(handle: ScopeHandle) => T | Promise<T>")] callback: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -3929,8 +3933,12 @@ pub fn set_latency_sensitivity(value: u32) -> Result<()> {
 pub fn register_plugin(
     env: Env,
     plugin_kind: String,
-    #[napi(ts_arg_type = "(...args: any[]) => any | undefined | null")] validate: Option<Callback>,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] register: Callback,
+    #[napi(
+        ts_arg_type = "((pluginConfig: JsonObject) => ConfigDiagnostic[] | null | undefined) | undefined | null"
+    )]
+    validate: Option<Callback>,
+    #[napi(ts_arg_type = "(pluginConfig: JsonObject, context: PluginContext) => void")]
+    register: Callback,
 ) -> Result<()> {
     let validate = validate
         .map(|func| {

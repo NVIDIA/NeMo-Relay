@@ -266,6 +266,123 @@ export interface LlmRequestInterceptOutcome {
   optimizationContributions?: LlmOptimizationContribution[];
 }
 
+export interface ConfigDiagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  component?: string;
+  field?: string;
+  message: string;
+}
+export interface ToolExecutionInterceptOutcome {
+  result: Json;
+  annotation?: Json;
+  pendingMarks?: PendingMarkSpec[];
+}
+export interface PluginContext {
+  registerConditionalMiddlewareGuardrail(
+    name: string,
+    kinds: RuntimeRegistrationKind[],
+    registrationName: string,
+    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
+  ): void;
+  registerSubscriber(name: string, callback: (event: JsonObject) => void | Promise<void>): void;
+  registerEventMetadataInjector(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject) => EventMetadata | Promise<EventMetadata>,
+  ): void;
+  registerMarkSanitizeGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+  ): void;
+  registerScopeSanitizeStartGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+  ): void;
+  registerScopeSanitizeEndGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+  ): void;
+  registerToolSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => Json | Promise<Json>,
+  ): void;
+  registerToolSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, result: Json) => Json | Promise<Json>,
+  ): void;
+  registerToolConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => string | null | Promise<string | null>,
+  ): void;
+  registerLlmSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmSanitizeRequestContext,
+    ) => LlmRequestShape | null | Promise<LlmRequestShape | null>,
+  ): void;
+  registerLlmSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>,
+  ): void;
+  registerLlmConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: LlmRequestShape) => string | null | Promise<string | null>,
+  ): void;
+  registerLlmRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (args: {
+      name: string;
+      request: LlmRequestShape;
+      annotated: Json | null;
+    }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
+  ): void;
+  registerLlmExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmExecutionContext,
+      next: (request: LlmRequestShape) => Json | Promise<Json>,
+    ) => Json | Promise<Json>,
+  ): void;
+  registerLlmStreamExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmExecutionContext,
+      next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+  ): void;
+  registerToolRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, args: Json) => Json | Promise<Json>,
+  ): void;
+  registerToolExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      context: ToolExecutionContext,
+      next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
+    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
+  ): void;
+}
+
 /** Scalar value accepted in event metadata additions. */
 export type EventMetadataScalar = string | number | boolean;
 
