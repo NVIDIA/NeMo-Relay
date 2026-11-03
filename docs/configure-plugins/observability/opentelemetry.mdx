@@ -345,7 +345,7 @@ are configured. gRPC does not use HTTP redirects.
 | `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
-| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. See [Attribute Mappings](#attribute-mappings). |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. Refer to [Attribute Mappings](#attribute-mappings). |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
@@ -502,7 +502,7 @@ activation.
 | `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
-| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. See [Attribute Mappings](#attribute-mappings). |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. Refer to [Attribute Mappings](#attribute-mappings). |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Every promoted resource writes to the sink's one file, which carries one `ResourceSpans` entry per resource. |
 
@@ -573,9 +573,8 @@ that must be attached to every span from an endpoint.
 
 ## Attribute Mappings
 
-`attribute_mappings` copies selected sanitized fields to custom attributes on a
-trace endpoint or file sink. All three projections use the same mapping rules;
-each projection supplies its own default attributes.
+`attribute_mappings` copies selected sanitized fields to aliases on trace
+endpoints and file sinks for all three projections.
 
 ```toml
 attribute_mappings = [
@@ -584,14 +583,13 @@ attribute_mappings = [
 ]
 ```
 
-- Sources are exact Full lifecycle keys or attributes from the selected projection.
-  Scalar types are preserved; objects and arrays use JSON strings. Missing, null,
-  and sanitizer-removed values are omitted. Values are not inherited from parents.
+- Sources are exact `full` lifecycle keys or native projection attributes.
+  Values keep their OTLP types; `full` lifecycle objects and arrays use JSON strings.
+  Missing, null, and sanitizer-removed values are omitted; parent values are not inherited.
 - Aliases resolve at span completion. Projection attributes win over aliases;
   active aliases take precedence over promoted metadata, even without a source value.
-- Explicit aliases can use any namespace, including `tool.*`, `llm.*`, and
-  `gen_ai.*`, when the projection does not emit that key. Namespace restrictions
-  on [metadata promotion](#event-metadata-promotion) still apply.
+- Aliases can use any namespace, including `tool.*` and `llm.*`.
+  [Metadata promotion](#event-metadata-promotion) retains its namespace restrictions.
 - Mappings do not change payload-retention settings or enable GenAI marks.
 
 ## Root Resource Metadata Promotion
@@ -929,9 +927,8 @@ activation when at least one automatic exporter is active. The automatic
 exporters retain their environment headers; skipped configured endpoints receive
 no requests.
 
-`full` and `openinference` endpoints support the mark controls shown above.
-`gen_ai` omits marks and emits standard attributes by default. All three
-projections support explicit [attribute mappings](#attribute-mappings).
+`full` and `openinference` support mark controls; `gen_ai` omits marks.
+All three projections support [attribute mappings](#attribute-mappings).
 `semantic_selector` and `capture_content` are unsupported.
 
 On a successful tool end span with a present, non-null annotation, the `full`
@@ -1218,8 +1215,7 @@ exists. It does not mean every integration supplies that optional source.
 upstream cardinality or value-shape contract. `Not supported` means the native
 projection does not emit it. The `gen_ai.*` namespace is reserved, so generic
 metadata promotion cannot be used to add an unsupported GenAI attribute.
-Explicit [attribute mappings](#attribute-mappings) can add caller-selected
-attributes; they do not change this native support inventory.
+Explicit [attribute mappings](#attribute-mappings) can add such attributes.
 
 <StickySearchableTable placeholder="Search GenAI projection attributes...">
 

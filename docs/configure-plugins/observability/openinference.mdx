@@ -39,8 +39,7 @@ authorization = "OTEL_AUTHORIZATION"
 The endpoint emits the existing OpenInference scope, tool, LLM, and mark
 projection. It supports the `mark_projection`, `mark_exclude_names`, and
 [`attribute_mappings`](./opentelemetry#attribute-mappings) controls on the typed
-endpoint. Mappings can add attributes such as `tool.description` or `llm.system`;
-attributes emitted by the projection take precedence.
+endpoint.
 
 Normalized tool results emit one `llm.input_messages` entry per result with
 `message.role = "tool"`, `message.tool_call_id`, and `message.content`.
