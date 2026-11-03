@@ -8,7 +8,7 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
-use nemo_relay_worker_proto::v1 as wire;
+use nemo_relay_worker_proto::nvidia_worker_v1 as wire;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -101,13 +101,18 @@ impl WorkerDiagnostics {
 
     fn capabilities_for(context: &Diagnostics) -> wire::DiagnosticCapabilities {
         wire::DiagnosticCapabilities {
-            protocol_version: 1,
-            snapshot_version: nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            protocol: Some(wire::ProtocolIdentity {
+                name: wire::WORKER_PROTOCOL.into(),
+                version: wire::CONTRACT_VERSION.into(),
+            }),
+            snapshot_contract_version: "1.0.0".into(),
             catalogue_version: nemo_relay_diagnostics::DIAGNOSTIC_CATALOGUE_VERSION,
-            provenance_version: 1,
+            provenance_contract_version: "1.0.0".into(),
             enabled: context.reader().availability()
                 == nemo_relay_diagnostics::DiagnosticAvailability::Available,
             can_read_context: false,
+            can_read_discovery: false,
+            can_inspect_memory: false,
             max_components: COMPONENTS as u32,
             max_extensions: EXTENSIONS as u32,
             max_metadata_bytes: METADATA_BYTES as u32,
@@ -117,21 +122,27 @@ impl WorkerDiagnostics {
             max_response_bytes: RESPONSE_BYTES as u32,
             max_pending_submissions: MAX_PENDING_SUBMISSIONS as u32,
             retry_attempts: SUBMISSION_ATTEMPTS,
-            retry_timeout_millis: SUBMISSION_TIMEOUT_MILLIS,
+            retry_timeout_duration: Some(prost_types::Duration {
+                seconds: (SUBMISSION_TIMEOUT_MILLIS / 1000) as i64,
+                nanos: ((SUBMISSION_TIMEOUT_MILLIS % 1000) * 1_000_000) as i32,
+            }),
         }
     }
 
     fn capabilities(&self) -> wire::DiagnosticCapabilities {
-        self.capabilities
+        self.capabilities.clone()
     }
 
     fn open(
         &self,
-        request: &wire::DiagnosticOpenRequest,
-    ) -> Result<wire::DiagnosticSession, Status> {
-        if request.protocol_version != 1
-            || request.provenance_version != 1
-            || request.snapshot_version != nemo_relay_diagnostics::DIAGNOSTIC_SCHEMA_VERSION
+        request: &wire::OpenDiagnosticSessionRequest,
+    ) -> Result<wire::OpenDiagnosticSessionResponse, Status> {
+        if request
+            .protocol
+            .as_ref()
+            .is_none_or(|p| p.name != wire::WORKER_PROTOCOL || p.version != wire::CONTRACT_VERSION)
+            || request.provenance_contract_version != "1.0.0"
+            || request.snapshot_contract_version != "1.0.0"
         {
             return Err(Status::failed_precondition(
                 "unsupported diagnostic contract",
@@ -146,10 +157,7 @@ impl WorkerDiagnostics {
         }
         let capabilities = self.capabilities();
         if !capabilities.enabled {
-            return Ok(wire::DiagnosticSession {
-                session_id: Vec::new(),
-                capabilities: Some(capabilities),
-            });
+            return Err(Status::failed_precondition("diagnostic delivery disabled"));
         }
         if state.session.is_none() {
             let permit = SESSIONS
@@ -171,7 +179,7 @@ impl WorkerDiagnostics {
         if session.closed {
             return Err(Status::failed_precondition("diagnostic session closed"));
         }
-        Ok(wire::DiagnosticSession {
+        Ok(wire::OpenDiagnosticSessionResponse {
             session_id: session.id.as_bytes().to_vec(),
             capabilities: Some(capabilities),
         })
@@ -179,7 +187,7 @@ impl WorkerDiagnostics {
 
     fn submit(
         &self,
-        request: wire::DiagnosticSubmission,
+        request: wire::SubmitDiagnosticRequest,
     ) -> Result<wire::DiagnosticReceipt, Status> {
         // Frame admission happens before prost decoding. Validate structure before
         // touching ordering; these errors explicitly consume no sequence.
@@ -193,12 +201,12 @@ impl WorkerDiagnostics {
                 "diagnostic frame too large; not consumed",
             ));
         }
-        if let Some(wire::diagnostic_submission::Operation::Record(observation)) =
+        if let Some(wire::submit_diagnostic_request::Operation::Record(observation)) =
             &request.operation
             && (observation.count == 0
-                || observation
-                    .observed_unix_micros
-                    .is_some_and(|time| DateTime::from_timestamp_micros(time).is_none()))
+                || observation.observe_time.as_ref().is_some_and(|time| {
+                    nemo_relay_worker_proto::conversions::decode::<DateTime<Utc>, _>(*time).is_err()
+                }))
         {
             return Err(Status::invalid_argument(
                 "invalid diagnostic observation; not consumed",
@@ -269,10 +277,10 @@ impl WorkerDiagnostics {
         &self,
         session: &mut Session,
         sequence: u64,
-        operation: wire::diagnostic_submission::Operation,
+        operation: wire::submit_diagnostic_request::Operation,
         receipt: &mut wire::DiagnosticReceipt,
     ) -> Result<(), &'static str> {
-        use wire::diagnostic_submission::Operation;
+        use wire::submit_diagnostic_request::Operation;
         if self.context.reader().availability()
             == nemo_relay_diagnostics::DiagnosticAvailability::Disabled
         {
@@ -513,8 +521,10 @@ impl WorkerDiagnostics {
             activation_instance_id: self.activation,
             submission_sequence: sequence.into(),
             observed_at: value
-                .observed_unix_micros
-                .and_then(DateTime::from_timestamp_micros),
+                .observe_time
+                .map(nemo_relay_worker_proto::conversions::decode)
+                .transpose()
+                .map_err(|_| "invalid observation time")?,
             received_at: Utc::now(),
             accepted_elapsed_millis: 0.into(),
         });
@@ -542,7 +552,7 @@ impl WorkerDiagnostics {
 
 fn outcome(value: i32) -> Result<DiagnosticOutcome, &'static str> {
     match wire::DiagnosticObservationOutcome::try_from(value) {
-        Ok(wire::DiagnosticObservationOutcome::Unknown) => Ok(DiagnosticOutcome::Unknown),
+        Ok(wire::DiagnosticObservationOutcome::Unspecified) => Ok(DiagnosticOutcome::Unknown),
         Ok(wire::DiagnosticObservationOutcome::Success) => Ok(DiagnosticOutcome::Success),
         Ok(wire::DiagnosticObservationOutcome::Failure) => Ok(DiagnosticOutcome::Failure),
         _ => Err("unknown diagnostic outcome"),
@@ -565,7 +575,7 @@ pub(super) struct Service {
 impl Service {
     fn authorize(
         &self,
-        credentials: Option<&wire::DiagnosticCredentials>,
+        credentials: Option<&wire::Credentials>,
     ) -> Result<&WorkerDiagnostics, Status> {
         let credentials = credentials
             .ok_or_else(|| Status::unauthenticated("diagnostic credentials required"))?;
@@ -579,12 +589,12 @@ impl Service {
 }
 
 #[tonic::async_trait]
-impl wire::relay_diagnostics_server::RelayDiagnostics for Service {
+impl wire::relay_diagnostics_service_server::RelayDiagnosticsService for Service {
     async fn get_diagnostic_capabilities(
         &self,
-        request: Request<wire::DiagnosticCredentials>,
-    ) -> Result<Response<wire::DiagnosticCapabilities>, Status> {
-        let service = self.authorize(Some(request.get_ref()))?;
+        request: Request<wire::GetDiagnosticCapabilitiesRequest>,
+    ) -> Result<Response<wire::GetDiagnosticCapabilitiesResponse>, Status> {
+        let service = self.authorize(request.get_ref().credentials.as_ref())?;
         if service
             .state
             .lock()
@@ -593,12 +603,14 @@ impl wire::relay_diagnostics_server::RelayDiagnostics for Service {
         {
             return Err(Status::failed_precondition("diagnostic activation expired"));
         }
-        Ok(Response::new(service.capabilities()))
+        Ok(Response::new(wire::GetDiagnosticCapabilitiesResponse {
+            capabilities: Some(service.capabilities()),
+        }))
     }
     async fn open_diagnostic_session(
         &self,
-        request: Request<wire::DiagnosticOpenRequest>,
-    ) -> Result<Response<wire::DiagnosticSession>, Status> {
+        request: Request<wire::OpenDiagnosticSessionRequest>,
+    ) -> Result<Response<wire::OpenDiagnosticSessionResponse>, Status> {
         let request = request.into_inner();
         self.authorize(request.credentials.as_ref())?
             .open(&request)
@@ -606,20 +618,43 @@ impl wire::relay_diagnostics_server::RelayDiagnostics for Service {
     }
     async fn submit_diagnostic(
         &self,
-        request: Request<wire::DiagnosticSubmission>,
-    ) -> Result<Response<wire::DiagnosticReceipt>, Status> {
+        request: Request<wire::SubmitDiagnosticRequest>,
+    ) -> Result<Response<wire::SubmitDiagnosticResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(request.credentials.as_ref())?
-            .submit(request)
-            .map(Response::new)
+        let service = self.authorize(request.credentials.as_ref())?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        service.submit(request).map(|receipt| {
+            Response::new(wire::SubmitDiagnosticResponse {
+                receipt: Some(receipt),
+            })
+        })
     }
     async fn read_diagnostic_page(
         &self,
-        request: Request<wire::DiagnosticReadRequest>,
-    ) -> Result<Response<wire::DiagnosticReadResponse>, Status> {
+        request: Request<wire::ReadDiagnosticPageRequest>,
+    ) -> Result<Response<wire::ReadDiagnosticPageResponse>, Status> {
         self.authorize(request.get_ref().credentials.as_ref())?;
         Err(Status::permission_denied(
             "worker snapshot inspection is not granted",
+        ))
+    }
+    async fn get_diagnostic_discovery(
+        &self,
+        request: Request<wire::GetDiagnosticDiscoveryRequest>,
+    ) -> Result<Response<wire::GetDiagnosticDiscoveryResponse>, Status> {
+        self.authorize(request.get_ref().credentials.as_ref())?;
+        Err(Status::permission_denied(
+            "worker discovery inspection is not granted",
+        ))
+    }
+    async fn inspect_diagnostic_memory(
+        &self,
+        request: Request<wire::InspectDiagnosticMemoryRequest>,
+    ) -> Result<Response<wire::InspectDiagnosticMemoryResponse>, Status> {
+        self.authorize(request.get_ref().credentials.as_ref())?;
+        Err(Status::permission_denied(
+            "worker memory inspection is not granted",
         ))
     }
 }

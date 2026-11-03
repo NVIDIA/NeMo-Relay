@@ -61,7 +61,7 @@ async fn request_permits_are_reserved_before_decoder_and_retained_by_response() 
 
 fn read_request() -> http::Request<TonicBody> {
     http::Request::builder()
-        .uri("/nemo.relay.worker.v1.RelayDiagnostics/ReadDiagnosticPage")
+        .uri("/nvidia.nemo.relay.worker.v1.RelayDiagnosticsService/ReadDiagnosticPage")
         .body(TonicBody::empty())
         .unwrap()
 }

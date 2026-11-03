@@ -43,8 +43,8 @@ fn sample_record() -> DynamicPluginRecord {
             config_ref: Some("plugins.acme.guardrails.pii".into()),
         },
         compatibility: DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            relay: ">=1.0.0,<2.0".into(),
+            worker_protocol: "nvidia.nemo.relay.worker.v1".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
             forward_env: vec![],
@@ -164,7 +164,7 @@ fn registry_rejects_invalid_raw_record_shapes() {
     let mut record = sample_record();
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "1".into(),
         });
 
@@ -234,7 +234,7 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut record = sample_record();
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "1".into(),
         });
 
@@ -255,7 +255,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     let mut worker_record = sample_record();
     worker_record.compatibility =
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             worker_protocol: "   ".into(),
         });
 
@@ -273,7 +273,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     rust_record.metadata.kind = DynamicPluginKind::RustDynamic;
     rust_record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "   ".into(),
         });
     rust_record.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
@@ -298,7 +298,7 @@ fn registry_rejects_missing_raw_record_relay_compatibility() {
     let mut record = sample_record();
     record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
         relay: String::new(),
-        worker_protocol: "grpc-v1".into(),
+        worker_protocol: "nvidia.nemo.relay.worker.v1".into(),
     });
 
     let err = registry
@@ -319,8 +319,8 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     let mut record = sample_record();
     record.metadata.id = " acme.guardrails.pii ".into();
     record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-        relay: " >=0.8.0,<1.0 ".into(),
-        worker_protocol: " grpc-v1 ".into(),
+        relay: " >=1.0.0,<2.0 ".into(),
+        worker_protocol: " nvidia.nemo.relay.worker.v1 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
         forward_env: vec![],
@@ -335,8 +335,8 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     assert_eq!(
         stored.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            relay: ">=1.0.0,<2.0".into(),
+            worker_protocol: "nvidia.nemo.relay.worker.v1".into(),
         })
     );
     assert_eq!(
@@ -546,8 +546,8 @@ version = "0.1.0"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -580,7 +580,7 @@ id = "acme.native.switchyard"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -665,8 +665,8 @@ id = "acme.guardrails.rich"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -713,8 +713,8 @@ id = "acme.guardrails.missing-schema"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -751,8 +751,8 @@ id = "acme.guardrails.missing-capability"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -957,8 +957,8 @@ id = " acme.guardrails.trimmed "
 kind = "worker"
 
 [compat]
-relay = " >=0.8.0,<1.0 "
-worker_protocol = " grpc-v1 "
+relay = " >=1.0.0,<2.0 "
+worker_protocol = " nvidia.nemo.relay.worker.v1 "
 
 [defaults]
 enabled = false
@@ -980,8 +980,8 @@ entrypoint = " acme_guardrails.plugin:register "
     assert_eq!(
         record.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            relay: ">=1.0.0,<2.0".into(),
+            worker_protocol: "nvidia.nemo.relay.worker.v1".into(),
         })
     );
     assert_eq!(
@@ -1012,8 +1012,8 @@ id = "acme.guardrails.{runtime}"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1055,7 +1055,7 @@ id = "acme.guardrails.future-worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 worker_protocol = "grpc-v2"
 
 [defaults]
@@ -1073,7 +1073,7 @@ entrypoint = "acme_guardrails.plugin:register"
 
     match err {
         PluginError::InvalidConfig(message) => {
-            assert!(message.contains("grpc-v1"), "{message}");
+            assert!(message.contains("nvidia.nemo.relay.worker.v1"), "{message}");
         }
         other => panic!("unexpected worker protocol error: {other}"),
     }
@@ -1082,7 +1082,7 @@ entrypoint = "acme_guardrails.plugin:register"
 #[test]
 fn manifest_rejects_relay_ranges_that_admit_pre_zero_eight_versions() {
     for requirement in [">=0.7.0,<1.0", ">=0.8.0-alpha,<1.0"] {
-        let manifest = valid_worker_manifest_toml().replace(">=0.8.0,<1.0", requirement);
+        let manifest = valid_worker_manifest_toml().replace(">=1.0.0,<2.0", requirement);
         let error = DynamicPluginManifest::parse_toml(&manifest)
             .expect_err("a pre-0.8-compatible manifest should fail");
         assert!(
@@ -1092,7 +1092,7 @@ fn manifest_rejects_relay_ranges_that_admit_pre_zero_eight_versions() {
         );
     }
 
-    let future = valid_worker_manifest_toml().replace(">=0.8.0,<1.0", ">=0.9.0,<1.0");
+    let future = valid_worker_manifest_toml().replace(">=1.0.0,<2.0", ">=0.9.0,<1.0");
     DynamicPluginManifest::parse_toml(&future)
         .expect("a future-targeted manifest that preserves the 0.8 floor should parse");
 }
@@ -1115,7 +1115,7 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
     assert_eq!(
         record.compatibility,
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8.0,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "1".into(),
         })
     );
@@ -1145,7 +1145,7 @@ id = "acme.guardrails.bad"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 
 [defaults]
 enabled = false
@@ -1181,7 +1181,7 @@ id = "acme.native.bad"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -1216,8 +1216,8 @@ id = "   "
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1251,7 +1251,7 @@ id = "acme.native.missing-api"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 
 [defaults]
 enabled = false
@@ -1285,7 +1285,7 @@ id = "acme.native.bad-load"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -1429,8 +1429,8 @@ id = "acme.guardrails.enabled"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = true
@@ -1464,8 +1464,8 @@ id = "acme.guardrails.empty-paths"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1598,8 +1598,8 @@ id = "acme.guardrails.future"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1633,8 +1633,8 @@ id = "acme.guardrails.dupe-cap"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1671,8 +1671,8 @@ version = "   "
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1822,7 +1822,7 @@ fn manifest_validation_covers_forbidden_cross_lane_fields() {
     );
 
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
-    native.compat.worker_protocol = Some("grpc-v1".into());
+    native.compat.worker_protocol = Some("nvidia.nemo.relay.worker.v1".into());
     assert!(
         native
             .validate()
@@ -1890,8 +1890,8 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     let mut native = sample_record();
     native.metadata.kind = DynamicPluginKind::RustDynamic;
     native.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-        relay: ">=0.8,<1.0".into(),
-        worker_protocol: "grpc-v1".into(),
+        relay: ">=1.0.0,<2.0".into(),
+        worker_protocol: "nvidia.nemo.relay.worker.v1".into(),
     });
     native.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "plugin.so".into(),
@@ -1908,7 +1908,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     native.metadata.kind = DynamicPluginKind::RustDynamic;
     native.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "1".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -1962,13 +1962,17 @@ fn registry_rejects_pre_zero_eight_ranges_and_v2_contracts() {
     compatibility.worker_protocol = "grpc-v2".into();
     let error = DynamicPluginRegistry::from_records(vec![worker_v2])
         .expect_err("a persisted grpc-v2 record should fail");
-    assert!(error.to_string().contains("worker_protocol = \"grpc-v1\""));
+    assert!(
+        error
+            .to_string()
+            .contains("worker_protocol = \"nvidia.nemo.relay.worker.v1\"")
+    );
 
     let mut native_v2 = sample_record();
     native_v2.metadata.kind = DynamicPluginKind::RustDynamic;
     native_v2.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.8,<1.0".into(),
+            relay: ">=1.0.0,<2.0".into(),
             native_api: "2".into(),
         });
     native_v2.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {

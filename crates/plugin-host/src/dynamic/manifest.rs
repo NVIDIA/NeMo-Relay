@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{PluginError, Result};
 
-const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v1";
+const SUPPORTED_WORKER_PROTOCOL: &str = "nvidia.nemo.relay.worker.v1";
 
 /// Authored `relay-plugin.toml` manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]

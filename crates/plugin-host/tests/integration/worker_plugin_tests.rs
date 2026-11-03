@@ -2087,7 +2087,7 @@ async fn worker_invalid_registration_plan_fails_activation() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("empty local_name"), "{error}");
+    assert!(error.contains("local_name"), "{error}");
 }
 
 #[tokio::test]
@@ -2140,10 +2140,7 @@ async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(
-        error.contains("worker plugin returned id 'fixture_worker' kind 'fixture_worker' but manifest id is 'other_worker'"),
-        "{error}"
-    );
+    assert!(error.contains("incompatible worker identity"), "{error}");
     assert_worker_stage_failure(
         &diagnostics,
         "other_worker",
@@ -3017,7 +3014,7 @@ kind = "worker"
 
 [compat]
 relay = {relay}
-worker_protocol = "grpc-v1"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -3114,7 +3111,7 @@ fn toml_string(value: &str) -> String {
 }
 
 fn supported_relay_requirement() -> String {
-    format!("={}", env!("CARGO_PKG_VERSION"))
+    ">=1.0.0,<2.0".into()
 }
 
 fn assert_error_mentions_manifest_relative_entrypoint(

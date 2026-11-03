@@ -19,7 +19,6 @@ const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = path.resolve(nodeDir, '../..');
 const fixtureTarget = path.join(repoRoot, 'target', 'node-dynamic-plugin-fixtures');
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-dynamic-'));
-const relayVersion = JSON.parse(readFileSync(path.join(nodeDir, 'package.json'), 'utf8')).version;
 
 let nativeManifestRef;
 let workerManifestRef;
@@ -65,7 +64,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 
 [compat]
-relay = ${tomlString(`=${relayVersion}`)}
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -101,8 +100,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = ${tomlString(`=${relayVersion}`)}
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false

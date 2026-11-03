@@ -328,9 +328,9 @@ fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
         ));
     };
     validate_relay_compatibility(&compatibility.relay)?;
-    if compatibility.worker_protocol.trim() != "grpc-v1" {
+    if compatibility.worker_protocol.trim() != "nvidia.nemo.relay.worker.v1" {
         return Err(PluginError::InvalidConfig(
-            "dynamic worker record has invalid compatibility shape; expected worker_protocol = \"grpc-v1\""
+            "dynamic worker record has invalid compatibility shape; expected worker_protocol = \"nvidia.nemo.relay.worker.v1\""
                 .into(),
         ));
     }

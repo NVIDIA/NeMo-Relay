@@ -244,7 +244,7 @@ manifest_version = 1
 id = "fixture_native"
 kind = "rust_dynamic"
 [compat]
-relay = "={version}"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 [defaults]
 enabled = false
@@ -259,7 +259,6 @@ signature = "artifact.sig"
 library = {library_name:?}
 symbol = "nemo_relay_fixture_native_plugin"
 "#,
-            version = env!("CARGO_PKG_VERSION"),
             digest = Sha256::digest(&bytes)
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
@@ -366,7 +365,7 @@ async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
             )
         } else {
             (
-                "worker_protocol = \"grpc-v1\"",
+                "worker_protocol = \"nvidia.nemo.relay.worker.v1\"",
                 "runtime = \"command\"\nentrypoint = \"never-launch\"",
             )
         };
@@ -382,7 +381,7 @@ manifest_version = 1
 id = "fixture.skipped"
 kind = "{kind}"
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 {compat}
 [defaults]
 enabled = false
