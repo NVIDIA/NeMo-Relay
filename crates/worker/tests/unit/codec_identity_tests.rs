@@ -5,8 +5,7 @@ use super::*;
 
 #[test]
 fn known_builtin_codec_identities_decode_as_builtins() {
-    use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
-    use nemo_relay_worker_proto::v1::LlmCodecKind;
+    use wire::LlmCodecReference as ProtoIdentity;
 
     for codec in [
         BuiltinLlmCodec::OpenAiChat,
@@ -16,28 +15,27 @@ fn known_builtin_codec_identities_decode_as_builtins() {
         BuiltinLlmCodec::GeminiGenerateContent,
     ] {
         let proto = ProtoIdentity {
-            kind: LlmCodecKind::Builtin as i32,
+            kind: "builtin".into(),
             id: Some(codec.id().to_owned()),
         };
         assert_eq!(
-            codec_identity_from_proto(Some(&proto)),
+            codec_identity_from_proto(Some(&proto)).unwrap(),
             LlmCodecIdentity::BuiltIn(codec),
         );
     }
 }
 
 #[test]
-fn unknown_builtin_codec_identity_decodes_as_opaque() {
-    use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
-    use nemo_relay_worker_proto::v1::LlmCodecKind;
+fn unknown_codec_identity_does_not_prevent_capability_access() {
+    use wire::LlmCodecReference as ProtoIdentity;
 
     let proto = ProtoIdentity {
-        kind: LlmCodecKind::Builtin as i32,
+        kind: "builtin".into(),
         id: Some("future_provider".to_owned()),
     };
     assert_eq!(
-        codec_identity_from_proto(Some(&proto)),
-        LlmCodecIdentity::Opaque
+        codec_identity_from_proto(Some(&proto)).unwrap(),
+        LlmCodecIdentity::Runtime("future_provider".into())
     );
 }
 

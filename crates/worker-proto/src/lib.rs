@@ -6,9 +6,6 @@
 //! The [`nvidia_worker_v1`] contract models Relay-owned DTOs in protobuf
 //! and keeps application/provider fields as lossless JSON.
 
-/// Legacy worker protocol identifier, retained until the consumer cutover.
-pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
-
 mod message_limits;
 pub use message_limits::{
     CallbackMessageLimitService, WORKER_CALLBACK_METADATA, WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV,
@@ -98,53 +95,3 @@ pub mod nvidia_worker_v1 {
 
 /// Descriptors for the worker contract, including its imported messages.
 pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("worker_descriptor");
-
-/// Generated protobuf and gRPC service definitions.
-#[allow(missing_docs)]
-pub mod v1 {
-    tonic::include_proto!("nemo.relay.worker.v1");
-}
-
-/// Creates a JSON envelope from a serializable DTO.
-///
-/// # Errors
-/// Returns a serde error when the supplied value cannot be serialized as JSON.
-pub fn json_envelope<T: serde::Serialize>(
-    schema: impl Into<String>,
-    value: &T,
-) -> Result<v1::JsonEnvelope, serde_json::Error> {
-    Ok(v1::JsonEnvelope {
-        schema: schema.into(),
-        json: serde_json::to_vec(value)?,
-    })
-}
-
-/// Decodes a JSON envelope into the requested DTO type.
-///
-/// # Errors
-/// Returns a serde error when the envelope bytes are not valid JSON for `T`.
-pub fn decode_json_envelope<T: serde::de::DeserializeOwned>(
-    envelope: &v1::JsonEnvelope,
-) -> Result<T, serde_json::Error> {
-    serde_json::from_slice(&envelope.json)
-}
-
-/// Creates a lossless protocol JSON value from a serializable value.
-///
-/// # Errors
-/// Returns a serde error when the supplied value cannot be serialized as JSON.
-pub fn json_value<T: serde::Serialize>(value: &T) -> Result<v1::JsonValue, serde_json::Error> {
-    Ok(v1::JsonValue {
-        json: serde_json::to_vec(value)?,
-    })
-}
-
-/// Decodes a lossless protocol JSON value into the requested type.
-///
-/// # Errors
-/// Returns a serde error when the bytes are not valid JSON for `T`.
-pub fn decode_json_value<T: serde::de::DeserializeOwned>(
-    value: &v1::JsonValue,
-) -> Result<T, serde_json::Error> {
-    serde_json::from_slice(&value.json)
-}

@@ -4,8 +4,6 @@
 version: v2
 modules:
   - path: proto
-    excludes:
-      - proto/nemo
 deps:
   - buf.build/bufbuild/protovalidate:v1.2.2
 lint:

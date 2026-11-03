@@ -5,7 +5,7 @@
 //! Counters, history, and recording permission remain owned by the Relay host.
 
 use nemo_relay_types::diagnostics::{BuiltinDiagnosticCode, DiagnosticAvailability};
-use nemo_relay_worker_proto::v1 as wire;
+use nemo_relay_worker_proto::nvidia_worker_v1 as wire;
 use prost::Message;
 use std::sync::{
     Arc,
@@ -48,7 +48,11 @@ impl DeliveryPolicy {
         let max_request_bytes = usize::try_from(capabilities.max_request_bytes).ok()?;
         let max_response_bytes = usize::try_from(capabilities.max_response_bytes).ok()?;
         let max_pending_submissions = usize::try_from(capabilities.max_pending_submissions).ok()?;
-        let retry_timeout = Duration::from_millis(u64::from(capabilities.retry_timeout_millis));
+        let timeout = capabilities.retry_timeout_duration.as_ref()?;
+        if timeout.seconds < 0 || !(0..1_000_000_000).contains(&timeout.nanos) {
+            return None;
+        }
+        let retry_timeout = Duration::new(timeout.seconds as u64, timeout.nanos as u32);
         if !(SUBMISSION_ENVELOPE_ALLOWANCE_BYTES + MIN_SUBMISSION_BYTES..=MAX_REQUEST_BYTES)
             .contains(&max_request_bytes)
             || !(MIN_RESPONSE_BYTES..=MAX_RESPONSE_BYTES).contains(&max_response_bytes)
@@ -156,20 +160,27 @@ impl WorkerDiagnostics {
             return facade;
         };
         let mut client =
-            wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel.clone())
-                .max_encoding_message_size(MAX_REQUEST_BYTES)
-                .max_decoding_message_size(MAX_RESPONSE_BYTES);
-        let credentials = wire::DiagnosticCredentials {
+            wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient::new(
+                channel.clone(),
+            )
+            .max_encoding_message_size(MAX_REQUEST_BYTES)
+            .max_decoding_message_size(MAX_RESPONSE_BYTES);
+        let credentials = wire::Credentials {
             activation_id,
             auth_token,
         };
         let capabilities = match tokio::time::timeout(
             BOOTSTRAP_TIMEOUT,
-            client.get_diagnostic_capabilities(credentials.clone()),
+            client.get_diagnostic_capabilities(wire::GetDiagnosticCapabilitiesRequest {
+                credentials: Some(credentials.clone()),
+            }),
         )
         .await
         {
-            Ok(Ok(response)) => response.into_inner(),
+            Ok(Ok(response)) => match response.into_inner().capabilities {
+                Some(value) => value,
+                None => return facade,
+            },
             Ok(Err(error)) if error.code() == Code::Unimplemented => {
                 facade.availability = DiagnosticAvailability::Unsupported;
                 return facade;
@@ -180,9 +191,12 @@ impl WorkerDiagnostics {
             facade.availability = DiagnosticAvailability::Disabled;
             return facade;
         }
-        if capabilities.protocol_version != 1
-            || capabilities.provenance_version != 1
-            || capabilities.snapshot_version != 1
+        if capabilities
+            .protocol
+            .as_ref()
+            .is_none_or(|p| p.name != wire::WORKER_PROTOCOL || p.version != wire::CONTRACT_VERSION)
+            || capabilities.provenance_contract_version != "1.0.0"
+            || capabilities.snapshot_contract_version != "1.0.0"
         {
             facade.availability = DiagnosticAvailability::Unsupported;
             return facade;
@@ -193,11 +207,14 @@ impl WorkerDiagnostics {
         }
         let opened = match tokio::time::timeout(
             BOOTSTRAP_TIMEOUT,
-            client.open_diagnostic_session(wire::DiagnosticOpenRequest {
+            client.open_diagnostic_session(wire::OpenDiagnosticSessionRequest {
                 credentials: Some(credentials.clone()),
-                protocol_version: 1,
-                snapshot_version: 1,
-                provenance_version: 1,
+                protocol: Some(wire::ProtocolIdentity {
+                    name: wire::WORKER_PROTOCOL.into(),
+                    version: wire::CONTRACT_VERSION.into(),
+                }),
+                snapshot_contract_version: "1.0.0".into(),
+                provenance_contract_version: "1.0.0".into(),
             }),
         )
         .await
@@ -224,9 +241,10 @@ impl WorkerDiagnostics {
         if opened.session_id.len() != 16 {
             return facade;
         }
-        let client = wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel)
-            .max_encoding_message_size(policy.max_request_bytes)
-            .max_decoding_message_size(policy.max_response_bytes);
+        let client =
+            wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient::new(channel)
+                .max_encoding_message_size(policy.max_request_bytes)
+                .max_decoding_message_size(policy.max_response_bytes);
         let (sender, receiver) = mpsc::channel(policy.max_pending_submissions);
         facade.availability = DiagnosticAvailability::Available;
         facade.sender = Some(sender);
@@ -267,12 +285,14 @@ impl WorkerDiagnostics {
             });
         }
         let receipt = self
-            .submit(wire::diagnostic_submission::Operation::RegisterComponent(
-                wire::DiagnosticComponentRegistration {
-                    local_name: name.into(),
-                    codes,
-                },
-            ))
+            .submit(
+                wire::submit_diagnostic_request::Operation::RegisterComponent(
+                    wire::DiagnosticComponentRegistration {
+                        local_name: name.into(),
+                        codes,
+                    },
+                ),
+            )
             .await?;
         if receipt.status != DiagnosticReceiptStatus::Registered as i32 {
             return Err(DiagnosticDeliveryError::Rejected);
@@ -283,10 +303,10 @@ impl WorkerDiagnostics {
         })
     }
     fn freeze(
-        operation: wire::diagnostic_submission::Operation,
+        operation: wire::submit_diagnostic_request::Operation,
         max_request_bytes: usize,
     ) -> Result<Vec<u8>, DiagnosticDeliveryError> {
-        let request = wire::DiagnosticSubmission {
+        let request = wire::SubmitDiagnosticRequest {
             operation: Some(operation),
             ..Default::default()
         };
@@ -299,7 +319,7 @@ impl WorkerDiagnostics {
     }
     async fn submit(
         &self,
-        operation: wire::diagnostic_submission::Operation,
+        operation: wire::submit_diagnostic_request::Operation,
     ) -> Result<DiagnosticReceipt, DiagnosticDeliveryError> {
         if self.state.stopped.load(Ordering::Acquire) {
             return Err(DiagnosticDeliveryError::Closed);
@@ -345,11 +365,9 @@ impl WorkerDiagnostics {
         }
         let result = tokio::time::timeout(deadline, async {
             self.flush(deadline).await?;
-            self.submit(wire::diagnostic_submission::Operation::CloseSession(
-                wire::DiagnosticSessionClose {},
-            ))
-            .await
-            .map(|_| ())
+            self.submit(wire::submit_diagnostic_request::Operation::CloseSession(()))
+                .await
+                .map(|_| ())
         })
         .await
         .map_err(|_| DiagnosticDeliveryError::Uncertain)
@@ -399,7 +417,7 @@ impl DiagnosticComponent {
         }
         observation.component = self.handle;
         let frozen = WorkerDiagnostics::freeze(
-            wire::diagnostic_submission::Operation::Record(observation),
+            wire::submit_diagnostic_request::Operation::Record(observation),
             policy.max_request_bytes,
         )
         .inspect_err(|_| increment(&self.diagnostics.state.dropped))?;
@@ -415,7 +433,7 @@ impl DiagnosticComponent {
             return Ok(());
         }
         self.diagnostics
-            .submit(wire::diagnostic_submission::Operation::CloseComponent(
+            .submit(wire::submit_diagnostic_request::Operation::CloseComponent(
                 wire::DiagnosticComponentClose {
                     component: self.handle,
                 },
