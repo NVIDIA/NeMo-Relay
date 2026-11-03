@@ -211,12 +211,7 @@ search_result = result.result
 
 <Tab title="Node.js" language="node">
 ```ts
-import {
-  JsonPassthrough,
-  typedToolExecute,
-  type Codec,
-  type JsonValue,
-} from 'nemo-relay-node/typed';
+import { typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 
 type SearchArgs = { query: string };
 type SearchResult = { echo: string };
@@ -225,13 +220,17 @@ const argsCodec: Codec<SearchArgs, JsonValue> = {
   toJson: (value) => value,
   fromJson: (json) => json as SearchArgs,
 };
+const resultCodec: Codec<SearchResult, JsonValue> = {
+  toJson: (value) => value,
+  fromJson: (json) => json as SearchResult,
+};
 
 const result = await typedToolExecute<SearchArgs, SearchResult>(
   'search',
   { query: 'weather' },
   async (args) => ({ result: { echo: args.query } }),
   argsCodec,
-  new JsonPassthrough(),
+  resultCodec,
 );
 const searchResult = result.result;
 ```
