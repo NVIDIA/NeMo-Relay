@@ -261,6 +261,15 @@ def pack(cls: Any, value: Any, *, _field_names: dict[str, str] | None = None) ->
                 raise ValueError(f"{name}.{source_name} must be an array")
             if field.message_type:
                 target.extend(pack(GetMessageClass(field.message_type), child) for child in item)
+            elif field.enum_type:
+                prefix = re.sub(r"(?<!^)(?=[A-Z])", "_", field.enum_type.name).upper() + "_"
+                for child in item:
+                    if not isinstance(child, str):
+                        raise ValueError(f"{name}.{source_name} elements must be strings")
+                    member = field.enum_type.values_by_name.get(prefix + child.upper())
+                    if member is None:
+                        raise ValueError(f"{name}.{source_name} has unknown value {child!r}")
+                    target.append(member.number)
             else:
                 if field.type == field.TYPE_STRING and any(not isinstance(child, str) for child in item):
                     raise ValueError(f"{name}.{source_name} elements must be strings")
@@ -336,7 +345,17 @@ def unpack(value: Any, *, _field_names: dict[str, str] | None = None) -> Any:
         if field.message_type and field.message_type.GetOptions().map_entry:
             item = {k: unpack(v) if hasattr(v, "DESCRIPTOR") else v for k, v in item.items()}
         elif field.is_repeated:
-            item = [unpack(v) if hasattr(v, "DESCRIPTOR") else v for v in item]
+            if field.enum_type:
+                prefix = re.sub(r"(?<!^)(?=[A-Z])", "_", field.enum_type.name).upper() + "_"
+                converted = []
+                for raw in item:
+                    member = field.enum_type.values_by_number.get(raw)
+                    if member is None:
+                        raise ValueError(f"unknown {field.enum_type.name}")
+                    converted.append(member.name.removeprefix(prefix).lower())
+                item = converted
+            else:
+                item = [unpack(v) if hasattr(v, "DESCRIPTOR") else v for v in item]
         elif field.message_type:
             item = unpack(item, _field_names=_CONTENT_PART_FIELDS.get(field.name) if name == "ContentPart" else None)
         elif field.enum_type:

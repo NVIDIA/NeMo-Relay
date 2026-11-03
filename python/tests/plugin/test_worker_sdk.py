@@ -4267,3 +4267,16 @@ async def test_scope_stack_snapshot_rejects_malformed_host_response(response) ->
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
     with pytest.raises(WorkerSdkError, match="invalid host response"):
         await runtime.current_scope_stack_snapshot()
+
+
+def test_protocol_repeated_enum_round_trip() -> None:
+    body = {"kinds": ["tool_execution_intercept", "llm_execution_intercept"]}
+    message = plugin_api._protocol.pack(runtime_pb.ConditionalMiddlewareInvocation, body)
+    assert plugin_api._protocol.unpack(message)["kinds"] == body["kinds"]
+    with pytest.raises(ValueError, match="unknown value"):
+        plugin_api._protocol.pack(runtime_pb.ConditionalMiddlewareInvocation, {"kinds": ["missing"]})
+    with pytest.raises(ValueError, match="elements must be strings"):
+        plugin_api._protocol.pack(runtime_pb.ConditionalMiddlewareInvocation, {"kinds": [1]})
+    message.kinds.append(999)
+    with pytest.raises(ValueError, match="unknown RegistrationSurface"):
+        plugin_api._protocol.unpack(message)

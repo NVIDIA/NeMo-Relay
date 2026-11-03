@@ -72,8 +72,7 @@ Relay 0.8 makes the tool result explicit at every dynamic boundary. A managed to
 callback and its continuation return a `ToolExecutionResult`: the application payload in
 `result` and an optional opaque `annotation`. A tool execution intercept returns that
 same pair plus Relay-owned pending marks. Native and worker plugins built for an earlier
-release must rebuild for this contract. Workers now use the `nvidia.nemo.relay.worker.v1` package and must regenerate
-bindings or rebuild with the updated SDK.
+release must rebuild for this contract.
 
 Relay 0.10 adds codec context to every LLM execution callback in language
 bindings, native plugins, and worker SDKs. Every native plugin must rebuild for

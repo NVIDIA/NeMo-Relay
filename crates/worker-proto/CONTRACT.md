@@ -271,7 +271,7 @@ and required behavior:
 
 | Authoring Capability | Shared Domain Contract | New Worker Wire Format | Adoption Requirements |
 | --- | --- | --- | --- |
-| Plugin identity and registration | Component configuration, diagnostics, and explicit multiple-component policy | Handshake, Validate, Register, RegistrationPlan | Resolve `plugin_kind`/`plugin_id`, mutable registration, `Send`/`Sync`, and differing defaults in the shared facade; never silently change legacy defaults. |
+| Plugin identity and registration | Component configuration, diagnostics, and explicit multiple-component policy | Handshake, Validate, Register, RegistrationPlan | The shared facade preserves `plugin_kind`/`plugin_id`, mutable registration, `Send`/`Sync`, and backend-specific defaults. |
 | Events and metadata | Event, EventSanitizeFields, PendingMarkSpec, typed metadata maps | Per-surface invocation and result alternatives | Same transformations, event parentage, and null/presence behavior through both adapters. |
 | Tool invocation | ToolExecutionContext, ToolExecutionResult, ToolExecutionInterceptOutcome | ToolExecutionInvocation and canonical tool result/outcome | Same callback input type and lossless result/annotation/mark behavior. |
 | LLM invocation and codecs | LlmRequest, AnnotatedLlmRequest/Response, LlmCodecIdentity, optimization DTOs | Typed invocation and normalized results, open codec reference metadata and capability | Async common facade supports RPC latency; native synchronous helpers may remain backend-specific. |

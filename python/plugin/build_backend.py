@@ -61,7 +61,9 @@ def generate_worker_proto(output_dir: Path = _GENERATED_DIR) -> None:
     if result:
         raise RuntimeError(f"grpc_tools.protoc failed with exit code {result}")
     # Keep generated packages private; installing this wheel must not populate
-    # the application's global NVIDIA or Buf namespaces.
+    # the application's global NVIDIA or Buf Python namespaces. Protobuf descriptor
+    # package names remain unchanged: update the Buf Protovalidate lock and the
+    # Python protovalidate dependency pin together to keep descriptors identical.
     for generated in sorted((*output_dir.rglob("*_pb2*.py"), *output_dir.rglob("*_pb2.pyi"))):
         text = generated.read_text(encoding="utf-8")
         text = re.sub(r"^from (nvidia\.|buf\.)", r"from nemo_relay_plugin._proto.\1", text, flags=re.MULTILINE)

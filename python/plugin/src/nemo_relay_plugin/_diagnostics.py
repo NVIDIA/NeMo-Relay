@@ -34,19 +34,19 @@ DiagnosticObservation = diagnostics_pb.DiagnosticObservation
 class DiagnosticObservationOutcome(IntEnum):
     """Explicit operation outcome independent of evidence severity."""
 
-    UNKNOWN = 0
-    SUCCESS = 1
-    FAILURE = 2
+    UNKNOWN = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_UNSPECIFIED
+    SUCCESS = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_SUCCESS
+    FAILURE = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE
 
 
 class DiagnosticObservationSeverity(IntEnum):
     """Evidence severity independent of operation outcome."""
 
-    TRACE = 1
-    DEBUG = 2
-    INFO = 3
-    WARNING = 4
-    ERROR = 5
+    TRACE = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_TRACE
+    DEBUG = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_DEBUG
+    INFO = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_INFO
+    WARNING = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_WARNING
+    ERROR = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR
 
 
 # Document the SDK's aliases without changing generated protobuf sources.

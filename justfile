@@ -1608,8 +1608,6 @@ test-python-plugin-e2e:
     worker_wheels=("$tmp"/wheels/nemo_relay_plugin-*.whl)
     "$python_executable" -c 'from pathlib import Path; import sys; print("nemo-relay-plugin @ " + Path(sys.argv[1]).resolve().as_uri())' "${worker_wheels[0]}" > "$tmp/worker-constraints.txt"
     cargo build -p nemo-relay-cli --features __skip-implicit-config
-    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
-    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$tmp/system"
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
     # Explicit --config paths must exist; plugin policy and state are sibling files.

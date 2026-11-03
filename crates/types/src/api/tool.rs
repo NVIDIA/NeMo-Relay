@@ -41,7 +41,7 @@ bitflags! {
 ///
 /// Native and worker SDKs share this owned value. Continuation capabilities and
 /// transport credentials remain in their backend adapters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ToolExecutionContext {
     /// Tool name associated with the execution.
     pub tool_name: String,
@@ -49,6 +49,16 @@ pub struct ToolExecutionContext {
     pub args: Json,
     /// Provider-issued tool-call correlation identifier, when supplied.
     pub tool_call_id: Option<String>,
+}
+
+impl std::fmt::Debug for ToolExecutionContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolExecutionContext")
+            .field("tool_name", &self.tool_name)
+            .field("tool_call_id", &self.tool_call_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ToolExecutionContext {
