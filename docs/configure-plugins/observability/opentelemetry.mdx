@@ -779,10 +779,10 @@ OTLP request.
 
 A collector can return a successful OTLP response while rejecting individual
 spans, log records, or metric data points. For OTLP/HTTP exports, NeMo Relay
-reads that partial success response and records `otel.spans_rejected`,
-`otel.logs_rejected`, or `otel.metric_points_rejected` in the exporter's
-`runtime_diagnostics`. Its `count` is the total number of rejected items, and
-`message` includes the endpoint origin (scheme, host, and port). The collector's
+reads that partial success response and records `otel.partial_success` in the
+trace, log, or metric exporter's `runtime_diagnostics`. Its `count` is the total
+number of rejected items, and `message` names the rejected item type and the
+endpoint origin (scheme, host, and port). The collector's
 own error message is not included, because it can contain payload data. The
 export still counts as successful, so `force_flush()` and `shutdown()` can
 succeed.

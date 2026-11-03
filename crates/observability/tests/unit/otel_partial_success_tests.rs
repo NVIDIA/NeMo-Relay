@@ -90,7 +90,7 @@ fn protobuf_trace_partial_success_records_rejected_spans() {
 
     assert_eq!(response.body().as_ref(), body.as_slice());
     let diagnostic = only_diagnostic(&diagnostics);
-    assert_eq!(diagnostic.code, "otel.spans_rejected");
+    assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 3);
     assert!(diagnostic.message.contains("collector.example:4318"));
     assert!(!diagnostic.message.contains("secret"));
@@ -111,12 +111,12 @@ fn json_trace_partial_success_records_rejected_spans() {
     );
 
     let diagnostic = only_diagnostic(&diagnostics);
-    assert_eq!(diagnostic.code, "otel.spans_rejected");
+    assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 2);
 }
 
 #[test]
-fn log_and_metric_partial_success_use_their_own_codes_and_counts() {
+fn log_and_metric_partial_success_record_their_rejected_counts() {
     let logs = SignalRuntimeDiagnostics::new(None);
     let body = ExportLogsServiceResponse {
         partial_success: Some(ExportLogsPartialSuccess {
@@ -127,7 +127,7 @@ fn log_and_metric_partial_success_use_their_own_codes_and_counts() {
     .encode_to_vec();
     send(OtlpSignal::Logs, 200, body, "application/x-protobuf", &logs);
     let diagnostic = only_diagnostic(&logs);
-    assert_eq!(diagnostic.code, "otel.logs_rejected");
+    assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 4);
 
     let metrics = SignalRuntimeDiagnostics::new(None);
@@ -146,7 +146,7 @@ fn log_and_metric_partial_success_use_their_own_codes_and_counts() {
         &metrics,
     );
     let diagnostic = only_diagnostic(&metrics);
-    assert_eq!(diagnostic.code, "otel.metric_points_rejected");
+    assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 5);
 }
 
@@ -225,19 +225,19 @@ fn json_counts_encoded_as_strings_are_read() {
         (
             OtlpSignal::Traces,
             r#"{"partialSuccess":{"rejectedSpans":"3","errorMessage":"x"}}"#,
-            "otel.spans_rejected",
+            "otel.partial_success",
             3,
         ),
         (
             OtlpSignal::Logs,
             r#"{"partialSuccess":{"rejectedLogRecords":"4"}}"#,
-            "otel.logs_rejected",
+            "otel.partial_success",
             4,
         ),
         (
             OtlpSignal::Metrics,
             r#"{"partialSuccess":{"rejectedDataPoints":5}}"#,
-            "otel.metric_points_rejected",
+            "otel.partial_success",
             5,
         ),
     ] {
@@ -301,4 +301,32 @@ fn warning_is_logged_when_the_rejected_total_crosses_a_power_of_two() {
     assert!(!rejection_crosses_power_of_two(4, 6));
     assert!(rejection_crosses_power_of_two(0, 1));
     assert!(rejection_crosses_power_of_two(1, 2));
+    // `record` returns 0 when the diagnostics table is full: nothing to log.
+    assert!(!rejection_crosses_power_of_two(0, 0));
+}
+
+#[test]
+fn full_diagnostics_table_records_nothing_for_partial_success() {
+    let diagnostics = SignalRuntimeDiagnostics::new(None);
+    for index in 0..crate::runtime_diagnostics::MAX_RUNTIME_DIAGNOSTICS {
+        diagnostics.record(format!("test.filler_{index}"), "filler".into(), 1);
+    }
+    send(
+        OtlpSignal::Traces,
+        200,
+        trace_response(3, "").encode_to_vec(),
+        "application/x-protobuf",
+        &diagnostics,
+    );
+    let snapshot = diagnostics.snapshot();
+    assert_eq!(
+        snapshot.diagnostics.len(),
+        crate::runtime_diagnostics::MAX_RUNTIME_DIAGNOSTICS
+    );
+    assert!(
+        !snapshot
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "otel.partial_success")
+    );
 }

@@ -2051,8 +2051,8 @@ fn http_trace_export_reports_collector_partial_success_as_runtime_diagnostic() {
     let rejected = diagnostics
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "otel.spans_rejected")
-        .unwrap_or_else(|| panic!("no otel.spans_rejected in {diagnostics:?}"));
+        .find(|diagnostic| diagnostic.code == "otel.partial_success")
+        .unwrap_or_else(|| panic!("no otel.partial_success in {diagnostics:?}"));
     assert_eq!(rejected.count, 1);
     assert!(!rejected.message.contains("collector policy"));
     subscriber.shutdown().unwrap();

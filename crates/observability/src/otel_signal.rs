@@ -130,14 +130,6 @@ pub enum OtlpSignal {
 }
 
 impl OtlpSignal {
-    fn rejected_code(self) -> &'static str {
-        match self {
-            Self::Traces => "otel.spans_rejected",
-            Self::Logs => "otel.logs_rejected",
-            Self::Metrics => "otel.metric_points_rejected",
-        }
-    }
-
     fn rejected_items(self) -> &'static str {
         match self {
             Self::Traces => "spans",
@@ -198,7 +190,8 @@ impl OtlpSignal {
 /// partial successes log on the first one and then at doubling totals.
 #[doc(hidden)]
 pub fn rejection_crosses_power_of_two(previous: u64, total: u64) -> bool {
-    previous == 0 || previous.ilog2() != total.ilog2()
+    // A zero total means nothing was recorded (the diagnostics table is full).
+    total != 0 && (previous == 0 || previous.ilog2() != total.ilog2())
 }
 
 /// Record an OTLP/HTTP partial success response as a runtime diagnostic.
@@ -229,25 +222,14 @@ pub fn record_otlp_partial_success(
         super::otel::trace_endpoint_log_identity(request_uri),
         signal.rejected_items(),
     );
-    let total = diagnostics.record(signal.rejected_code(), message.clone(), rejected);
+    // Each signal owns its recorder, so one code does not mix their counts.
+    let total = diagnostics.record("otel.partial_success", message.clone(), rejected);
     if rejection_crosses_power_of_two(total.saturating_sub(rejected), total) {
-        match signal {
-            OtlpSignal::Traces => log::warn!(
-                target: "nemo_relay.observability",
-                event = "otel_spans_rejected";
-                "{message}"
-            ),
-            OtlpSignal::Logs => log::warn!(
-                target: "nemo_relay.observability",
-                event = "otel_logs_rejected";
-                "{message}"
-            ),
-            OtlpSignal::Metrics => log::warn!(
-                target: "nemo_relay.observability",
-                event = "otel_metric_points_rejected";
-                "{message}"
-            ),
-        }
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "otel_partial_success";
+            "{message}"
+        );
     }
 }
 

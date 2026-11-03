@@ -601,8 +601,8 @@ fn http_log_export_reports_collector_partial_success_as_runtime_diagnostic() {
     let rejected = snapshot
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "otel.logs_rejected")
-        .unwrap_or_else(|| panic!("no otel.logs_rejected in {snapshot:?}"));
+        .find(|diagnostic| diagnostic.code == "otel.partial_success")
+        .unwrap_or_else(|| panic!("no otel.partial_success in {snapshot:?}"));
     assert_eq!(rejected.count, 1);
     assert!(!rejected.message.contains("collector policy"));
     let _ = provider.shutdown();
