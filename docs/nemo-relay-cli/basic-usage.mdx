@@ -639,6 +639,59 @@ Doctor reports each helper's timeout and authentication method. It warns about
 environment credentials that a helper ignores. It also reports configuration
 errors, such as combining a helper with a static API key.
 
+### Sign In With OpenID Connect
+
+Some providers authenticate users with OpenID Connect (OIDC) instead of static
+API keys. Relay can own that sign-in. `nemo-relay auth` signs the user in once
+and gives the API key helper a current access token for each request.
+
+An administrator configures the provider once, for example in the system
+`config.toml`. The issuer, client ID, and scopes are not secrets:
+
+```toml
+[upstream]
+openai_base_url = "https://openrouter.ai/api/v1"
+
+[upstream.openai_api_key_helper]
+command = "/opt/nvidia/bin/nemo-relay"
+args = [
+  "auth", "token",
+  "--issuer", "https://clerk.openrouter.ai",
+  "--client-id", "<client id>",
+  "--scope", "openid offline_access email inference",
+]
+cache_ttl_ms = 300000
+```
+
+Each user then signs in once:
+
+```bash
+nemo-relay auth login
+```
+
+The command reads the issuer, client ID, and scopes from the helper above. Pass
+`--issuer`, `--client-id`, and `--scope` to sign in to another provider. The
+command uses the OAuth 2.0 device authorization grant. It prints a URL and a
+code. Open the URL on any device, enter the code, and approve the sign-in. The
+command does not need a local browser, so it also works over SSH.
+
+Relay stores the sign-in in `<user config dir>/oidc/` with owner-only access,
+one file for each issuer and client ID. `nemo-relay auth token` prints the
+access token. When the token expires within five minutes, the command refreshes
+it with the stored refresh token first. Refreshes from several processes run
+one at a time, so a rotated refresh token is never used twice. With
+`cache_ttl_ms`, Relay reuses the token between refreshes instead of running the
+command for each request.
+
+The issuer must use `https`, or `http` on a loopback address. Its token and
+device endpoints must have the same origin as the issuer. Relay never writes
+tokens to logs or error messages.
+
+If the provider rejects the refresh token, `nemo-relay auth token` fails and
+names the `nemo-relay auth login` command. Relay then stops the request, as for
+any failed helper. A temporary provider error keeps the stored sign-in. Run
+`nemo-relay auth logout` to remove the stored sign-in.
+
 Doctor does not run helpers or check their tokens, even without `--offline`.
 The credential checks do not display API keys, helper commands, or helper
 arguments. Add `--json` to read these checks under
