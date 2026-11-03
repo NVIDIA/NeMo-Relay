@@ -29,12 +29,11 @@ def _validate_package(repository_root: Path, temporary_root: Path) -> None:
     for generated in (project_root / "src/nemo_relay_plugin/_proto").glob("plugin_worker_pb2*.py"):
         generated.unlink()
 
-    canonical_proto = workspace_root / "crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto"
-    canonical_proto.parent.mkdir(parents=True)
-    shutil.copy2(
-        repository_root / "crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto",
-        canonical_proto,
-    )
+    proto_crate = workspace_root / "crates/worker-proto"
+    for directory in ("proto/nvidia",):
+        shutil.copytree(repository_root / "crates/worker-proto" / directory, proto_crate / directory)
+
+    shutil.copy2(repository_root / "crates/worker-proto/buf.lock", proto_crate / "buf.lock")
 
     repository_wheel_dir = temporary_root / "repository-wheel"
     _run(["uv", "build", "--wheel", "--out-dir", str(repository_wheel_dir), str(project_root)])
@@ -48,9 +47,13 @@ def _validate_package(repository_root: Path, temporary_root: Path) -> None:
     extraction_root = (temporary_root / "extracted").resolve()
     with tarfile.open(sdist) as archive:
         names = archive.getnames()
-        if not any(name.endswith("/proto/plugin_worker.proto") for name in names):
-            raise AssertionError("source distribution is missing plugin_worker.proto")
-        if any(name.endswith(("plugin_worker_pb2.py", "plugin_worker_pb2_grpc.py")) for name in names):
+        if not any(name.endswith("/proto/nvidia/nemo/relay/worker/v1/plugin_worker_service.proto") for name in names):
+            raise AssertionError("source distribution is missing worker service contract")
+        if not any(name.endswith("/proto/buf.lock") for name in names):
+            raise AssertionError("source distribution is missing the pinned Buf dependency")
+        if any("/proto/buf/validate/" in name for name in names):
+            raise AssertionError("source distribution contains vendored validation sources")
+        if any(name.endswith(("_pb2.py", "_pb2.pyi", "_pb2_grpc.py")) for name in names):
             raise AssertionError("source distribution contains generated worker bindings")
         for member in archive.getmembers():
             destination = (extraction_root / member.name).resolve()
@@ -68,7 +71,17 @@ def _validate_package(repository_root: Path, temporary_root: Path) -> None:
     _run(["uv", "venv", "--python", sys.executable, str(venv)])
     python = venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     _run(["uv", "pip", "install", "--python", str(python), str(rebuilt_wheel)])
-    _run([str(python), "-c", "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"])
+    _run(
+        [
+            str(python),
+            "-c",
+            (
+                "import nemo_relay_plugin; from nemo_relay_plugin import _protocol; "
+                "from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1.common_pb2 import JsonValue; "
+                "_protocol.validate(_protocol.pack(JsonValue, None))"
+            ),
+        ]
+    )
 
 
 def _ignore_build_outputs(directory: str, names: list[str]) -> set[str]:
@@ -83,9 +96,19 @@ def _ignore_build_outputs(directory: str, names: list[str]) -> set[str]:
 def _assert_wheel_contains_worker_bindings(wheel: Path) -> None:
     with ZipFile(wheel) as archive:
         names = set(archive.namelist())
-    required = {
+    legacy_bindings = {
         "nemo_relay_plugin/_proto/plugin_worker_pb2.py",
         "nemo_relay_plugin/_proto/plugin_worker_pb2_grpc.py",
+    }
+    if names & legacy_bindings:
+        raise AssertionError("wheel contains retired worker bindings")
+    required = {
+        "nemo_relay_plugin/_proto/buf/validate/validate_pb2.py",
+        "nemo_relay_plugin/_proto/buf/validate/validate_pb2.pyi",
+        "nemo_relay_plugin/_proto/PROTOVALIDATE-LICENSE",
+        "nemo_relay_plugin/_proto/nvidia/nemo/relay/worker/v1/plugin_worker_service_pb2.py",
+        "nemo_relay_plugin/_proto/nvidia/nemo/relay/worker/v1/plugin_worker_service_pb2.pyi",
+        "nemo_relay_plugin/_proto/nvidia/nemo/relay/worker/v1/plugin_worker_service_pb2_grpc.py",
     }
     missing = required - names
     if missing:

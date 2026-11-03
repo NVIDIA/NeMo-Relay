@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""High-level Python API for NeMo Relay ``grpc-v1`` worker plugins.
+"""High-level Python API for NeMo Relay ``nvidia.nemo.relay.worker.v1`` worker plugins.
 
 The module exposes the authoring contract for out-of-process Python plugins.
 Callbacks can be synchronous or asynchronous unless a method documents a more
@@ -56,7 +56,7 @@ Public callback aliases used in registration annotations:
 
 Public functions:
     http_error_message: Format an upstream HTTP error status for forwarding.
-    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
+    serve_plugin: Run a local ``nvidia.nemo.relay.worker.v1`` worker until host shutdown.
 """
 
 from __future__ import annotations
@@ -84,13 +84,39 @@ from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
+from . import _protocol
 from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics, _open_diagnostic_channel
 from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    common_pb2 as common_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    event_pb2 as event_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    llm_pb2 as llm_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    plugin_worker_service_pb2 as worker_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    plugin_worker_service_pb2_grpc as worker_grpc,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    relay_diagnostics_service_pb2_grpc as diagnostics_grpc,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    relay_host_runtime_service_pb2 as host_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    relay_host_runtime_service_pb2_grpc as host_grpc,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    runtime_pb2 as runtime_pb,
+)
 
 grpc: Any = importlib.import_module("grpc")
 
-pb: Any = importlib.import_module("._proto.plugin_worker_pb2", __package__)
-pb_grpc: Any = importlib.import_module("._proto.plugin_worker_pb2_grpc", __package__)
 
 #: Any JSON-serializable Python value accepted by the worker protocol.
 Json: TypeAlias = Any
@@ -281,67 +307,41 @@ class LlmExecutionContext:
     response_codec: LlmResponseContext | None
 
 
-def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
-    """Return the codec identity from a worker invocation."""
-    context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
-    proto_codec = context.codec if context is not None and context.HasField("codec") else None
-    codec_id = proto_codec.id if proto_codec is not None and proto_codec.HasField("id") else None
-    codec_kind = proto_codec.kind if proto_codec is not None else pb.LLM_CODEC_KIND_UNSPECIFIED
-    return _codec_identity(codec_kind, codec_id)
-
-
-def _codec_identity(codec_kind: int, codec_id: str | None) -> LlmCodecIdentity:
-    if codec_kind == pb.LLM_CODEC_KIND_UNSPECIFIED:
-        return LlmCodecIdentity("none")
-    if codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
-        return LlmCodecIdentity("builtin", codec_id)
-    if codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
-        return LlmCodecIdentity("runtime", codec_id)
-    return LlmCodecIdentity("opaque")
-
-
-def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
-    context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
-    return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
+def _codec_identity(codec: Any) -> LlmCodecIdentity:
+    if codec is None:
+        raise WorkerSdkError("missing codec identity")
+    if not codec.kind:
+        raise WorkerSdkError("missing codec reference namespace")
+    return LlmCodecIdentity(codec.kind, codec.id if codec.HasField("id") else None)
 
 
 def _llm_execution_context(
-    invocation: pb.LlmInvocation,
+    invocation: runtime_pb.LlmExecutionInvocation | worker_pb.InvokeStreamRequest,
     runtime: "PluginRuntime",
     invocation_id: str,
     *,
     response_required: bool,
 ) -> LlmExecutionContext:
-    if not invocation.HasField("execution_codec_context"):
-        raise WorkerSdkError("malformed LLM execution codec context: execution context is missing")
-    context = invocation.execution_codec_context
-    if not context.HasField("request"):
+    if not invocation.HasField("request_codec"):
         raise WorkerSdkError("malformed LLM execution codec context: request context is missing")
-    if not context.request.HasField("codec"):
+    request = invocation.request_codec
+    if not request.HasField("codec"):
         raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
-
-    request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
     request_context = LlmRequestContext(
-        codec=_codec_identity(
-            context.request.codec.kind,
-            context.request.codec.id if context.request.codec.HasField("id") else None,
-        ),
+        codec=_codec_identity(request.codec),
         _runtime=runtime,
-        _capability_id=request_id,
+        _capability_id=request.capability_id if request.HasField("capability_id") else None,
         _invocation_id=invocation_id,
     )
     response_context: LlmResponseContext | None = None
-    if context.HasField("response"):
-        if not context.response.HasField("codec"):
+    if isinstance(invocation, runtime_pb.LlmExecutionInvocation) and invocation.HasField("response_codec"):
+        response = invocation.response_codec
+        if not response.HasField("codec"):
             raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
-        response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
         response_context = LlmResponseContext(
-            codec=_codec_identity(
-                context.response.codec.kind,
-                context.response.codec.id if context.response.codec.HasField("id") else None,
-            ),
+            codec=_codec_identity(response.codec),
             _runtime=runtime,
-            _capability_id=response_id,
+            _capability_id=response.capability_id if response.HasField("capability_id") else None,
             _invocation_id=invocation_id,
         )
     elif response_required:
@@ -352,7 +352,7 @@ def _llm_execution_context(
     )
 
 
-WORKER_PROTOCOL = "grpc-v1"
+WORKER_PROTOCOL = _protocol.PACKAGE
 _WORKER_MAX_MESSAGE_BYTES_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
 _DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 
@@ -379,23 +379,8 @@ def _worker_grpc_options(limit: int) -> tuple[tuple[str, int], ...]:
     return (("grpc.max_receive_message_length", limit), ("grpc.max_send_message_length", limit))
 
 
-JSON_SCHEMA = "nemo.relay.Json@1"
-DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
 METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
 METRIC_DATA_SCHEMA_VERSION = "1"
-EVENT_SCHEMA = "nemo.relay.Event@1"
-LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
-ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
-LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@2"
-PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
-_OBJECT_SCHEMAS = frozenset(
-    {
-        EVENT_SCHEMA,
-        LLM_REQUEST_SCHEMA,
-        ANNOTATED_LLM_REQUEST_SCHEMA,
-        LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-    }
-)
 _UNREGISTERED = object()
 _SCOPE_CONTEXT: contextvars.ContextVar[_BoundScopeContext | None] = contextvars.ContextVar(
     "nemo_relay_plugin_scope_context",
@@ -1252,17 +1237,17 @@ class PluginContext:
     """
 
     _EVENT_SANITIZER_HANDLER_ATTRIBUTES: ClassVar[dict[int, str]] = {
-        pb.MARK_SANITIZE_GUARDRAIL: "mark_sanitizers",
-        pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope_start_sanitizers",
-        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitizers",
+        common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL: "mark_sanitizers",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL: "scope_start_sanitizers",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitizers",
     }
     _LLM_HANDLER_ATTRIBUTES: ClassVar[frozenset[int]] = frozenset(
         {
-            pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-            pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
-            pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-            pb.LLM_REQUEST_INTERCEPT,
-            pb.LLM_EXECUTION_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT,
         }
     )
 
@@ -1295,7 +1280,7 @@ class PluginContext:
         Callback errors:
             An exception becomes a structured worker invocation error.
         """
-        self._push_registration(name, pb.SUBSCRIBER, 0, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
 
     def register_conditional_middleware_guardrail(
@@ -1307,7 +1292,7 @@ class PluginContext:
     ) -> None:
         """Declare a callback-based gate installed with this activation."""
         self._handlers.conditional_middleware_guardrails.append(
-            pb.ConditionalMiddlewareGuardrailRegistration(
+            runtime_pb.ConditionalMiddlewareGuardrailRegistration(
                 name=name,
                 kinds=[_runtime_registration_surface(kind) for kind in kinds],
                 registration_name=registration_name,
@@ -1336,14 +1321,14 @@ class PluginContext:
             An exception becomes a structured worker invocation error. Relay
             omits this callback's additions and continues processing the Event.
         """
-        self._push_registration(name, pb.EVENT_METADATA_INJECTOR, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR, priority, False)
         self._handlers.event_metadata_injectors[name] = callback
 
     def _register_event_sanitizer(
         self,
         name: str,
         callback: EventSanitizeCallback,
-        surface: int,
+        surface: common_pb.RegistrationSurface,
         priority: int,
     ) -> None:
         self._push_registration(name, surface, priority, False)
@@ -1370,7 +1355,7 @@ class PluginContext:
         self._register_event_sanitizer(
             name,
             callback,
-            pb.MARK_SANITIZE_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL,
             priority,
         )
 
@@ -1391,7 +1376,7 @@ class PluginContext:
         self._register_event_sanitizer(
             name,
             callback,
-            pb.SCOPE_SANITIZE_START_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL,
             priority,
         )
 
@@ -1412,7 +1397,7 @@ class PluginContext:
         self._register_event_sanitizer(
             name,
             callback,
-            pb.SCOPE_SANITIZE_END_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL,
             priority,
         )
 
@@ -1433,7 +1418,7 @@ class PluginContext:
                 It does not change the arguments passed to the real tool.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL, priority, False)
         self._handlers.tool_sanitize_requests[name] = callback
 
     def register_tool_sanitize_response_guardrail(
@@ -1453,7 +1438,7 @@ class PluginContext:
                 change the real tool result.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
         self._handlers.tool_sanitize_responses[name] = callback
 
     def register_tool_conditional_execution_guardrail(
@@ -1472,7 +1457,9 @@ class PluginContext:
                 must block it. The callback can return an awaitable.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, priority, False)
+        self._push_registration(
+            name, common_pb.REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, priority, False
+        )
         self._handlers.tool_conditionals[name] = callback
 
     def register_tool_request_intercept(
@@ -1494,7 +1481,7 @@ class PluginContext:
             break_chain: Whether Relay skips later, lower-priority request
                 intercepts after this callback runs.
         """
-        self._push_registration(name, pb.TOOL_REQUEST_INTERCEPT, priority, break_chain)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, priority, break_chain)
         self._handlers.tool_requests[name] = callback
 
     def register_tool_execution_intercept(
@@ -1514,7 +1501,7 @@ class PluginContext:
                 zero, one, or multiple times while the invocation is active.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.TOOL_EXECUTION_INTERCEPT, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, priority, False)
         self._handlers.tool_executions[name] = callback
 
     def register_llm_sanitize_request_guardrail(
@@ -1533,7 +1520,7 @@ class PluginContext:
                 through an awaitable. Return ``None`` to omit observability.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL, priority, False)
         self._handlers.llm_sanitize_requests[name] = callback
 
     def register_llm_sanitize_response_guardrail(
@@ -1552,7 +1539,7 @@ class PluginContext:
                 awaitable. Return ``None`` to omit observability.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL, priority, False)
         self._handlers.llm_sanitize_responses[name] = callback
 
     def register_llm_conditional_execution_guardrail(
@@ -1571,7 +1558,9 @@ class PluginContext:
                 it. The callback can return an awaitable.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, priority, False)
+        self._push_registration(
+            name, common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL, priority, False
+        )
         self._handlers.llm_conditionals[name] = callback
 
     def register_llm_request_intercept(
@@ -1596,7 +1585,7 @@ class PluginContext:
             break_chain: Whether Relay skips later, lower-priority request
                 intercepts after this callback runs.
         """
-        self._push_registration(name, pb.LLM_REQUEST_INTERCEPT, priority, break_chain)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT, priority, break_chain)
         self._handlers.llm_requests[name] = callback
 
     def register_llm_execution_intercept(
@@ -1617,7 +1606,7 @@ class PluginContext:
                 while the invocation is active.
             priority: Execution order. Lower values run first.
         """
-        self._push_registration(name, pb.LLM_EXECUTION_INTERCEPT, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_executions[name] = callback
 
     def register_llm_stream_execution_intercept(
@@ -1645,13 +1634,13 @@ class PluginContext:
             errors terminate the replacement stream with a structured worker
             error.
         """
-        self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
+        self._push_registration(name, common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
     def _push_registration(
         self,
         name: str,
-        surface: int,
+        surface: common_pb.RegistrationSurface,
         priority: int,
         break_chain: bool,
     ) -> None:
@@ -1661,7 +1650,7 @@ class PluginContext:
         ):
             raise WorkerSdkError(f"handler {name!r} is already registered for surface {surface}")
         self._handlers.registrations.append(
-            pb.Registration(
+            runtime_pb.Registration(
                 local_name=name,
                 surface=surface,
                 priority=priority,
@@ -1762,12 +1751,12 @@ class PluginRuntime:
             WorkerSdkError: The host rejects the authenticated log request.
         """
         levels = {
-            "error": pb.LOG_LEVEL_ERROR,
-            "warn": pb.LOG_LEVEL_WARN,
-            "warning": pb.LOG_LEVEL_WARN,
-            "info": pb.LOG_LEVEL_INFO,
-            "debug": pb.LOG_LEVEL_DEBUG,
-            "trace": pb.LOG_LEVEL_TRACE,
+            "error": common_pb.LOG_SEVERITY_ERROR,
+            "warn": common_pb.LOG_SEVERITY_WARN,
+            "warning": common_pb.LOG_SEVERITY_WARN,
+            "info": common_pb.LOG_SEVERITY_INFO,
+            "debug": common_pb.LOG_SEVERITY_DEBUG,
+            "trace": common_pb.LOG_SEVERITY_TRACE,
         }
         try:
             wire_level = levels[level.lower()]
@@ -1776,13 +1765,12 @@ class PluginRuntime:
         if fields is not None and not isinstance(fields, Mapping):
             raise TypeError("fields must be a mapping or None")
         response = await self._host_stub.Log(
-            pb.LogRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.LogRequest(
                 level=wire_level,
                 target=target,
                 message=message,
-                fields=_json_value(dict(fields)) if fields is not None else None,
+                fields=_encode_payload(common_pb.JsonObject, dict(fields)) if fields is not None else None,
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
         _ack_to_result(response)
@@ -1813,27 +1801,32 @@ class PluginRuntime:
         """List global gateable registrations known to the Relay host."""
         selected = [] if kinds is None else [_runtime_registration_surface(kind) for kind in kinds]
         response = await self._host_stub.ListRuntimeRegistrations(
-            pb.ListRuntimeRegistrationsRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.ListRuntimeRegistrationsRequest(
                 kinds=selected,
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
-        if response.HasField("error"):
-            raise _worker_error_to_sdk(response.error)
+        for registration in response.registrations:
+            _runtime_registration_kind(registration.kind)
+            if registration.owner.WhichOneof("owner") is None:
+                raise WorkerSdkError("unknown runtime registration owner kind")
+        _validate_response(response)
         return [
             RuntimeRegistrationIdentity(
                 kind=_runtime_registration_kind(registration.kind),
                 local_name=registration.local_name,
                 effective_name=registration.effective_name,
                 owner=RuntimeRegistrationOwner(
-                    kind=_runtime_registration_owner_kind(registration.owner.kind),
+                    kind=RuntimeRegistrationOwnerKind(registration.owner.WhichOneof("owner")),
                     plugin_kind=(
-                        registration.owner.plugin_kind if registration.owner.HasField("plugin_kind") else None
+                        registration.owner.plugin.plugin_kind
+                        if registration.owner.WhichOneof("owner") == "plugin"
+                        else None
                     ),
                     component_ordinal=(
-                        registration.owner.component_ordinal
-                        if registration.owner.HasField("component_ordinal")
+                        registration.owner.plugin.component_ordinal
+                        if registration.owner.WhichOneof("owner") == "plugin"
+                        and registration.owner.plugin.HasField("component_ordinal")
                         else None
                     ),
                 ),
@@ -1854,21 +1847,20 @@ class PluginRuntime:
         self._conditional_middleware_callbacks[name] = callback
         try:
             response = await self._host_stub.RegisterConditionalMiddlewareGuardrail(
-                pb.RegisterConditionalMiddlewareGuardrailRequest(
-                    activation_id=self._activation_id,
-                    auth_token=self._auth_token,
-                    name=name,
-                    kinds=[_runtime_registration_surface(kind) for kind in kinds],
-                    registration_name=registration_name,
-                    callback=True,
+                host_pb.RegisterConditionalMiddlewareGuardrailRequest(
+                    credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
+                    registration=runtime_pb.ConditionalMiddlewareGuardrailRegistration(
+                        name=name,
+                        kinds=[_runtime_registration_surface(kind) for kind in kinds],
+                        registration_name=registration_name,
+                        callback=True,
+                    ),
                 )
             )
+            _validate_response(response)
         except Exception:
             self._conditional_middleware_callbacks.pop(name, None)
             raise
-        if response.HasField("error"):
-            self._conditional_middleware_callbacks.pop(name, None)
-            raise _worker_error_to_sdk(response.error)
         return ConditionalMiddlewareGuardrailHandle(response.handle, name)
 
     async def deregister_conditional_middleware_guardrail(self, handle: ConditionalMiddlewareGuardrailHandle) -> bool:
@@ -1876,14 +1868,11 @@ class PluginRuntime:
         if not isinstance(handle, ConditionalMiddlewareGuardrailHandle):
             raise TypeError("handle must be a ConditionalMiddlewareGuardrailHandle")
         response = await self._host_stub.DeregisterConditionalMiddlewareGuardrail(
-            pb.DeregisterConditionalMiddlewareGuardrailRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.DeregisterConditionalMiddlewareGuardrailRequest(
                 handle=handle._value,
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
-        if response.HasField("error"):
-            raise _worker_error_to_sdk(response.error)
         if response.removed:
             self._conditional_middleware_callbacks.pop(handle._callback_name, None)
         return response.removed
@@ -1892,39 +1881,36 @@ class PluginRuntime:
         self, capability_id: str, invocation_id: str, request: LlmRequest
     ) -> AnnotatedLlmRequest:
         result = await self._host_stub.DecodeLlmCodecRequest(
-            pb.LlmCodecDecodeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.DecodeLlmCodecRequestRequest(
                 codec_capability_id=capability_id,
                 invocation_id=invocation_id,
-                request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+                request=_encode_payload(llm_pb.LlmRequest, request),
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
-        return _json_result_to_value(result, ANNOTATED_LLM_REQUEST_SCHEMA)
+        return _json_result_to_value(result)
 
     async def _encode_llm_codec_request(
         self, capability_id: str, invocation_id: str, annotated: AnnotatedLlmRequest, original: LlmRequest
     ) -> LlmRequest:
         result = await self._host_stub.EncodeLlmCodecRequest(
-            pb.LlmCodecEncodeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.EncodeLlmCodecRequestRequest(
                 codec_capability_id=capability_id,
                 invocation_id=invocation_id,
-                annotated_request=_json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated),
-                original_request=_json_envelope(LLM_REQUEST_SCHEMA, original),
+                annotated_request=_encode_payload(llm_pb.AnnotatedLlmRequest, annotated),
+                original_request=_encode_payload(llm_pb.LlmRequest, original),
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
-        return _json_result_to_value(result, LLM_REQUEST_SCHEMA)
+        return _json_result_to_value(result)
 
     async def _decode_llm_codec_response(self, capability_id: str, invocation_id: str, response: Json) -> Json:
         result = await self._host_stub.DecodeLlmCodecResponse(
-            pb.LlmCodecDecodeResponse(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.DecodeLlmCodecResponseRequest(
                 codec_capability_id=capability_id,
                 invocation_id=invocation_id,
-                response=_json_envelope(JSON_SCHEMA, response),
+                response=_encode_payload(common_pb.JsonValue, response),
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
         return _json_result_to_value(result)
@@ -1966,19 +1952,21 @@ class PluginRuntime:
         if category is not None and not isinstance(category, str):
             raise TypeError("category must be a string or None")
         response = await self._host_stub.EmitMark(
-            pb.EmitMarkRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.EmitMarkRequest(
                 scope=self._scope_context(scope_stack_id, parent_scope_id),
-                name=name,
-                data=_optional_json_envelope(data),
-                metadata=_optional_json_envelope(metadata),
-                data_schema=_optional_json_envelope(
-                    _data_schema_json(data_schema),
-                    DATA_SCHEMA_SCHEMA,
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
+                mark=event_pb.PendingMarkSpec(
+                    name=name,
+                    data=_optional_payload(data),
+                    metadata=_optional_payload(metadata),
+                    data_schema=_optional_payload(_data_schema_json(data_schema), common_pb.DataSchema),
+                    severity=(
+                        common_pb.LogSeverity.Value("LOG_SEVERITY_" + _log_severity_value(severity).upper())
+                        if severity is not None
+                        else None
+                    ),
+                    category=category or None,
                 ),
-                severity=_log_severity_value(severity),
-                category=category or "",
             )
         )
         _ack_to_result(response)
@@ -1992,21 +1980,19 @@ class PluginRuntime:
         """
         try:
             response = await self._host_stub.GetCurrentScopeStackSnapshot(
-                pb.GetCurrentScopeStackSnapshotRequest(
-                    activation_id=self._activation_id,
-                    auth_token=self._auth_token,
+                host_pb.GetCurrentScopeStackSnapshotRequest(
                     scope=self._scope_context(),
+                    credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
                 )
             )
         except grpc.aio.AioRpcError as error:
             if error.code() == grpc.StatusCode.UNIMPLEMENTED:
                 raise WorkerSdkError(
-                    "scope stack snapshots are unsupported by this host; require the grpc-v1 snapshot extension"
+                    "scope stack snapshots are unsupported by this host; require the worker v1 snapshot contract"
                 ) from error
             raise WorkerSdkError(f"GetCurrentScopeStackSnapshot failed: {error.details()}") from error
-        if response.HasField("error"):
-            raise _worker_error_to_sdk(response.error)
-        if not response.HasField("snapshot"):
+        _validate_response(response)
+        if response.WhichOneof("result") == "no_context":
             return None
         categories = {_proto_scope_type(category): category for category in ScopeType}
         entries = []
@@ -2020,21 +2006,21 @@ class PluginRuntime:
 
         Raises:
             WorkerSdkError: The host rejects the request or lacks the additive
-                ``grpc-v1`` runtime-diagnostics operation.
+                ``nvidia.nemo.relay.worker.v1`` runtime-diagnostics operation.
         """
         try:
             response = await self._host_stub.GetRuntimeDiagnostics(
-                pb.GetRuntimeDiagnosticsRequest(
-                    activation_id=self._activation_id,
-                    auth_token=self._auth_token,
+                host_pb.GetRuntimeDiagnosticsRequest(
+                    credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token)
                 )
             )
         except grpc.aio.AioRpcError as exc:
             if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
                 raise WorkerSdkError(
-                    "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                    "runtime diagnostics require a Relay host with the worker v1 diagnostics contract"
                 ) from exc
             raise WorkerSdkError(f"GetRuntimeDiagnostics failed: {exc.details()}") from exc
+        _validate_response(response)
         return RuntimeDiagnostics(
             entries=tuple(
                 RuntimeDiagnostic(code=entry.code, message=entry.message, count=entry.count)
@@ -2084,13 +2070,11 @@ class PluginRuntime:
             WorkerSdkError: The host cannot create the stack.
         """
         response = await self._host_stub.CreateScopeStack(
-            pb.CreateScopeStackRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.CreateScopeStackRequest(
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token)
             )
         )
-        if response.HasField("error"):
-            raise _worker_error_to_sdk(response.error)
+        _validate_response(response)
         return response.scope_stack_id
 
     async def drop_scope_stack(self, scope_stack_id: str) -> None:
@@ -2107,11 +2091,12 @@ class PluginRuntime:
             Do not use the identifier after this call succeeds. Clear any local
             binding that still references it.
         """
+        if not scope_stack_id:
+            raise WorkerSdkError("scope_stack_id must not be empty")
         response = await self._host_stub.DropScopeStack(
-            pb.DropScopeStackRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
+            host_pb.DropScopeStackRequest(
                 scope_stack_id=scope_stack_id,
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
             )
         )
         _ack_to_result(response)
@@ -2155,22 +2140,20 @@ class PluginRuntime:
             ValueError: ``scope_type`` is unsupported or ``timestamp`` is
                 timezone-naive.
         """
-        request = pb.PushScopeRequest(
-            activation_id=self._activation_id,
-            auth_token=self._auth_token,
+        request = host_pb.PushScopeRequest(
             scope=self._scope_context(scope_stack_id, parent_scope_id),
             name=name,
             scope_type=_proto_scope_type(scope_type),
-            data=_optional_json_envelope(data),
-            metadata=_optional_json_envelope(metadata),
-            input=_optional_json_envelope(input),
+            data=_optional_payload(data),
+            metadata=_optional_payload(metadata),
+            input=_optional_payload(input),
+            credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
         )
         timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
         if timestamp_unix_micros is not None:
-            request.timestamp_unix_micros = timestamp_unix_micros
+            request.time.FromMicroseconds(timestamp_unix_micros)
         response = await self._host_stub.PushScope(request)
-        if response.HasField("error"):
-            raise _worker_error_to_sdk(response.error)
+        _validate_response(response)
         return response.scope_handle_id
 
     async def pop_scope(
@@ -2197,16 +2180,15 @@ class PluginRuntime:
                 not a :class:`datetime.datetime`.
             ValueError: ``timestamp`` is timezone-naive.
         """
-        request = pb.PopScopeRequest(
-            activation_id=self._activation_id,
-            auth_token=self._auth_token,
+        request = host_pb.PopScopeRequest(
             scope_handle_id=scope_handle_id,
-            output=_optional_json_envelope(output),
-            metadata=_optional_json_envelope(metadata),
+            output=_optional_payload(output),
+            metadata=_optional_payload(metadata),
+            credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
         )
         timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
         if timestamp_unix_micros is not None:
-            request.timestamp_unix_micros = timestamp_unix_micros
+            request.time.FromMicroseconds(timestamp_unix_micros)
         response = await self._host_stub.PopScope(request)
         _ack_to_result(response)
 
@@ -2290,7 +2272,7 @@ class PluginRuntime:
                 effective_scope = None
         if not effective_scope:
             return None
-        return pb.ScopeContext(
+        return runtime_pb.ScopeContext(
             scope_stack_id=effective_scope.scope_stack_id,
             parent_scope_id=effective_scope.parent_scope_id or "",
         )
@@ -2336,18 +2318,20 @@ class ToolNext:
         response = await self._runtime._callback_rpc(
             "ToolNext",
             self._callback_name,
-            pb.ToolNextRequest(
-                activation_id=self._runtime._activation_id,
-                auth_token=self._runtime._auth_token,
+            host_pb.ToolNextRequest(
                 continuation_id=self._continuation_id,
-                value=_json_envelope(JSON_SCHEMA, value),
+                value=_encode_payload(common_pb.JsonValue, value),
                 scope=self._runtime._scope_context(),
+                credentials=common_pb.Credentials(
+                    activation_id=self._runtime._activation_id, auth_token=self._runtime._auth_token
+                ),
             ),
         )
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
         if not response.HasField("value"):
             raise WorkerSdkError("tool execution result is missing")
+        _validate_response(response)
         return _tool_execution_result_from_proto(response.value)
 
 
@@ -2390,12 +2374,13 @@ class LlmNext:
         response = await self._runtime._callback_rpc(
             "LlmNext",
             self._callback_name,
-            pb.LlmNextRequest(
-                activation_id=self._runtime._activation_id,
-                auth_token=self._runtime._auth_token,
+            host_pb.LlmNextRequest(
                 continuation_id=self._continuation_id,
-                request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+                request=_encode_payload(llm_pb.LlmRequest, request),
                 scope=self._runtime._scope_context(),
+                credentials=common_pb.Credentials(
+                    activation_id=self._runtime._activation_id, auth_token=self._runtime._auth_token
+                ),
             ),
         )
         return _json_result_to_value(response)
@@ -2445,12 +2430,13 @@ class LlmStreamNext:
         stream = self._runtime._callback_rpc(
             "LlmStreamNext",
             self._callback_name,
-            pb.LlmStreamNextRequest(
-                activation_id=self._runtime._activation_id,
-                auth_token=self._runtime._auth_token,
+            host_pb.LlmStreamNextRequest(
                 continuation_id=self._continuation_id,
-                request=_json_envelope(LLM_REQUEST_SCHEMA, request),
+                request=_encode_payload(llm_pb.LlmRequest, request),
                 scope=self._runtime._scope_context(),
+                credentials=common_pb.Credentials(
+                    activation_id=self._runtime._activation_id, auth_token=self._runtime._auth_token
+                ),
             ),
         )
 
@@ -2466,7 +2452,7 @@ class LlmStreamNext:
 
 
 async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
-    """Run a local ``grpc-v1`` worker until the Relay host shuts it down.
+    """Run a local ``nvidia.nemo.relay.worker.v1`` worker until the Relay host shuts it down.
 
     Args:
         plugin: Plugin implementation with a non-empty ``plugin_id`` plus
@@ -2538,8 +2524,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
-        host_stub=pb_grpc.RelayHostRuntimeStub(host_channel),
-        diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
+        host_stub=host_grpc.RelayHostRuntimeServiceStub(host_channel),
+        diagnostic_stub=diagnostics_grpc.RelayDiagnosticsServiceStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
@@ -2548,7 +2534,13 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
     )
     try:
-        pb_grpc.add_PluginWorkerServicer_to_server(service, server)
+        worker_grpc.add_PluginWorkerServiceServicer_to_server(service, server)
+        from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+
+        health_service = health.aio.HealthServicer()
+        health_pb2_grpc.add_HealthServicer_to_server(health_service, server)
+        await health_service.set("", health_pb2.HealthCheckResponse.SERVING)
+        await health_service.set(f"{WORKER_PROTOCOL}.PluginWorkerService", health_pb2.HealthCheckResponse.SERVING)
         bound_port = server.add_insecure_port(worker_target)
         if bound_port == 0:
             raise WorkerSdkError(f"failed to bind worker endpoint {worker_endpoint}")
@@ -2558,6 +2550,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
             _write_endpoint_file(path, _announced_worker_endpoint(worker_endpoint, bound_port))
         await shutdown_event.wait()
     finally:
+        await health_service.enter_graceful_shutdown()
         await server.stop(grace=2)
         try:
             await runtime._close_diagnostics()
@@ -2573,7 +2566,7 @@ class _ActiveInvocation:
     cancel_callback: Callable[[str], None] | None = None
 
 
-class _WorkerService(pb_grpc.PluginWorkerServicer):
+class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
     def __init__(
         self,
         plugin: _SupportsWorkerPlugin,
@@ -2587,69 +2580,93 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
         self._registered_config: Json | object = _UNREGISTERED
         self._registration_lock = asyncio.Lock()
         self._active_invocations: dict[str, _ActiveInvocation] = {}
+        self._draining = False
 
     async def Handshake(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
-        plugin_id = _plugin_id(self._plugin)
-        return pb.HandshakeResponse(
-            plugin_id=plugin_id,
-            plugin_kind=plugin_id,
+        if (
+            request.plugin_id != _plugin_id(self._plugin)
+            or request.protocol.name != WORKER_PROTOCOL
+            or request.protocol.version != _protocol.VERSION
+        ):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "worker identity or protocol mismatch")
+        return worker_pb.HandshakeResponse(
+            identity=self._identity(),
             allows_multiple_components=bool(getattr(self._plugin, "allows_multiple_components", False)),
-            worker_protocol=WORKER_PROTOCOL,
+            supported_surfaces=_all_surfaces(),
+        )
+
+    def _identity(self) -> Any:
+        return runtime_pb.WorkerIdentity(
+            plugin_id=_plugin_id(self._plugin),
+            plugin_kind=_plugin_id(self._plugin),
+            protocol=common_pb.ProtocolIdentity(name=WORKER_PROTOCOL, version=_protocol.VERSION),
             sdk_name="nemo-relay-plugin",
             sdk_version=_SDK_VERSION,
             runtime_name="python",
             runtime_version=platform.python_version(),
-            supported_surfaces=_all_surfaces(),
         )
 
     async def Health(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
-        plugin_id = _plugin_id(self._plugin)
-        return pb.HealthResponse(
-            ok=True,
-            message="ready",
-            plugin_id=plugin_id,
-            worker_protocol=WORKER_PROTOCOL,
-            sdk_name="nemo-relay-plugin",
-            sdk_version=_SDK_VERSION,
-            runtime_name="python",
-            runtime_version=platform.python_version(),
+        return worker_pb.HealthResponse(
+            status=runtime_pb.WORKER_HEALTH_STATUS_UNHEALTHY
+            if self._draining
+            else runtime_pb.WORKER_HEALTH_STATUS_READY,
+            message="draining" if self._draining else "ready",
+            identity=self._identity(),
         )
 
     async def Validate(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
+        if request.plugin_id != _plugin_id(self._plugin):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "plugin identity mismatch")
+        if self._draining:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "worker is draining")
         config = await _decode_optional_config_or_abort(request, context)
         try:
             diagnostics = [_diagnostic_to_json(item) for item in await _maybe_await(self._plugin.validate(config))]
-            return pb.ValidateResponse(
-                diagnostics=_json_envelope(PLUGIN_DIAGNOSTICS_SCHEMA, diagnostics),
+            return worker_pb.ValidateResponse(
+                diagnostics=runtime_pb.ConfigDiagnostics(
+                    entries=[_protocol.pack(runtime_pb.ConfigDiagnostic, item) for item in diagnostics]
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            return pb.ValidateResponse(error=_sdk_error_to_worker(exc))
+            return worker_pb.ValidateResponse(error=_sdk_error_to_worker(exc))
 
     async def Register(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
+        if request.plugin_id != _plugin_id(self._plugin):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "plugin identity mismatch")
+        if self._draining:
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "worker is draining")
         config = await _decode_optional_config_or_abort(request, context)
-        try:
+        async with self._registration_lock:
+            if self._draining:
+                await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "worker is draining")
             if self._registered_config is not _UNREGISTERED:
-                if config != self._registered_config:
-                    raise WorkerSdkError("worker is already registered with a different component config")
-                return pb.RegisterResponse(
-                    registrations=self._handlers.registrations,
-                    conditional_middleware_guardrails=self._handlers.conditional_middleware_guardrails,
-                )
-            async with self._registration_lock:
-                if self._registered_config is not _UNREGISTERED:
-                    if config != self._registered_config:
-                        raise WorkerSdkError("worker is already registered with a different component config")
-                    return pb.RegisterResponse(
+                if json.dumps(config, sort_keys=True, allow_nan=False) != json.dumps(
+                    self._registered_config, sort_keys=True, allow_nan=False
+                ):
+                    await context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "worker is already registered with a different component config",
+                    )
+                return worker_pb.RegisterResponse(
+                    plan=runtime_pb.RegistrationPlan(
                         registrations=self._handlers.registrations,
                         conditional_middleware_guardrails=self._handlers.conditional_middleware_guardrails,
                     )
+                )
+            try:
                 registered_config = copy.deepcopy(config)
                 ctx = PluginContext(runtime=self._runtime)
                 await _maybe_await(self._plugin.register(ctx, config))
+            except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
+                return worker_pb.RegisterResponse(error=_sdk_error_to_worker(exc))
+            if self._draining:
+                await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "worker is draining")
+            try:
                 previous_callbacks = self._handlers.conditional_middleware_callbacks
                 collisions = ctx._handlers.conditional_middleware_callbacks.keys() & (
                     self._runtime._conditional_middleware_callbacks.keys() - previous_callbacks.keys()
@@ -2662,27 +2679,29 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 self._runtime._conditional_middleware_callbacks.update(ctx._handlers.conditional_middleware_callbacks)
                 self._handlers = ctx._handlers
                 self._registered_config = registered_config
-                return pb.RegisterResponse(
-                    registrations=ctx._handlers.registrations,
-                    conditional_middleware_guardrails=ctx._handlers.conditional_middleware_guardrails,
+                return worker_pb.RegisterResponse(
+                    plan=runtime_pb.RegistrationPlan(
+                        registrations=ctx._handlers.registrations,
+                        conditional_middleware_guardrails=ctx._handlers.conditional_middleware_guardrails,
+                    )
                 )
-        except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            return pb.RegisterResponse(error=_sdk_error_to_worker(exc))
+            except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
+                return worker_pb.RegisterResponse(error=_sdk_error_to_worker(exc))
 
     async def Invoke(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
         try:
             active = self._start_invocation(request.invocation_id, self._invoke_result(request))
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            return pb.InvokeResponse(error=_sdk_error_to_worker(exc))
+            return worker_pb.InvokeResponse(error=_sdk_error_to_worker(exc))
         try:
             return await active.task
         except asyncio.CancelledError:
             if active.cancel_reason is None:
                 raise
-            return pb.InvokeResponse(error=_cancelled_worker_error(active.cancel_reason))
+            return worker_pb.InvokeResponse(error=_cancelled_worker_error(active.cancel_reason))
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            return pb.InvokeResponse(error=_sdk_error_to_worker(exc))
+            return worker_pb.InvokeResponse(error=_sdk_error_to_worker(exc))
         finally:
             self._forget_invocation(request.invocation_id, active)
 
@@ -2693,13 +2712,13 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
         def cancel_stream(reason: str) -> None:
             while not queue.empty():
                 queue.get_nowait()
-            queue.put_nowait(pb.StreamChunk(error=_cancelled_worker_error(reason)))
+            queue.put_nowait(worker_pb.InvokeStreamResponse(error=_cancelled_worker_error(reason)))
 
         try:
             active = self._start_invocation(request.invocation_id, self._produce_stream(request, queue))
             active.cancel_callback = cancel_stream
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            yield pb.StreamChunk(error=_sdk_error_to_worker(exc))
+            yield worker_pb.InvokeStreamResponse(error=_sdk_error_to_worker(exc))
             return
         try:
             while True:
@@ -2719,7 +2738,9 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     yield queue.get_nowait()
                 break
             if active.task.cancelled() and active.cancel_reason is None:
-                yield pb.StreamChunk(error=_cancelled_worker_error("stream callback cancelled without a host request"))
+                yield worker_pb.InvokeStreamResponse(
+                    error=_cancelled_worker_error("stream callback cancelled without a host request")
+                )
         finally:
             if not active.task.done() and not active.cancel_requested:
                 active.cancel_requested = True
@@ -2729,11 +2750,9 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
 
     async def _produce_stream(self, request: Any, queue: asyncio.Queue[Any]) -> None:
         try:
-            if request.surface != pb.LLM_STREAM_EXECUTION_INTERCEPT:
-                raise WorkerSdkError("InvokeStream only supports LLM stream execution intercepts")
             handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
-            payload = _require_payload(request, "llm")
-            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            payload = request
+            llm_request = _decode_payload(payload.request, "llm request")
             execution_context = _llm_execution_context(
                 payload,
                 self._runtime,
@@ -2746,24 +2765,26 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 iterator = _as_async_iter(stream)
                 try:
                     async for value in iterator:
-                        await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+                        await queue.put(
+                            worker_pb.InvokeStreamResponse(value=_encode_payload(common_pb.JsonValue, value))
+                        )
                 finally:
                     await iterator.aclose()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-            await queue.put(pb.StreamChunk(error=_sdk_error_to_worker(exc)))
+            await queue.put(worker_pb.InvokeStreamResponse(error=_sdk_error_to_worker(exc)))
 
     async def CancelInvocation(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
         active = self._active_invocations.get(request.invocation_id)
         if active is None:
-            return pb.WorkerAck(accepted=False, message="invocation is not active")
+            return worker_pb.CancelInvocationResponse(accepted=False, message="invocation is not active")
         if active.cancel_requested:
             await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
-            return pb.WorkerAck(accepted=False, message="invocation is not active")
+            return worker_pb.CancelInvocationResponse(accepted=False, message="invocation is not active")
         if active.task.done() and active.cancel_callback is None:
-            return pb.WorkerAck(accepted=False, message="invocation is not active")
+            return worker_pb.CancelInvocationResponse(accepted=False, message="invocation is not active")
         active.cancel_requested = True
         active.cancel_reason = request.reason or "host requested cancellation"
         if active.cancel_callback is not None:
@@ -2771,42 +2792,60 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
         if not active.task.done():
             active.task.cancel()
         await asyncio.shield(asyncio.gather(active.task, return_exceptions=True))
-        return pb.WorkerAck(accepted=True, message=f"cancellation accepted: {active.cancel_reason}")
+        return worker_pb.CancelInvocationResponse(
+            accepted=True, message=f"cancellation accepted: {active.cancel_reason}"
+        )
 
     async def Shutdown(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
+        self._draining = True
+        tasks = []
+        for active in list(self._active_invocations.values()):
+            active.cancel_requested = True
+            active.cancel_reason = request.reason or "worker shutdown"
+            if active.cancel_callback is not None:
+                active.cancel_callback(active.cancel_reason)
+            active.task.cancel()
+            tasks.append(active.task)
+        if tasks:
+            await asyncio.wait(tasks, timeout=2)
         await self._runtime._close_diagnostics()
         asyncio.get_running_loop().call_soon(self._shutdown_event.set)
-        return pb.WorkerAck(accepted=True, message="shutdown accepted")
+        return worker_pb.ShutdownResponse()
 
     async def _invoke_result(self, request: Any) -> Any:
+        selected = request.WhichOneof("invocation")
+        if selected is None:
+            raise WorkerSdkError("missing invocation alternative")
+        payload = getattr(request, selected)
+        surface = common_pb.RegistrationSurface.Value("REGISTRATION_SURFACE_" + selected.upper())
         with _bind_invocation_scope(request):
-            if request.surface == pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL:
+            if surface == common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL:
                 callback = self._runtime._conditional_middleware_callbacks.get(request.registration_name)
                 if callback is None:
                     raise WorkerSdkError(
                         f"conditional middleware callback {request.registration_name!r} is not registered"
                     )
-                kinds = {_runtime_registration_kind(kind) for kind in request.conditional_middleware.kinds}
-                result = await _maybe_await(callback(kinds, request.conditional_middleware.registration_name))
-                return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
-            if request.surface in PluginContext._LLM_HANDLER_ATTRIBUTES:
-                return await self._invoke_llm_result(request)
-            if request.surface == pb.SUBSCRIBER:
-                event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
+                kinds = {_runtime_registration_kind(kind) for kind in payload.kinds}
+                result = await _maybe_await(callback(kinds, payload.registration_name))
+                return worker_pb.InvokeResponse(guardrail=_guardrail(result))
+            if surface in PluginContext._LLM_HANDLER_ATTRIBUTES:
+                return await self._invoke_llm_result(request, surface, payload)
+            if surface == common_pb.REGISTRATION_SURFACE_SUBSCRIBER:
+                event = _decode_payload(payload, "event")
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
-                return pb.InvokeResponse(empty=pb.EmptyResult())
-            if request.surface == pb.EVENT_METADATA_INJECTOR:
-                event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
+                return worker_pb.InvokeResponse(completed=_empty())
+            if surface == common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR:
+                event = _decode_payload(payload, "event")
                 result = await _maybe_await(
                     self._handler(
                         self._handlers.event_metadata_injectors,
                         request.registration_name,
                     )(event)
                 )
-                return _json_response(result)
-            if request.surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
-                event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
+                return worker_pb.InvokeResponse(metadata_additions=_encode_payload(common_pb.JsonObject, result))
+            if surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
+                event = _decode_payload(payload, "event")
                 fields: EventSanitizeFields = {
                     "data": event.get("data"),
                     "category_profile": event.get("category_profile"),
@@ -2814,90 +2853,91 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 }
                 handlers = getattr(
                     self._handlers,
-                    PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES[request.surface],
+                    PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES[surface],
                 )
                 handler = self._handler(handlers, request.registration_name)
-                return _json_response(await _maybe_await(handler(event, fields)))
-            if request.surface == pb.TOOL_SANITIZE_REQUEST_GUARDRAIL:
+                return worker_pb.InvokeResponse(
+                    event_sanitize=_encode_payload(
+                        event_pb.EventSanitizeFields, await _maybe_await(handler(event, fields))
+                    )
+                )
+            if surface == common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL:
                 return _json_response(
                     await _maybe_await(
                         self._handler(self._handlers.tool_sanitize_requests, request.registration_name)(
-                            request.tool.tool_name,
-                            _decode_required_envelope(request.tool.value, "tool value"),
+                            payload.tool_name,
+                            _decode_payload(payload.value, "tool value"),
                         )
                     )
                 )
-            if request.surface == pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL:
+            if surface == common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL:
                 return _json_response(
                     await _maybe_await(
                         self._handler(self._handlers.tool_sanitize_responses, request.registration_name)(
-                            request.tool.tool_name,
-                            _decode_required_envelope(request.tool.value, "tool value"),
+                            payload.tool_name,
+                            _decode_payload(payload.value, "tool value"),
                         )
                     )
                 )
-            if request.surface == pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL:
+            if surface == common_pb.REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL:
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_conditionals, request.registration_name)(
-                        request.tool.tool_name,
-                        _decode_required_envelope(request.tool.value, "tool value"),
+                        payload.tool_name,
+                        _decode_payload(payload.value, "tool value"),
                     )
                 )
-                return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
-            if request.surface == pb.TOOL_REQUEST_INTERCEPT:
+                return worker_pb.InvokeResponse(guardrail=_guardrail(result))
+            if surface == common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT:
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_requests, request.registration_name)(
-                        request.tool.tool_name,
-                        _decode_required_envelope(request.tool.value, "tool value"),
+                        payload.tool_name,
+                        _decode_payload(payload.value, "tool value"),
                     )
                 )
                 return _json_response(result)
-            if request.surface == pb.TOOL_EXECUTION_INTERCEPT:
+            if surface == common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT:
                 context = ToolExecutionContext(
-                    tool_name=request.tool.tool_name,
-                    args=_decode_required_envelope(request.tool.value, "tool value"),
-                    tool_call_id=(request.tool.tool_call_id if request.tool.HasField("tool_call_id") else None),
+                    tool_name=payload.tool_name,
+                    args=_decode_payload(payload.args, "tool value"),
+                    tool_call_id=(payload.tool_call_id if payload.HasField("tool_call_id") else None),
                 )
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
                         context,
-                        ToolNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
+                        ToolNext(self._runtime, payload.continuation_id, callback_name=request.registration_name),
                     )
                 )
                 if not isinstance(result, ToolExecutionInterceptOutcome):
                     raise WorkerSdkError("tool execution intercept must return ToolExecutionInterceptOutcome")
-                return pb.InvokeResponse(
-                    tool_execution=pb.ToolExecutionInterceptResult(
-                        outcome=_tool_execution_intercept_outcome_to_proto(result),
-                    )
+                return worker_pb.InvokeResponse(
+                    tool_execution_outcome=_tool_execution_intercept_outcome_to_proto(result)
                 )
-            raise WorkerSdkError(f"unsupported registration surface {request.surface}")
+            raise WorkerSdkError(f"unsupported registration surface {surface}")
 
-    async def _invoke_llm_result(self, request: Any) -> Any:
-        if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+    async def _invoke_llm_result(self, request: Any, surface: common_pb.RegistrationSurface, payload: Any) -> Any:
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL:
             callback = self._handler(self._handlers.llm_sanitize_requests, request.registration_name)
-            payload = _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
-            return await self._invoke_llm_sanitizer(callback, payload, request, LlmSanitizeRequestContext)
-        if request.surface == pb.LLM_SANITIZE_RESPONSE_GUARDRAIL:
+            value = _decode_payload(payload.request, "llm request")
+            return await self._invoke_llm_sanitizer(
+                callback, value, payload.context, request.invocation_id, LlmSanitizeRequestContext
+            )
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL:
             callback = self._handler(self._handlers.llm_sanitize_responses, request.registration_name)
-            payload = _decode_required_envelope(request.llm.response, "llm response")
-            return await self._invoke_llm_sanitizer(callback, payload, request, LlmSanitizeResponseContext)
-        if request.surface == pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL:
+            value = _decode_payload(payload.response, "llm response")
+            return await self._invoke_llm_sanitizer(
+                callback, value, payload.context, request.invocation_id, LlmSanitizeResponseContext
+            )
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL:
             result = await _maybe_await(
                 self._handler(self._handlers.llm_conditionals, request.registration_name)(
-                    _decode_required_envelope(request.llm.request, "llm request", LLM_REQUEST_SCHEMA)
+                    _decode_payload(payload.request, "llm request")
                 )
             )
-            return pb.InvokeResponse(guardrail=pb.GuardrailResult(block_reason=result or ""))
-        if request.surface == pb.LLM_REQUEST_INTERCEPT:
-            payload = request.llm
-            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            return worker_pb.InvokeResponse(guardrail=_guardrail(result))
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT:
+            llm_request = _decode_payload(payload.request, "llm request")
             annotated = (
-                _decode_required_envelope(
-                    payload.annotated_request,
-                    "annotated llm request",
-                    ANNOTATED_LLM_REQUEST_SCHEMA,
-                )
+                _decode_payload(payload.annotated_request, "annotated llm request")
                 if payload.HasField("annotated_request")
                 else None
             )
@@ -2910,53 +2950,55 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             )
             if not isinstance(result, LlmRequestInterceptOutcome):
                 raise WorkerSdkError("LLM request intercept must return LlmRequestInterceptOutcome")
-            return pb.InvokeResponse(
-                llm_request=pb.LlmRequestInterceptResult(
-                    outcome=_json_envelope(
-                        LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-                        result.to_json(),
-                    ),
-                )
+            return worker_pb.InvokeResponse(
+                llm_request_outcome=_encode_payload(runtime_pb.LlmRequestInterceptOutcome, result.to_json())
             )
-        if request.surface == pb.LLM_EXECUTION_INTERCEPT:
-            payload = request.llm
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT:
             result = await _maybe_await(
                 self._handler(self._handlers.llm_executions, request.registration_name)(
                     payload.model_name,
-                    _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
+                    _decode_payload(payload.request, "llm request"),
                     _llm_execution_context(
                         payload,
                         self._runtime,
                         request.invocation_id,
                         response_required=True,
                     ),
-                    LlmNext(self._runtime, request.continuation_id, callback_name=request.registration_name),
+                    LlmNext(self._runtime, payload.continuation_id, callback_name=request.registration_name),
                 )
             )
-            return _json_response(result)
-        raise WorkerSdkError(f"unsupported LLM registration surface {request.surface}")
+            return worker_pb.InvokeResponse(llm_response=_json_value(result))
+        raise WorkerSdkError(f"unsupported LLM registration surface {surface}")
 
     async def _invoke_llm_sanitizer(
         self,
         callback: Any,
         payload: Any,
-        request: Any,
+        codec_context: Any,
+        invocation_id: str,
         context_type: type[LlmSanitizeRequestContext] | type[LlmSanitizeResponseContext],
     ) -> Any:
         context = context_type(
-            _llm_codec_identity(request.llm),
+            _codec_identity(codec_context.codec),
             self._runtime,
-            _llm_codec_capability(request.llm),
-            request.invocation_id,
+            codec_context.capability_id if codec_context.HasField("capability_id") else None,
+            invocation_id,
         )
         result = await _maybe_await(callback(payload, context))
-        return pb.InvokeResponse(empty=pb.EmptyResult()) if result is None else _json_response(result)
+        if result is None:
+            return worker_pb.InvokeResponse(unchanged=_empty())
+        if context_type is LlmSanitizeRequestContext:
+            return worker_pb.InvokeResponse(llm_request=_encode_payload(llm_pb.LlmRequest, result))
+        return worker_pb.InvokeResponse(llm_response=_json_value(result))
 
     def _start_invocation(
         self,
         invocation_id: str,
         coroutine: Any,
     ) -> _ActiveInvocation:
+        if self._draining:
+            coroutine.close()
+            raise WorkerSdkError("worker is draining")
         if not invocation_id:
             coroutine.close()
             raise WorkerSdkError("invocation_id must not be empty")
@@ -2974,10 +3016,16 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             self._active_invocations.pop(invocation_id, None)
 
     async def _authorize(self, request: Any, context: Any) -> None:
-        if not hmac.compare_digest(request.activation_id, self._runtime._activation_id):
-            await context.abort(grpc.StatusCode.PERMISSION_DENIED, "invalid activation ID")
-        if not hmac.compare_digest(request.auth_token, self._runtime._auth_token):
-            await context.abort(grpc.StatusCode.PERMISSION_DENIED, "invalid auth token")
+        if not request.HasField("credentials"):
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing credentials")
+        if request.credentials.activation_id != self._runtime._activation_id or not hmac.compare_digest(
+            request.credentials.auth_token.encode(), self._runtime._auth_token.encode()
+        ):
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "invalid activation credentials")
+        try:
+            _protocol.validate(request)
+        except (ValueError, TypeError, _protocol.protovalidate.ValidationError) as error:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(error))
 
     def _handler(self, handlers: dict[str, Any], name: str) -> Any:
         try:
@@ -2995,25 +3043,10 @@ def _plugin_id(plugin: _SupportsWorkerPlugin) -> str:
     return plugin_id
 
 
-def _all_surfaces() -> list[int]:
+def _all_surfaces() -> list[common_pb.RegistrationSurface]:
     return [
-        pb.SUBSCRIBER,
-        pb.EVENT_METADATA_INJECTOR,
-        pb.MARK_SANITIZE_GUARDRAIL,
-        pb.SCOPE_SANITIZE_START_GUARDRAIL,
-        pb.SCOPE_SANITIZE_END_GUARDRAIL,
-        pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
-        pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
-        pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
-        pb.TOOL_REQUEST_INTERCEPT,
-        pb.TOOL_EXECUTION_INTERCEPT,
-        pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-        pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
-        pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-        pb.LLM_REQUEST_INTERCEPT,
-        pb.LLM_EXECUTION_INTERCEPT,
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+        *(_runtime_registration_surface(kind) for kind in RuntimeRegistrationKind),
+        common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
     ]
 
 
@@ -3025,7 +3058,7 @@ def _diagnostic_to_json(value: ConfigDiagnostic | dict[str, Any]) -> dict[str, A
 
 def _json_value(value: Json) -> Any:
     _validate_json_object_keys(value)
-    return pb.JsonValue(json=json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+    return common_pb.JsonValue(json=json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"))
 
 
 def _decode_json_value(value: Any, field: str) -> Json:
@@ -3052,29 +3085,18 @@ def _tool_execution_result_from_proto(value: Any) -> ToolExecutionResult:
 
 
 def _tool_execution_intercept_outcome_to_proto(value: ToolExecutionInterceptOutcome) -> Any:
-    payload = value.to_json()
-    fields: dict[str, Any] = {
-        "result": _json_value(payload["result"]),
-    }
-    if "annotation" in payload:
-        fields["annotation"] = _json_value(payload["annotation"])
-    if payload["pending_marks"]:
-        fields["pending_marks"] = _json_value(payload["pending_marks"])
-    return pb.ToolExecutionInterceptOutcome(**fields)
+    return _encode_payload(runtime_pb.ToolExecutionInterceptOutcome, value.to_json())
 
 
-def _json_envelope(schema: str, value: Json) -> Any:
-    _validate_json_shape(schema, value)
-    return pb.JsonEnvelope(
-        schema=schema,
-        json=json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"),
-    )
+def _encode_payload(message_type: Any, value: Json) -> Any:
+    if message_type is not common_pb.JsonValue and not isinstance(value, dict):
+        raise WorkerSdkError(f"{message_type.DESCRIPTOR.name} payload must be a JSON object")
+    _validate_json_object_keys(value)
+    return _protocol.pack(message_type, value)
 
 
-def _optional_json_envelope(value: Json | None, schema: str = JSON_SCHEMA) -> Any:
-    if value is None:
-        return None
-    return _json_envelope(schema, value)
+def _optional_payload(value: Json | None, message_type: Any = common_pb.JsonValue) -> Any:
+    return None if value is None else _encode_payload(message_type, value)
 
 
 def _datetime_to_unix_micros(value: datetime | None) -> int | None:
@@ -3121,55 +3143,32 @@ def _log_severity_value(value: LogSeverity | str | None) -> str:
         raise ValueError(f"invalid log severity: {value!r}") from exc
 
 
-def _decode_required_envelope(envelope: Any, field: str, expected_schema: str = JSON_SCHEMA) -> Json:
-    if envelope is None or not getattr(envelope, "json", b""):
+def _decode_payload(envelope: Any, field: str) -> Json:
+    if envelope is None:
         raise WorkerSdkError(f"{field} is missing")
-    if envelope.schema != expected_schema:
-        raise WorkerSdkError(f"{field} has schema {envelope.schema!r}; expected {expected_schema!r}")
     try:
-        value = json.loads(envelope.json.decode("utf-8"), parse_constant=_reject_json_constant)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise WorkerSdkError(f"{field} contains invalid JSON") from exc
-    _validate_json_shape(expected_schema, value)
-    return value
+        value = _protocol.unpack(envelope)
+        _validate_json_object_keys(value)
+        return value
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise WorkerSdkError(f"invalid {field}: {error}") from error
 
 
 def _reject_json_constant(value: str) -> Json:
     raise WorkerSdkError(f"non-standard JSON constant {value!r} is not allowed")
 
 
-def _validate_json_shape(schema: str, value: Json) -> None:
-    if schema in _OBJECT_SCHEMAS and not isinstance(value, dict):
-        raise WorkerSdkError(f"{schema} payload must be a JSON object")
-    _validate_json_object_keys(value)
-
-
-def _validate_json_object_keys(value: Json, ancestors: set[int] | None = None) -> None:
-    if not isinstance(value, (dict, list, tuple)):
-        return
-    if ancestors is None:
-        ancestors = set()
-    object_id = id(value)
-    if object_id in ancestors:
-        raise WorkerSdkError("JSON payload must not contain circular references")
-    ancestors.add(object_id)
+def _validate_json_object_keys(value: Json) -> None:
     try:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    raise WorkerSdkError("JSON object keys must be strings")
-                _validate_json_object_keys(item, ancestors)
-        else:
-            for item in value:
-                _validate_json_object_keys(item, ancestors)
-    finally:
-        ancestors.remove(object_id)
+        _protocol.validate_json_object_keys(value)
+    except ValueError as error:
+        raise WorkerSdkError(str(error)) from error
 
 
 def _decode_optional_json(message: Any, field: str, *, default: Json) -> Json:
     if hasattr(message, "HasField") and not message.HasField(field):
         return default
-    return _decode_required_envelope(getattr(message, field), field)
+    return _decode_payload(getattr(message, field), field)
 
 
 async def _decode_optional_config_or_abort(message: Any, context: Any) -> Json:
@@ -3181,13 +3180,24 @@ async def _decode_optional_config_or_abort(message: Any, context: Any) -> Json:
 
 
 def _json_response(value: Json) -> Any:
-    return pb.InvokeResponse(json=pb.JsonResult(value=_json_envelope(JSON_SCHEMA, value)))
+    return worker_pb.InvokeResponse(tool_value=_json_value(value))
 
 
-def _json_result_to_value(result: Any, expected_schema: str = JSON_SCHEMA) -> Json:
-    if result.HasField("error"):
+def _validate_response(response: Any) -> None:
+    try:
+        _protocol.validate(response)
+    except Exception as exc:  # noqa: BLE001 - invalid peer data is an SDK error.
+        raise WorkerSdkError(f"invalid host response: {exc}") from exc
+
+
+def _json_result_to_value(result: Any) -> Json:
+    selected = result.WhichOneof("result")
+    if selected == "error":
         raise _worker_error_to_sdk(result.error)
-    return _decode_required_envelope(result.value, "json result", expected_schema)
+    if selected != "value":
+        raise WorkerSdkError("missing RPC result")
+    _validate_response(result)
+    return _decode_payload(result.value, "RPC result")
 
 
 def _stream_chunk_to_value(chunk: Any) -> Json:
@@ -3196,10 +3206,18 @@ def _stream_chunk_to_value(chunk: Any) -> Json:
         raise _worker_error_to_sdk(chunk.error)
     if item != "value":
         raise WorkerSdkError("stream chunk is empty")
-    return _decode_required_envelope(chunk.value, "stream chunk")
+    _validate_response(chunk)
+    return _decode_payload(chunk.value, "stream chunk")
 
 
 def _worker_error_to_sdk(error: Any) -> WorkerSdkError:
+    if error.code != "worker.cancelled" and error.HasField("http_status") and not _is_http_error_message(error.message):
+        original = WorkerSdkError(http_error_message(error.http_status, error.message))
+        return (
+            _DownstreamError(original, error.downstream_continuation_id)
+            if error.downstream_continuation_id
+            else original
+        )
     if error.code != "worker.cancelled" and _is_http_error_message(error.message):
         original = WorkerSdkError(error.message)
     else:
@@ -3219,14 +3237,16 @@ def _sdk_error_to_worker(error: BaseException) -> Any:
     code = "worker.error"
     if isinstance(error, WorkerSdkError):
         code = "worker.sdk_error"
-    result = pb.WorkerError(code=code, message=str(error), retryable=False)
+    result = common_pb.WorkerError(code=code, message=str(error), retryable=False)
+    if _is_http_error_message(str(error)):
+        result.http_status = int(str(error).split(":", 1)[0][5:])
     if isinstance(continuation_id, str) and continuation_id:
         result.downstream_continuation_id = continuation_id
     return result
 
 
 def _cancelled_worker_error(reason: str) -> Any:
-    return pb.WorkerError(
+    return common_pb.WorkerError(
         code="worker.cancelled",
         message=f"worker invocation was cancelled: {reason}",
         retryable=False,
@@ -3234,17 +3254,8 @@ def _cancelled_worker_error(reason: str) -> Any:
 
 
 def _ack_to_result(response: Any) -> None:
-    if response.ok:
-        return
-    if response.HasField("error"):
-        raise _worker_error_to_sdk(response.error)
-    raise WorkerSdkError("host call failed")
-
-
-def _require_payload(request: Any, payload: str) -> Any:
-    if request.WhichOneof("payload") != payload:
-        raise WorkerSdkError(f"expected {payload} payload")
-    return getattr(request, payload)
+    # Runtime operation failures arrive as standard gRPC status.
+    return None
 
 
 @contextlib.contextmanager
@@ -3300,64 +3311,20 @@ async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncGe
             close()
 
 
-def _runtime_registration_surface(kind: RuntimeRegistrationKind | str) -> int:
-    value = RuntimeRegistrationKind(kind)
-    mapping = {
-        RuntimeRegistrationKind.SUBSCRIBER: pb.SUBSCRIBER,
-        RuntimeRegistrationKind.EVENT_METADATA_INJECTOR: pb.EVENT_METADATA_INJECTOR,
-        RuntimeRegistrationKind.MARK_SANITIZE_GUARDRAIL: pb.MARK_SANITIZE_GUARDRAIL,
-        RuntimeRegistrationKind.SCOPE_SANITIZE_START_GUARDRAIL: pb.SCOPE_SANITIZE_START_GUARDRAIL,
-        RuntimeRegistrationKind.SCOPE_SANITIZE_END_GUARDRAIL: pb.SCOPE_SANITIZE_END_GUARDRAIL,
-        RuntimeRegistrationKind.TOOL_SANITIZE_REQUEST_GUARDRAIL: pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
-        RuntimeRegistrationKind.TOOL_SANITIZE_RESPONSE_GUARDRAIL: pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
-        RuntimeRegistrationKind.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL: pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
-        RuntimeRegistrationKind.TOOL_REQUEST_INTERCEPT: pb.TOOL_REQUEST_INTERCEPT,
-        RuntimeRegistrationKind.TOOL_EXECUTION_INTERCEPT: pb.TOOL_EXECUTION_INTERCEPT,
-        RuntimeRegistrationKind.LLM_SANITIZE_REQUEST_GUARDRAIL: pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-        RuntimeRegistrationKind.LLM_SANITIZE_RESPONSE_GUARDRAIL: pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
-        RuntimeRegistrationKind.LLM_CONDITIONAL_EXECUTION_GUARDRAIL: pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-        RuntimeRegistrationKind.LLM_REQUEST_INTERCEPT: pb.LLM_REQUEST_INTERCEPT,
-        RuntimeRegistrationKind.LLM_EXECUTION_INTERCEPT: pb.LLM_EXECUTION_INTERCEPT,
-        RuntimeRegistrationKind.LLM_STREAM_EXECUTION_INTERCEPT: pb.LLM_STREAM_EXECUTION_INTERCEPT,
-    }
-    return mapping[value]
+def _runtime_registration_surface(kind: RuntimeRegistrationKind | str) -> common_pb.RegistrationSurface:
+    return common_pb.RegistrationSurface.Value("REGISTRATION_SURFACE_" + RuntimeRegistrationKind(kind).value.upper())
 
 
 def _runtime_registration_kind(surface: int) -> RuntimeRegistrationKind:
-    for kind in RuntimeRegistrationKind:
-        if _runtime_registration_surface(kind) == surface:
-            return kind
-    raise WorkerSdkError(f"unknown runtime registration kind: {surface}")
-
-
-def _runtime_registration_owner_kind(value: int) -> RuntimeRegistrationOwnerKind:
-    mapping = {
-        pb.RUNTIME_REGISTRATION_OWNER_KIND_CORE: RuntimeRegistrationOwnerKind.CORE,
-        pb.RUNTIME_REGISTRATION_OWNER_KIND_GLOBAL_API: RuntimeRegistrationOwnerKind.GLOBAL_API,
-        pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN: RuntimeRegistrationOwnerKind.PLUGIN,
-    }
     try:
-        return mapping[value]
-    except KeyError as exc:
-        raise WorkerSdkError(f"unknown runtime registration owner kind: {value}") from exc
+        name = common_pb.RegistrationSurface.Name(surface).removeprefix("REGISTRATION_SURFACE_").lower()
+        return RuntimeRegistrationKind(name)
+    except ValueError as exc:
+        raise WorkerSdkError(f"unknown runtime registration kind: {surface}") from exc
 
 
-def _proto_scope_type(scope_type: ScopeType | str) -> int:
-    value = ScopeType(scope_type)
-    mapping = {
-        ScopeType.AGENT: pb.AGENT,
-        ScopeType.FUNCTION: pb.FUNCTION,
-        ScopeType.TOOL: pb.TOOL,
-        ScopeType.LLM: pb.LLM,
-        ScopeType.RETRIEVER: pb.RETRIEVER,
-        ScopeType.EMBEDDER: pb.EMBEDDER,
-        ScopeType.RERANKER: pb.RERANKER,
-        ScopeType.GUARDRAIL: pb.GUARDRAIL,
-        ScopeType.EVALUATOR: pb.EVALUATOR,
-        ScopeType.CUSTOM: pb.CUSTOM,
-        ScopeType.UNKNOWN: pb.UNKNOWN,
-    }
-    return mapping[value]
+def _proto_scope_type(scope_type: ScopeType | str) -> common_pb.ScopeType:
+    return common_pb.ScopeType.Value("SCOPE_TYPE_" + ScopeType(scope_type).value.upper())
 
 
 def _required_env(name: str) -> str:
@@ -3490,3 +3457,17 @@ def _is_http_error_message(message: str) -> bool:
         return False
     code, separator, _body = message[len(prefix) :].partition(": ")
     return bool(separator) and len(code) == 3 and code.isascii() and code.isdigit() and 400 <= int(code) <= 599
+
+
+def _empty() -> Any:
+    from google.protobuf.empty_pb2 import Empty
+
+    return Empty()
+
+
+def _guardrail(reason: str | None) -> Any:
+    return (
+        runtime_pb.GuardrailDecision(allow=_empty())
+        if reason is None
+        else runtime_pb.GuardrailDecision(block_reason=reason)
+    )

@@ -2,7 +2,7 @@
   "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Python gRPC Worker Documentation Plugin",
-  "description": "Configures every safe grpc-v1 registration family in the Python worker example.",
+  "description": "Configures every safe nvidia.nemo.relay.worker.v1 registration family in the Python worker example.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

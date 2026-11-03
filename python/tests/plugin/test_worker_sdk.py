@@ -14,6 +14,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal, cast
 from unittest import mock
 from uuid import UUID
@@ -56,17 +57,11 @@ from nemo_relay_plugin import (  # noqa: E402
 )
 from nemo_relay_plugin import _api as plugin_api  # noqa: E402
 from nemo_relay_plugin._api import (  # noqa: E402
-    ANNOTATED_LLM_REQUEST_SCHEMA,
-    EVENT_SCHEMA,
-    JSON_SCHEMA,
-    LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-    LLM_REQUEST_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
     _decode_json_value,
-    _decode_required_envelope,
+    _decode_payload,
     _grpc_target,
-    _json_envelope,
     _json_value,
     _open_host_channel,
     _required_env,
@@ -75,9 +70,88 @@ from nemo_relay_plugin._api import (  # noqa: E402
     _unlink_unix_socket,
     _WorkerService,
     _write_endpoint_file,
-    pb,
-    pb_grpc,
 )
+from nemo_relay_plugin._api import (  # noqa: E402
+    _encode_payload as _pack_payload,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    common_pb2 as common_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    event_pb2 as event_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    llm_pb2 as llm_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2 as worker_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2_grpc as worker_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_host_runtime_service_pb2 as host_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    runtime_pb2 as runtime_pb,
+)
+
+
+class _Fixture(SimpleNamespace):
+    def HasField(self, name):
+        return getattr(self, name, None) is not None
+
+    def CopyFrom(self, value):
+        self.__dict__.update(value.__dict__)
+
+    def WhichOneof(self, name):
+        for field in ("request_sanitize_context", "response_sanitize_context"):
+            if self.HasField(field):
+                return field
+        return None
+
+
+class _ExecutionContext(_Fixture):
+    def __init__(self, request=None, response=None):
+        super().__init__(request=request, response=response)
+
+
+class _LlmPayload(_Fixture):
+    def __init__(self, **kwargs):
+        values = dict(
+            model_name="model",
+            request=None,
+            response=None,
+            annotated_request=None,
+            request_sanitize_context=None,
+            response_sanitize_context=None,
+            execution_codec_context=None,
+        )
+        values.update(kwargs)
+        super().__init__(**values)
+
+
+class _ToolPayload(_Fixture):
+    def __init__(self, tool_name="lookup", value=None, tool_call_id=None):
+        super().__init__(tool_name=tool_name, value=value, tool_call_id=tool_call_id)
+
+
+def _wire_codec(kind="none", id=None):
+    return runtime_pb.LlmCodecReference(kind=kind, id=id)
+
+
+def _encode_payload(schema, value):
+    if schema == event_pb.Event and isinstance(value, dict):
+        value = {
+            "kind": "mark",
+            "uuid": "0199942f-1000-7000-8000-000000000001",
+            "timestamp": "2026-10-15T09:00:00Z",
+            **value,
+        }
+        if value.get("kind") == "scope":
+            value = {"scope_category": "start", "category": "custom", **value}
+    return _pack_payload(schema, value)
+
 
 ACTIVATION_ID = "act"
 AUTH_TOKEN = "token"
@@ -132,14 +206,14 @@ def test_tool_execution_result_and_outcome_preserve_optional_annotation() -> Non
     ],
 )
 def test_tool_execution_result_proto_preserves_arbitrary_json(value: Json) -> None:
-    decoded = _tool_execution_result_from_proto(pb.ToolExecutionResult(result=_json_value(value)))
+    decoded = _tool_execution_result_from_proto(runtime_pb.ToolExecutionResult(result=_json_value(value)))
 
     assert decoded == ToolExecutionResult(result=value)
 
 
 def test_tool_execution_result_proto_normalizes_null_annotation() -> None:
     decoded = _tool_execution_result_from_proto(
-        pb.ToolExecutionResult(
+        runtime_pb.ToolExecutionResult(
             result=_json_value({"ok": True}),
             annotation=_json_value(None),
         )
@@ -151,13 +225,13 @@ def test_tool_execution_result_proto_normalizes_null_annotation() -> None:
 @pytest.mark.parametrize(
     ("message", "expected_message"),
     [
-        (pb.ToolExecutionResult(), "missing result"),
-        (pb.ToolExecutionResult(result=pb.JsonValue()), "result contains invalid JSON"),
-        (pb.ToolExecutionResult(result=pb.JsonValue(json=b"{")), "result contains invalid JSON"),
+        (runtime_pb.ToolExecutionResult(), "missing result"),
+        (runtime_pb.ToolExecutionResult(result=common_pb.JsonValue()), "result contains invalid JSON"),
+        (runtime_pb.ToolExecutionResult(result=common_pb.JsonValue(json=b"{")), "result contains invalid JSON"),
         (
-            pb.ToolExecutionResult(
+            runtime_pb.ToolExecutionResult(
                 result=_json_value({"ok": True}),
-                annotation=pb.JsonValue(json=b"not-json"),
+                annotation=common_pb.JsonValue(json=b"not-json"),
             ),
             "annotation contains invalid JSON",
         ),
@@ -185,17 +259,15 @@ def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks() -
         )
     )
 
-    assert _decode_json_value(message.result, "result") == [{"text": "ok"}, None]
-    assert _decode_json_value(message.annotation, "annotation") == {"source": ["worker", 1]}
-    assert _decode_json_value(message.pending_marks, "pending marks") == [
+    assert _decode_json_value(message.value.result, "result") == [{"text": "ok"}, None]
+    assert _decode_json_value(message.value.annotation, "annotation") == {"source": ["worker", 1]}
+    assert [plugin_api._protocol.unpack(mark) for mark in message.pending_marks] == [
         {
             "name": "worker.mark",
             "category": "tool",
             "category_profile": {"subtype": "checkpoint", "nested": {"ok": True}},
             "data": False,
             "metadata": 0,
-            "data_schema": None,
-            "severity": None,
         }
     ]
 
@@ -205,19 +277,13 @@ def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fi
         ToolExecutionInterceptOutcome(result=None, pending_marks=[PendingMarkSpec("worker.mark")], annotation=None)
     )
 
-    assert message.HasField("result")
-    assert _decode_json_value(message.result, "result") is None
-    assert not message.HasField("annotation")
-    assert message.HasField("pending_marks")
-    assert _decode_json_value(message.pending_marks, "pending marks") == [
+    assert message.value.HasField("result")
+    assert _decode_json_value(message.value.result, "result") is None
+    assert not message.value.HasField("annotation")
+    assert bool(message.pending_marks)
+    assert [plugin_api._protocol.unpack(mark) for mark in message.pending_marks] == [
         {
             "name": "worker.mark",
-            "category": None,
-            "category_profile": None,
-            "data": None,
-            "metadata": None,
-            "data_schema": None,
-            "severity": None,
         }
     ]
 
@@ -390,6 +456,7 @@ class RecordingHostStub:
         self.failures: dict[str, str] = {}
 
     async def EmitMark(self, request: Any) -> Any:
+        plugin_api._protocol.validate(request)
         self.requests.append(request)
         return self._host_ack("EmitMark")
 
@@ -399,38 +466,38 @@ class RecordingHostStub:
 
     async def GetRuntimeDiagnostics(self, request: Any) -> Any:
         self.requests.append(request)
-        return pb.GetRuntimeDiagnosticsResponse(
+        return host_pb.GetRuntimeDiagnosticsResponse(
             entries=[
-                pb.RuntimeDiagnostic(code="alpha", message="first", count=1),
-                pb.RuntimeDiagnostic(code="zeta", message="latest", count=3),
+                runtime_pb.RuntimeDiagnostic(code="alpha", message="first", count=1),
+                runtime_pb.RuntimeDiagnostic(code="zeta", message="latest", count=3),
             ]
         )
 
     async def ListRuntimeRegistrations(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("ListRuntimeRegistrations") == "error":
-            return pb.ListRuntimeRegistrationsResponse(error=_worker_error("list failed"))
+            raise WorkerSdkError("list failed")
         if self.failures.get("ListRuntimeRegistrations") == "unknown_kind":
-            return pb.ListRuntimeRegistrationsResponse(registrations=[pb.RuntimeRegistrationIdentity(kind=999)])
+            return host_pb.ListRuntimeRegistrationsResponse(
+                registrations=[runtime_pb.RuntimeRegistrationIdentity(kind=999)]
+            )
         if self.failures.get("ListRuntimeRegistrations") == "unknown_owner":
-            return pb.ListRuntimeRegistrationsResponse(
+            return host_pb.ListRuntimeRegistrationsResponse(
                 registrations=[
-                    pb.RuntimeRegistrationIdentity(
-                        kind=pb.SUBSCRIBER,
-                        owner=pb.RuntimeRegistrationOwner(kind=999),
+                    runtime_pb.RuntimeRegistrationIdentity(
+                        kind=common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
+                        owner=runtime_pb.RuntimeRegistrationOwner(),
                     )
                 ]
             )
-        return pb.ListRuntimeRegistrationsResponse(
+        return host_pb.ListRuntimeRegistrationsResponse(
             registrations=[
-                pb.RuntimeRegistrationIdentity(
-                    kind=pb.SUBSCRIBER,
+                runtime_pb.RuntimeRegistrationIdentity(
+                    kind=common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
                     local_name="opentelemetry",
                     effective_name="nemo-relay-plugin.v1.observability:1:opentelemetry",
-                    owner=pb.RuntimeRegistrationOwner(
-                        kind=pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN,
-                        plugin_kind="observability",
-                        component_ordinal=1,
+                    owner=runtime_pb.RuntimeRegistrationOwner(
+                        plugin=runtime_pb.PluginRegistrationOwner(plugin_kind="observability", component_ordinal=1)
                     ),
                 )
             ]
@@ -439,20 +506,20 @@ class RecordingHostStub:
     async def RegisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("RegisterConditionalMiddlewareGuardrail") == "error":
-            return pb.RegisterConditionalMiddlewareGuardrailResponse(error=_worker_error("register failed"))
-        return pb.RegisterConditionalMiddlewareGuardrailResponse(handle="gate-1")
+            raise WorkerSdkError("register failed")
+        return host_pb.RegisterConditionalMiddlewareGuardrailResponse(handle="gate-1")
 
     async def DeregisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("DeregisterConditionalMiddlewareGuardrail") == "error":
-            return pb.DeregisterConditionalMiddlewareGuardrailResponse(error=_worker_error("deregister failed"))
-        return pb.DeregisterConditionalMiddlewareGuardrailResponse(removed=True)
+            raise WorkerSdkError("deregister failed")
+        return host_pb.DeregisterConditionalMiddlewareGuardrailResponse(removed=True)
 
     async def CreateScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("CreateScopeStack") == "error":
-            return pb.CreateScopeStackResponse(error=_worker_error("CreateScopeStack failed"))
-        return pb.CreateScopeStackResponse(scope_stack_id="stack-1")
+            raise WorkerSdkError("CreateScopeStack failed")
+        return host_pb.CreateScopeStackResponse(scope_stack_id="stack-1")
 
     async def DropScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
@@ -461,8 +528,8 @@ class RecordingHostStub:
     async def PushScope(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("PushScope") == "error":
-            return pb.PushScopeResponse(error=_worker_error("PushScope failed"))
-        return pb.PushScopeResponse(scope_handle_id="scope-1")
+            raise WorkerSdkError("PushScope failed")
+        return host_pb.PushScopeResponse(scope_handle_id="scope-1")
 
     async def PopScope(self, request: Any) -> Any:
         self.requests.append(request)
@@ -472,32 +539,34 @@ class RecordingHostStub:
         self.requests.append(request)
         failure = self.failures.get("ToolNext")
         if failure == "error":
-            return pb.ToolExecutionResultResponse(error=_worker_error("ToolNext failed"))
+            return host_pb.ToolNextResponse(error=_worker_error("ToolNext failed"))
         if failure == "empty":
-            return pb.ToolExecutionResultResponse()
+            return host_pb.ToolNextResponse()
         if failure == "missing_result":
-            return pb.ToolExecutionResultResponse(
-                value=pb.ToolExecutionResult(annotation=_json_value({"source": "host"}))
+            return host_pb.ToolNextResponse(
+                value=runtime_pb.ToolExecutionResult(annotation=_json_value({"source": "host"}))
             )
         if failure == "malformed_result":
-            return pb.ToolExecutionResultResponse(value=pb.ToolExecutionResult(result=pb.JsonValue(json=b"not-json")))
+            return host_pb.ToolNextResponse(
+                value=runtime_pb.ToolExecutionResult(result=common_pb.JsonValue(json=b"not-json"))
+            )
         if failure == "malformed_annotation":
-            return pb.ToolExecutionResultResponse(
-                value=pb.ToolExecutionResult(
+            return host_pb.ToolNextResponse(
+                value=runtime_pb.ToolExecutionResult(
                     result=_json_value({"ok": True}),
-                    annotation=pb.JsonValue(json=b"not-json"),
+                    annotation=common_pb.JsonValue(json=b"not-json"),
                 )
             )
         if failure == "null_annotation":
-            return pb.ToolExecutionResultResponse(
-                value=pb.ToolExecutionResult(
+            return host_pb.ToolNextResponse(
+                value=runtime_pb.ToolExecutionResult(
                     result=_json_value({"ok": True}),
                     annotation=_json_value(None),
                 )
             )
         value = json.loads(request.value.json.decode("utf-8"))
-        return pb.ToolExecutionResultResponse(
-            value=pb.ToolExecutionResult(
+        return host_pb.ToolNextResponse(
+            value=runtime_pb.ToolExecutionResult(
                 result=_json_value({"next_tool": value}),
                 annotation=_json_value({"source": "host"}),
             )
@@ -506,9 +575,9 @@ class RecordingHostStub:
     async def LlmNext(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("LlmNext") == "error":
-            return pb.JsonResult(error=_worker_error("LlmNext failed"))
-        value = json.loads(request.request.json.decode("utf-8"))
-        return pb.JsonResult(value=_json_envelope(JSON_SCHEMA, {"next_llm": value}))
+            return host_pb.LlmNextResponse(error=_worker_error("LlmNext failed"))
+        value = _envelope_value(request.request)
+        return host_pb.LlmNextResponse(value=_encode_payload(common_pb.JsonValue, {"next_llm": value}))
 
     def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
         self.requests.append(request)
@@ -516,25 +585,25 @@ class RecordingHostStub:
         async def stream() -> AsyncIterator[Any]:
             failure = self.failures.get("LlmStreamNext")
             if failure == "error":
-                yield pb.StreamChunk(error=_worker_error("LlmStreamNext failed"))
+                yield host_pb.LlmStreamNextResponse(error=_worker_error("LlmStreamNext failed"))
                 return
             if failure == "empty":
-                yield pb.StreamChunk()
+                yield host_pb.LlmStreamNextResponse()
                 return
-            value = json.loads(request.request.json.decode("utf-8"))
-            yield pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, {"next_stream": value}))
+            value = _envelope_value(request.request)
+            yield host_pb.LlmStreamNextResponse(value=_encode_payload(common_pb.JsonValue, {"next_stream": value}))
 
         return stream()
 
     async def DecodeLlmCodecRequest(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("DecodeLlmCodecRequest") == "error":
-            return pb.JsonResult(error=_worker_error("DecodeLlmCodecRequest failed"))
+            return host_pb.DecodeLlmCodecRequestResponse(error=_worker_error("DecodeLlmCodecRequest failed"))
         value = _envelope_value(request.request)
         model = value.get("content", {}).get("model")
-        return pb.JsonResult(
-            value=_json_envelope(
-                ANNOTATED_LLM_REQUEST_SCHEMA,
+        return host_pb.DecodeLlmCodecRequestResponse(
+            value=_encode_payload(
+                llm_pb.AnnotatedLlmRequest,
                 {"messages": [], "model": model},
             )
         )
@@ -542,28 +611,26 @@ class RecordingHostStub:
     async def EncodeLlmCodecRequest(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("EncodeLlmCodecRequest") == "error":
-            return pb.JsonResult(error=_worker_error("EncodeLlmCodecRequest failed"))
-        return pb.JsonResult(value=request.original_request)
+            return host_pb.EncodeLlmCodecRequestResponse(error=_worker_error("EncodeLlmCodecRequest failed"))
+        return host_pb.EncodeLlmCodecRequestResponse(value=request.original_request)
 
     async def DecodeLlmCodecResponse(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("DecodeLlmCodecResponse") == "error":
-            return pb.JsonResult(error=_worker_error("DecodeLlmCodecResponse failed"))
+            return host_pb.DecodeLlmCodecResponseResponse(error=_worker_error("DecodeLlmCodecResponse failed"))
         value = _envelope_value(request.response)
-        return pb.JsonResult(
-            value=_json_envelope(
-                JSON_SCHEMA,
+        return host_pb.DecodeLlmCodecResponseResponse(
+            value=plugin_api._protocol.pack(
+                llm_pb.AnnotatedLlmResponse,
                 {"model": value.get("model"), "message": value.get("message")},
             )
         )
 
     def _host_ack(self, method: str) -> Any:
         failure = self.failures.get(method)
-        if failure == "empty":
-            return pb.HostAck(ok=False)
-        if failure == "error":
-            return pb.HostAck(ok=False, error=_worker_error(f"{method} failed"))
-        return pb.HostAck(ok=True)
+        if failure:
+            raise WorkerSdkError(f"{method} failed" if failure == "error" else "host call failed")
+        return getattr(host_pb, f"{method}Response")()
 
 
 class AllSurfacesPlugin(WorkerPlugin):
@@ -689,10 +756,10 @@ def service_fixture(host_stub: RecordingHostStub) -> _WorkerService:
 
 async def test_register_returns_initial_conditional_middleware_guardrail(service: _WorkerService) -> None:
     response = await _register(service)
-    assert len(response.conditional_middleware_guardrails) == 1
-    gate = response.conditional_middleware_guardrails[0]
+    assert len(response.plan.conditional_middleware_guardrails) == 1
+    gate = response.plan.conditional_middleware_guardrails[0]
     assert gate.name == "initial_gate"
-    assert list(gate.kinds) == [pb.SUBSCRIBER]
+    assert list(gate.kinds) == [common_pb.REGISTRATION_SURFACE_SUBSCRIBER]
     assert gate.registration_name == "missing-target"
     assert gate.callback
 
@@ -712,9 +779,9 @@ async def test_register_rejects_initial_callback_name_owned_by_runtime(service: 
     decision = await service.Invoke(
         _invoke_request(
             "initial_gate",
-            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
-            conditional_middleware=pb.ConditionalMiddlewareInvocation(
-                kinds=[pb.SUBSCRIBER],
+            common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=runtime_pb.ConditionalMiddlewareInvocation(
+                kinds=[common_pb.REGISTRATION_SURFACE_SUBSCRIBER],
                 registration_name="target-subscriber",
             ),
         ),
@@ -725,105 +792,65 @@ async def test_register_rejects_initial_callback_name_owned_by_runtime(service: 
 
 
 def test_generated_proto_matches_worker_contract() -> None:
-    assert WORKER_PROTOCOL == "grpc-v1"
-    methods = {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods}
-    assert methods == {
-        "Handshake",
-        "Health",
-        "Validate",
-        "Register",
-        "Invoke",
-        "InvokeStream",
-        "CancelInvocation",
-        "Shutdown",
-    }
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
-    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
-    assert execution_context.number == 11
-    assert execution_context.containing_oneof is None
-    assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
-    assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
-    assert pb.SUBSCRIBER == 1
-    assert pb.EVENT_METADATA_INJECTOR == 2
-    assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
-    assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
-    assert pb.MARK_SANITIZE_GUARDRAIL == 30
-    assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
-    assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
-    assert pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL == 40
-    assert pb.CUSTOM == 10
-
-    host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
-    diagnostics = host_runtime.methods_by_name["GetRuntimeDiagnostics"]
-    assert diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
-    assert diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
-    tool_next = host_runtime.methods_by_name["ToolNext"]
-    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
-    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
-    assert tool_result["result"].number == 1
-    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    assert tool_result["annotation"].number == 2
-    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    tool_outcome = pb.ToolExecutionInterceptOutcome.DESCRIPTOR.fields_by_name
-    assert tool_outcome["result"].number == 1
-    assert tool_outcome["annotation"].number == 2
-    assert tool_outcome["pending_marks"].number == 3
-    assert tool_outcome["pending_marks"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
-    assert outcome.number == 1
-    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
+    assert WORKER_PROTOCOL == "nvidia.nemo.relay.worker.v1"
+    service = worker_pb.DESCRIPTOR.services_by_name["PluginWorkerService"]
+    assert len(service.methods) == 8
+    assert service.methods_by_name["InvokeStream"].input_type.name == "InvokeStreamRequest"
+    assert worker_pb.DESCRIPTOR.message_types_by_name["InvokeRequest"].oneofs_by_name["invocation"]
 
 
 async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService) -> None:
-    health = await service.Health(pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN), AbortContext())
-    assert health.ok
-    assert health.plugin_id == "tests.python_worker"
-    assert health.worker_protocol == WORKER_PROTOCOL
-    assert health.sdk_name == "nemo-relay-plugin"
-    assert health.sdk_version == plugin_api._SDK_VERSION
-    assert health.runtime_name == "python"
+    health = await service.Health(
+        worker_pb.HealthRequest(credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)),
+        AbortContext(),
+    )
+    assert health.status == runtime_pb.WORKER_HEALTH_STATUS_READY
+    assert health.identity.plugin_id == "tests.python_worker"
+    assert health.identity.protocol.name == WORKER_PROTOCOL
+    assert health.identity.sdk_name == "nemo-relay-plugin"
+    assert health.identity.sdk_version == plugin_api._SDK_VERSION
+    assert health.identity.runtime_name == "python"
 
     handshake = await service.Handshake(_handshake_request(), AbortContext())
-    assert handshake.plugin_id == "tests.python_worker"
-    assert handshake.plugin_kind == "tests.python_worker"
-    assert handshake.worker_protocol == WORKER_PROTOCOL
-    assert handshake.sdk_version == plugin_api._SDK_VERSION
+    assert handshake.identity.plugin_id == "tests.python_worker"
+    assert handshake.identity.plugin_kind == "tests.python_worker"
+    assert handshake.identity.protocol.name == WORKER_PROTOCOL
+    assert handshake.identity.sdk_version == plugin_api._SDK_VERSION
     assert set(handshake.supported_surfaces) == set(_all_expected_surfaces())
 
     validate = await service.Validate(
-        pb.ValidateRequest(
-            activation_id=ACTIVATION_ID,
+        worker_pb.ValidateRequest(
             plugin_id="tests.python_worker",
-            auth_token=AUTH_TOKEN,
-            config=_json_envelope(JSON_SCHEMA, {"warn": True}),
+            config=_encode_payload(common_pb.JsonValue, {"warn": True}),
+            credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
         ),
         AbortContext(),
     )
-    diagnostics = _envelope_value(validate.diagnostics)
+    diagnostics = [plugin_api._protocol.unpack(item) for item in validate.diagnostics.entries]
     assert diagnostics == [{"level": "warning", "code": "tests.warn", "message": "warning requested"}]
 
     register = await _register(service)
     registrations = [
         (registration.local_name, registration.surface, registration.priority, registration.break_chain)
-        for registration in register.registrations
+        for registration in register.plan.registrations
     ]
     assert registrations == [
-        ("subscriber", pb.SUBSCRIBER, 0, False),
-        ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
-        ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
-        ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
-        ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
-        ("tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False),
-        ("tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False),
-        ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
-        ("tool_request", pb.TOOL_REQUEST_INTERCEPT, 4, True),
-        ("tool_execution", pb.TOOL_EXECUTION_INTERCEPT, 5, False),
-        ("llm_sanitize_request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, 6, False),
-        ("llm_sanitize_response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False),
-        ("llm_conditional", pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False),
-        ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True),
-        ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False),
-        ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False),
+        ("subscriber", common_pb.REGISTRATION_SURFACE_SUBSCRIBER, 0, False),
+        ("event_metadata", common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR, 1, False),
+        ("event_sanitize", common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL, 1, False),
+        ("event_sanitize", common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
+        ("scope_end_sanitize", common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
+        ("tool_sanitize", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False),
+        ("tool_sanitize", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False),
+        ("tool_conditional", common_pb.REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
+        ("tool_request", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, 4, True),
+        ("tool_execution", common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, 5, False),
+        ("llm_sanitize_request", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL, 6, False),
+        ("llm_sanitize_response", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False),
+        ("llm_conditional", common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False),
+        ("llm_request", common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT, 9, True),
+        ("llm_execution", common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT, 10, False),
+        ("llm_stream_execution", common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT, 11, False),
     ]
 
 
@@ -856,9 +883,9 @@ def test_sdk_version_uses_package_metadata_and_source_tree_fallback(
         {"nested": [float("nan")]},
     ],
 )
-def test_json_envelope_rejects_non_finite_numbers(value: Json) -> None:
+def test_encode_payload_rejects_non_finite_numbers(value: Json) -> None:
     with pytest.raises(ValueError, match="Out of range float values"):
-        _json_envelope(JSON_SCHEMA, value)
+        _encode_payload(common_pb.JsonValue, value)
 
 
 @pytest.mark.parametrize(
@@ -868,12 +895,12 @@ def test_json_envelope_rejects_non_finite_numbers(value: Json) -> None:
         {"nested": [{2: True}]},
     ],
 )
-def test_json_envelope_rejects_non_string_object_keys(value: Json) -> None:
+def test_encode_payload_rejects_non_string_object_keys(value: Json) -> None:
     with pytest.raises(WorkerSdkError, match="JSON object keys must be strings"):
-        _json_envelope(JSON_SCHEMA, value)
+        _encode_payload(common_pb.JsonValue, value)
 
 
-def test_json_envelope_rejects_cycles_and_allows_shared_subobjects() -> None:
+def test_encode_payload_rejects_cycles_and_allows_shared_subobjects() -> None:
     dict_cycle: Json = {}
     dict_cycle["self"] = dict_cycle
     list_cycle: Json = []
@@ -881,10 +908,10 @@ def test_json_envelope_rejects_cycles_and_allows_shared_subobjects() -> None:
 
     for value in (dict_cycle, list_cycle):
         with pytest.raises(WorkerSdkError, match="must not contain circular references"):
-            _json_envelope(JSON_SCHEMA, value)
+            _encode_payload(common_pb.JsonValue, value)
 
     shared = {"value": True}
-    envelope = _json_envelope(JSON_SCHEMA, {"first": shared, "second": shared})
+    envelope = _encode_payload(common_pb.JsonValue, {"first": shared, "second": shared})
     assert _envelope_value(envelope) == {
         "first": {"value": True},
         "second": {"value": True},
@@ -892,83 +919,84 @@ def test_json_envelope_rejects_cycles_and_allows_shared_subobjects() -> None:
 
 
 @pytest.mark.parametrize("payload", [b"NaN", b"Infinity", b"-Infinity", b'{"nested":NaN}'])
-def test_json_envelope_decode_rejects_non_standard_constants(payload: bytes) -> None:
-    envelope = pb.JsonEnvelope(schema=JSON_SCHEMA, json=payload)
+def test_encode_payload_decode_rejects_non_standard_constants(payload: bytes) -> None:
+    envelope = common_pb.JsonValue(json=payload)
     with pytest.raises(WorkerSdkError, match="non-standard JSON constant"):
-        _decode_required_envelope(envelope, "json value")
+        _decode_payload(envelope, "json value")
 
 
 @pytest.mark.parametrize("payload", [b"{", b"\xff"])
-def test_json_envelope_decode_normalizes_malformed_payload_errors(payload: bytes) -> None:
-    envelope = pb.JsonEnvelope(schema=JSON_SCHEMA, json=payload)
-    with pytest.raises(WorkerSdkError, match="json value contains invalid JSON"):
-        _decode_required_envelope(envelope, "json value")
+def test_encode_payload_decode_normalizes_malformed_payload_errors(payload: bytes) -> None:
+    envelope = common_pb.JsonValue(json=payload)
+    with pytest.raises(WorkerSdkError, match="invalid json value"):
+        _decode_payload(envelope, "json value")
 
 
 @pytest.mark.parametrize(
     "schema",
-    [EVENT_SCHEMA, LLM_REQUEST_SCHEMA, ANNOTATED_LLM_REQUEST_SCHEMA],
+    [event_pb.Event, llm_pb.LlmRequest, llm_pb.AnnotatedLlmRequest],
 )
 @pytest.mark.parametrize("value", [None, [], "scalar", 42])
 def test_object_schema_envelopes_reject_non_objects(schema: str, value: Json) -> None:
     with pytest.raises(WorkerSdkError, match="must be a JSON object"):
-        _json_envelope(schema, value)
+        _encode_payload(schema, value)
 
-    envelope = pb.JsonEnvelope(schema=schema, json=json.dumps(value).encode("utf-8"))
-    with pytest.raises(WorkerSdkError, match="must be a JSON object"):
-        _decode_required_envelope(envelope, "typed value", schema)
-
-    assert _envelope_value(_json_envelope(JSON_SCHEMA, value)) == value
+    assert _envelope_value(_encode_payload(common_pb.JsonValue, value)) == value
 
 
 @pytest.mark.parametrize(
     ("rpc_name", "request_factory", "streaming"),
     [
         ("Handshake", lambda: _handshake_request(), False),
-        ("Health", lambda: pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN), False),
+        (
+            "Health",
+            lambda: worker_pb.HealthRequest(
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+            ),
+            False,
+        ),
         (
             "Validate",
-            lambda: pb.ValidateRequest(
-                activation_id=ACTIVATION_ID,
+            lambda: worker_pb.ValidateRequest(
                 plugin_id="tests.python_worker",
-                auth_token=AUTH_TOKEN,
-                config=_json_envelope(JSON_SCHEMA, {}),
+                config=_encode_payload(common_pb.JsonValue, {}),
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             False,
         ),
         (
             "Register",
-            lambda: pb.RegisterRequest(
-                activation_id=ACTIVATION_ID,
+            lambda: worker_pb.RegisterRequest(
                 plugin_id="tests.python_worker",
-                auth_token=AUTH_TOKEN,
-                config=_json_envelope(JSON_SCHEMA, {}),
+                config=_encode_payload(common_pb.JsonValue, {}),
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             False,
         ),
-        ("Invoke", lambda: _tool_request("missing", pb.TOOL_REQUEST_INTERCEPT, {}), False),
+        ("Invoke", lambda: _tool_request("missing", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {}), False),
         (
             "InvokeStream",
             lambda: _invoke_request(
                 "missing",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             True,
         ),
         (
             "CancelInvocation",
-            lambda: pb.CancelInvocationRequest(
-                activation_id=ACTIVATION_ID,
+            lambda: worker_pb.CancelInvocationRequest(
                 invocation_id="invoke-1",
-                auth_token=AUTH_TOKEN,
                 reason="test",
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             False,
         ),
         (
             "Shutdown",
-            lambda: pb.ShutdownRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, reason="test"),
+            lambda: worker_pb.ShutdownRequest(
+                reason="test", credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+            ),
             False,
         ),
     ],
@@ -981,7 +1009,7 @@ async def test_auth_and_activation_failures_for_every_rpc(
 ) -> None:
     for field in ("activation_id", "auth_token"):
         request = request_factory()
-        setattr(request, field, "wrong")
+        setattr(request.credentials, field, "wrong")
         with pytest.raises(GrpcAbort) as exc_info:
             result = getattr(service, rpc_name)(request, AbortContext())
             if streaming:
@@ -989,21 +1017,20 @@ async def test_auth_and_activation_failures_for_every_rpc(
                     pass
             else:
                 await result
-        assert exc_info.value.code == grpc.StatusCode.PERMISSION_DENIED
-        assert field.split("_")[0] in exc_info.value.details
+        assert exc_info.value.code == grpc.StatusCode.UNAUTHENTICATED
+        assert "credentials" in exc_info.value.details
 
 
 async def test_validate_and_register_decode_errors_are_grpc_protocol_errors(service: _WorkerService) -> None:
-    bad_config = _json_envelope(JSON_SCHEMA, {})
+    bad_config = _encode_payload(common_pb.JsonValue, {})
     bad_config.json = b"{"
 
     with pytest.raises(GrpcAbort) as validate_error:
         await service.Validate(
-            pb.ValidateRequest(
-                activation_id=ACTIVATION_ID,
+            worker_pb.ValidateRequest(
                 plugin_id="tests.python_worker",
-                auth_token=AUTH_TOKEN,
                 config=bad_config,
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             AbortContext(),
         )
@@ -1011,29 +1038,17 @@ async def test_validate_and_register_decode_errors_are_grpc_protocol_errors(serv
 
     with pytest.raises(GrpcAbort) as register_error:
         await service.Register(
-            pb.RegisterRequest(
-                activation_id=ACTIVATION_ID,
+            worker_pb.RegisterRequest(
                 plugin_id="tests.python_worker",
-                auth_token=AUTH_TOKEN,
                 config=bad_config,
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             AbortContext(),
         )
     assert register_error.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
-    wrong_schema = _json_envelope(EVENT_SCHEMA, {})
-    with pytest.raises(GrpcAbort) as schema_error:
-        await service.Validate(
-            pb.ValidateRequest(
-                activation_id=ACTIVATION_ID,
-                plugin_id="tests.python_worker",
-                auth_token=AUTH_TOKEN,
-                config=wrong_schema,
-            ),
-            AbortContext(),
-        )
-    assert schema_error.value.code == grpc.StatusCode.INVALID_ARGUMENT
-    assert "expected 'nemo.relay.Json@1'" in schema_error.value.details
+    with pytest.raises(TypeError):
+        worker_pb.ValidateRequest(config=event_pb.Event())
 
 
 async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() -> None:
@@ -1061,15 +1076,17 @@ async def test_base_plugin_defaults_context_errors_and_plugin_id_validation() ->
 
     callable_service = _service(CallablePluginId(), RecordingHostStub())
     health = await callable_service.Health(
-        pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
+        worker_pb.HealthRequest(credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)),
         AbortContext(),
     )
-    assert health.plugin_id == "tests.callable_id"
+    assert health.identity.plugin_id == "tests.callable_id"
 
     invalid_service = _service(InvalidPluginId(), RecordingHostStub())
     with pytest.raises(WorkerSdkError, match="plugin_id"):
         await invalid_service.Health(
-            pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
+            worker_pb.HealthRequest(
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+            ),
             AbortContext(),
         )
 
@@ -1090,9 +1107,9 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface() -> None:
     registrations = [
         (registration.local_name, registration.surface) for registration in context._handlers.registrations
     ]
-    assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
-    assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
-    assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+    assert registrations.count(("duplicate", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT)) == 1
+    assert ("shared", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
+    assert ("shared", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
 
 
 def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
@@ -1108,8 +1125,8 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
     )
 
     assert [(registration.local_name, registration.surface) for registration in context._handlers.registrations] == [
-        ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL),
-        ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL),
+        ("request", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL),
+        ("response", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL),
     ]
 
 
@@ -1124,7 +1141,7 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
 
             async def execution(name: str, request: Json, context: Any, next_call: Any) -> Json:
                 assert name == "model"
-                assert request == {"content": {"model": "gpt-test"}}
+                assert request == {"headers": {}, "content": {"model": "gpt-test"}}
                 seen.append(context)
                 assert context.request_codec.codec == plugin_api.LlmCodecIdentity("builtin", "openai_chat")
                 assert context.response_codec is not None
@@ -1144,22 +1161,22 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
     service = _service(ContextualExecutionPlugin(), host)
     await _register(service)
 
-    new_context = pb.LlmExecutionCodecContext(
-        request=pb.LlmSanitizeRequestContext(
-            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
-            codec_capability_id="request-capability",
+    new_context = _ExecutionContext(
+        request=runtime_pb.LlmCodecContext(
+            codec=_wire_codec(kind="builtin", id="openai_chat"),
+            capability_id="request-capability",
         ),
-        response=pb.LlmSanitizeResponseContext(
-            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
-            codec_capability_id="response-capability",
+        response=runtime_pb.LlmCodecContext(
+            codec=_wire_codec(kind="builtin", id="openai_chat"),
+            capability_id="response-capability",
         ),
     )
     payload = _llm_payload(request={"content": {"model": "gpt-test"}})
-    payload.execution_codec_context.CopyFrom(new_context)
+    payload.execution_codec_context = new_context
     result = await _invoke_json_async(
         service,
         "execution",
-        pb.LLM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT,
         payload=payload,
     )
     assert "next_llm" in result
@@ -1168,7 +1185,7 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
     codec_capabilities = [
         request.codec_capability_id
         for request in host.requests
-        if isinstance(request, (pb.LlmCodecDecodeRequest, pb.LlmCodecDecodeResponse))
+        if isinstance(request, (host_pb.DecodeLlmCodecRequestRequest, host_pb.DecodeLlmCodecResponseRequest))
     ]
     assert codec_capabilities == ["request-capability", "response-capability"]
 
@@ -1176,8 +1193,8 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
 @pytest.mark.parametrize(
     ("proto_kind", "capability_prefix", "expected_kind", "resolves"),
     [
-        (pb.LLM_CODEC_KIND_UNSPECIFIED, None, "none", False),
-        (pb.LLM_CODEC_KIND_OPAQUE, "opaque", "opaque", True),
+        ("none", None, "none", False),
+        ("opaque", "opaque", "opaque", True),
     ],
 )
 def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs(
@@ -1191,17 +1208,12 @@ def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs(
         auth_token=AUTH_TOKEN,
         host_stub=RecordingHostStub(),
     )
-    request = pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
-    response = pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
+    request = runtime_pb.LlmCodecContext(codec=_wire_codec(kind=proto_kind))
+    response = runtime_pb.LlmCodecContext(codec=_wire_codec(kind=proto_kind))
     if capability_prefix is not None:
-        request.codec_capability_id = f"{capability_prefix}-request"
-        response.codec_capability_id = f"{capability_prefix}-response"
-    invocation = pb.LlmInvocation(
-        execution_codec_context=pb.LlmExecutionCodecContext(
-            request=request,
-            response=response,
-        )
-    )
+        request.capability_id = f"{capability_prefix}-request"
+        response.capability_id = f"{capability_prefix}-response"
+    invocation = runtime_pb.LlmExecutionInvocation(request_codec=request, response_codec=response)
     context = plugin_api._llm_execution_context(
         invocation,
         runtime,
@@ -1218,40 +1230,26 @@ def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs(
 @pytest.mark.parametrize(
     ("invocation", "expected"),
     [
-        (pb.LlmInvocation(), "execution context is missing"),
+        (runtime_pb.LlmExecutionInvocation(), "request context is missing"),
         (
-            pb.LlmInvocation(execution_codec_context=pb.LlmExecutionCodecContext()),
-            "request context is missing",
-        ),
-        (
-            pb.LlmInvocation(
-                execution_codec_context=pb.LlmExecutionCodecContext(
-                    request=pb.LlmSanitizeRequestContext(),
-                )
-            ),
+            runtime_pb.LlmExecutionInvocation(request_codec=runtime_pb.LlmCodecContext()),
             "request codec identity is missing",
         ),
         (
-            pb.LlmInvocation(
-                execution_codec_context=pb.LlmExecutionCodecContext(
-                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
-                    response=pb.LlmSanitizeResponseContext(),
-                )
+            runtime_pb.LlmExecutionInvocation(
+                request_codec=runtime_pb.LlmCodecContext(codec=_wire_codec()),
+                response_codec=runtime_pb.LlmCodecContext(),
             ),
             "response codec identity is missing",
         ),
         (
-            pb.LlmInvocation(
-                execution_codec_context=pb.LlmExecutionCodecContext(
-                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
-                )
-            ),
+            runtime_pb.LlmExecutionInvocation(request_codec=runtime_pb.LlmCodecContext(codec=_wire_codec())),
             "response context is missing",
         ),
     ],
 )
 def test_execution_context_rejects_malformed_unary_contexts(
-    invocation: pb.LlmInvocation,
+    invocation: runtime_pb.LlmExecutionInvocation,
     expected: str,
 ) -> None:
     runtime = PluginRuntime(
@@ -1292,32 +1290,30 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> N
     service = _service(ContextualSanitizerPlugin(), RecordingHostStub())
     await _register(service)
     for codec_kind, codec_id in [
-        (pb.LLM_CODEC_KIND_UNSPECIFIED, None),
-        (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
-        (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
-        (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
-        (pb.LLM_CODEC_KIND_BUILTIN, "gemini_generate_content"),
-        (pb.LLM_CODEC_KIND_RUNTIME, "com.example.chat.v1"),
-        (pb.LLM_CODEC_KIND_OPAQUE, None),
+        ("none", None),
+        ("builtin", "openai_chat"),
+        ("builtin", "openai_responses"),
+        ("builtin", "anthropic_messages"),
+        ("builtin", "gemini_generate_content"),
+        ("runtime", "com.example.chat.v1"),
+        ("opaque", None),
     ]:
-        codec = pb.LlmCodecIdentity(kind=codec_kind)
-        if codec_id is not None:
-            codec.id = codec_id
+        codec = _wire_codec(kind=codec_kind, id=codec_id)
         request_payload = _llm_payload(
             request={"content": {"prompt": "secret"}},
             response={"secret": "value"},
         )
-        request_payload.request_sanitize_context.CopyFrom(pb.LlmSanitizeRequestContext(codec=codec))
+        request_payload.request_sanitize_context = runtime_pb.LlmCodecContext(codec=codec)
         response_payload = _llm_payload(
             request={"content": {"prompt": "secret"}},
             response={"secret": "value"},
         )
-        response_payload.response_sanitize_context.CopyFrom(pb.LlmSanitizeResponseContext(codec=codec))
+        response_payload.response_sanitize_context = runtime_pb.LlmCodecContext(codec=codec)
 
         request_response = await service.Invoke(
             _invoke_request(
                 "request",
-                pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+                common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL,
                 llm=request_payload,
             ),
             AbortContext(),
@@ -1325,13 +1321,13 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> N
         response_response = await service.Invoke(
             _invoke_request(
                 "response",
-                pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+                common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL,
                 llm=response_payload,
             ),
             AbortContext(),
         )
-        assert request_response.WhichOneof("result") == "empty"
-        assert response_response.WhichOneof("result") == "empty"
+        assert request_response.WhichOneof("result") == "unchanged"
+        assert response_response.WhichOneof("result") == "unchanged"
 
     assert seen == [
         ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("none"))),
@@ -1395,41 +1391,32 @@ async def test_llm_sanitizers_resolve_directional_codec_proxies() -> None:
     request_payload = _llm_payload(
         request={"headers": {}, "content": {"model": "runtime-model"}},
     )
-    request_payload.request_sanitize_context.CopyFrom(
-        pb.LlmSanitizeRequestContext(
-            codec=pb.LlmCodecIdentity(
-                kind=pb.LLM_CODEC_KIND_RUNTIME,
-                id="com.example.runtime",
-            ),
-            codec_capability_id="request-capability",
-        )
+    request_payload.request_sanitize_context = runtime_pb.LlmCodecContext(
+        codec=_wire_codec(kind="runtime", id="com.example.runtime"), capability_id="request-capability"
     )
     request_result = await service.Invoke(
         _invoke_request(
             "request",
-            pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL,
             llm=request_payload,
         ),
         AbortContext(),
     )
-    assert request_result.WhichOneof("result") == "json", request_result
+    assert request_result.WhichOneof("result") == "llm_request", request_result
 
     response_payload = _llm_payload(response={"model": "opaque-model", "message": "secret"})
-    response_payload.response_sanitize_context.CopyFrom(
-        pb.LlmSanitizeResponseContext(
-            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
-            codec_capability_id="response-capability",
-        )
+    response_payload.response_sanitize_context = runtime_pb.LlmCodecContext(
+        codec=_wire_codec(kind="opaque"), capability_id="response-capability"
     )
     response_result = await service.Invoke(
         _invoke_request(
             "response",
-            pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL,
             llm=response_payload,
         ),
         AbortContext(),
     )
-    assert response_result.WhichOneof("result") == "json", response_result
+    assert response_result.WhichOneof("result") == "llm_response", response_result
     assert calls == [
         ("request_decode", {"messages": [], "model": "runtime-model"}),
         (
@@ -1447,9 +1434,9 @@ async def test_llm_sanitizers_resolve_directional_codec_proxies() -> None:
 @pytest.mark.parametrize(
     ("failure", "surface", "registration_name"),
     [
-        ("DecodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
-        ("EncodeLlmCodecRequest", pb.LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
-        ("DecodeLlmCodecResponse", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, "response"),
+        ("DecodeLlmCodecRequest", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("EncodeLlmCodecRequest", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL, "request"),
+        ("DecodeLlmCodecResponse", common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL, "response"),
     ],
 )
 async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
@@ -1489,21 +1476,15 @@ async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
     service = _service(CodecFailurePlugin(), host)
     await _register(service)
 
-    if surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
+    if surface == common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL:
         payload = _llm_payload(request={"headers": {}, "content": {"model": "test"}})
-        payload.request_sanitize_context.CopyFrom(
-            pb.LlmSanitizeRequestContext(
-                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
-                codec_capability_id="request-capability",
-            )
+        payload.request_sanitize_context = runtime_pb.LlmCodecContext(
+            codec=_wire_codec(kind="opaque"), capability_id="request-capability"
         )
     else:
         payload = _llm_payload(response={"model": "test", "message": "secret"})
-        payload.response_sanitize_context.CopyFrom(
-            pb.LlmSanitizeResponseContext(
-                codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_OPAQUE),
-                codec_capability_id="response-capability",
-            )
+        payload.response_sanitize_context = runtime_pb.LlmCodecContext(
+            codec=_wire_codec(kind="opaque"), capability_id="response-capability"
         )
 
     result = await service.Invoke(
@@ -1517,9 +1498,9 @@ async def test_llm_sanitizer_codec_rpc_failures_return_invocation_errors(
 @pytest.mark.parametrize(
     "surface",
     [
-        pb.MARK_SANITIZE_GUARDRAIL,
-        pb.SCOPE_SANITIZE_START_GUARDRAIL,
-        pb.SCOPE_SANITIZE_END_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL,
     ],
 )
 async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
@@ -1527,23 +1508,23 @@ async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
 ) -> None:
     await _register(service)
     registration = {
-        pb.MARK_SANITIZE_GUARDRAIL: "event_sanitize",
-        pb.SCOPE_SANITIZE_START_GUARDRAIL: "event_sanitize",
-        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitize",
+        common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL: "event_sanitize",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL: "event_sanitize",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitize",
     }[surface]
     sanitizer = {
-        pb.MARK_SANITIZE_GUARDRAIL: "mark",
-        pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope-start",
-        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope-end",
+        common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL: "mark",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL: "scope-start",
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL: "scope-end",
     }[surface]
     response = await service.Invoke(
         _invoke_request(
             registration,
             surface,
-            event=_json_envelope(
-                EVENT_SCHEMA,
+            event=_encode_payload(
+                event_pb.Event,
                 {
-                    "kind": "mark" if surface == pb.MARK_SANITIZE_GUARDRAIL else "scope",
+                    "kind": "mark" if surface == common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL else "scope",
                     "name": "worker-event",
                     "data": {"secret": True},
                     "category_profile": {"subtype": "test"},
@@ -1553,7 +1534,7 @@ async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
         ),
         AbortContext(),
     )
-    assert _envelope_value(response.json.value) == {
+    assert _envelope_value(response.event_sanitize) == {
         "data": {"sanitized": f"{sanitizer}:worker-event"},
         "category_profile": {"subtype": "test"},
         "metadata": None,
@@ -1573,14 +1554,14 @@ async def test_validate_accepts_missing_config_and_dict_diagnostics() -> None:
 
     service = _service(DictDiagnosticPlugin(), RecordingHostStub())
     response = await service.Validate(
-        pb.ValidateRequest(
-            activation_id=ACTIVATION_ID,
+        worker_pb.ValidateRequest(
             plugin_id="tests.dict_diagnostic",
-            auth_token=AUTH_TOKEN,
+            config=_json_value(None),
+            credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
         ),
         AbortContext(),
     )
-    assert _envelope_value(response.diagnostics) == [
+    assert [plugin_api._protocol.unpack(item) for item in response.diagnostics.entries] == [
         {"level": "error", "code": "dict.diag", "message": "dict diagnostic"}
     ]
 
@@ -1659,7 +1640,7 @@ async def test_async_validate_and_register_hooks_are_awaited() -> None:
         _validate_request(plugin_id="tests.async_lifecycle", config={"mode": "async"}),
         AbortContext(),
     )
-    assert _envelope_value(validate.diagnostics) == [
+    assert [plugin_api._protocol.unpack(item) for item in validate.diagnostics.entries] == [
         {
             "level": "warning",
             "code": "async.validate",
@@ -1671,15 +1652,15 @@ async def test_async_validate_and_register_hooks_are_awaited() -> None:
         _register_request(plugin_id="tests.async_lifecycle", config={"mode": "async"}),
         AbortContext(),
     )
-    assert [(item.local_name, item.surface) for item in register.registrations] == [
-        ("async_request", pb.TOOL_REQUEST_INTERCEPT)
+    assert [(item.local_name, item.surface) for item in register.plan.registrations] == [
+        ("async_request", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT)
     ]
     response = await service.Invoke(
-        _tool_request("async_request", pb.TOOL_REQUEST_INTERCEPT, {"query": "relay"}),
+        _tool_request("async_request", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {"query": "relay"}),
         AbortContext(),
     )
-    assert response.WhichOneof("result") == "json", response
-    assert _envelope_value(response.json.value) == {
+    assert response.WhichOneof("result") == "tool_value", response
+    assert _envelope_value(response.tool_value) == {
         "tool_name": "lookup",
         "args": {"query": "relay"},
         "config": {"mode": "async"},
@@ -1753,9 +1734,9 @@ async def test_validate_register_and_invoke_callback_errors_are_structured() -> 
     leaked_gate = await register_service.Invoke(
         _invoke_request(
             "failed_gate",
-            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
-            conditional_middleware=pb.ConditionalMiddlewareInvocation(
-                kinds=[pb.SUBSCRIBER],
+            common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=runtime_pb.ConditionalMiddlewareInvocation(
+                kinds=[common_pb.REGISTRATION_SURFACE_SUBSCRIBER],
                 registration_name="target-subscriber",
             ),
         ),
@@ -1766,7 +1747,9 @@ async def test_validate_register_and_invoke_callback_errors_are_structured() -> 
 
     invoke_service = _service(FailingInvokePlugin(), RecordingHostStub())
     await _register(invoke_service)
-    response = await invoke_service.Invoke(_tool_request("fail", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
+    response = await invoke_service.Invoke(
+        _tool_request("fail", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {}), AbortContext()
+    )
     assert response.WhichOneof("result") == "error"
     assert "invoke boom" in response.error.message
 
@@ -1775,8 +1758,8 @@ async def test_validate_register_and_invoke_callback_errors_are_structured() -> 
     event_response = await event_service.Invoke(
         _invoke_request(
             "fail",
-            pb.EVENT_METADATA_INJECTOR,
-            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
+            common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR,
+            event=_encode_payload(event_pb.Event, {"name": "event"}),
         ),
         AbortContext(),
     )
@@ -1816,21 +1799,21 @@ async def test_register_is_idempotent_and_rejects_changed_component_config() -> 
         _register_request({"tag": "first"}, plugin_id="tests.register_config"),
         AbortContext(),
     )
-    changed = await service.Register(
-        _register_request({"tag": "second"}, plugin_id="tests.register_config"),
-        AbortContext(),
-    )
+    with pytest.raises(GrpcAbort) as changed:
+        await service.Register(
+            _register_request({"tag": "second"}, plugin_id="tests.register_config"),
+            AbortContext(),
+        )
 
     assert plugin.register_calls == 1
-    assert list(repeated.registrations) == list(first.registrations)
-    assert changed.HasField("error")
-    assert "different component config" in changed.error.message
+    assert list(repeated.plan.registrations) == list(first.plan.registrations)
+    assert changed.value.code == grpc.StatusCode.FAILED_PRECONDITION
 
     result = await service.Invoke(
-        _tool_request("configured", pb.TOOL_REQUEST_INTERCEPT, {"query": "relay"}),
+        _tool_request("configured", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {"query": "relay"}),
         AbortContext(),
     )
-    assert _envelope_value(result.json.value) == {"query": "relay", "tag": "first"}
+    assert _envelope_value(result.tool_value) == {"query": "relay", "tag": "first"}
 
 
 async def test_concurrent_register_calls_install_handlers_once() -> None:
@@ -1865,8 +1848,8 @@ async def test_concurrent_register_calls_install_handlers_once() -> None:
 
     assert plugin.register_calls == 1
     assert all(not response.HasField("error") for response in responses)
-    assert [registration.local_name for registration in responses[0].registrations] == ["subscriber"]
-    assert list(responses[1].registrations) == list(responses[0].registrations)
+    assert [registration.local_name for registration in responses[0].plan.registrations] == ["subscriber"]
+    assert list(responses[1].plan.registrations) == list(responses[0].plan.registrations)
 
 
 async def test_concurrent_register_calls_reject_a_different_config() -> None:
@@ -1886,11 +1869,11 @@ async def test_concurrent_register_calls_reject_a_different_config() -> None:
     ]
     await registration_lock.wait_until_contended()
     registration_lock.release()
-    responses = await asyncio.gather(*requests)
+    responses = await asyncio.gather(*requests, return_exceptions=True)
 
-    assert sum(response.HasField("error") for response in responses) == 1
-    error = next(response.error for response in responses if response.HasField("error"))
-    assert "different component config" in error.message
+    assert sum(isinstance(response, GrpcAbort) for response in responses) == 1
+    error = next(response for response in responses if isinstance(response, GrpcAbort))
+    assert "different component config" in error.details
 
 
 async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: RecordingHostStub) -> None:
@@ -1899,24 +1882,24 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     subscriber = await service.Invoke(
         _invoke_request(
             "subscriber",
-            pb.SUBSCRIBER,
-            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
-            scope=pb.ScopeContext(scope_stack_id="invoke-stack", parent_scope_id="parent-scope"),
+            common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
+            event=_encode_payload(event_pb.Event, {"name": "event"}),
+            scope=runtime_pb.ScopeContext(scope_stack_id="invoke-stack", parent_scope_id="parent-scope"),
         ),
         AbortContext(),
     )
-    assert subscriber.WhichOneof("result") == "empty"
-    mark_request = _last_request(host_stub, pb.EmitMarkRequest)
-    assert mark_request.name == "tests.subscriber"
+    assert subscriber.WhichOneof("result") == "completed"
+    mark_request = _last_request(host_stub, host_pb.EmitMarkRequest)
+    assert mark_request.mark.name == "tests.subscriber"
     assert mark_request.scope.scope_stack_id == "invoke-stack"
     assert mark_request.scope.parent_scope_id == "parent-scope"
 
     conditional_middleware = await service.Invoke(
         _invoke_request(
             "initial_gate",
-            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
-            conditional_middleware=pb.ConditionalMiddlewareInvocation(
-                kinds=[pb.SUBSCRIBER],
+            common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=runtime_pb.ConditionalMiddlewareInvocation(
+                kinds=[common_pb.REGISTRATION_SURFACE_SUBSCRIBER],
                 registration_name="missing-target",
             ),
         ),
@@ -1926,9 +1909,9 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     allowed_conditional_middleware = await service.Invoke(
         _invoke_request(
             "initial_gate",
-            pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
-            conditional_middleware=pb.ConditionalMiddlewareInvocation(
-                kinds=[pb.SUBSCRIBER],
+            common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+            conditional_middleware=runtime_pb.ConditionalMiddlewareInvocation(
+                kinds=[common_pb.REGISTRATION_SURFACE_SUBSCRIBER],
                 registration_name="allowed-target",
             ),
         ),
@@ -1945,26 +1928,34 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     event_metadata = await service.Invoke(
         _invoke_request(
             "event_metadata",
-            pb.EVENT_METADATA_INJECTOR,
-            event=_json_envelope(EVENT_SCHEMA, {"name": "metadata-event"}),
+            common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR,
+            event=_encode_payload(event_pb.Event, {"name": "metadata-event"}),
         ),
         AbortContext(),
     )
-    assert event_metadata.WhichOneof("result") == "json"
-    assert _envelope_value(event_metadata.json.value) == {"worker.event_name": "metadata-event"}
+    assert event_metadata.WhichOneof("result") == "metadata_additions"
+    assert _envelope_value(event_metadata.metadata_additions) == {"worker.event_name": "metadata-event"}
 
-    tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
+    tool_sanitize_request = await _invoke_json_async(
+        service, "tool_sanitize", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL
+    )
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
-    tool_sanitize_response = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL)
+    tool_sanitize_response = await _invoke_json_async(
+        service, "tool_sanitize", common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL
+    )
     assert tool_sanitize_response["tag"] == "sanitize_lookup"
 
     tool_conditional = await service.Invoke(
-        _tool_request("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, {"query": "relay"}),
+        _tool_request(
+            "tool_conditional", common_pb.REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, {"query": "relay"}
+        ),
         AbortContext(),
     )
     assert tool_conditional.guardrail.block_reason == "tool blocked"
 
-    tool_request = await _invoke_json_async(service, "tool_request", pb.TOOL_REQUEST_INTERCEPT)
+    tool_request = await _invoke_json_async(
+        service, "tool_request", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT
+    )
     assert tool_request["tag"] == "request_lookup"
     tool_execution = await _invoke_tool_execution_async(service, "tool_execution")
     assert tool_execution["result"]["tag"] == "tool_execution"
@@ -1975,7 +1966,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     llm_sanitize_request = await _invoke_json_async(
         service,
         "llm_sanitize_request",
-        pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL,
         payload=_llm_payload(request={"content": {"prompt": "hello"}}),
     )
     assert llm_sanitize_request["content"]["llm_sanitize_request"]
@@ -1983,7 +1974,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     llm_sanitize_response = await _invoke_json_async(
         service,
         "llm_sanitize_response",
-        pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL,
         payload=_llm_payload(response={"answer": "hello"}),
     )
     assert llm_sanitize_response["tag"] == "llm_sanitize_response"
@@ -1991,7 +1982,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     llm_conditional = await service.Invoke(
         _invoke_request(
             "llm_conditional",
-            pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
+            common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
             llm=_llm_payload(request={"content": {"prompt": "hello"}}),
         ),
         AbortContext(),
@@ -2001,7 +1992,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     llm_request = await service.Invoke(
         _invoke_request(
             "llm_request",
-            pb.LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
             llm=_llm_payload(
                 request={"content": {"prompt": "hello"}},
                 annotated={"messages": [], "extra": {"before": True}},
@@ -2009,31 +2000,20 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
         ),
         AbortContext(),
     )
-    assert llm_request.llm_request.outcome.schema == LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA
-    outcome = _envelope_value(llm_request.llm_request.outcome)
+    outcome = _envelope_value(llm_request.llm_request_outcome)
     assert outcome["request"]["content"]["llm_request"]
     assert outcome["annotated_request"]["tag"] == "annotated"
-    assert outcome["pending_marks"] == [
-        {
-            "name": "worker.pending",
-            "category": None,
-            "category_profile": None,
-            "data": {"source": "python"},
-            "data_schema": None,
-            "metadata": None,
-            "severity": None,
-        }
-    ]
+    assert outcome["pending_marks"] == [{"name": "worker.pending", "data": {"source": "python"}}]
 
     request_only = await service.Invoke(
         _invoke_request(
             "llm_request",
-            pb.LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
             llm=_llm_payload(request={"content": {"prompt": "hello"}}),
         ),
         AbortContext(),
     )
-    request_only_outcome = _envelope_value(request_only.llm_request.outcome)
+    request_only_outcome = _envelope_value(request_only.llm_request_outcome)
     assert request_only_outcome["request"]["content"]["llm_request"]
     assert request_only_outcome["annotated_request"] is None
     assert request_only_outcome["pending_marks"] == outcome["pending_marks"]
@@ -2041,7 +2021,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     llm_execution = await _invoke_json_async(
         service,
         "llm_execution",
-        pb.LLM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT,
         payload=_llm_payload(model_name="gpt-test", request={"content": {"prompt": "hello"}}),
     )
     assert llm_execution["tag"] == "llm_execution"
@@ -2050,51 +2030,30 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
 
 async def test_unary_invoke_failure_paths(service: _WorkerService) -> None:
     await _register(service)
-
-    invalid = _tool_request("tool_request", pb.TOOL_REQUEST_INTERCEPT, {})
-    invalid.tool.value.json = b"{"
-    invalid_payload = await service.Invoke(invalid, AbortContext())
-    assert invalid_payload.WhichOneof("result") == "error"
-    assert "tool value contains invalid JSON" in invalid_payload.error.message
-
-    missing_handler = await service.Invoke(_tool_request("missing", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
+    invalid = _tool_request("tool_request", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {})
+    invalid.tool_request_intercept.value.json = b"{"
+    missing = _invoke_request("subscriber", common_pb.REGISTRATION_SURFACE_SUBSCRIBER)
+    bad_scope = _invoke_request(
+        "subscriber",
+        common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
+        event=_encode_payload(event_pb.Event, {"name": "event"}),
+        scope=runtime_pb.ScopeContext(),
+    )
+    parent_only = _invoke_request(
+        "subscriber",
+        common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
+        event=_encode_payload(event_pb.Event, {"name": "event"}),
+        scope=runtime_pb.ScopeContext(parent_scope_id="parent-only"),
+    )
+    for request in (invalid, missing, bad_scope, parent_only):
+        with pytest.raises(GrpcAbort) as error:
+            await service.Invoke(request, AbortContext())
+        assert error.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    missing_handler = await service.Invoke(
+        _tool_request("missing", common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, {}), AbortContext()
+    )
     assert missing_handler.WhichOneof("result") == "error"
     assert "not registered" in missing_handler.error.message
-
-    unsupported = await service.Invoke(
-        _tool_request("tool_request", pb.REGISTRATION_SURFACE_UNSPECIFIED, {}),
-        AbortContext(),
-    )
-    assert unsupported.WhichOneof("result") == "error"
-    assert "unsupported registration surface" in unsupported.error.message
-
-    missing_event = await service.Invoke(_invoke_request("subscriber", pb.SUBSCRIBER), AbortContext())
-    assert missing_event.WhichOneof("result") == "error"
-    assert "event is missing" in missing_event.error.message
-
-    parent_only_scope = await service.Invoke(
-        _invoke_request(
-            "subscriber",
-            pb.SUBSCRIBER,
-            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
-            scope=pb.ScopeContext(parent_scope_id="parent-only"),
-        ),
-        AbortContext(),
-    )
-    assert parent_only_scope.WhichOneof("result") == "error"
-    assert "parent_scope_id requires scope_stack_id" in parent_only_scope.error.message
-
-    empty_scope = await service.Invoke(
-        _invoke_request(
-            "subscriber",
-            pb.SUBSCRIBER,
-            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
-            scope=pb.ScopeContext(),
-        ),
-        AbortContext(),
-    )
-    assert empty_scope.WhichOneof("result") == "error"
-    assert "scope_stack_id must not be empty" in empty_scope.error.message
 
 
 @pytest.mark.parametrize("invalid_part", ["request", "annotated_request"])
@@ -2118,7 +2077,7 @@ async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_pa
     response = await service.Invoke(
         _invoke_request(
             "invalid",
-            pb.LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
             llm=_llm_payload(
                 request={"content": {"prompt": "hello"}},
                 annotated={"messages": []},
@@ -2147,7 +2106,7 @@ async def test_tool_execution_intercept_rejects_raw_result() -> None:
     service = _service(LegacyResultPlugin(), RecordingHostStub())
     await _register(service)
     response = await service.Invoke(
-        _tool_request("legacy", pb.TOOL_EXECUTION_INTERCEPT, {}),
+        _tool_request("legacy", common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, {}),
         AbortContext(),
     )
 
@@ -2156,89 +2115,30 @@ async def test_tool_execution_intercept_rejects_raw_result() -> None:
 
 
 @pytest.mark.parametrize(
-    ("request_factory", "expected_message"),
+    "field,wrong_type",
     [
-        (
-            lambda: _invoke_request(
-                "subscriber",
-                pb.SUBSCRIBER,
-                event=_json_envelope(JSON_SCHEMA, {"name": "event"}),
-            ),
-            "expected 'nemo.relay.Event@1'",
-        ),
-        (
-            lambda: _tool_request("tool_request", pb.TOOL_REQUEST_INTERCEPT, {}),
-            "expected 'nemo.relay.Json@1'",
-        ),
-        (
-            lambda: _invoke_request(
-                "llm_sanitize_request",
-                pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-                llm=_llm_payload(request={"content": {}}),
-            ),
-            "expected 'nemo.relay.LlmRequest@1'",
-        ),
-        (
-            lambda: _invoke_request(
-                "llm_conditional",
-                pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-                llm=_llm_payload(request={"content": {}}),
-            ),
-            "expected 'nemo.relay.LlmRequest@1'",
-        ),
-        (
-            lambda: _invoke_request(
-                "llm_execution",
-                pb.LLM_EXECUTION_INTERCEPT,
-                llm=_llm_payload(request={"content": {}}),
-            ),
-            "expected 'nemo.relay.LlmRequest@1'",
-        ),
-        (
-            lambda: _invoke_request(
-                "llm_request",
-                pb.LLM_REQUEST_INTERCEPT,
-                llm=_llm_payload(request={"content": {}}, annotated={"messages": []}),
-            ),
-            "expected 'nemo.relay.AnnotatedLlmRequest@2'",
-        ),
+        ("subscriber", common_pb.JsonValue),
+        ("tool_request_intercept", event_pb.Event),
+        ("llm_sanitize_request_guardrail", common_pb.JsonValue),
+        ("llm_conditional_execution_guardrail", llm_pb.LlmRequest),
+        ("llm_execution_intercept", llm_pb.LlmRequest),
+        ("llm_request_intercept", llm_pb.AnnotatedLlmRequest),
     ],
 )
-async def test_invoke_rejects_mismatched_envelope_schemas(
-    service: _WorkerService,
-    request_factory: Any,
-    expected_message: str,
-) -> None:
-    await _register(service)
-    request = request_factory()
-    if request.surface == pb.TOOL_REQUEST_INTERCEPT:
-        request.tool.value.schema = EVENT_SCHEMA
-    elif request.surface in {
-        pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-        pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-        pb.LLM_EXECUTION_INTERCEPT,
-    }:
-        request.llm.request.schema = JSON_SCHEMA
-    elif request.surface == pb.LLM_REQUEST_INTERCEPT:
-        request.llm.annotated_request.schema = JSON_SCHEMA
-
-    response = await service.Invoke(request, AbortContext())
-    assert response.WhichOneof("result") == "error"
-    assert expected_message in response.error.message
+def test_invoke_rejects_mismatched_message_types(field, wrong_type):
+    with pytest.raises(TypeError):
+        worker_pb.InvokeRequest(**{field: wrong_type()})
 
 
-async def test_invoke_stream_rejects_mismatched_llm_request_schema(service: _WorkerService) -> None:
+async def test_invoke_stream_rejects_malformed_llm_request(service: _WorkerService) -> None:
     await _register(service)
     request = _invoke_request(
-        "llm_stream_execution",
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        llm=_llm_payload(request={"content": {"prompt": "hello"}}),
+        "llm_stream_execution", common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT, llm=_llm_payload()
     )
-    request.llm.request.schema = JSON_SCHEMA
-
-    chunks = [chunk async for chunk in service.InvokeStream(request, AbortContext())]
-    assert len(chunks) == 1
-    assert "expected 'nemo.relay.LlmRequest@1'" in chunks[0].error.message
+    request.request.content.json = b"{"
+    with pytest.raises(GrpcAbort) as error:
+        _ = [chunk async for chunk in service.InvokeStream(request, AbortContext())]
+    assert error.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
 
 async def test_llm_request_intercept_can_return_request_without_annotation() -> None:
@@ -2259,12 +2159,12 @@ async def test_llm_request_intercept_can_return_request_without_annotation() -> 
     response = await service.Invoke(
         _invoke_request(
             "request_only",
-            pb.LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
             llm=_llm_payload(request={"content": {"prompt": "hello"}}),
         ),
         AbortContext(),
     )
-    outcome = _envelope_value(response.llm_request.outcome)
+    outcome = _envelope_value(response.llm_request_outcome)
     assert outcome["request"]["content"]["request_only"]
     assert outcome["annotated_request"] is None
     assert outcome["pending_marks"] == []
@@ -2296,15 +2196,15 @@ async def test_llm_request_intercept_preserves_optimization_contribution_worker_
     response = await service.Invoke(
         _invoke_request(
             "optimization",
-            pb.LLM_REQUEST_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
             llm=_llm_payload(request={"content": {"prompt": "hello"}}),
         ),
         AbortContext(),
     )
 
-    assert response.WhichOneof("result") == "llm_request"
-    assert response.llm_request.outcome.schema == LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA
-    outcome = _envelope_value(response.llm_request.outcome)
+    assert response.WhichOneof("result") == "llm_request_outcome"
+    assert response.llm_request_outcome.DESCRIPTOR.full_name == "nvidia.nemo.relay.worker.v1.LlmRequestInterceptOutcome"
+    outcome = _envelope_value(response.llm_request_outcome)
     assert outcome["optimization_contributions"] == [fixture]
     assert outcome["optimization_contributions"][0]["future_top_level_field"] == {"preserved": True}
 
@@ -2317,7 +2217,7 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "llm_stream_execution",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(model_name="gpt-test", request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2326,21 +2226,17 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
     assert [_stream_value(chunk)["tag"] for chunk in chunks] == ["llm_stream_execution"]
     assert _stream_value(chunks[0])["next_stream"]["content"]["llm_stream_gpt-test"]
 
-    wrong_surface = [
-        chunk
-        async for chunk in service.InvokeStream(
-            _tool_request("tool_request", pb.TOOL_REQUEST_INTERCEPT, {}),
-            AbortContext(),
+    with pytest.raises(ValueError):
+        worker_pb.InvokeStreamRequest(
+            tool_request_intercept=runtime_pb.ToolValueInvocation()  # ty: ignore[unknown-argument]
         )
-    ]
-    assert "only supports LLM stream" in wrong_surface[0].error.message
 
     missing_handler = [
         chunk
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "missing",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2348,14 +2244,15 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
     ]
     assert "not registered" in missing_handler[0].error.message
 
-    missing_payload = [
-        chunk
-        async for chunk in service.InvokeStream(
-            _invoke_request("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT),
-            AbortContext(),
-        )
-    ]
-    assert "expected llm payload" in missing_payload[0].error.message
+    missing_payload = worker_pb.InvokeStreamRequest(
+        credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
+        invocation_id="missing",
+        registration_name="llm_stream_execution",
+        continuation_id="next",
+    )
+    with pytest.raises(GrpcAbort) as error:
+        _ = [chunk async for chunk in service.InvokeStream(missing_payload, AbortContext())]
+    assert error.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
     host_stub.failures["LlmStreamNext"] = "error"
     host_error = [
@@ -2363,7 +2260,7 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "llm_stream_execution",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2377,7 +2274,7 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "llm_stream_execution",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2407,7 +2304,7 @@ async def test_stream_callback_exception_is_structured() -> None:
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "fail_stream",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2436,7 +2333,7 @@ async def test_stream_callback_can_return_sync_iterable() -> None:
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "sync_stream",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2466,7 +2363,7 @@ async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream
         async for chunk in service.InvokeStream(
             _invoke_request(
                 "invalid_stream",
-                pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(request={"content": {"prompt": "hello"}}),
             ),
             AbortContext(),
@@ -2474,6 +2371,23 @@ async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream
     ]
     assert len(chunks) == 1
     assert "stream callback must return" in chunks[0].error.message
+
+
+@pytest.mark.parametrize("ordinal", [None, 0, 1])
+async def test_runtime_plugin_registration_preserves_optional_component_ordinal(ordinal):
+    class Host(RecordingHostStub):
+        async def ListRuntimeRegistrations(self, request):
+            response = await super().ListRuntimeRegistrations(request)
+            owner = response.registrations[0].owner.plugin
+            if ordinal is None:
+                owner.ClearField("component_ordinal")
+            else:
+                owner.component_ordinal = ordinal
+            return response
+
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=Host())
+    registrations = await runtime.list_runtime_registrations()
+    assert registrations[0].owner.component_ordinal == ordinal
 
 
 async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub) -> None:
@@ -2503,10 +2417,10 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
             ),
         )
     ]
-    list_request = _last_request(host_stub, pb.ListRuntimeRegistrationsRequest)
-    assert list_request.activation_id == ACTIVATION_ID
-    assert list_request.auth_token == AUTH_TOKEN
-    assert list(list_request.kinds) == [pb.SUBSCRIBER]
+    list_request = _last_request(host_stub, host_pb.ListRuntimeRegistrationsRequest)
+    assert list_request.credentials.activation_id == ACTIVATION_ID
+    assert list_request.credentials.auth_token == AUTH_TOKEN
+    assert list(list_request.kinds) == [common_pb.REGISTRATION_SURFACE_SUBSCRIBER]
     gate = await runtime.register_conditional_middleware_guardrail(
         "pause-otel",
         {RuntimeRegistrationKind.SUBSCRIBER},
@@ -2514,17 +2428,17 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         lambda _kinds, _name: "temporarily disabled",
     )
     assert isinstance(gate, ConditionalMiddlewareGuardrailHandle)
-    register_request = _last_request(host_stub, pb.RegisterConditionalMiddlewareGuardrailRequest)
-    assert register_request.activation_id == ACTIVATION_ID
-    assert register_request.auth_token == AUTH_TOKEN
-    assert register_request.name == "pause-otel"
-    assert list(register_request.kinds) == [pb.SUBSCRIBER]
-    assert register_request.registration_name == registrations[0].effective_name
-    assert register_request.callback
+    register_request = _last_request(host_stub, host_pb.RegisterConditionalMiddlewareGuardrailRequest)
+    assert register_request.credentials.activation_id == ACTIVATION_ID
+    assert register_request.credentials.auth_token == AUTH_TOKEN
+    assert register_request.registration.name == "pause-otel"
+    assert list(register_request.registration.kinds) == [common_pb.REGISTRATION_SURFACE_SUBSCRIBER]
+    assert register_request.registration.registration_name == registrations[0].effective_name
+    assert register_request.registration.callback
     assert await runtime.deregister_conditional_middleware_guardrail(gate)
-    deregister_request = _last_request(host_stub, pb.DeregisterConditionalMiddlewareGuardrailRequest)
-    assert deregister_request.activation_id == ACTIVATION_ID
-    assert deregister_request.auth_token == AUTH_TOKEN
+    deregister_request = _last_request(host_stub, host_pb.DeregisterConditionalMiddlewareGuardrailRequest)
+    assert deregister_request.credentials.activation_id == ACTIVATION_ID
+    assert deregister_request.credentials.auth_token == AUTH_TOKEN
     assert deregister_request.handle == "gate-1"
 
     stack_id = await runtime.create_scope_stack()
@@ -2533,27 +2447,30 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         assert runtime.current_scope_stack_id() == stack_id
         assert runtime.current_parent_scope_id() == "parent-1"
         await runtime.emit_mark("mark", {"ok": True})
+        ordinary_mark = _last_request(host_stub, host_pb.EmitMarkRequest).mark
+        assert not ordinary_mark.HasField("severity")
+        assert not ordinary_mark.HasField("category")
         await runtime.emit_mark("override-parent", parent_scope_id="parent-2")
         scope_id = await runtime.push_scope("scope", scope_type=ScopeType.TOOL, input={"in": True})
-        ordinary_push = _last_request(host_stub, pb.PushScopeRequest)
-        assert not ordinary_push.HasField("timestamp_unix_micros")
+        ordinary_push = _last_request(host_stub, host_pb.PushScopeRequest)
+        assert not ordinary_push.HasField("time")
         await runtime.pop_scope(scope_id, output={"out": True})
-        ordinary_pop = _last_request(host_stub, pb.PopScopeRequest)
-        assert not ordinary_pop.HasField("timestamp_unix_micros")
+        ordinary_pop = _last_request(host_stub, host_pb.PopScopeRequest)
+        assert not ordinary_pop.HasField("time")
         historical_scope_id = await runtime.push_scope(
             "historical-scope",
             timestamp=datetime(1969, 12, 31, 23, 59, 59, 999998, tzinfo=timezone.utc),
         )
-        historical_push = _last_request(host_stub, pb.PushScopeRequest)
-        assert historical_push.HasField("timestamp_unix_micros")
-        assert historical_push.timestamp_unix_micros == -2
+        historical_push = _last_request(host_stub, host_pb.PushScopeRequest)
+        assert historical_push.HasField("time")
+        assert historical_push.time.ToMicroseconds() == -2
         await runtime.pop_scope(
             historical_scope_id,
             timestamp=datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
-        historical_pop = _last_request(host_stub, pb.PopScopeRequest)
-        assert historical_pop.HasField("timestamp_unix_micros")
-        assert historical_pop.timestamp_unix_micros == 0
+        historical_pop = _last_request(host_stub, host_pb.PopScopeRequest)
+        assert historical_pop.HasField("time")
+        assert historical_pop.time.ToMicroseconds() == 0
         tool_next = await ToolNext(runtime, "tool-next").call({"value": 1})
         llm_next = await _llm_next(runtime, {"content": {"prompt": "hello"}})
         stream_next = [chunk async for chunk in _llm_stream_next(runtime, {"content": {"prompt": "hello"}})]
@@ -2589,41 +2506,41 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
-    mark_request = _last_request(host_stub, pb.EmitMarkRequest)
+    mark_request = _last_request(host_stub, host_pb.EmitMarkRequest)
     assert mark_request.scope.scope_stack_id == "explicit-stack"
     assert mark_request.scope.parent_scope_id == "explicit-parent"
-    push_request = _last_request(host_stub, pb.PushScopeRequest)
+    push_request = _last_request(host_stub, host_pb.PushScopeRequest)
     assert push_request.scope.scope_stack_id == "stack-1"
     assert push_request.scope.parent_scope_id == "parent-1"
 
     telemetry_mark = next(
         request
         for request in host_stub.requests
-        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-options"
+        if isinstance(request, host_pb.EmitMarkRequest) and request.mark.name == "telemetry-options"
     )
-    assert telemetry_mark.data_schema.schema == "nemo.relay.DataSchema@1"
-    assert json.loads(telemetry_mark.data_schema.json) == {
+
+    assert plugin_api._protocol.unpack(telemetry_mark.mark.data_schema) == {
         "name": "nemo.relay.metric_measurements",
         "version": "1",
     }
-    assert telemetry_mark.severity == "warn"
-    assert telemetry_mark.category == "custom"
+    assert telemetry_mark.mark.severity == common_pb.LOG_SEVERITY_WARN
+    assert telemetry_mark.mark.category == "custom"
     metric_mark = next(
         request
         for request in host_stub.requests
-        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-metric"
+        if isinstance(request, host_pb.EmitMarkRequest) and request.mark.name == "telemetry-metric"
     )
-    assert json.loads(metric_mark.data.json)["measurements"][0]["value"] == 42
-    assert json.loads(metric_mark.data_schema.json) == {
+    assert json.loads(metric_mark.mark.data.json)["measurements"][0]["value"] == 42
+    assert plugin_api._protocol.unpack(metric_mark.mark.data_schema) == {
         "name": "nemo.relay.metric_measurements",
         "version": "1",
     }
-    assert metric_mark.category == "vendor.metric"
+    assert metric_mark.mark.category == "vendor.metric"
 
     override_mark = next(
         request
         for request in host_stub.requests
-        if isinstance(request, pb.EmitMarkRequest) and request.name == "override-parent"
+        if isinstance(request, host_pb.EmitMarkRequest) and request.mark.name == "override-parent"
     )
     assert override_mark.scope.scope_stack_id == "stack-1"
     assert override_mark.scope.parent_scope_id == "parent-2"
@@ -2662,17 +2579,17 @@ async def test_runtime_logs_every_level_with_structured_fields(host_stub: Record
     await runtime.error("error message", target="plugin")
     await runtime.log("warning", "warning alias", target="plugin")
 
-    requests = [request for request in host_stub.requests if isinstance(request, pb.LogRequest)]
+    requests = [request for request in host_stub.requests if isinstance(request, host_pb.LogRequest)]
     assert [request.level for request in requests] == [
-        pb.LOG_LEVEL_TRACE,
-        pb.LOG_LEVEL_DEBUG,
-        pb.LOG_LEVEL_INFO,
-        pb.LOG_LEVEL_WARN,
-        pb.LOG_LEVEL_ERROR,
-        pb.LOG_LEVEL_WARN,
+        common_pb.LOG_SEVERITY_TRACE,
+        common_pb.LOG_SEVERITY_DEBUG,
+        common_pb.LOG_SEVERITY_INFO,
+        common_pb.LOG_SEVERITY_WARN,
+        common_pb.LOG_SEVERITY_ERROR,
+        common_pb.LOG_SEVERITY_WARN,
     ]
-    assert all(request.activation_id == ACTIVATION_ID for request in requests)
-    assert all(request.auth_token == AUTH_TOKEN for request in requests)
+    assert all(request.credentials.activation_id == ACTIVATION_ID for request in requests)
+    assert all(request.credentials.auth_token == AUTH_TOKEN for request in requests)
     assert all(request.target == "plugin" for request in requests)
     assert [request.message for request in requests] == [
         "trace message",
@@ -2682,7 +2599,7 @@ async def test_runtime_logs_every_level_with_structured_fields(host_stub: Record
         "error message",
         "warning alias",
     ]
-    assert _decode_json_value(requests[0].fields, "fields") == {"ordinal": 0, "nested": {"ok": True}}
+    assert plugin_api._protocol.unpack(requests[0].fields) == {"ordinal": 0, "nested": {"ok": True}}
     assert not requests[1].HasField("fields")
 
     with pytest.raises(TypeError, match="fields must be a mapping"):
@@ -2731,6 +2648,162 @@ async def test_runtime_gate_operations_propagate_host_errors(host_stub: Recordin
         )
 
 
+async def test_invalid_gate_handle_rolls_back_callback_and_allows_retry() -> None:
+    class Host(RecordingHostStub):
+        invalid = True
+
+        async def RegisterConditionalMiddlewareGuardrail(self, request):
+            if self.invalid:
+                self.invalid = False
+                return host_pb.RegisterConditionalMiddlewareGuardrailResponse()
+            return await super().RegisterConditionalMiddlewareGuardrail(request)
+
+    host = Host()
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    arguments = ("gate", {RuntimeRegistrationKind.SUBSCRIBER}, "target", lambda _kinds, _name: None)
+    with pytest.raises(WorkerSdkError, match="invalid host response: handle"):
+        await runtime.register_conditional_middleware_guardrail(*arguments)
+    assert runtime._conditional_middleware_callbacks == {}
+    handle = await runtime.register_conditional_middleware_guardrail(*arguments)
+    assert handle._value == "gate-1"
+    assert await runtime.deregister_conditional_middleware_guardrail(handle)
+
+
+@pytest.mark.parametrize("field", ["local_name", "effective_name", "plugin_kind"])
+async def test_runtime_registration_discovery_validates_names(field) -> None:
+    class Host(RecordingHostStub):
+        async def ListRuntimeRegistrations(self, request):
+            response = await super().ListRuntimeRegistrations(request)
+            registration = response.registrations[0]
+            if field == "plugin_kind":
+                registration.owner.plugin.plugin_kind = ""
+            else:
+                setattr(registration, field, "")
+            return response
+
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=Host())
+    with pytest.raises(WorkerSdkError, match="invalid host response"):
+        await runtime.list_runtime_registrations()
+
+
+@pytest.mark.parametrize("method", ["CreateScopeStack", "PushScope"])
+async def test_scope_creation_rejects_empty_host_handles_and_allows_valid_retry(method) -> None:
+    class Host(RecordingHostStub):
+        async def CreateScopeStack(self, request):
+            if method == "CreateScopeStack":
+                return host_pb.CreateScopeStackResponse()
+            return await super().CreateScopeStack(request)
+
+        async def PushScope(self, request):
+            if method == "PushScope":
+                return host_pb.PushScopeResponse()
+            return await super().PushScope(request)
+
+    host = Host()
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    with pytest.raises(WorkerSdkError, match="invalid host response"):
+        await (runtime.create_scope_stack() if method == "CreateScopeStack" else runtime.push_scope("scope"))
+    assert runtime.current_scope_stack_id() is None
+    assert runtime.current_parent_scope_id() is None
+    runtime._host_stub = RecordingHostStub()
+    assert await runtime.create_scope_stack() == "stack-1"
+    assert await runtime.push_scope("scope") == "scope-1"
+
+
+async def test_drop_scope_stack_rejects_empty_handle_before_host_call(host_stub: RecordingHostStub) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    with pytest.raises(WorkerSdkError, match="scope_stack_id must not be empty"):
+        await runtime.drop_scope_stack("")
+    assert host_stub.requests == []
+    await runtime.drop_scope_stack("stack-1")
+
+
+async def test_structured_log_rejects_nested_nonstring_json_keys(host_stub: RecordingHostStub) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    with pytest.raises(WorkerSdkError, match="JSON object keys must be strings"):
+        await runtime.info("message", fields={"nested": {1: "first", "1": "second"}})
+    assert host_stub.requests == []
+
+
+@pytest.mark.parametrize("surface", ["metadata", "sanitizer", "tool_outcome", "llm_outcome"])
+async def test_typed_callback_outputs_reject_nested_nonstring_json_keys(surface) -> None:
+    invalid = {"nested": {1: "first", "1": "second"}}
+
+    class InvalidPlugin(WorkerPlugin):
+        plugin_id = "test.invalid-json-keys"
+
+        def register(self, ctx, config):
+            ctx.register_event_metadata_injector("metadata", lambda event: invalid)
+            ctx.register_mark_sanitize_guardrail("sanitizer", lambda event, fields: {"data": invalid})
+            ctx.register_tool_execution_intercept(
+                "tool_outcome", lambda context, next_call: ToolExecutionInterceptOutcome(result=invalid)
+            )
+            ctx.register_llm_request_intercept(
+                "llm_outcome",
+                lambda model, request, annotation: LlmRequestInterceptOutcome(
+                    request={"headers": {}, "content": invalid}
+                ),
+            )
+
+    service = _service(InvalidPlugin(), RecordingHostStub())
+    await _register(service)
+    kind = {
+        "metadata": common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR,
+        "sanitizer": common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL,
+        "tool_outcome": common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
+        "llm_outcome": common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
+    }[surface]
+    if surface in {"metadata", "sanitizer"}:
+        payload = {"event": _encode_payload(event_pb.Event, {"name": "root"})}
+    elif surface == "tool_outcome":
+        payload = {"tool": _ToolPayload(value=_encode_payload(common_pb.JsonValue, {}))}
+    else:
+        payload = {"llm": _llm_payload(request={"headers": {}, "content": {}})}
+    response = await service.Invoke(
+        _invoke_request(surface, kind, **payload),
+        AbortContext(),
+    )
+    assert response.WhichOneof("result") == "error"
+    assert response.error.code == "worker.sdk_error"
+    assert "JSON object keys must be strings" in response.error.message
+
+
+@pytest.mark.parametrize(
+    "annotated,error",
+    [
+        ({"messages": [], "params": {"stop": "END"}}, "StringList must be an array"),
+        ({"messages": [], "params": {"stop": {"first": "END"}}}, "StringList must be an array"),
+        ({"messages": [], "params": [["max_tokens", 12]]}, "GenerationParams must be an object"),
+        ({"messages": [], "model": b"example"}, "model must be a string"),
+        ({"messages": None}, "messages must be an array"),
+    ],
+)
+async def test_request_interceptor_rejects_invalid_native_container_and_string_shapes(annotated, error) -> None:
+    class InvalidPlugin(WorkerPlugin):
+        plugin_id = "test.invalid-request-shape"
+
+        def register(self, ctx, config):
+            ctx.register_llm_request_intercept(
+                "rewrite",
+                lambda model, request, annotation: LlmRequestInterceptOutcome(
+                    request=request, annotated_request=annotated
+                ),
+            )
+
+    service = _service(InvalidPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _invoke_request(
+            "rewrite",
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
+            llm=_llm_payload(request={"headers": {}, "content": {}}),
+        ),
+        AbortContext(),
+    )
+    assert response.WhichOneof("result") == "error"
+    assert error in response.error.message
+
+
 async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub) -> None:
     started = 0
     both_started = asyncio.Event()
@@ -2759,15 +2832,15 @@ async def test_invocation_scope_context_is_isolated_across_concurrent_requests(h
         response = await service.Invoke(
             _invoke_request(
                 "subscriber",
-                pb.SUBSCRIBER,
+                common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
                 invocation_id=f"invoke-{name}",
                 continuation_id=f"next-{name}",
-                event=_json_envelope(EVENT_SCHEMA, {"name": name}),
-                scope=pb.ScopeContext(scope_stack_id=stack, parent_scope_id=parent),
+                event=_encode_payload(event_pb.Event, {"name": name}),
+                scope=runtime_pb.ScopeContext(scope_stack_id=stack, parent_scope_id=parent),
             ),
             AbortContext(),
         )
-        assert response.WhichOneof("result") == "empty"
+        assert response.WhichOneof("result") == "completed"
 
     tasks = [
         asyncio.create_task(invoke("first", "stack-1", "parent-1")),
@@ -2785,9 +2858,9 @@ async def test_invocation_scope_context_is_isolated_across_concurrent_requests(h
         await asyncio.gather(*tasks, return_exceptions=True)
 
     marks = [
-        (request.name, request.scope.scope_stack_id, request.scope.parent_scope_id)
+        (request.mark.name, request.scope.scope_stack_id, request.scope.parent_scope_id)
         for request in host_stub.requests
-        if isinstance(request, pb.EmitMarkRequest)
+        if isinstance(request, host_pb.EmitMarkRequest)
     ]
     assert len(marks) == 2
     assert sorted(marks) == [
@@ -2822,7 +2895,7 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
             auth_token=AUTH_TOKEN,
             host_stub=OldHostStub(),
         )
-        with pytest.raises(WorkerSdkError, match="grpc-v1 diagnostics extension"):
+        with pytest.raises(WorkerSdkError, match="worker v1 diagnostics contract"):
             await old_host_runtime.runtime_diagnostics()
 
     host_stub.failures["CreateScopeStack"] = "error"
@@ -2847,9 +2920,9 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
 
     for failure, expected_message in (
         ("empty", "tool execution result is missing"),
-        ("missing_result", "tool execution result is missing result"),
-        ("malformed_result", "tool execution result contains invalid JSON"),
-        ("malformed_annotation", "tool execution result annotation contains invalid JSON"),
+        ("missing_result", "invalid host response"),
+        ("malformed_result", "invalid host response"),
+        ("malformed_annotation", "invalid host response"),
     ):
         host_stub.failures["ToolNext"] = failure
         with pytest.raises(WorkerSdkError, match=expected_message):
@@ -2899,11 +2972,10 @@ async def test_runtime_scope_timestamps_reject_invalid_values_before_host_call(
 
 async def test_lifecycle_acks(service: _WorkerService) -> None:
     cancel = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
+        worker_pb.CancelInvocationRequest(
             invocation_id="invoke-1",
-            auth_token=AUTH_TOKEN,
             reason="test",
+            credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
         ),
         AbortContext(),
     )
@@ -2911,11 +2983,12 @@ async def test_lifecycle_acks(service: _WorkerService) -> None:
     assert "not active" in cancel.message
 
     shutdown = await service.Shutdown(
-        pb.ShutdownRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, reason="test"),
+        worker_pb.ShutdownRequest(
+            reason="test", credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+        ),
         AbortContext(),
     )
-    assert shutdown.accepted
-    assert "shutdown accepted" in shutdown.message
+    assert shutdown == worker_pb.ShutdownResponse()
 
 
 async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent() -> None:
@@ -2948,20 +3021,19 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
     await _register(service)
     request = _invoke_request(
         "cancel",
-        pb.TOOL_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
         invocation_id="cancel-unary",
-        tool=pb.ToolInvocation(tool_name="lookup", value=_json_envelope(JSON_SCHEMA, {})),
+        tool=_ToolPayload(tool_name="lookup", value=_encode_payload(common_pb.JsonValue, {})),
     )
     invoke_task = asyncio.create_task(service.Invoke(request, AbortContext()))
     await asyncio.wait_for(started.wait(), timeout=1)
 
     first_task = asyncio.create_task(
         service.CancelInvocation(
-            pb.CancelInvocationRequest(
-                activation_id=ACTIVATION_ID,
+            worker_pb.CancelInvocationRequest(
                 invocation_id="cancel-unary",
-                auth_token=AUTH_TOKEN,
                 reason="test timeout",
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             AbortContext(),
         )
@@ -2969,11 +3041,10 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
     await asyncio.wait_for(cancelled.wait(), timeout=1)
     second_task = asyncio.create_task(
         service.CancelInvocation(
-            pb.CancelInvocationRequest(
-                activation_id=ACTIVATION_ID,
+            worker_pb.CancelInvocationRequest(
                 invocation_id="cancel-unary",
-                auth_token=AUTH_TOKEN,
                 reason="repeat",
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             AbortContext(),
         )
@@ -3025,7 +3096,7 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
     await _register(service)
     request = _invoke_request(
         "cancel_stream",
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
         invocation_id="cancel-stream",
         llm=_llm_payload(),
     )
@@ -3037,11 +3108,10 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
     await asyncio.wait_for(started.wait(), timeout=1)
     cancel_task = asyncio.create_task(
         service.CancelInvocation(
-            pb.CancelInvocationRequest(
-                activation_id=ACTIVATION_ID,
+            worker_pb.CancelInvocationRequest(
                 invocation_id="cancel-stream",
-                auth_token=AUTH_TOKEN,
                 reason="stream abandoned",
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
             ),
             AbortContext(),
         )
@@ -3081,7 +3151,7 @@ async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_
     await _register(service)
     request = _invoke_request(
         "buffered_stream",
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
         invocation_id="buffered-stream",
         llm=_llm_payload(),
     )
@@ -3093,11 +3163,10 @@ async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_
     assert "buffered-stream" in service._active_invocations
 
     ack = await service.CancelInvocation(
-        pb.CancelInvocationRequest(
-            activation_id=ACTIVATION_ID,
+        worker_pb.CancelInvocationRequest(
             invocation_id="buffered-stream",
-            auth_token=AUTH_TOKEN,
             reason="stop buffered stream",
+            credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
         ),
         AbortContext(),
     )
@@ -3133,7 +3202,7 @@ async def test_stream_callback_cancellation_without_host_reason_is_terminal_erro
     await _register(service)
     request = _invoke_request(
         "cancelled_stream",
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
         invocation_id="self-cancelled-stream",
         llm=_llm_payload(),
     )
@@ -3379,6 +3448,12 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
             pass
 
     class FakeServer:
+        def add_generic_rpc_handlers(self, *args):
+            """Accept standard health service registration in this lifecycle double."""
+
+        def add_registered_method_handlers(self, *args):
+            """Accept optimized standard health method registration."""
+
         def add_insecure_port(self, target: str) -> int:
             """Return a resolved loopback port without publishing it yet."""
             assert target == "127.0.0.1:0"
@@ -3396,9 +3471,11 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     fake_server = FakeServer()
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: FakeChannel())
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
+    monkeypatch.setattr(plugin_api.host_grpc, "RelayHostRuntimeServiceStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.diagnostics_grpc, "RelayDiagnosticsServiceStub", lambda channel: object())
+    monkeypatch.setattr(
+        plugin_api.worker_grpc, "add_PluginWorkerServiceServicer_to_server", lambda service, server: None
+    )
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
     monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
@@ -3432,6 +3509,12 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
             self.closed = True
 
     class FakeServer:
+        def add_generic_rpc_handlers(self, *args):
+            """Accept standard health service registration in this lifecycle double."""
+
+        def add_registered_method_handlers(self, *args):
+            """Accept optimized standard health method registration."""
+
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
@@ -3453,9 +3536,11 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     fake_server = FakeServer()
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
+    monkeypatch.setattr(plugin_api.host_grpc, "RelayHostRuntimeServiceStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.diagnostics_grpc, "RelayDiagnosticsServiceStub", lambda channel: object())
+    monkeypatch.setattr(
+        plugin_api.worker_grpc, "add_PluginWorkerServiceServicer_to_server", lambda service, server: None
+    )
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
     monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
@@ -3479,6 +3564,12 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
             self.closed = True
 
     class FakeServer:
+        def add_generic_rpc_handlers(self, *args):
+            """Accept standard health service registration in this lifecycle double."""
+
+        def add_registered_method_handlers(self, *args):
+            """Accept optimized standard health method registration."""
+
         stopped = False
 
         def add_insecure_port(self, target: str) -> int:
@@ -3496,9 +3587,11 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     fake_server = FakeServer()
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
-    monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
+    monkeypatch.setattr(plugin_api.host_grpc, "RelayHostRuntimeServiceStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.diagnostics_grpc, "RelayDiagnosticsServiceStub", lambda channel: object())
+    monkeypatch.setattr(
+        plugin_api.worker_grpc, "add_PluginWorkerServiceServicer_to_server", lambda service, server: None
+    )
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
     monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
@@ -3534,14 +3627,21 @@ async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
         assert endpoint.startswith("http://127.0.0.1:")
 
         channel = grpc.aio.insecure_channel(_grpc_target(endpoint))
-        stub = pb_grpc.PluginWorkerStub(channel)
-        health = await stub.Health(pb.HealthRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN), timeout=5)
-        assert health.ok
-        shutdown = await stub.Shutdown(
-            pb.ShutdownRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, reason="test"),
+        stub = worker_grpc.PluginWorkerServiceStub(channel)
+        health = await stub.Health(
+            worker_pb.HealthRequest(
+                credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+            ),
             timeout=5,
         )
-        assert shutdown.accepted
+        assert health.status == runtime_pb.WORKER_HEALTH_STATUS_READY
+        shutdown = await stub.Shutdown(
+            worker_pb.ShutdownRequest(
+                reason="test", credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN)
+            ),
+            timeout=5,
+        )
+        assert shutdown == worker_pb.ShutdownResponse()
         await asyncio.wait_for(task, timeout=5)
     finally:
         if channel is not None:
@@ -3558,7 +3658,7 @@ def _service(plugin: WorkerPlugin, host_stub: RecordingHostStub) -> _WorkerServi
 
 
 def _worker_error(message: str) -> Any:
-    return pb.WorkerError(code="test.error", message=message, retryable=False)
+    return common_pb.WorkerError(code="test.error", message=message, retryable=False)
 
 
 def _tag(value: Json, tag: str) -> Json:
@@ -3578,13 +3678,12 @@ def _tag_llm_request(request: Json, tag: str) -> Json:
 
 
 def _handshake_request() -> Any:
-    return pb.HandshakeRequest(
-        activation_id=ACTIVATION_ID,
+    return worker_pb.HandshakeRequest(
         plugin_id="tests.python_worker",
         relay_version="0.8.0",
-        worker_protocol=WORKER_PROTOCOL,
-        auth_token=AUTH_TOKEN,
+        protocol=common_pb.ProtocolIdentity(name=WORKER_PROTOCOL, version="1.0.0"),
         host_endpoint="http://127.0.0.1:9",
+        credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
     )
 
 
@@ -3593,11 +3692,10 @@ def _validate_request(
     *,
     plugin_id: str = "tests.python_worker",
 ) -> Any:
-    return pb.ValidateRequest(
-        activation_id=ACTIVATION_ID,
+    return worker_pb.ValidateRequest(
         plugin_id=plugin_id,
-        auth_token=AUTH_TOKEN,
-        config=_json_envelope(JSON_SCHEMA, {} if config is None else config),
+        config=_encode_payload(common_pb.JsonValue, {} if config is None else config),
+        credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
     )
 
 
@@ -3606,11 +3704,10 @@ def _register_request(
     *,
     plugin_id: str = "tests.python_worker",
 ) -> Any:
-    return pb.RegisterRequest(
-        activation_id=ACTIVATION_ID,
+    return worker_pb.RegisterRequest(
         plugin_id=plugin_id,
-        auth_token=AUTH_TOKEN,
-        config=_json_envelope(JSON_SCHEMA, {} if config is None else config),
+        config=_encode_payload(common_pb.JsonValue, {} if config is None else config),
+        credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
     )
 
 
@@ -3629,29 +3726,89 @@ def _invoke_request(
     continuation_id: str = "next-1",
     **kwargs: Any,
 ) -> Any:
-    llm = kwargs.get("llm")
-    if llm is not None and surface in {pb.LLM_EXECUTION_INTERCEPT, pb.LLM_STREAM_EXECUTION_INTERCEPT}:
-        if not llm.HasField("execution_codec_context"):
-            context = pb.LlmExecutionCodecContext(request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()))
-            if surface == pb.LLM_EXECUTION_INTERCEPT:
-                context.response.CopyFrom(pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity()))
-            llm.execution_codec_context.CopyFrom(context)
-    return pb.InvokeRequest(
-        activation_id=ACTIVATION_ID,
+    surface_name = common_pb.RegistrationSurface.Name(surface).removeprefix("REGISTRATION_SURFACE_").lower()
+    fields: dict[str, Any] = dict(
         invocation_id=invocation_id,
         registration_name=registration_name,
-        surface=surface,
-        continuation_id=continuation_id,
-        auth_token=AUTH_TOKEN,
-        **kwargs,
+        credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
     )
+    if "scope" in kwargs:
+        fields["scope"] = kwargs["scope"]
+    if "event" in kwargs:
+        fields[surface_name] = kwargs["event"]
+        if surface == common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL:
+            fields[surface_name].scope.scope_category = event_pb.SCOPE_CATEGORY_END
+    elif "tool" in kwargs:
+        tool = kwargs["tool"]
+        if surface == common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT:
+            fields[surface_name] = runtime_pb.ToolExecutionInvocation(
+                tool_name=tool.tool_name,
+                args=tool.value,
+                tool_call_id=tool.tool_call_id,
+                continuation_id=continuation_id,
+            )
+        else:
+            fields[surface_name] = runtime_pb.ToolValueInvocation(tool_name=tool.tool_name, value=tool.value)
+    elif "conditional_middleware" in kwargs:
+        fields[surface_name] = kwargs["conditional_middleware"]
+    elif "llm" in kwargs:
+        llm = kwargs["llm"]
+        context = llm.execution_codec_context or _ExecutionContext(
+            request=runtime_pb.LlmCodecContext(codec=_wire_codec()),
+            response=runtime_pb.LlmCodecContext(codec=_wire_codec()),
+        )
+        if surface == common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT:
+            return worker_pb.InvokeStreamRequest(
+                **fields,
+                request=llm.request,
+                model_name=llm.model_name,
+                continuation_id=continuation_id,
+                request_codec=context.request,
+            )
+        types = {
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL: (
+                runtime_pb.LlmSanitizeRequestInvocation,
+                dict(
+                    request=llm.request,
+                    context=llm.request_sanitize_context or runtime_pb.LlmCodecContext(codec=_wire_codec()),
+                ),
+            ),
+            common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL: (
+                runtime_pb.LlmSanitizeResponseInvocation,
+                dict(
+                    response=llm.response,
+                    context=llm.response_sanitize_context or runtime_pb.LlmCodecContext(codec=_wire_codec()),
+                ),
+            ),
+            common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL: (
+                runtime_pb.LlmConditionalInvocation,
+                dict(request=llm.request),
+            ),
+            common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT: (
+                runtime_pb.LlmRequestInvocation,
+                dict(request=llm.request, model_name=llm.model_name, annotated_request=llm.annotated_request),
+            ),
+            common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT: (
+                runtime_pb.LlmExecutionInvocation,
+                dict(
+                    request=llm.request,
+                    model_name=llm.model_name,
+                    continuation_id=continuation_id,
+                    request_codec=context.request,
+                    response_codec=context.response,
+                ),
+            ),
+        }
+        message_type, body = types[surface]
+        fields[surface_name] = message_type(**body)
+    return worker_pb.InvokeRequest(**fields)
 
 
 def _tool_request(registration_name: str, surface: int, value: Json) -> Any:
     return _invoke_request(
         registration_name,
         surface,
-        tool=pb.ToolInvocation(tool_name="lookup", value=_json_envelope(JSON_SCHEMA, value)),
+        tool=_ToolPayload(tool_name="lookup", value=_encode_payload(common_pb.JsonValue, value)),
     )
 
 
@@ -3664,12 +3821,12 @@ def _llm_payload(
 ) -> Any:
     kwargs: dict[str, Any] = {
         "model_name": model_name,
-        "request": _json_envelope(LLM_REQUEST_SCHEMA, request or {"content": {}}),
-        "response": _json_envelope(JSON_SCHEMA, response or {}),
+        "request": _encode_payload(llm_pb.LlmRequest, {"headers": {}, **(request or {"content": {}})}),
+        "response": _encode_payload(common_pb.JsonValue, response or {}),
     }
     if annotated is not None:
-        kwargs["annotated_request"] = _json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated)
-    return pb.LlmInvocation(**kwargs)
+        kwargs["annotated_request"] = _encode_payload(llm_pb.AnnotatedLlmRequest, annotated)
+    return _LlmPayload(**kwargs)
 
 
 async def _invoke_json_async(
@@ -3684,8 +3841,9 @@ async def _invoke_json_async(
     else:
         request = _invoke_request(registration_name, surface, llm=payload)
     response = await service.Invoke(request, AbortContext())
-    assert response.WhichOneof("result") == "json", response
-    return _envelope_value(response.json.value)
+    selected = response.WhichOneof("result")
+    assert selected in {"tool_value", "llm_request", "llm_response", "metadata_additions", "event_sanitize"}, response
+    return _envelope_value(getattr(response, selected))
 
 
 async def _invoke_tool_execution_async(
@@ -3693,28 +3851,15 @@ async def _invoke_tool_execution_async(
     registration_name: str,
 ) -> Json:
     response = await service.Invoke(
-        _tool_request(registration_name, pb.TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
+        _tool_request(registration_name, common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
         AbortContext(),
     )
-    assert response.WhichOneof("result") == "tool_execution", response
-    outcome = response.tool_execution.outcome
-    value = {
-        "result": _decode_json_value(outcome.result, "tool execution outcome result"),
-        "pending_marks": (
-            _decode_json_value(outcome.pending_marks, "tool execution outcome pending marks")
-            if outcome.HasField("pending_marks")
-            else []
-        ),
-    }
-    if outcome.HasField("annotation"):
-        annotation = _decode_json_value(outcome.annotation, "tool execution outcome annotation")
-        if annotation is not None:
-            value["annotation"] = annotation
-    return value
+    assert response.WhichOneof("result") == "tool_execution_outcome", response
+    return plugin_api._protocol.unpack(response.tool_execution_outcome)
 
 
 def _envelope_value(envelope: Any) -> Json:
-    return json.loads(envelope.json.decode("utf-8"))
+    return plugin_api._protocol.unpack(envelope)
 
 
 def _stream_value(chunk: Any) -> Json:
@@ -3740,23 +3885,23 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 
 def _all_expected_surfaces() -> list[int]:
     return [
-        pb.SUBSCRIBER,
-        pb.EVENT_METADATA_INJECTOR,
-        pb.MARK_SANITIZE_GUARDRAIL,
-        pb.SCOPE_SANITIZE_START_GUARDRAIL,
-        pb.SCOPE_SANITIZE_END_GUARDRAIL,
-        pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
-        pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
-        pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
-        pb.TOOL_REQUEST_INTERCEPT,
-        pb.TOOL_EXECUTION_INTERCEPT,
-        pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
-        pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
-        pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
-        pb.LLM_REQUEST_INTERCEPT,
-        pb.LLM_EXECUTION_INTERCEPT,
-        pb.LLM_STREAM_EXECUTION_INTERCEPT,
-        pb.CONDITIONAL_MIDDLEWARE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_SUBSCRIBER,
+        common_pb.REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR,
+        common_pb.REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
+        common_pb.REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
+        common_pb.REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL,
     ]
 
 
@@ -3783,18 +3928,18 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
     response = await service.Invoke(
         _invoke_request(
             "context",
-            pb.TOOL_EXECUTION_INTERCEPT,
+            common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
             continuation_id="continuation-1",
-            tool=pb.ToolInvocation(
+            tool=_ToolPayload(
                 tool_name="lookup",
-                value=_json_envelope(JSON_SCHEMA, {"query": "relay"}),
+                value=_encode_payload(common_pb.JsonValue, {"query": "relay"}),
                 tool_call_id="worker-call-9",
             ),
         ),
         AbortContext(),
     )
 
-    assert response.WhichOneof("result") == "tool_execution", response
+    assert response.WhichOneof("result") == "tool_execution_outcome", response
     assert seen["tool_name"] == "lookup"
     assert seen["arguments"] == {"query": "relay"}
     assert seen["tool_call_id"] == "worker-call-9"
@@ -3819,7 +3964,7 @@ async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> No
     service = _service(ContextPlugin(), RecordingHostStub())
     await _register(service)
     await service.Invoke(
-        _tool_request("context_none", pb.TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
+        _tool_request("context_none", common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
         AbortContext(),
     )
 
@@ -3863,21 +4008,23 @@ def test_worker_cancellation_keeps_code_even_with_http_prefix() -> None:
 
 
 async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh() -> None:
-    identifiers = [str(UUID(int=number)) for number in range(1, 14)]
-    snapshot = pb.ScopeStackSnapshot(
+    identifiers = [str(UUID(int=number)) for number in range(1, 12)]
+    snapshot = runtime_pb.ScopeStackSnapshot(
         scopes=[
-            pb.ScopeStackEntry(scope_id=identifier, scope_type=category)
-            for identifier, category in zip(identifiers, list(range(1, 12)) + [0, 999], strict=True)
+            runtime_pb.ScopeStackEntry(scope_id=identifier, scope_type=category)
+            for identifier, category in zip(identifiers, list(range(1, 12)), strict=True)
         ]
     )
-    snapshot_response = pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot)
+    snapshot_response = host_pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot)
     host = mock.Mock()
     host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
         side_effect=[
-            pb.GetCurrentScopeStackSnapshotResponse(),
+            host_pb.GetCurrentScopeStackSnapshotResponse(no_context={}),
             snapshot_response,
-            pb.GetCurrentScopeStackSnapshotResponse(snapshot=pb.ScopeStackSnapshot(scopes=snapshot.scopes[:1])),
-            pb.GetCurrentScopeStackSnapshotResponse(),
+            host_pb.GetCurrentScopeStackSnapshotResponse(
+                snapshot=runtime_pb.ScopeStackSnapshot(scopes=snapshot.scopes[:1])
+            ),
+            host_pb.GetCurrentScopeStackSnapshotResponse(no_context={}),
         ]
     )
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
@@ -3886,7 +4033,7 @@ async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh(
         retained = await runtime.current_scope_stack_snapshot()
         assert retained is not None
         assert [entry.scope_id for entry in retained.scopes] == identifiers
-        assert [entry.scope_type for entry in retained.scopes] == list(ScopeType) + [ScopeType.UNKNOWN] * 2
+        assert [entry.scope_type for entry in retained.scopes] == list(ScopeType)
         retained.scopes.pop()
         with runtime.bind_scope_stack("second", parent_scope_id=identifiers[0]):
             current = await runtime.current_scope_stack_snapshot()
@@ -3900,19 +4047,24 @@ async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh(
     requests = [call.args[0] for call in host.GetCurrentScopeStackSnapshot.await_args_list]
     assert [request.scope.scope_stack_id for request in requests] == ["", "first", "second", ""]
     assert [request.scope.parent_scope_id for request in requests] == ["", identifiers[1], identifiers[0], ""]
-    assert all(request.activation_id == ACTIVATION_ID and request.auth_token == AUTH_TOKEN for request in requests)
+    assert all(
+        request.credentials.activation_id == ACTIVATION_ID and request.credentials.auth_token == AUTH_TOKEN
+        for request in requests
+    )
 
 
 async def test_scope_stack_snapshot_distinguishes_host_error_and_unsupported_rpc() -> None:
     host = mock.Mock()
     host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
-        return_value=pb.GetCurrentScopeStackSnapshotResponse(error=_worker_error("expired binding"))
+        side_effect=grpc.aio.AioRpcError(
+            grpc.StatusCode.FAILED_PRECONDITION, initial_metadata=(), trailing_metadata=(), details="expired binding"
+        )
     )
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
     with pytest.raises(WorkerSdkError, match="expired binding"):
         await runtime.current_scope_stack_snapshot()
     for status, message in [
-        (grpc.StatusCode.UNIMPLEMENTED, "grpc-v1 snapshot extension"),
+        (grpc.StatusCode.UNIMPLEMENTED, "worker v1 snapshot contract"),
         (grpc.StatusCode.PERMISSION_DENIED, "GetCurrentScopeStackSnapshot failed: denied"),
     ]:
         host.GetCurrentScopeStackSnapshot.side_effect = grpc.aio.AioRpcError(
@@ -3927,10 +4079,10 @@ async def test_scope_stack_snapshot_matches_shared_fixture() -> None:
     entries = json.loads(fixture_path.read_text())["scopes"]
     host = mock.Mock()
     host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
-        return_value=pb.GetCurrentScopeStackSnapshotResponse(
-            snapshot=pb.ScopeStackSnapshot(
+        return_value=host_pb.GetCurrentScopeStackSnapshotResponse(
+            snapshot=runtime_pb.ScopeStackSnapshot(
                 scopes=[
-                    pb.ScopeStackEntry(
+                    runtime_pb.ScopeStackEntry(
                         scope_id=entry["scope_id"], scope_type=plugin_api._proto_scope_type(entry["scope_type"])
                     )
                     for entry in entries
@@ -3947,16 +4099,21 @@ async def test_scope_stack_snapshot_matches_shared_fixture() -> None:
 @pytest.mark.parametrize("message", ["provider failed", "HTTP 503: provider unavailable"])
 def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: str) -> None:
     legacy = plugin_api._sdk_error_to_worker(
-        plugin_api._worker_error_to_sdk(pb.WorkerError(code="host.runtime_error", message=message))
+        plugin_api._worker_error_to_sdk(common_pb.WorkerError(code="host.runtime_error", message=message))
     )
-    wire = pb.WorkerError(code="host.runtime_error", message=message, downstream_continuation_id="next-owned")
-    wire = pb.WorkerError.FromString(wire.SerializeToString())
+    wire = common_pb.WorkerError(code="host.runtime_error", message=message, downstream_continuation_id="next-owned")
+    wire = common_pb.WorkerError.FromString(wire.SerializeToString())
     first = plugin_api._worker_error_to_sdk(wire)
     second = plugin_api._worker_error_to_sdk(
-        pb.WorkerError(code="host.runtime_error", message="another call", downstream_continuation_id="next-other")
+        common_pb.WorkerError(
+            code="host.runtime_error", message="another call", downstream_continuation_id="next-other"
+        )
     )
     # A caught failure followed by success or another failure does not overwrite origin.
-    assert plugin_api._json_result_to_value(pb.JsonResult(value=_json_envelope(JSON_SCHEMA, None))) is None
+    assert (
+        plugin_api._json_result_to_value(host_pb.LlmNextResponse(value=_encode_payload(common_pb.JsonValue, None)))
+        is None
+    )
     for error, expected in [(second, "next-other"), (first, "next-owned")]:
         assert isinstance(error, WorkerSdkError)
         forwarded = plugin_api._sdk_error_to_worker(error)
@@ -3973,15 +4130,15 @@ class ProvenanceHost(RecordingHostStub):
         self.surface = surface
 
     def failure(self, request: Any) -> Any:
-        return pb.WorkerError(
+        return common_pb.WorkerError(
             code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
         )
 
     async def ToolNext(self, request: Any) -> Any:
-        return pb.ToolExecutionResultResponse(error=self.failure(request))
+        return host_pb.ToolNextResponse(error=self.failure(request))
 
     async def LlmNext(self, request: Any) -> Any:
-        return pb.JsonResult(error=self.failure(request))
+        return host_pb.LlmNextResponse(error=self.failure(request))
 
     async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
         if self.surface == "stream_setup":
@@ -3991,7 +4148,7 @@ class ProvenanceHost(RecordingHostStub):
                 grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
                 "provider failed",
             )
-        yield pb.StreamChunk(error=self.failure(request))
+        yield host_pb.LlmStreamNextResponse(error=self.failure(request))
 
 
 class ProvenancePlugin(WorkerPlugin):
@@ -4039,15 +4196,20 @@ async def test_continuation_provenance_survives_worker_callbacks(surface: str, r
 
     async def invoke(index: int) -> Any:
         if surface == "tool":
-            request = _tool_request("tool", pb.TOOL_EXECUTION_INTERCEPT, {})
+            request = _tool_request("tool", common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT, {})
         else:
             request = _invoke_request(
                 "llm" if surface == "llm" else "stream",
-                pb.LLM_EXECUTION_INTERCEPT if surface == "llm" else pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                common_pb.REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT
+                if surface == "llm"
+                else common_pb.REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT,
                 llm=_llm_payload(),
             )
         request.invocation_id = f"invoke-{index}"
-        request.continuation_id = f"next-{index}"
+        if surface.startswith("stream"):
+            request.continuation_id = f"next-{index}"
+        else:
+            getattr(request, request.WhichOneof("invocation")).continuation_id = f"next-{index}"
         if surface.startswith("stream"):
             chunks = [chunk async for chunk in service.InvokeStream(request, AbortContext())]
             return chunks[0].error
@@ -4062,3 +4224,24 @@ async def test_continuation_provenance_survives_worker_callbacks(surface: str, r
         else:
             assert error.downstream_continuation_id == f"next-{index}"
             assert "provider failed" in error.message
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        host_pb.GetCurrentScopeStackSnapshotResponse(),
+        host_pb.GetCurrentScopeStackSnapshotResponse(
+            snapshot=runtime_pb.ScopeStackSnapshot(
+                scopes=[
+                    runtime_pb.ScopeStackEntry(scope_id=str(UUID(int=1)), scope_type=999),
+                ]
+            )
+        ),
+    ],
+)
+async def test_scope_stack_snapshot_rejects_malformed_host_response(response) -> None:
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(return_value=response)
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    with pytest.raises(WorkerSdkError, match="invalid host response"):
+        await runtime.current_scope_stack_snapshot()

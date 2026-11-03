@@ -126,7 +126,7 @@ class MessageLimitInterceptor(grpc.aio.ServerInterceptor):
         if handler is None:
             return None
         method = details.method.rsplit("/", 1)[-1]
-        worker = "/PluginWorker/" in details.method or ".PluginWorker/" in details.method
+        worker = details.method.startswith("/nvidia.nemo.relay.worker.v1.PluginWorkerService/")
         invocation = worker and method in ("Invoke", "InvokeStream")
         callback = _callback_name(details)
         limit = self._by_name.get(callback or "", self._default) if not worker or invocation else self._default
