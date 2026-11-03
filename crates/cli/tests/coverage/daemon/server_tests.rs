@@ -3686,7 +3686,7 @@ async fn daemon_provider_responses_do_not_expose_redirect_targets() {
         GatewayConfig {
             openai_base_url: origin,
             insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
-                address.ip().to_string(),
+                address.host().to_string(),
             ])
             .unwrap(),
             response_timeout_secs: 10,
@@ -5043,7 +5043,7 @@ async fn http_model_hosts_daemon_pass_through_is_credential_free_and_does_not_fo
         openai_base_url: format!("http://{address}/v1"),
         anthropic_base_url: format!("http://{address}/v1"),
         insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
-            address.ip().to_string(),
+            address.host().to_string(),
         ])
         .unwrap(),
         response_timeout_secs: 10,

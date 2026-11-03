@@ -1273,7 +1273,7 @@ async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_crede
         openai_base_url: format!("http://{address}/v1"),
         anthropic_base_url: format!("http://{address}/v1"),
         insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
-            address.ip().to_string(),
+            address.host().to_string(),
         ])
         .unwrap(),
         response_timeout_secs: 10,

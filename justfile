@@ -1476,6 +1476,8 @@ test-python:
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"
+    mkdir -p "$test_config_home/system"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_home/system"
     export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     export_uv_python_runtime
     if is_true "{{ ci }}"; then
