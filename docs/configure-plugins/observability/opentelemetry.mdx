@@ -203,7 +203,7 @@ Each endpoint selects one fixed semantic projection:
 | Type | Projection |
 |---|---|
 | `full` | Complete NeMo Relay projection, including `nemo_relay.*` attributes and native handling for non-metric marks. |
-| `gen_ai` | OpenTelemetry GenAI semantic conventions only. |
+| `gen_ai` | OpenTelemetry GenAI semantic conventions, with explicitly configured custom attributes. |
 | `openinference` | OpenInference-compatible spans with the existing default handling for non-metric marks. |
 
 You can repeat a type or combine types. Each endpoint owns an independent exporter
@@ -345,7 +345,7 @@ are configured. gRPC does not use HTTP redirects.
 | `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
-| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. GenAI skips reserved aliases; see [Attribute Mappings](#attribute-mappings). |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
 
@@ -502,7 +502,7 @@ activation.
 | `resource_attributes` | `{}` | String-to-string resource attributes. Relay automatically adds `telemetry.sdk.name`, `telemetry.sdk.language`, and `telemetry.sdk.version`; do not configure those reserved keys. |
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
-| `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `attribute_mappings` | `[]` | `{ key, alias }` copies of selected sanitized fields. GenAI skips reserved aliases; see [Attribute Mappings](#attribute-mappings). |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Every promoted resource writes to the sink's one file, which carries one `ResourceSpans` entry per resource. |
 
@@ -525,7 +525,7 @@ you configure at least one prefix.
 | Supported values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
 | Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and integers outside the signed 64-bit range. |
 | Scope lifecycle | A Scope-end key is authoritative when Relay constructs the final span. When Scope-end omits the key, the Scope-start value remains. |
-| OpenTelemetry collisions | Projection-owned attributes always win. For `full` and `openinference`, configured attribute-mapping aliases also win over promoted metadata. |
+| OpenTelemetry collisions | Projection-owned attributes always win. Configured attribute-mapping aliases also win over promoted metadata. |
 
 For example, `"app."`, `"app_"`, and `"app-"` are valid literal prefixes.
 Leading or repeated dots, whitespace, other punctuation, and glob expressions
@@ -554,8 +554,7 @@ the `otel.metadata_promotion_value_unsupported.` prefix to monitor rejected span
 metadata keys.
 
 Projection-owned attributes take precedence over promoted metadata with the
-same key. For `full` and `openinference`, configured attribute-mapping aliases
-also take precedence. Relay also omits selected
+same key. Configured attribute-mapping aliases also take precedence. Relay also omits selected
 keys in namespaces owned by Relay or supported semantic projections:
 `nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
 `openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
@@ -571,6 +570,55 @@ Scope-start metadata can create resource attributes. Keys that cannot be
 promoted, including values overridden by configured resource attributes, remain
 in serialized metadata. Use `resource_attributes` instead for static values
 that must be attached to every span from an endpoint.
+
+## Attribute Mappings
+
+`attribute_mappings` copies exact source keys to aliases on one trace endpoint or
+file sink. The default is empty. For `full` and `openinference`, sources are that
+projection's attributes. For `gen_ai`, sources also include sanitized lifecycle
+fields under the `full` projection's names; only the selected aliases are
+exported, not the rest of the full projection.
+
+For example, a GenAI endpoint can select directories supplied in scope payloads:
+
+```toml
+attribute_mappings = [
+  { key = "nemo_relay.start.input.cwd", alias = "app.cwd" },
+  { key = "nemo_relay.end.output.cwd", alias = "app.cwd_end" },
+]
+```
+
+These values describe the observed payload. They are not inferred session
+directories or verified execution directories. Start and end values may differ.
+The same mechanism can select other supplied fields, such as an application
+request ID or attempt count.
+
+- Selection uses exact projected keys, not JSONPath or recursive traversal.
+  Scalar values retain their projected OTLP types; nested objects and arrays
+  retain the full projection's JSON-string representation. Null and missing
+  fields are omitted.
+- Credential removal and event sanitizers run before selection. A removed field
+  stays absent. Mappings do not inherit parent values or change Event metadata.
+- Aliases are resolved when the span completes. Start and end source keys are
+  distinct. Existing projection attributes win over aliases. Configured aliases
+  reserve their names against metadata promotion even when their source is absent.
+  Skipped mappings do not reserve aliases.
+- For `gen_ai`, mappings are skipped for aliases in the reserved namespaces listed
+  under [Event Metadata Promotion](#event-metadata-promotion), including
+  `gen_ai.*` and `nemo_relay.*`, and the bare `metadata` key. A mapping cannot
+  manufacture an unsupported semantic attribute even when that attribute is
+  absent from the span. Existing `full` and `openinference` alias rules are
+  unchanged. Each skipped mapping records `otel.attribute_mapping_alias_reserved`
+  once when the subscriber is constructed and logs a warning. Runtime diagnostics
+  count skipped mappings and identify their aliases without including payload values.
+- GenAI continues to omit marks. Mappings neither enable marks nor change
+  payload-retention settings such as `enable_full_payloads`.
+
+Previously, GenAI ignored `attribute_mappings`. Existing GenAI configurations
+with mappings now export the selected custom aliases. Reserved aliases remain
+ignored and no longer do so silently; they do not prevent exporter activation.
+Remove custom mappings to retain the previous output. Existing validation for
+blank keys, blank aliases, and duplicate aliases is unchanged.
 
 ## Root Resource Metadata Promotion
 
