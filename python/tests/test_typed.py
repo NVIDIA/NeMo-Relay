@@ -65,6 +65,22 @@ class StreamResponse:
     chunks: list[str]
 
 
+@dataclasses.dataclass
+class NullableArguments:
+    value: str | None
+
+
+@dataclasses.dataclass
+class DefaultedNullableArguments:
+    value: str | None = "fallback"
+
+
+@dataclasses.dataclass
+class ConstructorExcludedArguments(DefaultedNullableArguments):
+    excluded_null: str | None = dataclasses.field(init=False, default=None)
+    excluded_text: str = dataclasses.field(init=False, default="derived")
+
+
 # Codec instances
 search_args_codec = DataclassCodec(SearchArgs)
 search_result_codec = DataclassCodec(SearchResult)
@@ -188,6 +204,46 @@ class TestDataclassCodec:
         restored = dc_result_codec.from_json(dc_result_codec.to_json(original))
         assert restored == original
 
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
+    def test_explicit_none_roundtrip(
+        self,
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
+    ) -> None:
+        codec = DataclassCodec(argument_type)
+        original = argument_type(value=None)
+
+        encoded = codec.to_json(original)
+
+        assert encoded == {"value": None}
+        assert codec.from_json(encoded) == original
+
+    def test_omitted_field_uses_default(self) -> None:
+        assert DataclassCodec(DefaultedNullableArguments).from_json({}).value == "fallback"
+
+    def test_omitted_required_field_raises(self) -> None:
+        with pytest.raises(TypeError, match="value"):
+            DataclassCodec(NullableArguments).from_json({})
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(NullableArguments(None), {"value": None}, id="nested-dataclass"),
+            pytest.param(ConstructorExcludedArguments(None), {"value": None}, id="constructor-excluded-dataclass"),
+            pytest.param([ConstructorExcludedArguments(None)], [{"value": None}], id="constructor-excluded-list"),
+            pytest.param(
+                {"nested": ConstructorExcludedArguments(None)},
+                {"nested": {"value": None}},
+                id="constructor-excluded-dictionary",
+            ),
+            pytest.param([NullableArguments(None)], [{"value": None}], id="nested-list"),
+            pytest.param({"nested": NullableArguments(None)}, {"nested": {"value": None}}, id="nested-dictionary"),
+        ],
+    )
+    def test_nested_dataclass_preserves_none(self, value: object, expected: Json) -> None:
+        assert DataclassCodec(NestedResult).to_json(NestedResult(value)) == {"value": expected}
+
 
 class TestCustomCodec:
     def test_custom_codec(self) -> None:
@@ -246,6 +302,34 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
+    @pytest.mark.parametrize(
+        "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
+    )
+    @pytest.mark.parametrize("value", [None, "control"])
+    async def test_nullable_argument_reaches_tool(
+        self,
+        argument_type: type[NullableArguments] | type[DefaultedNullableArguments] | type[ConstructorExcludedArguments],
+        value: str | None,
+    ) -> None:
+        received_values: list[str | None] = []
+
+        def execute(
+            arguments: NullableArguments | DefaultedNullableArguments | ConstructorExcludedArguments,
+        ) -> ToolExecutionResult[Json]:
+            received_values.append(arguments.value)
+            return ToolExecutionResult({"value": arguments.value})
+
+        outcome = await typed.tool_execute(
+            "nullable_argument",
+            argument_type(value),
+            execute,
+            args_codec=DataclassCodec(argument_type),
+            result_codec=JsonPassthrough(),
+        )
+
+        assert received_values == [value]
+        assert outcome.result == {"value": value}
+
     async def test_best_effort_tool_result_envelope_reaches_events(self, subscribed_events) -> None:
         """Expose the normalized result in scope events while preserving opaque annotations."""
 
@@ -847,6 +931,29 @@ class TestBestEffortAnyCodec:
 
     def setup_method(self) -> None:
         self.codec = BestEffortAnyCodec()
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(DefaultedNullableArguments(None), {}, id="nullable-field"),
+            pytest.param(
+                ConstructorExcludedArguments(None),
+                {"excluded_text": "derived"},
+                id="constructor-excluded-fields",
+            ),
+            pytest.param(NestedResult(NullableArguments(None)), {"value": {}}, id="nested-nullable-field"),
+        ],
+    )
+    def test_dataclass_none_omission_is_unchanged(self, value: object, expected: Json) -> None:
+        encoded = cast(JsonObject, self.codec.to_json(value))
+        assert encoded["data"] == expected
+
+    def test_omitted_dataclass_field_still_uses_default(self) -> None:
+        codec = BestEffortAnyCodec(allowed_types=[DefaultedNullableArguments])
+
+        restored = codec.from_json(codec.to_json(DefaultedNullableArguments(None)))
+
+        assert restored == DefaultedNullableArguments("fallback")
 
     # -- Round-trip: JSON-native types --
 
