@@ -57,8 +57,15 @@ async fn plaintext_provider_dispatch_does_not_initialize_tls() {
         .await
         .unwrap();
     });
+    let configured = pooled_builder().build(tower::service_fn(|_: Uri| {
+        std::future::ready(Err::<TokioIo<tokio::net::TcpStream>, _>(
+            std::io::Error::other(
+                "configured provider connector must not be used for plaintext dispatch",
+            ),
+        ))
+    }));
     let response = request_provider(
-        &pooled_http_client(),
+        &configured,
         false,
         Request::get(destination)
             .body(box_body(Empty::<Bytes>::new()))
