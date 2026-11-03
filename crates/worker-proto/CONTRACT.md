@@ -362,6 +362,11 @@ checks protobuf bounds and nanoseconds; diagnostic `usize` values use checked
 `uint64` conversions. Losslessness applies to supported domain values and declared
 open payloads; unknown protobuf fields are not retained through domain conversion.
 
+JSON numbers follow the native SDK's numeric model: signed or unsigned 64-bit
+integers and finite binary64 floating-point values. Decimal spelling and precision
+beyond that model are not part of the round-trip guarantee. Codec-owned JSON uses
+the same numeric representation in native and worker callbacks.
+
 When changing a shared type or its transport representation:
 
 1. Update the schema and mapping together. Use the existing DTO/list macros for

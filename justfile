@@ -1215,7 +1215,11 @@ check-worker-proto:
 
 # Resolve the locked validation dependency into the ignored build cache.
 resolve-worker-proto-deps:
-    python3 scripts/proto_dependencies.py
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    python_executable="$(uv_python_executable)"
+    "$python_executable" scripts/proto_dependencies.py
 
 check-python-worker-proto:
     #!/usr/bin/env bash

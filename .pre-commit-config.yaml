@@ -57,7 +57,7 @@ repos:
         files: '^((?:crates/worker-proto/buf\.yaml|crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py)|crates/worker-proto/proto/.*\.proto)$'
       - id: buf-lint
         name: worker proto dependency resolution
-        entry: python3 scripts/proto_dependencies.py
+        entry: just resolve-worker-proto-deps
         types: [file]
         pass_filenames: false
         files: '^(crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py|python/plugin/build_backend\.py)$'
