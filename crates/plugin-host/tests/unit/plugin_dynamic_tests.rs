@@ -1933,7 +1933,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
 }
 
 #[test]
-fn registry_rejects_pre_zero_eight_ranges_and_v2_contracts() {
+fn registry_rejects_invalid_baselines_and_native_api_versions() {
     let mut future_relay = sample_record();
     let DynamicPluginCompatibility::Worker(compatibility) = &mut future_relay.compatibility else {
         unreachable!("sample record is a worker")
@@ -1955,19 +1955,6 @@ fn registry_rejects_pre_zero_eight_ranges_and_v2_contracts() {
             .contains("excludes Relay versions before 0.8")
     );
 
-    let mut worker_v2 = sample_record();
-    let DynamicPluginCompatibility::Worker(compatibility) = &mut worker_v2.compatibility else {
-        unreachable!("sample record is a worker")
-    };
-    compatibility.worker_protocol = "grpc-v2".into();
-    let error = DynamicPluginRegistry::from_records(vec![worker_v2])
-        .expect_err("a persisted grpc-v2 record should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("worker_protocol = \"nvidia.nemo.relay.worker.v1\"")
-    );
-
     let mut native_v2 = sample_record();
     native_v2.metadata.kind = DynamicPluginKind::RustDynamic;
     native_v2.compatibility =
@@ -1982,6 +1969,58 @@ fn registry_rejects_pre_zero_eight_ranges_and_v2_contracts() {
     let error = DynamicPluginRegistry::from_records(vec![native_v2])
         .expect_err("a persisted native API 2 record should fail");
     assert!(error.to_string().contains("native_api = \"1\""));
+}
+
+#[test]
+fn registry_preserves_unsupported_workers_for_explicit_recovery() {
+    for protocol in ["grpc-v1", "grpc-v2"] {
+        let mut stale = sample_record();
+        let DynamicPluginCompatibility::Worker(compatibility) = &mut stale.compatibility else {
+            unreachable!("sample record is a worker")
+        };
+        compatibility.worker_protocol = protocol.into();
+        let mut registry = DynamicPluginRegistry::new();
+        assert!(
+            registry
+                .add(stale.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("rebuild and reinstall")
+        );
+
+        let mut healthy = sample_record();
+        healthy.metadata.id = "acme.healthy".into();
+        let mut registry = DynamicPluginRegistry::from_records(vec![stale, healthy]).unwrap();
+        let record = registry.get("acme.guardrails.pii").unwrap();
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert!(
+            record
+                .status
+                .validation
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("plugins remove")
+        );
+        assert!(
+            registry
+                .enable("acme.guardrails.pii")
+                .unwrap_err()
+                .to_string()
+                .contains("rebuild and reinstall")
+        );
+        registry.remove("acme.guardrails.pii").unwrap();
+        let mut restored =
+            DynamicPluginRegistry::from_records(registry.cloned_records(true)).unwrap();
+        assert!(restored.get("acme.guardrails.pii").unwrap().is_tombstoned());
+        assert!(restored.get("acme.healthy").is_some());
+        restored
+            .add(sample_record())
+            .expect("a rebuilt worker can replace its tombstone");
+    }
 }
 
 #[test]

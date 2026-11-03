@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 
+use nemo_relay_worker_proto::nvidia_worker_v1::WORKER_PROTOCOL;
+
 use super::{
     DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginId,
     DynamicPluginManifest, DynamicPluginMetadata, DynamicPluginRecord, DynamicPluginRuntimeStatus,
@@ -24,11 +26,19 @@ impl DynamicPluginRegistry {
     }
 
     /// Reconstructs a registry from previously persisted durable records.
+    ///
+    /// Unsupported worker protocols remain readable for inspection and removal,
+    /// with invalid compatibility status. New registrations and enablement still
+    /// require the current protocol.
     pub fn from_records(records: Vec<DynamicPluginRecord>) -> Result<Self> {
         let mut registry = Self::new();
         for mut record in records {
             normalize_record_shape(&mut record);
-            validate_record_shape(&record)?;
+            validate_record_structure(&record)?;
+            if let Err(error) = validate_worker_protocol(&record) {
+                record.status.validation.compatibility = DynamicPluginCheckState::Invalid;
+                record.status.validation.message = Some(error.to_string());
+            }
             let plugin_id = record.metadata.id.clone();
             if registry.records.contains_key(&plugin_id) {
                 return Err(PluginError::Conflict(format!(
@@ -103,6 +113,7 @@ impl DynamicPluginRegistry {
     pub fn enable(&mut self, plugin_id: &str) -> Result<bool> {
         let record = self.lookup_mut(plugin_id)?;
         ensure_live_record(record, plugin_id)?;
+        validate_worker_protocol(record)?;
         if record.spec.enabled {
             return Ok(false);
         }
@@ -281,6 +292,11 @@ fn normalize_record_shape(record: &mut DynamicPluginRecord) {
 }
 
 fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
+    validate_record_structure(record)?;
+    validate_worker_protocol(record)
+}
+
+fn validate_record_structure(record: &DynamicPluginRecord) -> Result<()> {
     if record.metadata.id.trim().is_empty() {
         return Err(PluginError::InvalidConfig(
             "dynamic plugin id must not be empty".into(),
@@ -328,10 +344,9 @@ fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
         ));
     };
     validate_relay_compatibility(&compatibility.relay)?;
-    if compatibility.worker_protocol.trim() != "nvidia.nemo.relay.worker.v1" {
+    if compatibility.worker_protocol.trim().is_empty() {
         return Err(PluginError::InvalidConfig(
-            "dynamic worker record has invalid compatibility shape; expected worker_protocol = \"nvidia.nemo.relay.worker.v1\""
-                .into(),
+            "dynamic worker record has invalid compatibility shape; worker_protocol must not be empty".into(),
         ));
     }
     let valid_load = matches!(
@@ -345,6 +360,19 @@ fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
             "dynamic worker record has invalid load shape".into(),
         ))
     }
+}
+
+fn validate_worker_protocol(record: &DynamicPluginRecord) -> Result<()> {
+    if let super::DynamicPluginCompatibility::Worker(compatibility) = &record.compatibility
+        && compatibility.worker_protocol != WORKER_PROTOCOL
+    {
+        return Err(PluginError::InvalidConfig(format!(
+            "dynamic worker '{}' uses unsupported worker protocol '{}'; expected worker_protocol = \"{WORKER_PROTOCOL}\"; \
+             rebuild and reinstall the worker after removing its old registration with `nemo-relay plugins remove`",
+            record.metadata.id, compatibility.worker_protocol
+        )));
+    }
+    Ok(())
 }
 
 fn validate_relay_compatibility(relay: &str) -> Result<()> {

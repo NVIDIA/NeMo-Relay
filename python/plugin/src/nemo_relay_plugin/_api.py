@@ -2327,11 +2327,11 @@ class ToolNext:
                 ),
             ),
         )
+        _validate_response(response)
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
         if not response.HasField("value"):
             raise WorkerSdkError("tool execution result is missing")
-        _validate_response(response)
         return _tool_execution_result_from_proto(response.value)
 
 
@@ -3193,22 +3193,22 @@ def _validate_response(response: Any) -> None:
 
 
 def _json_result_to_value(result: Any) -> Json:
+    _validate_response(result)
     selected = result.WhichOneof("result")
     if selected == "error":
         raise _worker_error_to_sdk(result.error)
     if selected != "value":
         raise WorkerSdkError("missing RPC result")
-    _validate_response(result)
     return _decode_payload(result.value, "RPC result")
 
 
 def _stream_chunk_to_value(chunk: Any) -> Json:
+    _validate_response(chunk)
     item = chunk.WhichOneof("item")
     if item == "error":
         raise _worker_error_to_sdk(chunk.error)
     if item != "value":
         raise WorkerSdkError("stream chunk is empty")
-    _validate_response(chunk)
     return _decode_payload(chunk.value, "stream chunk")
 
 

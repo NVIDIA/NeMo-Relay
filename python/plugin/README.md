@@ -223,9 +223,8 @@ cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
 Worker v1 implementations are expected to implement this best-effort cancellation
-contract. Relay remains compatible with older workers that return
-`accepted = false`; in that case it still drops the transport request, but it
-cannot guarantee worker-side interruption.
+contract. If a worker returns `accepted = false`, Relay still drops the transport
+request, but it cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and

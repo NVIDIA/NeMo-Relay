@@ -26,6 +26,11 @@ Crate and wheel releases follow the Relay package version independently of the c
    manifest and declare `compat.relay = ">=1.0.0,<2.0"`.
 3. Recalculate artifact digests, reinstall workers, and validate activation.
 
+Persisted registrations for an unsupported worker protocol remain removable.
+Run `nemo-relay plugins remove <plugin-id>` to remove the old registration, then
+reinstall the rebuilt worker. Unsupported workers cannot be newly registered or
+enabled; their authored manifests and handshakes must use the current protocol.
+
 Custom workers must implement the new service names, nested credentials,
 surface-specific invocation oneofs, dedicated response types, and executable
 validation rules. JSON remains only for application and provider-owned values.

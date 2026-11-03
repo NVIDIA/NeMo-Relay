@@ -198,6 +198,7 @@ impl PluginWorkerClient<Channel> {
     ) -> &mut pb::plugin_worker_service_client::PluginWorkerServiceClient<Channel> {
         &mut self.0
     }
+    #[cfg(unix)]
     pub fn new(channel: Channel) -> Self {
         Self(pb::plugin_worker_service_client::PluginWorkerServiceClient::new(channel))
     }

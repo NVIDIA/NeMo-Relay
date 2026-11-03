@@ -2280,7 +2280,7 @@ async def test_stream_invoke_success_and_failures(service: _WorkerService, host_
             AbortContext(),
         )
     ]
-    assert "stream chunk is empty" in empty_chunk[0].error.message
+    assert "invalid host response" in empty_chunk[0].error.message
 
 
 async def test_stream_callback_exception_is_structured() -> None:
@@ -2919,7 +2919,7 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
         await ToolNext(runtime, "tool-next").call({"value": 1})
 
     for failure, expected_message in (
-        ("empty", "tool execution result is missing"),
+        ("empty", "invalid host response"),
         ("missing_result", "invalid host response"),
         ("malformed_result", "invalid host response"),
         ("malformed_annotation", "invalid host response"),
@@ -2941,7 +2941,7 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
             pass
 
     host_stub.failures["LlmStreamNext"] = "empty"
-    with pytest.raises(WorkerSdkError, match="stream chunk is empty"):
+    with pytest.raises(WorkerSdkError, match="invalid host response"):
         async for _chunk in _llm_stream_next(runtime, {"content": {}}):
             pass
 
@@ -4129,6 +4129,21 @@ def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: st
     forwarded.ClearField("downstream_continuation_id")
     assert forwarded == legacy
     assert not plugin_api._sdk_error_to_worker(WorkerSdkError(str(first))).HasField("downstream_continuation_id")
+
+
+@pytest.mark.parametrize("surface", ["tool", "llm", "stream"])
+async def test_continuations_validate_host_errors_before_decoding(surface: str) -> None:
+    error = common_pb.WorkerError(code="host.failure", message="invalid status", http_status=399)
+    with pytest.raises(WorkerSdkError, match="invalid host response"):
+        if surface == "tool":
+            host = mock.Mock()
+            host.ToolNext = mock.AsyncMock(return_value=host_pb.ToolNextResponse(error=error))
+            runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+            await ToolNext(runtime, "next").call({})
+        elif surface == "llm":
+            plugin_api._json_result_to_value(host_pb.LlmNextResponse(error=error))
+        else:
+            plugin_api._stream_chunk_to_value(host_pb.LlmStreamNextResponse(error=error))
 
 
 class ProvenanceHost(RecordingHostStub):

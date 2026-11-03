@@ -2081,18 +2081,14 @@ impl PluginWorker for WorkerService {
         self.authorize(&credentials.activation_id, &credentials.auth_token)?;
         nemo_relay_worker_proto::validation::validate(&request)
             .map_err(Status::invalid_argument)?;
+        let draining = self.draining.load(Ordering::Acquire);
         Ok(Response::new(HealthResponse {
-            status: if self.draining.load(Ordering::Acquire) {
+            status: if draining {
                 WorkerHealthStatus::Unhealthy as i32
             } else {
                 WorkerHealthStatus::Ready as i32
             },
-            message: if self.draining.load(Ordering::Acquire) {
-                "draining"
-            } else {
-                "ready"
-            }
-            .into(),
+            message: if draining { "draining" } else { "ready" }.into(),
             identity: Some(self.identity()),
         }))
     }

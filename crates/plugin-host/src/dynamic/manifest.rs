@@ -6,6 +6,7 @@ use std::fs;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 
+use nemo_relay_worker_proto::nvidia_worker_v1::WORKER_PROTOCOL;
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -20,8 +21,6 @@ use super::{
     validate_dynamic_plugin_relay_baseline,
 };
 use crate::{PluginError, Result};
-
-const SUPPORTED_WORKER_PROTOCOL: &str = "nvidia.nemo.relay.worker.v1";
 
 /// Authored `relay-plugin.toml` manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -782,9 +781,9 @@ fn validate_compat_shape(
                 compat.worker_protocol.as_deref(),
                 "compat.worker_protocol",
             )?;
-            if worker_protocol.trim() != SUPPORTED_WORKER_PROTOCOL {
+            if worker_protocol.trim() != WORKER_PROTOCOL {
                 return Err(PluginError::InvalidConfig(format!(
-                    "worker plugins must declare compat.worker_protocol = \"{SUPPORTED_WORKER_PROTOCOL}\""
+                    "worker plugins must declare compat.worker_protocol = \"{WORKER_PROTOCOL}\"; rebuild and reinstall workers built for an older protocol"
                 )));
             }
             if compat.native_api.is_some() {

@@ -135,6 +135,66 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
 }
 
 #[test]
+fn remove_and_reinstall_recover_a_persisted_legacy_worker() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.legacy-worker";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir.clone(),
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&entry.state_path).unwrap()).unwrap();
+    state["records"][0]["compatibility"]["worker"]["worker_protocol"] =
+        serde_json::json!("grpc-v1");
+    std::fs::write(&entry.state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        &manifest_path,
+        manifest.replace("nvidia.nemo.relay.worker.v1", "grpc-v1"),
+    )
+    .unwrap();
+
+    remove(PluginsRemoveRequest { id: id.into() }, &server).unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    assert!(
+        find_record_by_id(&scopes, id)
+            .unwrap()
+            .unwrap()
+            .record
+            .is_tombstoned()
+    );
+    std::fs::write(&manifest_path, manifest).unwrap();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    assert!(
+        !find_record_by_id(&scopes, id)
+            .unwrap()
+            .unwrap()
+            .record
+            .is_tombstoned()
+    );
+}
+
+#[test]
 fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
     let temp = tempfile::tempdir().unwrap();
     let id = "acme.layered";
