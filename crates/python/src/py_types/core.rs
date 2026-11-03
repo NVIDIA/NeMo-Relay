@@ -25,6 +25,7 @@ use nemo_relay::api::runtime::{
     ThreadScopeStackBinding, ToolExecutionContext,
 };
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+use nemo_relay::error::FlowError;
 
 pub(crate) const TOOL_EXECUTION_INTERCEPT_RESULT_ERROR: &str =
     "ToolExecutionInterceptOutcome result must be the downstream payload, not ToolExecutionResult";
@@ -157,6 +158,7 @@ pub struct PyLlmStream {
         Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>>,
     pub cancel: tokio::sync::watch::Sender<bool>,
     pub closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    pub finalizer_error: Option<Arc<std::sync::Mutex<Option<FlowError>>>>,
 }
 
 #[pymethods]
@@ -167,27 +169,44 @@ impl PyLlmStream {
 
     pub(crate) fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let receiver = Arc::clone(&self.receiver);
+        let finalizer_error = self.finalizer_error.clone();
 
         crate::py_async::future_into_py(py, async move {
             let mut guard = receiver.lock().await;
             let next_item = guard.recv().await;
             match next_item {
-                None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
-                    "stream exhausted",
-                )),
+                None => {
+                    if let Some(error) = finalizer_error
+                        .and_then(|error| error.lock().expect("stream finalizer error").take())
+                    {
+                        return Err(flow_error_to_py_err(error));
+                    }
+                    Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
+                        "stream exhausted",
+                    ))
+                }
                 Some(Ok(value)) => Python::attach(|py| json_to_py(py, &value)),
-                Some(Err(e)) => Err(flow_error_to_py_err(e)),
+                Some(Err(error)) => {
+                    if let Some(finalizer_error) = finalizer_error {
+                        finalizer_error
+                            .lock()
+                            .expect("stream finalizer error")
+                            .take();
+                    }
+                    Err(flow_error_to_py_err(error))
+                }
             }
         })
     }
 
     /// Stop forwarding chunks, wait for producer cleanup, and release the native stream.
     ///
-    /// This operation is idempotent and raises when producer cleanup fails.
+    /// This operation is idempotent and raises when producer cleanup or finalization fails.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cancel = self.cancel.clone();
         let mut closed = self.closed.clone();
         let receiver = Arc::clone(&self.receiver);
+        let finalizer_error = self.finalizer_error.clone();
 
         crate::py_async::future_into_py(py, async move {
             cancel.send_replace(true);
@@ -201,8 +220,22 @@ impl PyLlmStream {
             let result = closed.borrow().clone().expect("close state checked above");
             let mut receiver = receiver.lock().await;
             receiver.close();
-            while receiver.try_recv().is_ok() {}
-            result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
+            let mut buffered_stream_error = None;
+            while let Ok(buffered_result) = receiver.try_recv() {
+                if buffered_stream_error.is_none() {
+                    buffered_stream_error = buffered_result.err();
+                }
+            }
+            let finalizer_error = finalizer_error
+                .and_then(|error| error.lock().expect("stream finalizer error").take());
+            if let Some(error) = buffered_stream_error {
+                return Err(flow_error_to_py_err(error));
+            }
+            result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+            match finalizer_error {
+                Some(error) => Err(flow_error_to_py_err(error)),
+                None => Ok(()),
+            }
         })
     }
 }
