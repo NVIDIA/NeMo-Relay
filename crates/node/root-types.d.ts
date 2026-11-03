@@ -13,9 +13,18 @@ export type LlmRequestShape = {
 
 export type RuntimeRegistrationKindName = `${RuntimeRegistrationKind}`;
 
-export type ResourceMetricsMeasurementScope = 'runtime_default' | 'global' | 'application_process' | 'process_tree';
+export type ResourceMetricsMeasurementScope = 'runtime_default' | ResourceMeasurementScope;
 
-export type ResourceUnit<U extends string> = U | `${U}`;
+export type ResourceUnitKind =
+  | DurationUnit
+  | CapacityUnit
+  | DataUnit
+  | BandwidthUnit
+  | CpuUnit
+  | UtilizationUnit
+  | CountUnit;
+
+export type ResourceUnit<U extends ResourceUnitKind> = U | `${U}`;
 
 export interface ResourceMetricsPollingConfig {
   enabled?: boolean;
@@ -139,140 +148,137 @@ export type ResourceMeasurementScope = 'global' | 'application_process' | 'proce
 /** Measurement values use bigint for exact integers above JavaScript's safe-integer range. */
 export type ResourceNumeric = number | bigint;
 
-export interface ResourceMeasurement<
-  T extends number | bigint,
-  U extends DurationUnit | CapacityUnit | DataUnit | BandwidthUnit | CpuUnit | UtilizationUnit | CountUnit,
-> {
-  value: T;
-  unit: U;
+export interface ResourceMeasurement<T extends ResourceNumeric, U extends ResourceUnitKind> {
+  readonly value: T;
+  readonly unit: U;
 }
 
 export interface ResourceLimitEventCount {
-  resource: 'cpu' | 'memory' | 'processes';
-  event: 'throttled' | 'high' | 'maximum' | 'out_of_memory' | 'terminated';
-  count: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly resource: 'cpu' | 'memory' | 'processes';
+  readonly event: 'throttled' | 'high' | 'maximum' | 'out_of_memory' | 'terminated';
+  readonly count: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
 }
 
 export type AcceleratorVendor = 'nvidia' | 'amd' | 'intel' | 'apple' | 'other';
 
 export interface AcceleratorDeviceMetrics {
-  vendor: AcceleratorVendor;
-  deviceIdentifier: string;
-  deviceIndex: number | null;
-  memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
+  readonly vendor: AcceleratorVendor;
+  readonly deviceIdentifier: string;
+  readonly deviceIndex: number | null;
+  readonly memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
 }
 
 export interface AcceleratorProcessMetrics {
-  vendor: AcceleratorVendor;
-  deviceIdentifier: string;
-  deviceIndex: number | null;
-  processId: number;
-  memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
+  readonly vendor: AcceleratorVendor;
+  readonly deviceIdentifier: string;
+  readonly deviceIndex: number | null;
+  readonly processId: number;
+  readonly memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
 }
 
 export interface FilesystemCapacityMetrics {
-  path: string;
-  totalCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  availableCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  freeCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly path: string;
+  readonly totalCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly availableCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly freeCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
 }
 
 export interface CpuMetrics {
-  userTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  systemTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  totalTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  consumptionRate: ResourceMeasurement<number, CpuUnit> | null;
-  throttledTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  effectiveLimit: ResourceMeasurement<number, CpuUnit> | null;
-  somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly userTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly systemTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly totalTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly consumptionRate: ResourceMeasurement<number, CpuUnit> | null;
+  readonly throttledTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly effectiveLimit: ResourceMeasurement<number, CpuUnit> | null;
+  readonly somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 
 export interface MemoryMetrics {
-  systemUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  systemTotal: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  systemAvailable: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  resident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  private: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  physicalFootprint: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  virtualMemory: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  peakResident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  limit: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  environmentAccounted: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  outOfMemoryEventCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly systemUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly systemTotal: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly systemAvailable: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly resident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly private: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly physicalFootprint: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly virtualMemory: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly peakResident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly limit: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly environmentAccounted: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly outOfMemoryEventCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 
 export interface ProcessMetrics {
-  activeCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  descendantCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  threadCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  lifetimeCreationCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  openFileDescriptorCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  windowsHandleCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly activeCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly descendantCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly threadCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly lifetimeCreationCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly openFileDescriptorCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly windowsHandleCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 
 export interface DiskMetrics {
-  readData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  writeData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  readThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  writeThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  readOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  writeOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  filesystems: FilesystemCapacityMetrics[];
+  readonly readData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly writeData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly readThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly writeThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly readOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly writeOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly filesystems: readonly FilesystemCapacityMetrics[];
 }
 
 export interface GpuMetrics {
-  deviceMetrics: AcceleratorDeviceMetrics[] | null;
-  processMetrics: AcceleratorProcessMetrics[] | null;
+  readonly deviceMetrics: readonly AcceleratorDeviceMetrics[] | null;
+  readonly processMetrics: readonly AcceleratorProcessMetrics[] | null;
 }
 
 export interface NetworkTrafficMetrics {
-  receivedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  transmittedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  receiveThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  transmitThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  receivedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  transmittedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  receiveErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  transmitErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly receivedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly transmittedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly receiveThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly transmitThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly receivedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly transmittedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly receiveErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly transmitErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
 }
 
 export interface NetworkInterfaceMetrics {
-  name: string;
-  traffic: NetworkTrafficMetrics;
+  readonly name: string;
+  readonly traffic: NetworkTrafficMetrics;
 }
 
 export interface NetworkMetrics {
-  measurementScope: 'global';
-  system: NetworkTrafficMetrics;
-  interfaces: NetworkInterfaceMetrics[];
+  readonly measurementScope: 'global';
+  readonly system: NetworkTrafficMetrics;
+  readonly interfaces: readonly NetworkInterfaceMetrics[];
 }
 
 export interface ProcessSamplingMetadata {
-  visibleProcesses: ResourceNumeric;
-  sampledProcesses: ResourceNumeric;
+  readonly visibleProcesses: ResourceNumeric;
+  readonly sampledProcesses: ResourceNumeric;
   /** Readable process counts keyed by canonical snake_case measurement paths. */
-  fieldSampledProcesses: Record<string, ResourceNumeric>;
+  readonly fieldSampledProcesses: Readonly<Record<string, ResourceNumeric>>;
 }
 
 export interface ResourceMetricsSnapshot {
-  timestamp: string;
-  operatingSystem: ResourceOperatingSystem;
-  measurementScope: ResourceMeasurementScope;
-  processSampling: ProcessSamplingMetadata | null;
-  cpu: CpuMetrics | null;
-  memory: MemoryMetrics | null;
-  process: ProcessMetrics | null;
-  disk: DiskMetrics | null;
-  gpu: GpuMetrics | null;
-  network: NetworkMetrics | null;
+  readonly timestamp: string;
+  readonly operatingSystem: ResourceOperatingSystem;
+  readonly measurementScope: ResourceMeasurementScope;
+  readonly processSampling: ProcessSamplingMetadata | null;
+  readonly cpu: CpuMetrics | null;
+  readonly memory: MemoryMetrics | null;
+  readonly process: ProcessMetrics | null;
+  readonly disk: DiskMetrics | null;
+  readonly gpu: GpuMetrics | null;
+  readonly network: NetworkMetrics | null;
 }
 
 /** Codec identity available while a managed LLM event is sanitized. */
@@ -395,9 +401,7 @@ export interface ConfigDiagnostic {
   field?: string;
   message: string;
 }
-export interface ToolExecutionInterceptOutcome {
-  result: Json;
-  annotation?: Json;
+export interface ToolExecutionInterceptOutcome extends ToolExecutionResult {
   pendingMarks?: PendingMarkSpec[];
 }
 export interface PluginContext {
@@ -512,7 +516,7 @@ export type EventMetadataScalar = string | number | boolean;
  * Flat value accepted in event metadata additions. After JSON conversion,
  * numeric arrays must contain only integer values or only floating-point values.
  */
-export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
+export type EventMetadataValue = EventMetadataScalar | readonly string[] | readonly number[] | readonly boolean[];
 
 /** Metadata additions returned by an event metadata injector. */
 export type EventMetadata = Record<string, EventMetadataValue>;
