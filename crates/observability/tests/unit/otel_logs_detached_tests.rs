@@ -557,3 +557,91 @@ fn scope_with_parent(uuid: Uuid, parent_uuid: Option<Uuid>, category: ScopeCateg
         None,
     ))
 }
+
+#[test]
+fn http_log_export_reports_collector_partial_success_as_runtime_diagnostic() {
+    use opentelemetry::logs::{LogRecord as _, Logger as _, LoggerProvider as _};
+    use opentelemetry_proto::tonic::collector::logs::v1::{
+        ExportLogsPartialSuccess, ExportLogsServiceResponse,
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _runtime_guard = runtime.enter();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+    let body = ExportLogsServiceResponse {
+        partial_success: Some(ExportLogsPartialSuccess {
+            rejected_log_records: 1,
+            error_message: "log record rejected by collector policy".into(),
+        }),
+    }
+    .encode_to_vec();
+    let receiver = capture_one_request_with_response(listener, body);
+    let config = OpenTelemetryLogConfig::new(endpoint.clone())
+        .with_max_queue_size(1)
+        .with_max_export_batch_size(1);
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+        endpoint,
+        runtime_diagnostics.clone(),
+    ));
+    let provider = build_log_provider(&config, diagnostics, None).unwrap();
+    let logger = provider.logger("partial-success-test");
+    let mut record = logger.create_log_record();
+    record.set_body(AnyValue::String("rejected".into()));
+    logger.emit(record);
+    provider.force_flush().unwrap();
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let snapshot = runtime_diagnostics.snapshot();
+    let rejected = snapshot
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.logs_rejected")
+        .unwrap_or_else(|| panic!("no otel.logs_rejected in {snapshot:?}"));
+    assert_eq!(rejected.count, 1);
+    assert!(!rejected.message.contains("collector policy"));
+    let _ = provider.shutdown();
+}
+
+fn capture_one_request_with_response(
+    listener: TcpListener,
+    response_body: Vec<u8>,
+) -> mpsc::Receiver<()> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let content_length = String::from_utf8_lossy(&bytes[..offset])
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                if bytes.len() >= offset + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\n\r\n",
+            response_body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&response_body).unwrap();
+        sender.send(()).unwrap();
+    });
+    receiver
+}

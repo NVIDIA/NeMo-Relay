@@ -777,13 +777,21 @@ the SDK's concurrent-export setting. It also does not expose a separate batch
 processor export timeout; use the endpoint's `timeout_millis` to bound each
 OTLP request.
 
+A collector can return a successful OTLP response while rejecting individual
+spans, log records, or metric data points. For OTLP/HTTP exports, NeMo Relay
+reads that partial success response and records `otel.spans_rejected`,
+`otel.logs_rejected`, or `otel.metric_points_rejected` in the exporter's
+`runtime_diagnostics`. Its `count` is the total number of rejected items, and
+`message` includes the endpoint origin (scheme, host, and port). The collector's
+own error message is not included, because it can contain payload data. The
+export still counts as successful, so `force_flush()` and `shutdown()` can
+succeed.
+
 <Warning>
-**Known limitation: OTLP partial success is not reported.** A collector can
-return a successful OTLP response while rejecting individual spans, log
-records, or metric data points. With the vendored OpenTelemetry exporter,
-Relay treats that response as successful: it does not add a runtime diagnostic,
-and `force_flush()` and `shutdown()` can succeed. Monitor collector-side logs
-and rejection metrics when investigating missing telemetry.
+**Known limitation: OTLP/gRPC partial success is not reported.** Over gRPC,
+NeMo Relay treats a partial success response as successful and adds no runtime
+diagnostic. Monitor collector-side logs and rejection metrics when
+investigating missing telemetry.
 </Warning>
 
 <Warning>

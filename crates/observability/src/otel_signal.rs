@@ -120,6 +120,180 @@ pub fn should_relog_runtime_diagnostic(count: u64) -> bool {
     count.is_power_of_two()
 }
 
+/// OTLP signal whose export response is being inspected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum OtlpSignal {
+    Traces,
+    Logs,
+    Metrics,
+}
+
+impl OtlpSignal {
+    fn rejected_code(self) -> &'static str {
+        match self {
+            Self::Traces => "otel.spans_rejected",
+            Self::Logs => "otel.logs_rejected",
+            Self::Metrics => "otel.metric_points_rejected",
+        }
+    }
+
+    fn rejected_items(self) -> &'static str {
+        match self {
+            Self::Traces => "spans",
+            Self::Logs => "log records",
+            Self::Metrics => "metric data points",
+        }
+    }
+
+    fn rejected_field(self) -> &'static str {
+        match self {
+            Self::Traces => "rejectedSpans",
+            Self::Logs => "rejectedLogRecords",
+            Self::Metrics => "rejectedDataPoints",
+        }
+    }
+
+    /// Rejected item count from an OTLP/HTTP export response body, or `None`
+    /// when the body is empty, unreadable, or reports no rejected items.
+    fn rejected_count(self, body: &[u8], json: bool) -> Option<u64> {
+        if json {
+            // OTLP/JSON encodes int64 as a number or a decimal string.
+            let response: serde_json::Value = serde_json::from_slice(body).ok()?;
+            let rejected = response.get("partialSuccess")?.get(self.rejected_field())?;
+            return rejected
+                .as_u64()
+                .or_else(|| rejected.as_str()?.parse().ok())
+                .filter(|count| *count > 0);
+        }
+
+        use opentelemetry_proto::tonic::collector::{logs, metrics, trace};
+        use prost::Message;
+
+        let rejected = match self {
+            Self::Traces => {
+                trace::v1::ExportTraceServiceResponse::decode(body)
+                    .ok()?
+                    .partial_success?
+                    .rejected_spans
+            }
+            Self::Logs => {
+                logs::v1::ExportLogsServiceResponse::decode(body)
+                    .ok()?
+                    .partial_success?
+                    .rejected_log_records
+            }
+            Self::Metrics => {
+                metrics::v1::ExportMetricsServiceResponse::decode(body)
+                    .ok()?
+                    .partial_success?
+                    .rejected_data_points
+            }
+        };
+        u64::try_from(rejected).ok().filter(|count| *count > 0)
+    }
+}
+
+/// Whether the running rejected total crossed a power of two, so repeated
+/// partial successes log on the first one and then at doubling totals.
+#[doc(hidden)]
+pub fn rejection_crosses_power_of_two(previous: u64, total: u64) -> bool {
+    previous == 0 || previous.ilog2() != total.ilog2()
+}
+
+/// Record an OTLP/HTTP partial success response as a runtime diagnostic.
+///
+/// The collector's `error_message` is left out: like TLS error strings, it can
+/// carry collector or payload data.
+#[doc(hidden)]
+pub fn record_otlp_partial_success(
+    signal: OtlpSignal,
+    request_uri: &str,
+    request_is_json: bool,
+    response: &opentelemetry_http::Response<opentelemetry_http::Bytes>,
+    diagnostics: &SignalRuntimeDiagnostics,
+) {
+    if !response.status().is_success() {
+        return;
+    }
+    let Some(rejected) = signal.rejected_count(response.body(), request_is_json) else {
+        return;
+    };
+    let message = format!(
+        "OpenTelemetry {} export to {} succeeded, but the collector rejected {rejected} {}",
+        match signal {
+            OtlpSignal::Traces => "trace",
+            OtlpSignal::Logs => "log",
+            OtlpSignal::Metrics => "metric",
+        },
+        super::otel::trace_endpoint_log_identity(request_uri),
+        signal.rejected_items(),
+    );
+    let total = diagnostics.record(signal.rejected_code(), message.clone(), rejected);
+    if rejection_crosses_power_of_two(total.saturating_sub(rejected), total) {
+        match signal {
+            OtlpSignal::Traces => log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_spans_rejected";
+                "{message}"
+            ),
+            OtlpSignal::Logs => log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_logs_rejected";
+                "{message}"
+            ),
+            OtlpSignal::Metrics => log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_metric_points_rejected";
+                "{message}"
+            ),
+        }
+    }
+}
+
+/// Whether an OTLP/HTTP request body is JSON rather than protobuf.
+#[doc(hidden)]
+pub fn otlp_request_is_json(
+    request: &opentelemetry_http::Request<opentelemetry_http::Bytes>,
+) -> bool {
+    request
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"))
+}
+
+/// HTTP client wrapper that reports OTLP partial success for log and metric
+/// exports. Trace exports report it from their TLS-aware client.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct PartialSuccessHttpClient<C> {
+    pub inner: C,
+    pub signal: OtlpSignal,
+    pub diagnostics: SignalRuntimeDiagnostics,
+}
+
+#[async_trait::async_trait]
+impl<C: opentelemetry_http::HttpClient> opentelemetry_http::HttpClient
+    for PartialSuccessHttpClient<C>
+{
+    async fn send_bytes(
+        &self,
+        request: opentelemetry_http::Request<opentelemetry_http::Bytes>,
+    ) -> std::result::Result<
+        opentelemetry_http::Response<opentelemetry_http::Bytes>,
+        opentelemetry_http::HttpError,
+    > {
+        let uri = request.uri().to_string();
+        let json = otlp_request_is_json(&request);
+        let result = self.inner.send_bytes(request).await;
+        if let Ok(response) = &result {
+            record_otlp_partial_success(self.signal, &uri, json, response, &self.diagnostics);
+        }
+        result
+    }
+}
+
 /// Report capacity fallback without including high-cardinality resource keys.
 #[doc(hidden)]
 pub fn record_resource_pipeline_limit(diagnostics: &SignalRuntimeDiagnostics, signal: &str) {
@@ -844,3 +1018,7 @@ mod otel_signal_automatic_tests;
 #[cfg(test)]
 #[path = "../tests/unit/otel_signal_tests.rs"]
 mod otel_signal_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/otel_partial_success_tests.rs"]
+mod otel_partial_success_tests;

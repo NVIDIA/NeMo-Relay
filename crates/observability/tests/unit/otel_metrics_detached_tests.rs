@@ -1423,3 +1423,80 @@ impl MetricsService for GrpcMetricsCollector {
         Ok(tonic::Response::new(ExportMetricsServiceResponse::default()))
     }
 }
+
+#[test]
+fn http_metric_export_reports_collector_partial_success_as_runtime_diagnostic() {
+    use opentelemetry_proto::tonic::collector::metrics::v1::{
+        ExportMetricsPartialSuccess, ExportMetricsServiceResponse,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let body = ExportMetricsServiceResponse {
+        partial_success: Some(ExportMetricsPartialSuccess {
+            rejected_data_points: 1,
+            error_message: "data point rejected by collector policy".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let content_length = String::from_utf8_lossy(&bytes[..offset])
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                if bytes.len() >= offset + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&body).unwrap();
+        sender.send(()).unwrap();
+    });
+
+    let subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(endpoint).with_instrumentation_scope("partial-success-test"),
+    )
+    .unwrap();
+    subscriber.subscriber()(&metric_event(
+        METRIC_DATA_SCHEMA_VERSION,
+        serde_json::to_value(MetricEnvelope {
+            measurements: vec![measurement(
+                "example.rejected",
+                MetricKind::Counter,
+                MetricValueType::U64,
+                json!(1),
+            )],
+        })
+        .unwrap(),
+    ));
+    subscriber.force_flush().unwrap();
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let snapshot = subscriber.runtime_diagnostics();
+    let rejected = snapshot
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.metric_points_rejected")
+        .unwrap_or_else(|| panic!("no otel.metric_points_rejected in {snapshot:?}"));
+    assert_eq!(rejected.count, 1);
+    assert!(!rejected.message.contains("collector policy"));
+    let _ = subscriber.shutdown();
+}
