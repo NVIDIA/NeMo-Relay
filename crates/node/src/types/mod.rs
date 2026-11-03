@@ -448,14 +448,15 @@ impl LlmRequest {
     pub fn new(
         #[napi(ts_arg_type = "JsonObject")] headers: serde_json::Value,
         #[napi(ts_arg_type = "Json")] content: serde_json::Value,
-    ) -> Self {
-        let headers = match headers {
-            Json::Object(m) => m,
-            _ => serde_json::Map::new(),
+    ) -> Result<Self> {
+        let Json::Object(headers) = headers else {
+            return Err(Error::invalid_argument(
+                "LlmRequest headers must be a JSON object",
+            ));
         };
-        Self {
+        Ok(Self {
             inner: CoreLlmRequest { headers, content },
-        }
+        })
     }
 
     /// The metadata headers as a JSON object.

@@ -94,14 +94,8 @@ describe('LlmRequest', () => {
     });
   });
 
-  it('coerces non-object headers to an empty object', () => {
-    const req = new LlmRequest(null, {
-      model: 'gpt-4',
-    });
-    assert.deepEqual(req.headers, {});
-    assert.deepEqual(req.content, {
-      model: 'gpt-4',
-    });
+  it('rejects non-object headers', () => {
+    assert.throws(() => new LlmRequest(null, { model: 'gpt-4' }), /headers must be a JSON object/);
   });
 });
 
