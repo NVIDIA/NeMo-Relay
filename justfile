@@ -17,6 +17,10 @@ linux_glibc_version := "2.17"
 node_platform := ""
 node_target := ""
 node_build_strategy := "native"
+# Release packaging remains the default; source Quick Start runs use host dev builds.
+package_profile := "release"
+# Release CI packs the metapackage on Linux only; local host runs need both tarballs.
+node_metapackage := "false"
 
 bash_helpers := '''
 set -euo pipefail
@@ -1063,6 +1067,16 @@ check-quickstarts:
         scripts.tests.test_quickstart_jq
     "$python_executable" scripts/check-quickstarts.py check
 
+# Execute credential-free Quick Starts against explicit release, build, or local assets.
+[positional-arguments]
+test-quickstarts *args:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/run-quickstarts.py "$@"
+
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples
     #!/usr/bin/env bash
@@ -1093,6 +1107,13 @@ docs-api-reference:
     {{ bash_helpers }}
     ensure_docs_dependencies
     generate_docs_api_references
+
+# --set [package_profile=release|dev]
+build-cli:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build --locked --profile "{{ package_profile }}" -p nemo-relay-cli
 
 # --set [ci=true|false]
 build-rust:
@@ -2030,7 +2051,7 @@ package-rust:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev] [node_metapackage=true|false]
 package-node:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -2062,7 +2083,11 @@ package-node:
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
-    build_args=(build --)
+    case "{{ package_profile }}" in
+        release) build_args=(build --) ;;
+        dev) build_args=(build-debug --) ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
     if [[ -n "$node_target" ]]; then
         build_args+=(--target "$node_target")
     fi
@@ -2113,7 +2138,7 @@ package-node:
         --version "$package_version"
         --output-dir "$package_dir"
     )
-    if [[ "$node_platform" == "linux-amd64" ]]; then
+    if [[ "$node_platform" == "linux-amd64" ]] || is_true "{{ node_metapackage }}"; then
         package_args+=(--metapackage)
     fi
     "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
@@ -2164,7 +2189,7 @@ package-openclaw:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev]
 package-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -2178,6 +2203,9 @@ package-python:
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir wheels)"
     sync_args=(--no-install-project --no-install-package nemo-relay)
+    if [[ "{{ package_profile }}" == dev ]]; then
+        sync_args+=(--frozen --no-default-groups --group dev)
+    fi
     uv sync --inexact "${sync_args[@]}"
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then
@@ -2190,11 +2218,20 @@ package-python:
         set_cargo_workspace_version "{{ ref_name }}"
         set_python_package_version "{{ ref_name }}" true
     fi
-    build_args=()
-    while IFS= read -r -d '' arg; do
-        build_args+=("$arg")
-    done < <(python_wheel_build_args)
-    maturin build --release "${build_args[@]}" --out "$package_dir"
+    case "{{ package_profile }}" in
+        release)
+            build_args=(--release)
+            while IFS= read -r -d '' arg; do
+                build_args+=("$arg")
+            done < <(python_wheel_build_args)
+            ;;
+        dev)
+            # Host execution needs an installable wheel, without release cross-compilation.
+            build_args=(--locked --profile dev --interpreter "$(project_python_executable)")
+            ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
+    maturin build "${build_args[@]}" --out "$package_dir"
     shopt -s nullglob
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then
