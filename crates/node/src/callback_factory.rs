@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v27";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v28";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -556,6 +556,21 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       };
     },
 
+    reply(fn) {
+      return function __nemo_relay_reply_wrapper(error, complete, ...args) {
+        if (error != null) {
+          return;
+        }
+        let envelope;
+        try {
+          envelope = fn(...args);
+        } catch (error) {
+          envelope = failureEnvelope(error, 'JavaScript callback failed');
+        }
+        complete(envelope === undefined ? null : envelope);
+      };
+    },
+
     publicationCallbackActive() {
       return eventSanitizerContext.getStore()?.publicationState.active === true;
     },
@@ -695,6 +710,10 @@ pub(crate) fn wrap_finalizer_callback(env: &Env, func: &JsFunction) -> napi::Res
 
 pub(crate) fn wrap_scoped_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "scoped")
+}
+
+pub(crate) fn wrap_reply_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "reply")
 }
 
 pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {
