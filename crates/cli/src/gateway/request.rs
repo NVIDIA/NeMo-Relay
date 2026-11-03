@@ -134,11 +134,7 @@ pub(super) async fn prepare_gateway_request(
     );
     if authorization.allow_environment_provider_auth
         && provider.has_replacement(config)
-        && (if provider.is_anthropic() {
-            config.anthropic_api_key_helper.is_some()
-        } else {
-            config.openai_api_key_helper.is_some()
-        })
+        && crate::upstream_auth::mints_credential(config, provider.is_anthropic())
     {
         for name in ["authorization", "x-api-key", "api-key", "anthropic-api-key"] {
             parts.headers.remove(name);

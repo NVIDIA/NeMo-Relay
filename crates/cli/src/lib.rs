@@ -19,6 +19,7 @@ mod hooks;
 mod installation;
 mod mcp;
 mod mcp_environment;
+mod oidc;
 mod operational;
 mod runtime_diagnostics;
 

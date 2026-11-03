@@ -63,15 +63,16 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
-    /// Sign in to an upstream OpenID Connect provider and print its access tokens.
+    /// Sign in to the upstream OpenID Connect provider configured in `[upstream.*_oidc]`.
     #[command(
-        long_about = "Sign in to an upstream OpenID Connect provider with the device authorization \
-                      flow and keep the sign-in in the per-user NeMo Relay config directory. \
-                      `nemo-relay auth token` prints a current access token and refreshes it \
-                      near expiry, so an `[upstream.openai_api_key_helper]` can use it.",
+        long_about = "Sign in to the OpenID Connect provider named by `[upstream.openai_oidc]` or \
+                      `[upstream.anthropic_oidc]` with the device authorization flow. The sign-in \
+                      is kept in the per-user NeMo Relay config directory, and the gateway reads \
+                      it for each upstream request, refreshing the access token near expiry.",
         after_help = "Examples:\n  \
-                      nemo-relay auth login --issuer https://clerk.openrouter.ai --client-id <id> \\\n    --scope \"openid offline_access email inference\"\n  \
-                      nemo-relay auth token --issuer https://clerk.openrouter.ai --client-id <id>"
+                      nemo-relay auth login\n  \
+                      nemo-relay --config team.toml auth login --provider anthropic\n  \
+                      nemo-relay auth logout"
     )]
     Auth(AuthCommand),
     /// Inspect diagnostics on an existing local gateway; never launches or recovers it.

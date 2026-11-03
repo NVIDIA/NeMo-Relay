@@ -702,6 +702,8 @@ fn config() -> GatewayConfig {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     }
 }
 

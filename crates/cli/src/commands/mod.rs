@@ -376,7 +376,7 @@ async fn run_command(
 ) -> Result<ExitCode, error::CliError> {
     match command {
         Command::Diagnostics(command) => runtime_diagnostics::inspect(command).await,
-        Command::Auth(command) => auth::execute(command).await,
+        Command::Auth(command) => auth::execute(command, server).await,
         Command::Daemon(command) => daemon::execute(command, server).await,
         Command::HookForward(command) => {
             hook_forward::execute(command).await?;

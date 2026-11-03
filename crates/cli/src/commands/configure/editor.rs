@@ -381,7 +381,8 @@ impl ConfigDocument {
     fn set_credential(&mut self, key: &str, new_value: Value) -> Result<(), CliError> {
         let provider = key.split('_').next().unwrap_or_default();
         let upstream = self.section_mut("upstream")?;
-        for suffix in ["auth_header", "api_key", "api_key_helper"] {
+        // One credential source per provider, including an OpenID Connect sign-in.
+        for suffix in ["auth_header", "api_key", "api_key_helper", "oidc"] {
             let other = format!("{provider}_{suffix}");
             if other != key {
                 upstream.remove(&other);
