@@ -2204,6 +2204,41 @@ async fn failed_finalizer_on_explicit_close_records_exception_metadata() {
 }
 
 #[tokio::test]
+async fn failed_finalizer_on_drop_preserves_the_dropped_stream_error() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("dropped_finalizer_failure");
+
+    let wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "first"}))]),
+        make_llm_handle("dropped-finalizer-failure"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal(
+                "stream released before the finalizer ran".into(),
+            ))
+        })),
+        None,
+        None,
+        None,
+    );
+    drop(wrapper);
+
+    let events = captured_snapshot(&events);
+    assert_eq!(events.iter().filter(|event| is_llm_end(event)).count(), 1);
+    let end = end_event(&events);
+    let metadata = end.metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        metadata["otel.status_description"],
+        json!("stream dropped before clean completion")
+    );
+    assert!(metadata.get("exception.type").is_none());
+    assert!(end.data().is_none_or(Json::is_null));
+    assert!(deregister_subscriber("dropped_finalizer_failure").unwrap());
+}
+
+#[tokio::test]
 async fn failed_async_finalizer_marks_the_end_event_as_an_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

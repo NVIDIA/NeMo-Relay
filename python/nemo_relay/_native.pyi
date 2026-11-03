@@ -1168,7 +1168,11 @@ class LlmStream:
         """Return the next JSON chunk or raise ``StopAsyncIteration``."""
         ...
     async def aclose(self) -> None:
-        """Cancel the producer and release native stream resources."""
+        """Cancel the producer and release native stream resources.
+
+        When awaited, this method raises an exception if producer cleanup or
+        finalization fails.
+        """
         ...
 
 class OpenTelemetryTlsConfig:
