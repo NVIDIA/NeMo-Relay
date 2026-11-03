@@ -164,6 +164,71 @@ def _class_init_signature(node: ast.ClassDef) -> str | None:
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
             return _signature(item, drop_self=True).replace("__init__", node.name, 1)
+    return _dataclass_init_signature(node)
+
+
+def _dataclass_init_signature(node: ast.ClassDef) -> str | None:
+    decorator = next(
+        (
+            decorator
+            for decorator in node.decorator_list
+            if _annotation(decorator.func if isinstance(decorator, ast.Call) else decorator)
+            in {"dataclass", "dataclasses.dataclass"}
+        ),
+        None,
+    )
+    if decorator is None or node.keywords or any(_annotation(base) != "object" for base in node.bases):
+        # Inherited fields require resolving base classes; a partial signature would mislead callers.
+        return None
+    options = {keyword.arg: keyword.value for keyword in decorator.keywords} if isinstance(decorator, ast.Call) else {}
+    if not _boolean_option(options, "init", True):
+        return None
+    keyword_only = _boolean_option(options, "kw_only", False)
+    if keyword_only is None:
+        return None
+    positional_arguments: list[str] = []
+    keyword_arguments: list[str] = []
+    for declaration in node.body:
+        if not isinstance(declaration, ast.AnnAssign) or not isinstance(declaration.target, ast.Name):
+            continue
+        annotation_name = ast.unparse(declaration.annotation).split("[", 1)[0].rsplit(".", 1)[-1]
+        if annotation_name == "ClassVar":
+            continue
+        if annotation_name == "KW_ONLY":
+            keyword_only = True
+            continue
+        default = declaration.value
+        field_options = (
+            {keyword.arg: keyword.value for keyword in default.keywords}
+            if isinstance(default, ast.Call) and _annotation(default.func) in {"field", "dataclasses.field"}
+            else None
+        )
+        field_keyword_only = keyword_only
+        if field_options is not None:
+            field_initialized = _boolean_option(field_options, "init", True)
+            if field_initialized is None:
+                return None
+            if not field_initialized:
+                continue
+            field_keyword_only = _boolean_option(field_options, "kw_only", keyword_only)
+            if field_keyword_only is None:
+                return None
+            default = (
+                ast.Constant(value=Ellipsis) if "default_factory" in field_options else field_options.get("default")
+            )
+        argument = ast.arg(arg=declaration.target.id, annotation=declaration.annotation)
+        destination = keyword_arguments if field_keyword_only else positional_arguments
+        destination.append(_format_arg(argument, default))
+    arguments = positional_arguments + (["*", *keyword_arguments] if keyword_arguments else [])
+    return f"def {node.name}({', '.join(arguments)}) -> None"
+
+
+def _boolean_option(options: dict[str | None, ast.expr], name: str, default: bool) -> bool | None:
+    value = options.get(name)
+    if value is None:
+        return default
+    if isinstance(value, ast.Constant) and isinstance(value.value, bool):
+        return value.value
     return None
 
 

@@ -608,6 +608,45 @@ fn loop_affine_callback(
         .map(Bound::unbind)
 }
 
+fn invoke_python_execution_callback<'python, Argument, Output>(
+    python: Python<'python>,
+    python_callback: &Py<PyAny>,
+    selected_task_locals: Option<TaskLocals>,
+    prepare_argument: impl FnOnce(Python<'python>) -> FlowResult<Argument>,
+    split_result: impl FnOnce(
+        Python<'python>,
+        Py<PyAny>,
+        Option<&TaskLocals>,
+        Option<&Bound<'python, PyAny>>,
+    ) -> FlowResult<Output>,
+) -> FlowResult<Output>
+where
+    Argument: IntoPyObject<'python>,
+{
+    let (invocation_context, task_locals) =
+        copy_middleware_invocation(python, selected_task_locals)
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let argument = prepare_argument(python)?;
+    let loop_callback = loop_affine_callback(
+        python,
+        python_callback.bind(python),
+        task_locals.as_ref(),
+        false,
+    )
+    .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let result = match invocation_context.as_ref() {
+        Some(context) => context.call_method1("run", (loop_callback.bind(python), argument)),
+        None => loop_callback.bind(python).call1((argument,)),
+    }
+    .map_err(python_callback_error)?;
+    split_result(
+        python,
+        result.unbind(),
+        task_locals.as_ref(),
+        invocation_context.as_ref(),
+    )
+}
+
 async fn resolve_py_object_or_future(
     outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
 ) -> FlowResult<Py<PyAny>> {
@@ -1114,24 +1153,16 @@ pub fn wrap_py_tool_exec_fn(
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
-            let result = resolve_py_object_or_future(Python::attach(|py| {
-                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let py_args =
-                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                let callback =
-                    loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
-                        .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let result = match invocation_context.as_ref() {
-                    Some(context) => context.call_method1("run", (callback.bind(py), py_args)),
-                    None => callback.bind(py).call1((py_args,)),
-                }
-                .map_err(python_callback_error)?;
-                split_py_object_or_future_with_locals(
-                    py,
-                    result.unbind(),
-                    task_locals.as_ref(),
-                    invocation_context.as_ref(),
+            let result = resolve_py_object_or_future(Python::attach(|python| {
+                invoke_python_execution_callback(
+                    python,
+                    py_fn.as_ref(),
+                    task_locals,
+                    |python| {
+                        json_to_py(python, &args)
+                            .map_err(|error| FlowError::Internal(error.to_string()))
+                    },
+                    split_py_object_or_future_with_locals,
                 )
             }))
             .await?;
@@ -1717,19 +1748,16 @@ pub fn wrap_py_llm_exec_fn(
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
-            resolve_json_or_future(Python::attach(|py| {
-                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let py_req = PyLLMRequest { inner: request };
-                let callback =
-                    loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
-                        .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let result = match invocation_context.as_ref() {
-                    Some(context) => context.call_method1("run", (callback.bind(py), py_req)),
-                    None => callback.bind(py).call1((py_req,)),
-                }
-                .map_err(python_callback_error)?;
-                split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+            resolve_json_or_future(Python::attach(|python| {
+                invoke_python_execution_callback(
+                    python,
+                    py_fn.as_ref(),
+                    task_locals,
+                    |_| Ok(PyLLMRequest { inner: request }),
+                    |python, result, task_locals, _invocation_context| {
+                        split_json_or_future_with_locals(python, result, task_locals)
+                    },
+                )
             }))
             .await
         })

@@ -215,7 +215,7 @@ class PricingConfig:
         return _normalize_object({"sources": self.sources})
 
 
-PRICING_PLUGIN_KIND = "pricing"
+PRICING_PLUGIN_KIND: Literal["pricing"] = "pricing"
 
 
 @dataclass(slots=True)
