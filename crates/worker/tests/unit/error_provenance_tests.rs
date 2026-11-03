@@ -52,7 +52,6 @@ fn provenance_stays_on_each_error_and_does_not_mark_new_failures() {
     assert!(
         json_result_to_sdk(wire::LlmNextResponse {
             result: Some(wire::llm_next_response::Result::Value(infallible_wire(
-                JSON_SCHEMA,
                 &Json::Null
             )))
         })

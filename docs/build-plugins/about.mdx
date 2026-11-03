@@ -79,8 +79,9 @@ Relay 0.10 adds codec context to every LLM execution callback in language
 bindings, native plugins, and worker SDKs. Every native plugin must rebuild for
 ABI v7. Workers that register a non-streaming or streaming LLM execution
 intercept must update their callback signatures, rebuild, and set
-`compat.relay` to begin at `0.10.0`. The authored `native_api = "1"` and
-worker protocol identity changes in Relay 0.11 to `nvidia.nemo.relay.worker.v1`.
+`compat.relay` to begin at `0.10.0`. The authored `native_api = "1"` remains
+unchanged. Relay 1.0 changes the worker protocol identity to
+`nvidia.nemo.relay.worker.v1`.
 Rebuild workers and update their manifests for that typed contract.
 
 Codec access belongs to that execution callback. For a non-streaming call, it

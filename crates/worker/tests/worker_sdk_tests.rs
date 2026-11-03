@@ -20,11 +20,11 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, EventCategory, Json, JsonStream,
-    LlmNext, LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement,
-    MetricValueType, PluginContext, PluginLogLevel, PluginRuntime, Result, RuntimeRegistrationKind,
-    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
-    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    DataSchema, EmitMarkOptions, EventCategory, Json, JsonStream, LlmNext, LlmRequest,
+    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType, PluginContext,
+    PluginLogLevel, PluginRuntime, Result, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::nvidia_worker_v1 as pb;
 #[path = "support/typed_invocations.rs"]
@@ -304,7 +304,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     let invalid_validate_config = client
         .validate(Request::new(ValidateRequest {
             plugin_id: PLUGIN_ID.into(),
-            config: Some(invalid_json_env("nemo.relay.Json@1")),
+            config: Some(invalid_json_value()),
             credentials: Some(pb::Credentials {
                 activation_id: ACTIVATION_ID.into(),
                 auth_token: AUTH_TOKEN.into(),
@@ -347,7 +347,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     let invalid_register_config = client
         .register(Request::new(RegisterRequest {
             plugin_id: PLUGIN_ID.into(),
-            config: Some(invalid_json_env("nemo.relay.Json@1")),
+            config: Some(invalid_json_value()),
             credentials: Some(pb::Credentials {
                 activation_id: ACTIVATION_ID.into(),
                 auth_token: AUTH_TOKEN.into(),
@@ -993,7 +993,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(logs[0].message, "trace message");
     assert_eq!(logs[4].message, "error message");
     assert_eq!(
-        decode_json_envelope::<Json, _>(logs[0].fields.as_ref().expect("trace fields")).unwrap(),
+        decode_wire_value::<Json, _>(logs[0].fields.as_ref().expect("trace fields")).unwrap(),
         json!({"nested": {"ok": true}, "ordinal": 0})
     );
     assert!(logs[1].fields.is_none());
@@ -1011,7 +1011,7 @@ async fn worker_service_invokes_every_registration_surface() {
         assert_eq!(request.message, "method message");
         assert_eq!(request.target, "plugin.methods");
         assert_eq!(
-            decode_json_envelope::<Json, _>(request.fields.as_ref().unwrap()).unwrap(),
+            decode_wire_value::<Json, _>(request.fields.as_ref().unwrap()).unwrap(),
             json!({"method": true})
         );
     }
@@ -1389,7 +1389,7 @@ async fn worker_service_invokes_every_registration_surface() {
         .clone()
         .expect("mark data schema");
     assert_eq!(
-        decode_json_envelope::<DataSchema, _>(&data_schema).unwrap(),
+        decode_wire_value::<DataSchema, _>(&data_schema).unwrap(),
         DataSchema::builder()
             .name("nemo.relay.metric_measurements")
             .version("1")
@@ -1412,14 +1412,14 @@ async fn worker_service_invokes_every_registration_surface() {
         .clone()
         .expect("metric data schema");
     assert_eq!(
-        decode_json_envelope::<DataSchema, _>(&metric_schema).unwrap(),
+        decode_wire_value::<DataSchema, _>(&metric_schema).unwrap(),
         DataSchema::builder()
             .name("nemo.relay.metric_measurements")
             .version("1")
             .build()
     );
     assert_eq!(
-        decode_json_envelope::<Json, _>(
+        decode_wire_value::<Json, _>(
             &metric_mark
                 .mark
                 .as_ref()
@@ -3410,11 +3410,7 @@ impl RelayHostRuntime for MockHost {
         }
         Ok(Response::new(pb::EncodeLlmCodecRequestResponse {
             result: Some(pb::encode_llm_codec_request_response::Result::Value(
-                json_envelope(
-                    "nemo.relay.LlmRequest@1",
-                    &json!({"headers": {}, "content": {}}),
-                )
-                .expect("encode LLM request"),
+                wire_value(&json!({"headers": {}, "content": {}})).expect("encode LLM request"),
             )),
         }))
     }
@@ -3632,7 +3628,7 @@ fn json_env(value: Json) -> JsonEnvelope {
     conversions::encode(value).unwrap()
 }
 
-fn invalid_json_env(_schema: &str) -> JsonEnvelope {
+fn invalid_json_value() -> JsonEnvelope {
     JsonEnvelope {
         json: b"{".to_vec(),
     }
@@ -3678,7 +3674,7 @@ fn event_invoke_surface(registration_name: &str, surface: RegistrationSurface) -
         continuation_id: "next-1".into(),
         scope: Some(scope_context()),
         payload: Some(Payload::Event(Box::new(
-            json_envelope("nemo.relay.Event@1", &event).expect("encode event"),
+            wire_value(&event).expect("encode event"),
         ))),
         credentials: Some(pb::Credentials {
             activation_id: ACTIVATION_ID.into(),
@@ -3726,11 +3722,8 @@ fn llm_invoke(
         scope: Some(scope_context()),
         payload: Some(Payload::Llm(Box::new(LlmInvocation {
             model_name: "model".into(),
-            request: Some(
-                json_envelope("nemo.relay.LlmRequest@1", &request).expect("encode request"),
-            ),
-            annotated_request: annotated_request
-                .map(|v| json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, &v).unwrap()),
+            request: Some(wire_value(&request).expect("encode request")),
+            annotated_request: annotated_request.map(|v| wire_value(&v).unwrap()),
             response: response.map(json_env),
             sanitize_context: None,
             execution_codec_context,
@@ -3958,7 +3951,7 @@ async fn invoke_llm_request(
 fn stream_json(chunk: StreamChunk) -> Json {
     match chunk.item.expect("stream chunk item") {
         pb::invoke_stream_response::Item::Value(value) => {
-            decode_json_envelope(&value).expect("decode stream value")
+            decode_wire_value(&value).expect("decode stream value")
         }
         other => panic!("unexpected stream chunk: {other:?}"),
     }
@@ -4303,8 +4296,7 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
     host_handle.abort();
 }
 
-fn json_envelope<D: serde::Serialize, W: prost::Message + Default + prost::Name>(
-    _schema: &str,
+fn wire_value<D: serde::Serialize, W: prost::Message + Default + prost::Name>(
     value: &D,
 ) -> std::result::Result<W, Box<dyn std::error::Error>> {
     let json = serde_json::to_value(value)?;
@@ -4334,7 +4326,7 @@ fn json_envelope<D: serde::Serialize, W: prost::Message + Default + prost::Name>
     };
     Ok(W::decode(bytes.as_slice())?)
 }
-fn decode_json_envelope<D: serde::de::DeserializeOwned, W: prost::Message + prost::Name>(
+fn decode_wire_value<D: serde::de::DeserializeOwned, W: prost::Message + prost::Name>(
     value: &W,
 ) -> std::result::Result<D, Box<dyn std::error::Error>> {
     let bytes = value.encode_to_vec();

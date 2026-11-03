@@ -138,9 +138,6 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 /// Boxed JSON stream returned by streaming worker callbacks.
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
-const JSON_SCHEMA: &str = "nemo.relay.Json@1";
-const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
-
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
     static TASK_CALLBACK_NAME: Option<String>;
@@ -975,7 +972,7 @@ impl PluginRuntime {
                 level: level.wire_value(),
                 target: target.into(),
                 message: message.into(),
-                fields: fields.map(json_value_new).transpose()?,
+                fields: fields.map(encode_wire).transpose()?,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -1181,12 +1178,12 @@ impl PluginRuntime {
                 credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                request: Some(encode_wire(LLM_REQUEST_SCHEMA, request)?),
+                request: Some(encode_wire(request)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, ANNOTATED_LLM_REQUEST_SCHEMA)
+        decode_rpc_result(response)
     }
 
     async fn encode_llm_codec_request(
@@ -1202,13 +1199,13 @@ impl PluginRuntime {
                 credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                annotated_request: Some(encode_wire(ANNOTATED_LLM_REQUEST_SCHEMA, annotated)?),
-                original_request: Some(encode_wire(LLM_REQUEST_SCHEMA, original)?),
+                annotated_request: Some(encode_wire(annotated)?),
+                original_request: Some(encode_wire(original)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, LLM_REQUEST_SCHEMA)
+        decode_rpc_result(response)
     }
 
     async fn decode_llm_codec_response(
@@ -1223,12 +1220,12 @@ impl PluginRuntime {
                 credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                response: Some(encode_wire(JSON_SCHEMA, response)?),
+                response: Some(encode_wire(response)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, JSON_SCHEMA)
+        decode_rpc_result(response)
     }
     /// Emits a mark event through the host runtime.
     pub async fn emit_mark(
@@ -1680,7 +1677,7 @@ impl ToolNext {
             .tool_next(Request::new(ToolNextRequest {
                 credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                value: Some(encode_wire(JSON_SCHEMA, &value)?),
+                value: Some(encode_wire(&value)?),
                 scope: self.runtime.current_scope_context(),
             }))
             .await
@@ -1709,7 +1706,7 @@ impl LlmNext {
             .llm_next(Request::new(LlmNextRequest {
                 credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(encode_wire(LLM_REQUEST_SCHEMA, &request)?),
+                request: Some(encode_wire(&request)?),
                 scope: self.runtime.current_scope_context(),
             }))
             .await
@@ -1740,7 +1737,7 @@ impl LlmStreamNext {
             .llm_stream_next(Request::new(LlmStreamNextRequest {
                 credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(encode_wire(LLM_REQUEST_SCHEMA, &request)?),
+                request: Some(encode_wire(&request)?),
                 scope: scope.clone(),
             }))
             .await
@@ -2451,7 +2448,7 @@ impl PluginWorker for WorkerService {
                         Ok(value) => (
                             StreamChunk {
                                 item: Some(wire::invoke_stream_response::Item::Value(
-                                    match encode_wire(JSON_SCHEMA, &value) {
+                                    match encode_wire(&value) {
                                         Ok(value) => value,
                                         Err(err) => {
                                             let _ = task_tx
@@ -3094,13 +3091,7 @@ impl WorkerService {
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let annotated = payload
             .annotated_request
-            .map(|value| {
-                decode_expected_encode_wire::<AnnotatedLlmRequest>(
-                    &value,
-                    "annotated llm request",
-                    ANNOTATED_LLM_REQUEST_SCHEMA,
-                )
-            })
+            .map(|value| decode_wire::<AnnotatedLlmRequest>(&value))
             .transpose()?;
         let handler = self.llm_request(&request.registration_name)?;
         let outcome = with_thread_scope(scope, || {
@@ -3413,14 +3404,6 @@ fn required_json<D>(value: Option<impl DecodeTo<D>>, field: &str) -> Result<D> {
         .decode_to()
 }
 
-fn decode_expected_encode_wire<D>(
-    value: &impl DecodeTo<D>,
-    _field: &str,
-    _schema: &str,
-) -> Result<D> {
-    value.decode_to()
-}
-
 fn empty_response() -> InvokeResponse {
     InvokeResponse {
         result: Some(wire::invoke_response::Result::Completed(())),
@@ -3430,7 +3413,6 @@ fn empty_response() -> InvokeResponse {
 fn json_response(value: Json) -> InvokeResponse {
     InvokeResponse {
         result: Some(wire::invoke_response::Result::ToolValue(infallible_wire(
-            JSON_SCHEMA,
             &value,
         ))),
     }
@@ -3483,18 +3465,11 @@ fn json_result_to_sdk(result: wire::LlmNextResponse) -> Result<Json> {
     decode_rpc_result(result)
 }
 
-fn decode_typed_json_result<D>(result: impl RpcResult<D>, _schema: &str) -> Result<D> {
-    result.read_result()
-}
-
 fn optional_encode_wire(value: Option<Json>) -> Result<Option<JsonEnvelope>> {
-    value
-        .as_ref()
-        .map(|value| encode_wire(JSON_SCHEMA, value))
-        .transpose()
+    value.as_ref().map(encode_wire).transpose()
 }
 
-fn infallible_wire<D: Clone + WireValue<W>, W>(_schema: &str, value: &D) -> W {
+fn infallible_wire<D: Clone + WireValue<W>, W>(value: &D) -> W {
     conversions::encode(value.clone()).expect("validated SDK value must encode")
 }
 
@@ -4061,10 +4036,7 @@ impl<D: WireValue<W>, W: Clone> DecodeTo<D> for W {
 fn decode_wire<D>(value: &impl DecodeTo<D>) -> Result<D> {
     value.decode_to()
 }
-fn encode_wire<D: Clone + WireValue<W>, W>(_schema: &str, value: &D) -> Result<W> {
-    conversions::encode(value.clone()).map_err(Into::into)
-}
-fn json_value_new<D: Clone + WireValue<W>, W>(value: &D) -> Result<W> {
+fn encode_wire<D: Clone + WireValue<W>, W>(value: &D) -> Result<W> {
     conversions::encode(value.clone()).map_err(Into::into)
 }
 impl From<conversions::ConversionError> for WorkerSdkError {
@@ -4081,7 +4053,6 @@ fn unchanged_response() -> InvokeResponse {
 fn llm_response(value: Json) -> InvokeResponse {
     InvokeResponse {
         result: Some(wire::invoke_response::Result::LlmResponse(infallible_wire(
-            JSON_SCHEMA,
             &value,
         ))),
     }

@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
 [Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 1.0.0,
 implements `WorkerPlugin`, registers all
-16 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
+17 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
 create the authenticated `nvidia.nemo.relay.worker.v1` server from the
 activation environment Relay provides.
 
@@ -129,7 +129,7 @@ Use the following procedure to register the manifest and inspect worker activati
 
 2. Start Relay from the repository root. Inspect the activation report
    and confirm the handshake reports plugin identity, SDK and runtime metadata,
-   `nvidia.nemo.relay.worker.v1`, multiple-component behavior, and all 16 surfaces.
+   `nvidia.nemo.relay.worker.v1`, multiple-component behavior, and all 17 surfaces.
 
    ```bash
    nemo-relay --bind 127.0.0.1:4040

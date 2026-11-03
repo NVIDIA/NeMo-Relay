@@ -167,6 +167,8 @@ def _shape(cls: Any, value: Any) -> dict[str, Any]:
         return {"text": value} if isinstance(value, str) else {"parts": value}
     if name in _TAGS:
         body = dict(value)
+        if not isinstance(body.get(_TAGS[name]), str):
+            raise ValueError(f"{name}.{_TAGS[name]} must be a string")
         tag = body.pop(_TAGS[name])
         return {tag: body}
     if name == "FinishReason":
@@ -280,11 +282,10 @@ def pack(cls: Any, value: Any, *, _field_names: dict[str, str] | None = None) ->
             if not isinstance(item, str):
                 raise ValueError(f"{name}.{source_name} must be a string")
             prefix = re.sub(r"(?<!^)(?=[A-Z])", "_", field.enum_type.name).upper() + "_"
-            setattr(
-                result,
-                field.name,
-                field.enum_type.values_by_name[prefix + item.upper()].number,
-            )
+            member = field.enum_type.values_by_name.get(prefix + item.upper())
+            if member is None:
+                raise ValueError(f"{name}.{source_name} has unknown value {item!r}")
+            setattr(result, field.name, member.number)
         elif field.type in (field.TYPE_UINT64, field.TYPE_INT64, field.TYPE_UINT32, field.TYPE_INT32):
             decimal_string = field.type == field.TYPE_UINT64 and (
                 (field.containing_type.file.name in _DIAGNOSTIC_FILES and name not in _NUMERIC_DIAGNOSTICS)

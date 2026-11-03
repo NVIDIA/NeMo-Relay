@@ -51,6 +51,24 @@ class Plugin(WorkerPlugin):
         ctx.register_llm_sanitize_response_guardrail("response", lambda response, context: response)
 
 
+@pytest.mark.parametrize(
+    ("message_type", "value", "expected_error"),
+    [
+        (llm_pb.LlmMessage, {}, "LlmMessage.role must be a string"),
+        (llm_pb.ContentPart, {"type": None}, "ContentPart.type must be a string"),
+        (
+            diagnostics_pb.DiagnosticObservation,
+            {"severity": "invalid"},
+            "DiagnosticObservation.severity has unknown value 'invalid'",
+        ),
+    ],
+)
+def test_protocol_packing_rejects_missing_tags_and_unknown_enum_values(message_type, value, expected_error):
+    with pytest.raises(ValueError) as error:
+        pack(message_type, value)
+    assert str(error.value) == expected_error
+
+
 @pytest.mark.asyncio
 async def test_typed_lifecycle_and_invocation():
     plugin = Plugin()

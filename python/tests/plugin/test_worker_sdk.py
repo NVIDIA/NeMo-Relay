@@ -3498,8 +3498,11 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
             await task
 
 
-async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Close both channels and the server when the gRPC server cannot start."""
+@pytest.mark.parametrize("failure_stage", ["registration", "start"])
+async def test_serve_plugin_closes_resources_when_startup_fails(
+    monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    """Preserve startup errors and close channels even before health registration."""
 
     class FakeChannel:
         closed = False
@@ -3524,7 +3527,7 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
 
         async def start(self) -> None:
             """Simulate a startup failure after resource allocation."""
-            raise RuntimeError("start failed")
+            raise RuntimeError(f"{failure_stage} failed")
 
         async def stop(self, grace: int) -> None:
             """Record server cleanup while checking its grace period."""
@@ -3534,20 +3537,24 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     channels = [FakeChannel(), FakeChannel()]
     pending_channels = iter(channels)
     fake_server = FakeServer()
+
+    def register_worker(service: object, server: object) -> None:
+        """Fail before health setup when worker registration is the startup error."""
+        if failure_stage == "registration":
+            raise RuntimeError("registration failed")
+
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: fake_server)
     monkeypatch.setattr(plugin_api.host_grpc, "RelayHostRuntimeServiceStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.diagnostics_grpc, "RelayDiagnosticsServiceStub", lambda channel: object())
-    monkeypatch.setattr(
-        plugin_api.worker_grpc, "add_PluginWorkerServiceServicer_to_server", lambda service, server: None
-    )
+    monkeypatch.setattr(plugin_api.worker_grpc, "add_PluginWorkerServiceServicer_to_server", register_worker)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
     monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
     monkeypatch.setenv("NEMO_RELAY_WORKER_TOKEN", AUTH_TOKEN)
     monkeypatch.delenv("NEMO_RELAY_WORKER_ENDPOINT_FILE", raising=False)
 
-    with pytest.raises(RuntimeError, match="start failed"):
+    with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
         await serve_plugin(AllSurfacesPlugin())
     assert fake_server.stopped
     assert all(channel.closed for channel in channels)

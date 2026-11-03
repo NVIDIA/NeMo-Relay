@@ -1225,20 +1225,7 @@ check-python-worker-proto:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    python_executable="$(uv_python_executable)"
-    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
-        echo "Skipping Python worker proto check on Windows ARM64"
-        exit 0
-    fi
-    tmp_dir="$(mktemp -d)"
-    cleanup_proto_tmp() {
-        rm -rf "$tmp_dir"
-    }
-    trap cleanup_proto_tmp EXIT
-    generate_python_worker_proto_files "$tmp_dir"
-    grpcio_tools_version="$(python_plugin_grpcio_tools_version)"
-    uvx --from "grpcio-tools==$grpcio_tools_version" --with pytest --with pytest-asyncio --with protovalidate==2.1.0 python -m pytest \
-        python/tests/plugin/test_nvidia_worker_proto_v1.py -q -o asyncio_default_fixture_loop_scope=function
+    run_python_worker_proto_tests
 
 
 generate-test-plugin-lockfiles:

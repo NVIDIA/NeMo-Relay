@@ -2533,6 +2533,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
         interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
     )
+    health_service = None
     try:
         worker_grpc.add_PluginWorkerServiceServicer_to_server(service, server)
         from grpc_health.v1 import health, health_pb2, health_pb2_grpc
@@ -2550,7 +2551,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
             _write_endpoint_file(path, _announced_worker_endpoint(worker_endpoint, bound_port))
         await shutdown_event.wait()
     finally:
-        await health_service.enter_graceful_shutdown()
+        if health_service is not None:
+            await health_service.enter_graceful_shutdown()
         await server.stop(grace=2)
         try:
             await runtime._close_diagnostics()

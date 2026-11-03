@@ -21,6 +21,7 @@ demonstrations.
 | Tool sanitizers and policy | Sync or async callback, normalized by the SDK. | Closure returning a boxed or inferred future. | Sanitized JSON or an optional block reason. |
 | Tool request intercept | Sync or async callback. | Async closure. | Complete rewritten JSON request. |
 | Tool execution intercept | Async callback with `ToolNext`. | Async closure with cloneable `ToolNext`. | `ToolExecutionInterceptOutcome`, which preserves the downstream `result` and optional `annotation` plus Relay-owned accounting. |
+| Conditional middleware guardrail | Sync or async callback over registration kinds and name. | Async closure over registration kinds and name. | Optional block reason for the selected middleware registration. |
 | LLM sanitizers | Sync or async callback with an invocation-scoped codec context. | Async closure with typed request or response context. | Optional sanitized payload. |
 | LLM policy and request intercept | Sync or async callback. | Async closure. | Optional block reason or full request-intercept outcome with annotations. |
 | Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
@@ -31,7 +32,7 @@ streaming. Refer to [LLM Middleware](/daemon/reference#llm-middleware) for
 supported provider APIs and response behavior.
 
 The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
-and six LLM registrations make 16 surfaces. Registration names are component-local;
+six LLM registrations, and a conditional middleware gate make 17 surfaces. Registration names are component-local;
 [priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
 registration metadata and enforced by the host after it merges visible
 [middleware](/about-nemo-relay/concepts/middleware).
