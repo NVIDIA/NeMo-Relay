@@ -11,6 +11,128 @@ export type LlmRequestShape = {
   content: Json;
 };
 
+export type RuntimeRegistrationKindName = `${RuntimeRegistrationKind}`;
+
+export type ResourceMetricsMeasurementScope = 'runtime_default' | 'global' | 'application_process' | 'process_tree';
+
+export type ResourceUnit<U extends string> = U | `${U}`;
+
+export interface ResourceMetricsPollingConfig {
+  enabled?: boolean;
+  interval_millis?: number;
+}
+
+export interface ResourceMemoryInspectionConfig {
+  enabled?: boolean;
+  stale_after_millis?: number;
+}
+
+export interface ResourceMetricsCpuConfig {
+  enabled?: boolean;
+}
+
+export interface ResourceMetricsMemoryConfig {
+  enabled?: boolean;
+}
+
+export interface ResourceMetricsProcessConfig {
+  enabled?: boolean;
+}
+
+export interface ResourceMetricsDiskConfig {
+  enabled?: boolean;
+  process_io?: boolean;
+  filesystem_paths?: string[];
+}
+
+export interface ResourceMetricsGpuConfig {
+  enabled?: boolean;
+  devices?: string[];
+  device_metrics?: boolean;
+  process_metrics?: boolean;
+}
+
+export interface ResourceMetricsNetworkConfig {
+  enabled?: boolean;
+  interfaces?: string[];
+}
+
+export interface ResourceMetricsCpuUnits {
+  user_time?: ResourceUnit<DurationUnit>;
+  system_time?: ResourceUnit<DurationUnit>;
+  total_time?: ResourceUnit<DurationUnit>;
+  throttled_time?: ResourceUnit<DurationUnit>;
+  some_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  full_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  consumption_rate?: ResourceUnit<CpuUnit>;
+  effective_limit?: ResourceUnit<CpuUnit>;
+}
+
+export interface ResourceMetricsMemoryUnits {
+  system_used?: ResourceUnit<CapacityUnit>;
+  system_total?: ResourceUnit<CapacityUnit>;
+  system_available?: ResourceUnit<CapacityUnit>;
+  resident?: ResourceUnit<CapacityUnit>;
+  private?: ResourceUnit<CapacityUnit>;
+  physical_footprint?: ResourceUnit<CapacityUnit>;
+  virtual_memory?: ResourceUnit<CapacityUnit>;
+  peak_resident?: ResourceUnit<CapacityUnit>;
+  limit?: ResourceUnit<CapacityUnit>;
+  environment_accounted?: ResourceUnit<CapacityUnit>;
+  some_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  full_pressure_stall_time?: ResourceUnit<DurationUnit>;
+}
+
+export interface ResourceMetricsDiskUnits {
+  read_data?: ResourceUnit<DataUnit>;
+  write_data?: ResourceUnit<DataUnit>;
+  filesystem_total_capacity?: ResourceUnit<CapacityUnit>;
+  filesystem_available_capacity?: ResourceUnit<CapacityUnit>;
+  filesystem_free_capacity?: ResourceUnit<CapacityUnit>;
+  read_throughput?: ResourceUnit<BandwidthUnit>;
+  write_throughput?: ResourceUnit<BandwidthUnit>;
+}
+
+export interface ResourceMetricsGpuUnits {
+  device_memory_used?: ResourceUnit<CapacityUnit>;
+  process_memory_used?: ResourceUnit<CapacityUnit>;
+  device_compute_utilization?: ResourceUnit<UtilizationUnit>;
+  process_compute_utilization?: ResourceUnit<UtilizationUnit>;
+}
+
+export interface ResourceMetricsNetworkTrafficUnits {
+  received_data?: ResourceUnit<DataUnit>;
+  transmitted_data?: ResourceUnit<DataUnit>;
+  receive_throughput?: ResourceUnit<BandwidthUnit>;
+  transmit_throughput?: ResourceUnit<BandwidthUnit>;
+}
+
+export interface ResourceMetricsNetworkUnits {
+  system?: ResourceMetricsNetworkTrafficUnits;
+  interface?: ResourceMetricsNetworkTrafficUnits;
+}
+
+export interface ResourceMetricsUnits {
+  cpu?: ResourceMetricsCpuUnits;
+  memory?: ResourceMetricsMemoryUnits;
+  disk?: ResourceMetricsDiskUnits;
+  gpu?: ResourceMetricsGpuUnits;
+  network?: ResourceMetricsNetworkUnits;
+}
+
+export interface ResourceMetricsConfig {
+  measurement_scope?: ResourceMetricsMeasurementScope;
+  polling?: ResourceMetricsPollingConfig;
+  memory_inspection?: ResourceMemoryInspectionConfig;
+  cpu?: ResourceMetricsCpuConfig;
+  memory?: ResourceMetricsMemoryConfig;
+  process?: ResourceMetricsProcessConfig;
+  disk?: ResourceMetricsDiskConfig;
+  gpu?: ResourceMetricsGpuConfig;
+  network?: ResourceMetricsNetworkConfig;
+  units?: ResourceMetricsUnits;
+}
+
 export type ResourceOperatingSystem = 'linux' | 'macos' | 'windows' | 'unsupported';
 export type ResourceMeasurementScope = 'global' | 'application_process' | 'process_tree';
 
@@ -281,7 +403,7 @@ export interface ToolExecutionInterceptOutcome {
 export interface PluginContext {
   registerConditionalMiddlewareGuardrail(
     name: string,
-    kinds: RuntimeRegistrationKind[],
+    kinds: Array<RuntimeRegistrationKind | RuntimeRegistrationKindName>,
     registrationName: string,
     guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
   ): void;

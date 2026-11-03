@@ -63,6 +63,7 @@ describe('Type constants', () => {
         'tests/public_pii_redaction_api_fixture.ts',
         'tests/public_model_pricing_api_fixture.ts',
         'tests/public_json_api_fixture.ts',
+        'tests/public_plugin_api_fixture.ts',
       ],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),

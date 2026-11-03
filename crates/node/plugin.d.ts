@@ -3,7 +3,11 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { ConfigDiagnostic, Json, PluginContext } from './index';
+import type { AdaptivePluginConfig } from './adaptive';
+import type { ConfigDiagnostic, Json, JsonObject, PluginContext, ResourceMetricsConfig } from './index';
+import type { PricingConfig } from './model_pricing';
+import type { Config as ObservabilityConfig } from './observability';
+import type { Config as PiiRedactionConfig } from './pii_redaction';
 
 export type {
   ConfigDiagnostic,
@@ -53,21 +57,37 @@ export interface RuntimeDiagnostic {
   count: number;
 }
 
+export interface ComponentConfigs {
+  adaptive: AdaptivePluginConfig;
+  observability: ObservabilityConfig;
+  pii_redaction: PiiRedactionConfig;
+  pricing: PricingConfig;
+  resource_metrics: ResourceMetricsConfig;
+}
+
+export type ComponentKind = keyof ComponentConfigs;
+
+export type KnownComponentSpec = {
+  [K in ComponentKind]: { kind: K; enabled?: boolean; config?: ComponentConfigs[K] };
+}[ComponentKind];
+
 /** One top-level plugin component. */
 export interface ComponentSpec {
   kind: string;
   enabled?: boolean;
-  config?: Record<string, Json>;
+  config?: JsonObject;
 }
+
+export type ComponentConfigFor<K extends string> = K extends ComponentKind ? ComponentConfigs[K] : JsonObject;
+
+export type ComponentSpecFor<K extends string> = K extends ComponentKind
+  ? Extract<KnownComponentSpec, { kind: K }>
+  : ComponentSpec;
 
 /** Canonical plugin configuration document. */
 export interface PluginConfig {
   version?: number;
-  components?: Array<{
-    kind: string;
-    enabled?: boolean;
-    config?: Record<string, Json>;
-  }>;
+  components?: Array<KnownComponentSpec | ComponentSpec>;
   policy?: ConfigPolicy;
   /** Startup-only host service profile; omitted settings use file layers. */
   diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
@@ -127,13 +147,13 @@ export interface DynamicPluginValidationReport {
 /** Plugin callback contract. */
 export interface Plugin {
   /** Validate one component-local config object. */
-  validate?(pluginConfig: Record<string, Json>): ConfigDiagnostic[] | null | undefined;
+  validate?(pluginConfig: JsonObject): ConfigDiagnostic[] | null | undefined;
   /**
    * Install middleware and subscribers for one component instance.
    *
    * Throwing aborts the current initialization and triggers rollback.
    */
-  register(pluginConfig: Record<string, Json>, context: PluginContext): void;
+  register(pluginConfig: JsonObject, context: PluginContext): void;
 }
 
 /**
@@ -161,13 +181,13 @@ export declare function defaultConfig(): PluginConfig;
  * @remarks Setting `options.enabled = false` preserves the component for
  * validation while skipping runtime registration during `initialize`.
  */
-export declare function ComponentSpec(
-  kind: string,
-  config?: Record<string, Json>,
+export declare function ComponentSpec<K extends string>(
+  kind: K,
+  config?: ComponentConfigFor<K>,
   options?: {
     enabled?: boolean;
   },
-): ComponentSpec;
+): ComponentSpecFor<K>;
 /**
  * Initialize the core-owned static and dynamic plugin host.
  *

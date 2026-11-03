@@ -2426,6 +2426,7 @@ mirror_fields!(
 pub fn register_conditional_middleware_guardrail(
     env: Env,
     name: String,
+    #[napi(ts_arg_type = "Array<RuntimeRegistrationKind | RuntimeRegistrationKindName>")]
     kinds: Vec<RuntimeRegistrationKind>,
     registration_name: String,
     #[napi(
@@ -2450,9 +2451,15 @@ pub fn deregister_conditional_middleware_guardrail(name: String) -> Result<bool>
 }
 
 /// List global gateable runtime registrations.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "K extends RuntimeRegistrationKind | RuntimeRegistrationKindName = RuntimeRegistrationKind",
+    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: Extract<RuntimeRegistrationKind, `${K}`> }>",
+    catch_unwind
+)]
 pub fn list_runtime_registrations(
-    kinds: Option<Vec<RuntimeRegistrationKind>>,
+    #[napi(ts_arg_type = "Array<K> | undefined | null")] kinds: Option<
+        Vec<RuntimeRegistrationKind>,
+    >,
 ) -> Result<Vec<RuntimeRegistrationIdentity>> {
     let selected = kinds.map(|kinds| kinds.into_iter().map(Into::into).collect::<BTreeSet<_>>());
     let registrations =
