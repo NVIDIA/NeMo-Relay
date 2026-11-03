@@ -74,7 +74,7 @@ fn validation_dependency() -> Result<std::path::PathBuf, Box<dyn std::error::Err
     if !output.join("buf/validate/validate.proto").is_file() {
         let buf = std::env::var_os("BUF").unwrap_or_else(|| "buf".into());
         let status = std::process::Command::new(buf)
-            .args(["export", &format!("buf.build/bufbuild/protovalidate:{commit}"),
+            .args(["--timeout", "120s", "export", &format!("buf.build/bufbuild/protovalidate:{commit}"),
                 "--path", "buf/validate/validate.proto", "--output"])
             .arg(&output).status()
             .map_err(|error| format!("Buf is required to build nemo-relay-worker-proto; install Buf or set BUF: {error}"))?;
