@@ -383,7 +383,8 @@ impl LlmStreamWrapper {
             }
             let finalizer_failed = finalizer_failure.is_some();
             let metadata = match (&finalizer_failure, termination) {
-                (Some(error), StreamTermination::Complete) => {
+                (Some(error), StreamTermination::Complete)
+                | (Some(error @ FlowError::CallbackException { .. }), StreamTermination::Dropped) => {
                     metadata_with_otel_error(metadata, error)
                 }
                 _ => metadata,

@@ -477,6 +477,16 @@ For a complete example, refer to
 
 #### Update Streaming Callers
 
+Python callers of `nemo_relay.llm.stream_execute()` now receive finalizer
+failures from stream iteration or awaited `stream.aclose()`. This includes
+errors converting the finalizer result to JSON. The LLM end event records the
+failure. An earlier source error takes precedence over a subsequent finalizer
+failure.
+
+A finalizer that intentionally returns `None` remains successful when the
+stream completes normally. Review callers that relied on suppressed finalizer
+errors, and always await `stream.aclose()` when stopping early.
+
 Node.js streaming wrappers now report provider and collector failures to the
 caller. A provider failure can reject stream creation or `stream.next()`. A
 collector that throws or rejects stops the stream. A failed finalizer produces

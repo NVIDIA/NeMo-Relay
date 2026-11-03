@@ -31,12 +31,13 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
 };
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
-    LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    MiddlewareContinuationContext, PropagationContext, ScopeStackHandle, ToolConditionalFn,
-    ToolExecutionContext, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
-    capture_propagation_context, capture_traceparent, current_scope_stack,
+    LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmFinalizer, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, PropagationContext,
+    ScopeStackHandle, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
+    current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -1274,6 +1275,7 @@ impl PyLlmStreamNextFn {
                     receiver: Arc::new(tokio::sync::Mutex::new(rx)),
                     cancel,
                     closed: closed_rx,
+                    finalizer_error: None,
                 })
             }),
         )
@@ -1806,22 +1808,26 @@ pub fn wrap_py_collector_fn(
 /// The finalizer is called once when the stream is fully consumed or explicitly
 /// closed. Its return value is converted from a Python object to
 /// `serde_json::Value` (Json) and used as the aggregated response.
-pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
-    Box::new(move || {
-        Python::attach(|py| {
-            let result = match py_fn.call0(py) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nemo_relay: Python finalizer callable failed: {e}");
-                    return Json::Null;
-                }
-            };
-            py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_relay: py_to_json failed in finalizer: {e}");
-                Json::Null
-            })
-        })
-    })
+pub fn wrap_py_finalizer_fn(
+    python_callable: Py<PyAny>,
+) -> (LlmFinalizer, Arc<Mutex<Option<FlowError>>>) {
+    let finalizer_error = Arc::new(Mutex::new(None));
+    let retained_finalizer_error = Arc::clone(&finalizer_error);
+    let finalizer = LlmFinalizer::Fallible(Box::new(move || {
+        let finalizer_result = Python::attach(|python| {
+            let response = python_callable
+                .call0(python)
+                .map_err(python_callback_error)?;
+            py_to_json(response.bind(python)).map_err(python_callback_error)
+        });
+        if let Err(error) = &finalizer_result {
+            *retained_finalizer_error
+                .lock()
+                .expect("stream finalizer error") = Some(error.clone());
+        }
+        finalizer_result
+    }));
+    (finalizer, finalizer_error)
 }
 
 /// Wrap a Python callable `(Json, LlmSanitizeResponseContext) -> Optional[Json]`.

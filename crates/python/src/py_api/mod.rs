@@ -1395,7 +1395,7 @@ fn llm_stream_call_execute<'py>(
     let exec_fn = py_callable::wrap_py_llm_stream_exec_fn(func);
     let default_fn: LlmStreamExecutionNextFn = Arc::new(move |req| exec_fn(req));
     let collector_fn = py_callable::wrap_py_collector_fn(collector);
-    let finalizer_fn = py_callable::wrap_py_finalizer_fn(finalizer);
+    let (finalizer_fn, finalizer_error) = py_callable::wrap_py_finalizer_fn(finalizer);
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);
     let codec_arc = py_llm_codec(codec);
     let response_codec_arc = py_llm_response_codec(response_codec);
@@ -1452,6 +1452,7 @@ fn llm_stream_call_execute<'py>(
                             receiver: Arc::new(tokio::sync::Mutex::new(rx)),
                             cancel,
                             closed: closed_rx,
+                            finalizer_error: Some(finalizer_error),
                         })
                     }),
                 ),
