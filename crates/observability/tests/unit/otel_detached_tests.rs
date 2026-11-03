@@ -2055,5 +2055,10 @@ fn http_trace_export_reports_collector_partial_success_as_runtime_diagnostic() {
         .unwrap_or_else(|| panic!("no otel.partial_success in {diagnostics:?}"));
     assert_eq!(rejected.count, 1);
     assert!(!rejected.message.contains("collector policy"));
+    assert!(
+        rejected.message.contains("rejected 1 spans"),
+        "{}",
+        rejected.message
+    );
     subscriber.shutdown().unwrap();
 }

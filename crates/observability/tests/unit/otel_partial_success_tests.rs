@@ -92,6 +92,7 @@ fn protobuf_trace_partial_success_records_rejected_spans() {
     let diagnostic = only_diagnostic(&diagnostics);
     assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 3);
+    assert!(diagnostic.message.contains("rejected 3 spans"));
     assert!(diagnostic.message.contains("collector.example:4318"));
     assert!(!diagnostic.message.contains("secret"));
     assert!(!diagnostic.message.contains("token=abc"));
@@ -129,6 +130,7 @@ fn log_and_metric_partial_success_record_their_rejected_counts() {
     let diagnostic = only_diagnostic(&logs);
     assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 4);
+    assert!(diagnostic.message.contains("rejected 4 log records"));
 
     let metrics = SignalRuntimeDiagnostics::new(None);
     let body = ExportMetricsServiceResponse {
@@ -148,6 +150,7 @@ fn log_and_metric_partial_success_record_their_rejected_counts() {
     let diagnostic = only_diagnostic(&metrics);
     assert_eq!(diagnostic.code, "otel.partial_success");
     assert_eq!(diagnostic.count, 5);
+    assert!(diagnostic.message.contains("rejected 5 metric data points"));
 }
 
 #[test]
