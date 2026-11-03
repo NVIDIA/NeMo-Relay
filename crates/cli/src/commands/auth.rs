@@ -10,7 +10,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::serve::ServerArgs;
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
-use crate::oidc::OidcSource;
+use crate::oidc::{OidcPreset, OidcSource};
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AuthCommand {
@@ -42,6 +42,9 @@ pub(crate) struct ProviderArgs {
     /// Which configured provider to use when both have an `oidc` section.
     #[arg(long, value_enum)]
     pub(crate) provider: Option<ProviderArg>,
+    /// Use a provider's built-in settings instead of the configured ones.
+    #[arg(long, value_enum, conflicts_with_all = ["issuer", "client_id"])]
+    pub(crate) preset: Option<OidcPreset>,
     /// OpenID Connect issuer URL, instead of the configured one.
     #[arg(long, requires = "client_id")]
     pub(crate) issuer: Option<String>,
@@ -94,6 +97,13 @@ fn select_source(
 ) -> Result<OidcSource, CliError> {
     if let (Some(issuer), Some(client_id)) = (&args.issuer, &args.client_id) {
         return Ok(OidcSource::new(issuer, client_id, args.scope.as_deref()));
+    }
+    if let Some(preset) = args.preset {
+        let mut source = preset.source();
+        if let Some(scope) = args.scope {
+            source.scope = scope;
+        }
+        return Ok(source);
     }
     let config = load()?;
     let mut source = match (args.provider, &config.openai_oidc, &config.anthropic_oidc) {

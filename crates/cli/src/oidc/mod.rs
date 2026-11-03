@@ -33,16 +33,63 @@ fn default_scope() -> String {
     "openid offline_access".into()
 }
 
+/// Built-in settings for a known provider, so an administrator does not copy them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum OidcPreset {
+    /// OpenRouter: its issuer, its public client for command-line tools, and the inference scope.
+    Openrouter,
+}
+
+impl OidcPreset {
+    pub(crate) fn source(self) -> OidcSource {
+        match self {
+            Self::Openrouter => OidcSource::new(
+                "https://clerk.openrouter.ai",
+                "q3AE4KTq8gq6HlU3",
+                Some("openid offline_access email inference"),
+            ),
+        }
+    }
+}
+
+/// The fields of `[upstream.<provider>_oidc]` as written; a preset fills those left out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OidcSourceFields {
+    preset: Option<OidcPreset>,
+    issuer: Option<String>,
+    client_id: Option<String>,
+    scope: Option<String>,
+}
+
+impl TryFrom<OidcSourceFields> for OidcSource {
+    type Error = String;
+
+    fn try_from(fields: OidcSourceFields) -> Result<Self, Self::Error> {
+        let preset = fields.preset.map(OidcPreset::source);
+        let issuer = fields
+            .issuer
+            .or_else(|| preset.as_ref().map(|p| p.issuer.clone()))
+            .ok_or("issuer is required unless preset is set")?;
+        let client_id = fields
+            .client_id
+            .or_else(|| preset.as_ref().map(|p| p.client_id.clone()))
+            .ok_or("client_id is required unless preset is set")?;
+        let scope = fields.scope.or_else(|| preset.map(|p| p.scope));
+        Ok(Self::new(&issuer, &client_id, scope.as_deref()))
+    }
+}
+
 /// `[upstream.<provider>_oidc]`: the issuer and client that Relay signs in to.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "OidcSourceFields")]
 pub(crate) struct OidcSource {
     /// OpenID Connect issuer URL.
     pub(crate) issuer: String,
     /// OAuth client identifier registered with the issuer.
     pub(crate) client_id: String,
     /// Space-separated scopes requested at sign-in.
-    #[serde(default = "default_scope")]
     pub(crate) scope: String,
 }
 
