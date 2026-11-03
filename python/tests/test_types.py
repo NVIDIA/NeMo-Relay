@@ -1046,7 +1046,7 @@ class TestOpenTelemetryTypes:
         resource = record["resourceSpans"][0]["resource"]["attributes"]
         assert any(entry["key"] == "service.name" for entry in resource)
 
-    @pytest.mark.parametrize("projection", ["full", "gen_ai"])
+    @pytest.mark.parametrize("projection", ["full", "gen_ai", "openinference"])
     def test_file_sink_applies_shared_projection_options(self, tmp_path, projection) -> None:
         config = OpenTelemetryFileSinkConfig(projection, str(tmp_path), "projected.jsonl")
         config.mark_projection = "tool"
@@ -1095,15 +1095,12 @@ class TestOpenTelemetryTypes:
 
         # Asserted per option: a setting parsed but never applied must fail here.
         assert "scope.kind" in span_keys
-        assert ("gen_ai.unsupported" in span_keys) == (projection == "full")
+        assert "gen_ai.unsupported" not in span_keys
         skipped = subscriber.runtime_diagnostics().get("otel.attribute_mapping_alias_reserved")
-        if projection == "gen_ai":
-            assert skipped is not None and skipped.count == 1
-        else:
-            assert skipped is None
+        assert skipped is not None and skipped.count == 1
         assert "nv.tenant" in span_keys
         assert "deployment.environment" in resource_keys
-        assert ("mark:kept.mark" in span_names) == (projection == "full"), span_names
+        assert ("mark:kept.mark" in span_names) == (projection != "gen_ai"), span_names
         assert not any("custom.mark" in name for name in span_names), span_names
 
     @pytest.mark.parametrize(

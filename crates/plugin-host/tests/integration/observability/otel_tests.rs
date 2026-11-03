@@ -2913,7 +2913,7 @@ fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry
 }
 
 #[test]
-fn gen_ai_attribute_mappings_export_selected_sanitized_scope_fields() {
+fn attribute_mappings_export_selected_sanitized_scope_fields() {
     use nemo_relay_runtime::api::registry::{
         deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
         register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
@@ -2943,109 +2943,132 @@ fn gen_ai_attribute_mappings_export_selected_sanitized_scope_fields() {
         )
         .unwrap();
     }
-    for configured in [false, true] {
-        let (provider, exporter) = make_provider();
-        let mappings = [
-            ("nemo_relay.start.input.cwd", "app.cwd"),
-            ("nemo_relay.end.output.cwd", "app.cwd_end"),
-            ("nemo_relay.start.input.status", "app.start_status"),
-            ("nemo_relay.end.output.status", "app.end_status"),
-            ("nemo_relay.start.input.secret", "app.secret"),
-            ("nemo_relay.end.output.secret", "app.secret_end"),
-            ("nemo_relay.start.input.attempt", "app.attempt"),
-            ("nemo_relay.start.input.unset", "app.unset"),
-            ("gen_ai.operation.name", "app.operation"),
-        ];
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
-            provider,
-            "mapped-scopes",
+    for (projection, name_prefix, operation_key, operation) in [
+        (
+            OpenTelemetryType::Full,
+            "",
+            "nemo_relay.scope_type",
+            "agent",
+        ),
+        (
             OpenTelemetryType::GenAi,
-            OpenTelemetrySubscriberOptions {
-                attribute_mappings: if configured {
-                    mappings
-                        .into_iter()
-                        .map(|(key, alias)| OtlpAttributeMapping::new(key, alias))
-                        .collect()
-                } else {
-                    Vec::new()
+            "invoke_agent ",
+            "gen_ai.operation.name",
+            "invoke_agent",
+        ),
+        (
+            OpenTelemetryType::OpenInference,
+            "",
+            "openinference.span.kind",
+            "AGENT",
+        ),
+    ] {
+        for configured in [false, true] {
+            let (provider, exporter) = make_provider();
+            let mappings = [
+                ("nemo_relay.start.input.cwd", "app.cwd"),
+                ("nemo_relay.end.output.cwd", "app.cwd_end"),
+                ("nemo_relay.start.input.status", "app.start_status"),
+                ("nemo_relay.end.output.status", "app.end_status"),
+                ("nemo_relay.start.input.secret", "app.secret"),
+                ("nemo_relay.end.output.secret", "app.secret_end"),
+                ("nemo_relay.start.input.attempt", "app.attempt"),
+                ("nemo_relay.start.input.unset", "app.unset"),
+                (operation_key, "app.operation"),
+            ];
+            let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "mapped-scopes",
+                projection,
+                OpenTelemetrySubscriberOptions {
+                    attribute_mappings: if configured {
+                        mappings
+                            .into_iter()
+                            .map(|(key, alias)| OtlpAttributeMapping::new(key, alias))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .with_host(crate::observability_runtime::runtime_host());
-        subscriber.register("mapped-scopes").unwrap();
-        let parent = push_scope(
-            PushScopeParams::builder()
-                .name("mapped-parent")
-                .scope_type(ScopeType::Agent)
-                .input(json!({
-                    "cwd": "/start", "status": "raw", "secret": "private",
-                    "unselected": "private", "attempt": 2, "unset": null
-                }))
-                .build(),
-        )
-        .unwrap();
-        let child = push_scope(
-            PushScopeParams::builder()
-                .name("mapped-child")
-                .scope_type(ScopeType::Agent)
-                .parent(&parent)
-                .build(),
-        )
-        .unwrap();
-        pop_scope(PopScopeParams::builder().handle_uuid(&child.uuid).build()).unwrap();
-        pop_scope(
-            PopScopeParams::builder()
-                .handle_uuid(&parent.uuid)
-                .output(json!({"cwd": "/end", "status": "raw", "secret": "private"}))
-                .build(),
-        )
-        .unwrap();
-        let spans = finish_trace_subscriber(&subscriber, "mapped-scopes", &exporter);
-        assert_eq!(spans.len(), 2);
-        let parent_span = finished_span_named(&spans, "invoke_agent mapped-parent");
-        let attrs = attr_map(&parent_span.attributes);
-        assert_eq!(attrs["gen_ai.operation.name"], "invoke_agent");
-        for (key, expected) in [
-            ("app.cwd", "/start"),
-            ("app.cwd_end", "/end"),
-            ("app.start_status", "sanitized"),
-            ("app.end_status", "sanitized"),
-            ("app.operation", "invoke_agent"),
-        ] {
+            )
+            .unwrap()
+            .with_host(crate::observability_runtime::runtime_host());
+            subscriber.register("mapped-scopes").unwrap();
+            let parent = push_scope(
+                PushScopeParams::builder()
+                    .name("mapped-parent")
+                    .scope_type(ScopeType::Agent)
+                    .input(json!({
+                        "cwd": "/start", "status": "raw", "secret": "private",
+                        "unselected": "private", "attempt": 2, "unset": null
+                    }))
+                    .build(),
+            )
+            .unwrap();
+            let child = push_scope(
+                PushScopeParams::builder()
+                    .name("mapped-child")
+                    .scope_type(ScopeType::Agent)
+                    .parent(&parent)
+                    .build(),
+            )
+            .unwrap();
+            pop_scope(PopScopeParams::builder().handle_uuid(&child.uuid).build()).unwrap();
+            pop_scope(
+                PopScopeParams::builder()
+                    .handle_uuid(&parent.uuid)
+                    .output(json!({"cwd": "/end", "status": "raw", "secret": "private"}))
+                    .build(),
+            )
+            .unwrap();
+            let spans = finish_trace_subscriber(&subscriber, "mapped-scopes", &exporter);
+            assert_eq!(spans.len(), 2);
+            let parent_span = finished_span_named(&spans, &format!("{name_prefix}mapped-parent"));
+            let attrs = attr_map(&parent_span.attributes);
+            assert_eq!(attrs[operation_key], operation);
+            for (key, expected) in [
+                ("app.cwd", "/start"),
+                ("app.cwd_end", "/end"),
+                ("app.start_status", "sanitized"),
+                ("app.end_status", "sanitized"),
+                ("app.operation", operation),
+            ] {
+                assert_eq!(
+                    attrs.get(key).map(String::as_str),
+                    configured.then_some(expected)
+                );
+            }
             assert_eq!(
-                attrs.get(key).map(String::as_str),
-                configured.then_some(expected)
+                parent_span
+                    .attributes
+                    .iter()
+                    .find(|a| a.key.as_str() == "app.attempt")
+                    .map(|a| &a.value),
+                configured.then_some(&opentelemetry::Value::I64(2))
             );
+            for key in ["app.secret", "app.secret_end", "app.unset"] {
+                assert!(!attrs.contains_key(key));
+            }
+            let child_span = finished_span_named(&spans, &format!("{name_prefix}mapped-child"));
+            let child_attrs = attr_map(&child_span.attributes);
+            assert_eq!(
+                child_span.parent_span_id,
+                parent_span.span_context.span_id()
+            );
+            for key in ["app.cwd", "app.cwd_end", "app.attempt"] {
+                assert!(!child_attrs.contains_key(key));
+            }
+            if projection == OpenTelemetryType::GenAi {
+                assert!(
+                    spans.iter().flat_map(|span| &span.attributes).all(|a| !a
+                        .key
+                        .as_str()
+                        .starts_with("nemo_relay.")
+                        && !a.value.to_string().contains("private"))
+                );
+            }
         }
-        assert_eq!(
-            parent_span
-                .attributes
-                .iter()
-                .find(|a| a.key.as_str() == "app.attempt")
-                .map(|a| &a.value),
-            configured.then_some(&opentelemetry::Value::I64(2))
-        );
-        for key in ["app.secret", "app.secret_end", "app.unset"] {
-            assert!(!attrs.contains_key(key));
-        }
-        let child_span = finished_span_named(&spans, "invoke_agent mapped-child");
-        let child_attrs = attr_map(&child_span.attributes);
-        assert_eq!(
-            child_span.parent_span_id,
-            parent_span.span_context.span_id()
-        );
-        for key in ["app.cwd", "app.cwd_end", "app.attempt"] {
-            assert!(!child_attrs.contains_key(key));
-        }
-        assert!(
-            spans.iter().flat_map(|span| &span.attributes).all(|a| !a
-                .key
-                .as_str()
-                .starts_with("nemo_relay.")
-                && !a.value.to_string().contains("private"))
-        );
     }
     deregister_scope_sanitize_start_guardrail("mapping-sanitizer").unwrap();
     deregister_scope_sanitize_end_guardrail("mapping-sanitizer").unwrap();

@@ -411,7 +411,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
 });
 
 describe('OpenTelemetrySubscriber.fileSink', () => {
-  for (const type of ['full', 'gen_ai']) {
+  for (const type of ['full', 'gen_ai', 'openinference']) {
     it(`applies the shared projection options for ${type}`, () => {
       const directory = mkdtempSync(join(tmpdir(), 'nemo-relay-node-file-sink-'));
       const subscriber = OpenTelemetrySubscriber.fileSink({
@@ -454,22 +454,18 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
 
       // Asserted per option: a setting parsed but never applied must fail here.
       assert.ok(spanKeys.has('scope.kind'), 'attributeMappings should add the alias');
-      assert.equal(spanKeys.has('gen_ai.unsupported'), type === 'full');
+      assert.equal(spanKeys.has('gen_ai.unsupported'), false);
       const skipped = subscriber
         .runtimeDiagnostics()
         .find((entry) => entry.code === 'otel.attribute_mapping_alias_reserved');
-      if (type === 'gen_ai') {
-        assert.equal(skipped.count, 1);
-      } else {
-        assert.equal(skipped, undefined);
-      }
+      assert.equal(skipped.count, 1);
       assert.ok(spanKeys.has('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
       assert.ok(
         resourceKeys.includes('deployment.environment'),
         'promoteResourceMetadataPrefixes should copy onto the resource',
       );
       const spanNames = spans.map((span) => span.name);
-      assert.equal(spanNames.includes('mark:kept.mark'), type === 'full');
+      assert.equal(spanNames.includes('mark:kept.mark'), type !== 'gen_ai');
       assert.ok(
         !spanNames.some((spanName) => spanName.includes('custom.mark')),
         `markExcludeNames should drop the excluded mark: ${spanNames}`,

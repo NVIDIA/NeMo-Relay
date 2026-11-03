@@ -2750,7 +2750,7 @@ impl Drop for EnvironmentGuard {
 }
 
 #[test]
-fn gen_ai_attribute_mappings_accept_reserved_aliases_in_plugin_config() {
+fn attribute_mappings_accept_reserved_aliases_in_plugin_config() {
     for projection in ["full", "openinference", "gen_ai"] {
         for alias in ["app.cwd", "gen_ai.unsupported"] {
             for destination in ["endpoints", "file_sinks"] {

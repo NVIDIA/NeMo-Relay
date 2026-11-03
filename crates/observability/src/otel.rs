@@ -608,7 +608,6 @@ macro_rules! shared_trace_options {
             }
 
             /// Copies a projected attribute to a second attribute name.
-            /// GenAI also accepts Full lifecycle source keys, but only custom aliases.
             pub fn with_attribute_mapping(
                 mut self,
                 key: impl Into<String>,
@@ -902,7 +901,6 @@ pub struct OpenTelemetrySubscriberOptions {
     /// Mark names excluded from tool projection.
     pub mark_exclude_names: Vec<String>,
     /// Typed OTLP attributes copied to alias keys.
-    /// GenAI also accepts Full lifecycle source keys, but skips reserved aliases.
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
     /// Literal Event metadata prefixes copied to OTLP attributes.
     pub promote_metadata_prefixes: Vec<String>,
@@ -2259,7 +2257,7 @@ impl From<OtelEventProcessorConfig> for OtelEventProcessor {
             owned_config,
             dynamic_pipelines,
         } = config;
-        otel_type.filter_attribute_mappings(&mut attribute_mappings, &runtime_diagnostics);
+        filter_attribute_mappings(&mut attribute_mappings, &runtime_diagnostics);
         let tracer = provider.tracer(instrumentation_scope.clone());
         let (resource_metadata_prefixes, mut resource_metadata_protected_keys) = owned_config
             .as_ref()
@@ -2499,11 +2497,13 @@ impl OtelEventProcessor {
                 .iter()
                 .map(|mapping| mapping.alias.clone()),
         );
-        let projected_attributes = self.otel_type.attribute_mapping_start_inputs(
-            event,
-            &attributes,
-            &self.attribute_mappings,
-        );
+        let projected_attributes = if self.attribute_mappings.is_empty() {
+            Vec::new()
+        } else {
+            let mut sources = start_attributes(event);
+            sources.extend(attributes.iter().cloned());
+            attribute_mapping_inputs(&sources, &self.attribute_mappings)
+        };
         let mut start_promoted_metadata = Vec::new();
         let promoted_metadata_keys = self.promote_metadata(
             &mut start_promoted_metadata,
@@ -2605,26 +2605,25 @@ impl OtelEventProcessor {
                 vec![KeyValue::new("exception.type", exception_type.clone())],
             );
         }
-        let mut end_model_name =
+        let end_model_name =
             model_name_for_llm_event(event).or_else(|| active_span.start_model_name.take());
         if self.otel_type == OpenTelemetryType::Full
-            && let Some(model_name) = end_model_name.take()
+            && let Some(model_name) = end_model_name.clone()
         {
             attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
         }
         if self.otel_type == OpenTelemetryType::OpenInference
-            && let Some(model_name) = end_model_name.take()
+            && let Some(model_name) = end_model_name.clone()
         {
             super::openinference::push_model_name(&mut attributes, model_name);
         }
         if !self.attribute_mappings.is_empty() {
             let mut projected_attributes = active_span.projected_attributes;
-            self.otel_type.append_attribute_mapping_end_inputs(
-                &mut projected_attributes,
-                event,
-                &attributes,
-                end_model_name,
-            );
+            projected_attributes.extend(end_attributes(event));
+            if let Some(model_name) = end_model_name {
+                projected_attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
+            }
+            projected_attributes.extend(attributes.iter().cloned());
             attributes.extend(attribute_mapping_aliases(
                 &projected_attributes,
                 &self.attribute_mappings,
@@ -3060,74 +3059,30 @@ pub(crate) fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
     }
 }
 
-impl OpenTelemetryType {
-    fn filter_attribute_mappings(
-        self,
-        mappings: &mut Vec<OtlpAttributeMapping>,
-        diagnostics: &SignalRuntimeDiagnostics,
-    ) {
-        match self {
-            Self::Full | Self::OpenInference => {}
-            Self::GenAi => mappings.retain(|mapping| {
-                if !super::is_reserved_otel_attribute_key(mapping.alias.trim()) {
-                    return true;
-                }
-                diagnostics.record(
-                    "otel.attribute_mapping_alias_reserved",
-                    format!(
-                        "GenAI attribute mapping alias {:?} was skipped: reserved namespace",
-                        mapping.alias
-                    ),
-                    1,
-                );
-                log::warn!(
-                    target: "nemo_relay.observability",
-                    event = "otel_attribute_mapping_alias_reserved",
-                    alias = mapping.alias.as_str();
-                    "GenAI attribute mapping alias was skipped: reserved namespace"
-                );
-                false
-            }),
+fn filter_attribute_mappings(
+    mappings: &mut Vec<OtlpAttributeMapping>,
+    diagnostics: &SignalRuntimeDiagnostics,
+) {
+    mappings.retain(|mapping| {
+        if !super::is_reserved_otel_attribute_key(mapping.alias.trim()) {
+            return true;
         }
-    }
-
-    fn attribute_mapping_start_inputs(
-        self,
-        event: &EventView<'_>,
-        attributes: &[KeyValue],
-        mappings: &[OtlpAttributeMapping],
-    ) -> Vec<KeyValue> {
-        if mappings.is_empty() {
-            return Vec::new();
-        }
-        match self {
-            Self::Full | Self::OpenInference => attribute_mapping_inputs(attributes, mappings),
-            Self::GenAi => {
-                let mut sources = start_attributes(event);
-                sources.extend(attributes.iter().cloned());
-                attribute_mapping_inputs(&sources, mappings)
-            }
-        }
-    }
-
-    fn append_attribute_mapping_end_inputs(
-        self,
-        inputs: &mut Vec<KeyValue>,
-        event: &EventView<'_>,
-        attributes: &[KeyValue],
-        model_name: Option<String>,
-    ) {
-        match self {
-            Self::Full | Self::OpenInference => {}
-            Self::GenAi => {
-                inputs.extend(end_attributes(event));
-                if let Some(model_name) = model_name {
-                    inputs.push(KeyValue::new("nemo_relay.model_name", model_name));
-                }
-            }
-        }
-        inputs.extend(attributes.iter().cloned());
-    }
+        diagnostics.record(
+            "otel.attribute_mapping_alias_reserved",
+            format!(
+                "OpenTelemetry attribute mapping alias {:?} was skipped: reserved namespace",
+                mapping.alias
+            ),
+            1,
+        );
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "otel_attribute_mapping_alias_reserved",
+            alias = mapping.alias.as_str();
+            "OpenTelemetry attribute mapping alias was skipped: reserved namespace"
+        );
+        false
+    });
 }
 
 #[doc(hidden)]

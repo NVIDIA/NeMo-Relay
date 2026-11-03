@@ -346,7 +346,6 @@ pub struct OpenTelemetryEndpointConfig {
     #[serde(default = "default_mark_exclude_names")]
     pub mark_exclude_names: Vec<String>,
     /// Projected attributes copied to aliases.
-    /// GenAI also accepts Full lifecycle source keys, but skips reserved aliases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
     /// Literal Event metadata prefixes copied to top-level OTLP attributes.
@@ -433,7 +432,6 @@ pub struct OpenTelemetryFileSinkConfig {
     #[serde(default = "default_mark_exclude_names")]
     pub mark_exclude_names: Vec<String>,
     /// Projected attributes copied to aliases.
-    /// GenAI also accepts Full lifecycle source keys, but skips reserved aliases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
     /// Literal Event metadata prefixes copied to top-level OTLP attributes.

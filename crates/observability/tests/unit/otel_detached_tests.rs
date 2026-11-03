@@ -1804,143 +1804,177 @@ struct CapturedHttpRequest {
 }
 
 #[test]
-fn gen_ai_attribute_mappings_reserve_aliases_against_promoted_metadata() {
-    let (provider, exporter) = make_provider();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
-        provider,
-        "mapping-precedence",
+fn attribute_mappings_reserve_aliases_against_promoted_metadata() {
+    for projection in [
+        OpenTelemetryType::Full,
         OpenTelemetryType::GenAi,
-        OpenTelemetrySubscriberOptions {
-            attribute_mappings: vec![
-                crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", "app.cwd"),
-                crate::OtlpAttributeMapping::new("missing", "app.missing"),
-            ],
-            promote_metadata_prefixes: vec!["app.".into()],
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let callback = subscriber.subscriber();
-    let uuid = Uuid::now_v7();
-    for category in [ScopeCategory::Start, ScopeCategory::End] {
-        callback(&Event::Scope(ScopeEvent::new(
-            BaseEvent::builder().uuid(uuid).name("mapped")
-                .data(json!({"cwd": "/payload"}))
-                .metadata(json!({"app.cwd": "/metadata", "app.missing": "no fallback", "app.other": "retained"}))
-                .build(),
-            category, Vec::new(), EventCategory::agent(), None,
-        )));
-    }
-    subscriber.force_flush().unwrap();
-    let spans = exporter.get_finished_spans().unwrap();
-    let attrs = attr_map(&spans[0].attributes);
-    assert_eq!(attrs["app.cwd"], "/payload");
-    assert_eq!(attrs["app.other"], "retained");
-    assert!(!attrs.contains_key("app.missing"));
-}
-
-#[test]
-fn gen_ai_attribute_mappings_skip_reserved_aliases_and_report_diagnostics() {
-    let mappings = ["gen_ai.unsupported", "gen_ai.operation.name", "app.cwd"]
-        .map(|alias| crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", alias));
-    let (provider, exporter) = make_provider();
-    let existing_provider = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
-        provider,
-        "reserved-aliases",
-        OpenTelemetryType::GenAi,
-        OpenTelemetrySubscriberOptions {
-            attribute_mappings: mappings.to_vec(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let endpoint = OpenTelemetrySubscriber::new(
-        OpenTelemetryConfig::new(OpenTelemetryType::GenAi, "http://localhost:4318")
-            .with_attribute_mappings(mappings.clone()),
-    )
-    .unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let file_sink = OpenTelemetrySubscriber::new_file_sink(
-        OpenTelemetryFileSinkConfig::new(
-            OpenTelemetryType::GenAi,
-            OtlpFileSinkSettings::from_parts(directory.path().to_str().unwrap(), None, None, None)
-                .unwrap(),
-        )
-        .with_attribute_mappings(mappings),
-    )
-    .unwrap();
-
-    let callback = existing_provider.subscriber();
-    let uuid = Uuid::now_v7();
-    callback(&make_start_event(
-        uuid,
-        None,
-        "agent",
-        ScopeType::Agent,
-        Some(json!({"cwd": "/workspace"})),
-    ));
-    callback(&make_end_event(uuid, None, "agent", ScopeType::Agent, None));
-    existing_provider.force_flush().unwrap();
-    let spans = exporter.get_finished_spans().unwrap();
-    let attrs = attr_map(&spans[0].attributes);
-    assert_eq!(attrs["app.cwd"], "/workspace");
-    assert_eq!(attrs["gen_ai.operation.name"], "invoke_agent");
-    assert!(!attrs.contains_key("gen_ai.unsupported"));
-    assert!(!attrs.contains_key("nemo_relay.start.input.cwd"));
-
-    for subscriber in [existing_provider, endpoint, file_sink] {
-        let diagnostics = subscriber.runtime_diagnostics();
-        let skipped = diagnostics
-            .get("otel.attribute_mapping_alias_reserved")
-            .unwrap();
-        assert_eq!(skipped.count, 2);
-        assert!(skipped.message.contains("gen_ai.unsupported"));
-        assert!(skipped.message.contains("gen_ai.operation.name"));
-        assert!(!skipped.message.contains("/workspace"));
-        subscriber.shutdown().unwrap();
-    }
-}
-
-#[test]
-fn gen_ai_attribute_mappings_use_the_completed_model_name() {
-    for (response, expected) in [
-        (Some(json!({"model": "served"})), "served"),
-        (None, "requested"),
+        OpenTelemetryType::OpenInference,
     ] {
         let (provider, exporter) = make_provider();
         let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
             provider,
-            "mapped-model",
-            OpenTelemetryType::GenAi,
+            "mapping-precedence",
+            projection,
             OpenTelemetrySubscriberOptions {
-                attribute_mappings: vec![crate::OtlpAttributeMapping::new(
-                    "nemo_relay.model_name",
-                    "app.model",
-                )],
+                attribute_mappings: vec![
+                    crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", "app.cwd"),
+                    crate::OtlpAttributeMapping::new("missing", "app.missing"),
+                ],
+                promote_metadata_prefixes: vec!["app.".into()],
                 ..Default::default()
             },
         )
         .unwrap();
         let callback = subscriber.subscriber();
         let uuid = Uuid::now_v7();
-        callback(&make_start_event(
-            uuid,
-            None,
-            "model",
-            ScopeType::Llm,
-            Some(json!({"model": "requested"})),
-        ));
-        callback(&make_end_event(
-            uuid,
-            None,
-            "model",
-            ScopeType::Llm,
-            response,
-        ));
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            callback(&Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(uuid).name("mapped")
+                .data(json!({"cwd": "/payload"}))
+                .metadata(json!({"app.cwd": "/metadata", "app.missing": "no fallback", "app.other": "retained"}))
+                .build(),
+            category, Vec::new(), EventCategory::agent(), None,
+        )));
+        }
         subscriber.force_flush().unwrap();
         let spans = exporter.get_finished_spans().unwrap();
         let attrs = attr_map(&spans[0].attributes);
-        assert_eq!(attrs["app.model"], expected);
-        assert!(!attrs.contains_key("nemo_relay.model_name"));
+        assert_eq!(attrs["app.cwd"], "/payload");
+        assert_eq!(attrs["app.other"], "retained");
+        assert!(!attrs.contains_key("app.missing"));
+    }
+}
+
+#[test]
+fn attribute_mappings_skip_reserved_aliases_and_report_diagnostics() {
+    for (projection, native_key, native_value) in [
+        (OpenTelemetryType::Full, "nemo_relay.scope_type", "agent"),
+        (
+            OpenTelemetryType::GenAi,
+            "gen_ai.operation.name",
+            "invoke_agent",
+        ),
+        (
+            OpenTelemetryType::OpenInference,
+            "openinference.span.kind",
+            "AGENT",
+        ),
+    ] {
+        let mappings = ["gen_ai.unsupported", native_key, "app.cwd"]
+            .map(|alias| crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", alias));
+        let (provider, exporter) = make_provider();
+        let existing_provider =
+            OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "reserved-aliases",
+                projection,
+                OpenTelemetrySubscriberOptions {
+                    attribute_mappings: mappings.to_vec(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let endpoint = OpenTelemetrySubscriber::new(
+            OpenTelemetryConfig::new(projection, "http://localhost:4318")
+                .with_attribute_mappings(mappings.clone()),
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file_sink = OpenTelemetrySubscriber::new_file_sink(
+            OpenTelemetryFileSinkConfig::new(
+                projection,
+                OtlpFileSinkSettings::from_parts(
+                    directory.path().to_str().unwrap(),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap(),
+            )
+            .with_attribute_mappings(mappings),
+        )
+        .unwrap();
+
+        let callback = existing_provider.subscriber();
+        let uuid = Uuid::now_v7();
+        callback(&make_start_event(
+            uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            Some(json!({"cwd": "/workspace"})),
+        ));
+        callback(&make_end_event(uuid, None, "agent", ScopeType::Agent, None));
+        existing_provider.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let attrs = attr_map(&spans[0].attributes);
+        assert_eq!(attrs["app.cwd"], "/workspace");
+        assert_eq!(attrs[native_key], native_value);
+        assert!(!attrs.contains_key("gen_ai.unsupported"));
+
+        for subscriber in [existing_provider, endpoint, file_sink] {
+            let diagnostics = subscriber.runtime_diagnostics();
+            let skipped = diagnostics
+                .get("otel.attribute_mapping_alias_reserved")
+                .unwrap();
+            assert_eq!(skipped.count, 2);
+            assert!(skipped.message.contains("gen_ai.unsupported"));
+            assert!(skipped.message.contains(native_key));
+            assert!(!skipped.message.contains("/workspace"));
+            subscriber.shutdown().unwrap();
+        }
+    }
+}
+
+#[test]
+fn attribute_mappings_use_the_completed_model_name() {
+    for projection in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        for (response, expected) in [
+            (Some(json!({"model": "served"})), "served"),
+            (None, "requested"),
+        ] {
+            let (provider, exporter) = make_provider();
+            let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "mapped-model",
+                projection,
+                OpenTelemetrySubscriberOptions {
+                    attribute_mappings: vec![
+                        crate::OtlpAttributeMapping::new("nemo_relay.model_name", "app.model"),
+                        crate::OtlpAttributeMapping::new(
+                            "nemo_relay.start.input.model",
+                            "app.requested_model",
+                        ),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let callback = subscriber.subscriber();
+            let uuid = Uuid::now_v7();
+            callback(&make_start_event(
+                uuid,
+                None,
+                "model",
+                ScopeType::Llm,
+                Some(json!({"model": "requested"})),
+            ));
+            callback(&make_end_event(
+                uuid,
+                None,
+                "model",
+                ScopeType::Llm,
+                response,
+            ));
+            subscriber.force_flush().unwrap();
+            let spans = exporter.get_finished_spans().unwrap();
+            let attrs = attr_map(&spans[0].attributes);
+            assert_eq!(attrs["app.model"], expected);
+            assert_eq!(attrs["app.requested_model"], "requested");
+        }
     }
 }
