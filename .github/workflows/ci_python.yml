@@ -596,4 +596,4 @@ jobs:
           uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --no-deps --no-index "$wheel"
           # SONAR_IGNORE_END
           "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
-            "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"
+            "import nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1.plugin_worker_service_pb2_grpc"
