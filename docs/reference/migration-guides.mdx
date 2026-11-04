@@ -27,7 +27,8 @@ own version. Follow these steps to migrate a worker:
    manifest and declare `compat.relay = ">=1.0.0,<2.0"`.
 3. Recalculate artifact digests, reinstall workers, and validate activation.
 
-Persisted registrations for an unsupported worker protocol remain removable.
+Workers with an unsupported protocol remain inspectable and removable. Their
+compatibility status is invalid. They do not block other plugin commands.
 Run `nemo-relay plugins remove <plugin-id>` to remove the old registration, then
 reinstall the rebuilt worker. Unsupported workers cannot be newly registered or
 enabled. Validation refreshes do not clear their invalid compatibility status.

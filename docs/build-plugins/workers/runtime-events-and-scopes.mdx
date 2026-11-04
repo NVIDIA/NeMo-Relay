@@ -380,11 +380,12 @@ failed work supplies failure metadata and then propagates the original callback 
 
 ## Clean Up Under Failure
 
-The examples first capture the previous binding. If configured, they create and
-bind an isolated stack. They then push a scope and run the plugin work. During
-cleanup, they pop the scope with success or error metadata, restore the previous
-binding, and drop the isolated stack. Python uses `try`/`finally`. Rust handles
-each result and awaits cleanup before returning.
+The examples push a scope, run the plugin work, and pop the scope with success
+output or failure metadata. If configured, they then create an isolated stack
+and bind it for the isolated work. The binding helper restores the previous
+binding when it exits. Both examples attempt to drop the isolated stack even if
+the isolated work fails. Python uses `try`/`finally`. Rust checks each result and
+awaits cleanup before returning.
 
 Shutdown can race with these operations. The worker stops accepting new invocations,
 cancels active callbacks, and continues only the bounded cleanup that the SDK can still

@@ -52,8 +52,9 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native API 1 plugins, and `grpc-v1` workers require canonical tool callback and
-intercept returns. Relay 0.8 does not provide a legacy raw-result adapter.
+native API 1 plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
+tool callback and intercept returns. Relay does not provide a legacy raw-result
+adapter.
 
 ## Event and Exporter Projection
 
