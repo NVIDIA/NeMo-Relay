@@ -310,12 +310,13 @@ fn resolve_logging_config_section(
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
-        let parsed = raw
+        let mut parsed = raw
             .parse::<toml::Table>()
             .map(toml::Value::Table)
             .map_err(|error| {
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
+        expand_upstream_preset(&mut parsed, &path)?;
         merge_gateway_config_toml(&mut merged, parsed);
     }
 
@@ -1704,12 +1705,13 @@ fn read_shared_documents_for_startup(
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
         };
-        let parsed = raw
+        let mut parsed = raw
             .parse::<toml::Table>()
             .map(toml::Value::Table)
             .map_err(|error| {
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
+        expand_upstream_preset(&mut parsed, &path)?;
         let legacy_observability = legacy_observability_sections(&parsed);
         if validate_runtime && !legacy_observability.is_empty() {
             return Err(CliError::Config(format!(
@@ -2591,51 +2593,67 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
 // provider's singleton upstream. A higher-priority layer that changes that identity without
 // supplying a replacement credential must not inherit the credential for the old endpoint.
 fn merge_gateway_config_toml(left: &mut toml::Value, mut right: toml::Value) {
-    expand_upstream_preset(&mut right);
     clear_credentials_for_replaced_upstreams(left, &right);
     merge_logging_sinks_by_path(left, &mut right, &["logging"]);
     merge_logging_sinks_by_path(left, &mut right, &["daemon", "logging"]);
     merge_toml(left, right);
 }
 
+/// The `[upstream]` fields that `[upstream] preset` fills. A layer with the preset sets none of them.
+const UPSTREAM_PRESET_FIELDS: [&str; 10] = [
+    "openai_base_url",
+    "anthropic_base_url",
+    "openai_oidc",
+    "anthropic_oidc",
+    "openai_api_key",
+    "anthropic_api_key",
+    "openai_auth_header",
+    "anthropic_auth_header",
+    "openai_api_key_helper",
+    "anthropic_api_key_helper",
+];
+
 /// `[upstream] preset = "openrouter"` stands for both base URLs and a sign-in for each provider.
-/// It expands inside its own layer, before the merge, so fields written in that layer win and the
-/// usual layering rules then apply: a higher layer that changes a base URL drops its sign-in.
-fn expand_upstream_preset(layer: &mut toml::Value) {
+/// It is exclusive within its layer: the layer may not also set a field it fills. Each layer
+/// expands it before the merge, so the usual layering rules then apply: a higher layer that
+/// changes a base URL drops that provider's sign-in.
+fn expand_upstream_preset(layer: &mut toml::Value, path: &Path) -> Result<(), CliError> {
     let Some(upstream) = layer
         .get_mut("upstream")
         .and_then(toml::Value::as_table_mut)
     else {
-        return;
+        return Ok(());
     };
     let Some(raw) = upstream.get("preset").cloned() else {
-        return;
+        return Ok(());
     };
     // An unknown value stays in place, so `FileUpstreamConfig` rejects it with its name.
     let Ok(preset) = raw.clone().try_into::<crate::oidc::OidcPreset>() else {
-        return;
+        return Ok(());
     };
+    if let Some(field) = UPSTREAM_PRESET_FIELDS
+        .into_iter()
+        .find(|field| upstream.contains_key(*field))
+    {
+        return Err(CliError::Config(format!(
+            "upstream.preset in {} cannot be combined with upstream.{field}; write either the \
+             preset or the fields",
+            path.display()
+        )));
+    }
     for (provider, base_url) in [
         ("openai", preset.openai_base_url()),
         ("anthropic", preset.anthropic_base_url()),
     ] {
-        let base_url_key = format!("{provider}_base_url");
-        let same_endpoint = match upstream.get(&base_url_key).and_then(toml::Value::as_str) {
-            Some(written) => written == base_url,
-            None => {
-                upstream.insert(base_url_key, toml::Value::String(base_url.into()));
-                true
-            }
-        };
-        let has_credential = ["auth_header", "api_key", "api_key_helper", "oidc"]
-            .iter()
-            .any(|suffix| upstream.contains_key(&format!("{provider}_{suffix}")));
-        if same_endpoint && !has_credential {
-            let mut sign_in = toml::map::Map::new();
-            sign_in.insert("preset".into(), raw.clone());
-            upstream.insert(format!("{provider}_oidc"), toml::Value::Table(sign_in));
-        }
+        upstream.insert(
+            format!("{provider}_base_url"),
+            toml::Value::String(base_url.into()),
+        );
+        let mut sign_in = toml::map::Map::new();
+        sign_in.insert("preset".into(), raw.clone());
+        upstream.insert(format!("{provider}_oidc"), toml::Value::Table(sign_in));
     }
+    Ok(())
 }
 
 fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml::Value) {

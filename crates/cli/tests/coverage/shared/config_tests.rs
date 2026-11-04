@@ -5940,17 +5940,40 @@ fn the_upstream_openrouter_preset_sets_both_providers_and_one_sign_in() {
 }
 
 #[test]
-fn an_explicit_base_url_in_the_same_layer_wins_and_drops_that_providers_sign_in() {
+fn the_upstream_preset_cannot_be_combined_with_a_field_it_fills() {
     let _env = without_base_url_environment();
 
-    let gateway = load_layers(&[
-        "[upstream]\npreset = \"openrouter\"\nopenai_base_url = \"https://gateway.example/v1\"\n",
-    ])
-    .unwrap();
+    for (field, value) in [
+        ("openai_base_url", "\"https://openrouter.ai/api/v1\""),
+        ("anthropic_base_url", "\"https://gateway.example\""),
+        ("openai_oidc", "{ preset = \"openrouter\" }"),
+        ("anthropic_api_key", "\"sk-test\""),
+        ("openai_auth_header", "\"Bearer test\""),
+        ("anthropic_api_key_helper", "{ command = [\"helper\"] }"),
+    ] {
+        let error = load_layers(&[&format!(
+            "[upstream]\npreset = \"openrouter\"\n{field} = {value}\n"
+        )])
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(gateway.openai_base_url, "https://gateway.example/v1");
-    assert!(gateway.openai_oidc.is_none());
-    assert!(gateway.anthropic_oidc.is_some());
+        assert!(
+            error.contains(&format!("cannot be combined with upstream.{field}")),
+            "{field}: {error}"
+        );
+    }
+}
+
+#[test]
+fn the_upstream_preset_allows_settings_it_does_not_fill() {
+    let _env = without_base_url_environment();
+
+    let gateway =
+        load_layers(&["[upstream]\npreset = \"openrouter\"\nresponse_timeout_secs = 90\n"])
+            .unwrap();
+
+    assert_eq!(gateway.openai_base_url, "https://openrouter.ai/api/v1");
+    assert!(gateway.openai_oidc.is_some());
 }
 
 #[test]

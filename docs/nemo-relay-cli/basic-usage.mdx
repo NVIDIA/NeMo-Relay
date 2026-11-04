@@ -793,9 +793,17 @@ preset = "openrouter"
 It sets `openai_base_url` to `https://openrouter.ai/api/v1`, `anthropic_base_url`
 to `https://openrouter.ai/api`, and an OpenRouter sign-in for both providers.
 Both use the same issuer and client, so one `nemo-relay auth login` covers both.
-Fields written next to the preset win. A provider whose base URL is set to
-another address, by the same layer, a higher layer, or an environment variable,
-does not get the preset's sign-in.
+
+The preset stands for all of these fields, so it is not combined with them. A
+file that sets the preset and also `openai_base_url`, `anthropic_base_url`, an
+`openai_oidc` or `anthropic_oidc` section, or another credential for those
+providers is a configuration error that names the field. Other `[upstream]`
+settings, such as timeouts, can sit next to the preset.
+
+A higher layer, such as a user config over the system config, can still set a
+base URL. A provider whose base URL is then set to another address does not
+get the preset's sign-in. The same is true when `NEMO_RELAY_OPENAI_BASE_URL` or
+`NEMO_RELAY_ANTHROPIC_BASE_URL` changes it.
 
 For another provider, or a gateway in front of OpenRouter, an administrator
 names the sign-in in its own section. The issuer, client ID, and scopes are not
