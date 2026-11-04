@@ -135,16 +135,47 @@ fn a_config_section_with_only_a_preset_is_complete() {
 }
 
 #[test]
-fn explicit_fields_override_the_preset_and_missing_ones_fail_without_it() {
+fn a_preset_section_holds_no_other_field_and_missing_ones_fail_without_it() {
     let parse = |text: &str| toml::from_str::<OidcSource>(text);
 
-    let custom = parse("preset = \"openrouter\"\nscope = \"openid\"").unwrap();
-    assert_eq!(custom.client_id, "q3AE4KTq8gq6HlU3");
-    assert_eq!(custom.scope, "openid");
+    for field in [
+        "issuer = \"https://issuer.example\"",
+        "client_id = \"relay\"",
+        "scope = \"openid\"",
+    ] {
+        let error = parse(&format!("preset = \"openrouter\"\n{field}"))
+            .unwrap_err()
+            .to_string();
+        let name = field.split(' ').next().unwrap();
+        assert!(
+            error.contains(&format!("preset cannot be combined with {name}")),
+            "{error}"
+        );
+    }
 
     let error = parse("client_id = \"relay\"").unwrap_err().to_string();
     assert!(
         error.contains("issuer is required unless preset is set"),
         "{error}"
     );
+}
+
+#[test]
+fn the_preset_flag_cannot_be_combined_with_other_sign_in_flags() {
+    #[derive(clap::Parser)]
+    struct Probe {
+        #[command(flatten)]
+        args: ProviderArgs,
+    }
+
+    for flag in [
+        ["--scope", "openid"],
+        ["--issuer", "https://issuer.example"],
+        ["--client-id", "relay"],
+    ] {
+        let parsed = <Probe as clap::Parser>::try_parse_from(
+            ["probe", "--preset", "openrouter"].into_iter().chain(flag),
+        );
+        assert!(parsed.is_err(), "{flag:?}");
+    }
 }

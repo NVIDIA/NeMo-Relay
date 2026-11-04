@@ -43,7 +43,7 @@ pub(crate) struct ProviderArgs {
     #[arg(long, value_enum)]
     pub(crate) provider: Option<ProviderArg>,
     /// Use a provider's built-in settings instead of the configured ones.
-    #[arg(long, value_enum, conflicts_with_all = ["issuer", "client_id"])]
+    #[arg(long, value_enum, conflicts_with_all = ["issuer", "client_id", "scope"])]
     pub(crate) preset: Option<OidcPreset>,
     /// OpenID Connect issuer URL, instead of the configured one.
     #[arg(long, requires = "client_id")]
@@ -70,7 +70,7 @@ pub(super) async fn execute(
         }
         AuthSubcommand::Token(args) => {
             let source = select_source(args, load)?;
-            let token = crate::oidc::current_token(&dir, &source, crate::oidc::now_secs()).await?;
+            let token = crate::oidc::current_token(&dir, &source, &crate::oidc::now_secs).await?;
             println!("{token}");
         }
         AuthSubcommand::Logout(args) => {
@@ -99,11 +99,7 @@ fn select_source(
         return Ok(OidcSource::new(issuer, client_id, args.scope.as_deref()));
     }
     if let Some(preset) = args.preset {
-        let mut source = preset.source();
-        if let Some(scope) = args.scope {
-            source.scope = scope;
-        }
-        return Ok(source);
+        return Ok(preset.source());
     }
     let config = load()?;
     let mut source = match (args.provider, &config.openai_oidc, &config.anthropic_oidc) {

@@ -26,6 +26,9 @@ pub(crate) use self::session::sessions_dir;
 
 /// Refresh an access token this many seconds before it expires.
 pub(crate) const REFRESH_MARGIN_SECS: u64 = 300;
+/// The current Unix time in seconds. Production passes `now_secs`; tests pass a clock they move.
+pub(crate) type Clock<'a> = dyn Fn() -> u64 + Send + Sync + 'a;
+
 /// Bound for one issuer request.
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -53,7 +56,7 @@ impl OidcPreset {
     }
 }
 
-/// The fields of `[upstream.<provider>_oidc]` as written; a preset fills those left out.
+/// The fields of `[upstream.<provider>_oidc]` as written; a preset stands for the other three.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OidcSourceFields {
@@ -67,17 +70,26 @@ impl TryFrom<OidcSourceFields> for OidcSource {
     type Error = String;
 
     fn try_from(fields: OidcSourceFields) -> Result<Self, Self::Error> {
-        let preset = fields.preset.map(OidcPreset::source);
+        if let Some(preset) = fields.preset {
+            let written = [
+                ("issuer", fields.issuer.is_some()),
+                ("client_id", fields.client_id.is_some()),
+                ("scope", fields.scope.is_some()),
+            ];
+            if let Some((name, _)) = written.into_iter().find(|(_, set)| *set) {
+                return Err(format!(
+                    "preset cannot be combined with {name}; write either the preset or the fields"
+                ));
+            }
+            return Ok(preset.source());
+        }
         let issuer = fields
             .issuer
-            .or_else(|| preset.as_ref().map(|p| p.issuer.clone()))
             .ok_or("issuer is required unless preset is set")?;
         let client_id = fields
             .client_id
-            .or_else(|| preset.as_ref().map(|p| p.client_id.clone()))
             .ok_or("client_id is required unless preset is set")?;
-        let scope = fields.scope.or_else(|| preset.map(|p| p.scope));
-        Ok(Self::new(&issuer, &client_id, scope.as_deref()))
+        Ok(Self::new(&issuer, &client_id, fields.scope.as_deref()))
     }
 }
 
@@ -137,16 +149,16 @@ pub(crate) enum SignInState {
 /// The access token for one upstream request. The common case reads the stored sign-in without
 /// a lock; only a refresh takes the lock.
 pub(crate) async fn upstream_token(source: &OidcSource) -> Result<String, CliError> {
-    upstream_token_in(&sessions_dir()?, source, now_secs()).await
+    upstream_token_in(&sessions_dir()?, source, &now_secs).await
 }
 
 pub(crate) async fn upstream_token_in(
     dir: &Path,
     source: &OidcSource,
-    now: u64,
+    now: &Clock<'_>,
 ) -> Result<String, CliError> {
     if let Some(session) = read_session(&session_path(dir, source), source)?
-        && session.expires_at > now.saturating_add(REFRESH_MARGIN_SECS)
+        && session.expires_at > now().saturating_add(REFRESH_MARGIN_SECS)
     {
         return Ok(session.access_token);
     }
@@ -157,7 +169,7 @@ pub(crate) async fn upstream_token_in(
 pub(crate) async fn current_token(
     dir: &Path,
     source: &OidcSource,
-    now: u64,
+    now: &Clock<'_>,
 ) -> Result<String, CliError> {
     let path = session_path(dir, source);
     if !dir.exists() {
@@ -165,12 +177,12 @@ pub(crate) async fn current_token(
     }
     let _lock = SessionLock::acquire(&path).await?;
     let session = read_session(&path, source)?.ok_or_else(|| login_required(source.issuer()))?;
-    if session.expires_at > now.saturating_add(REFRESH_MARGIN_SECS) {
+    if session.expires_at > now().saturating_add(REFRESH_MARGIN_SECS) {
         return Ok(session.access_token);
     }
     let Some(refresh_token) = session.refresh_token else {
         // Without a refresh token, use the access token until it actually expires.
-        return if session.expires_at > now {
+        return if session.expires_at > now() {
             Ok(session.access_token)
         } else {
             Err(login_required(source.issuer()))
@@ -187,8 +199,11 @@ pub(crate) async fn current_token(
             write_session(&path, &renewed)?;
             Ok(renewed.access_token)
         }
-        // A temporary issuer failure must not drop a token that is still valid.
-        Err(error) if !matches!(error, CliError::SignInRequired(_)) && session.expires_at > now => {
+        // A temporary issuer failure must not drop a token that is still valid. Read the clock
+        // again: the lock wait, discovery and the refresh request all take time.
+        Err(error)
+            if !matches!(error, CliError::SignInRequired(_)) && session.expires_at > now() =>
+        {
             Ok(session.access_token)
         }
         Err(error) => Err(error),
