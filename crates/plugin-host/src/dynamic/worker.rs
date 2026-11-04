@@ -3144,20 +3144,20 @@ type ScopeCleanupResult = std::result::Result<(), String>;
 
 struct ScopeStackLifetime {
     revoked: AtomicBool,
-    pushes: watch::Sender<usize>,
+    operations: watch::Sender<usize>,
     complete: watch::Sender<Option<ScopeCleanupResult>>,
 }
 impl Default for ScopeStackLifetime {
     fn default() -> Self {
         Self {
             revoked: AtomicBool::new(false),
-            pushes: watch::channel(0).0,
+            operations: watch::channel(0).0,
             complete: watch::channel(None).0,
         }
     }
 }
 
-struct ScopePushAdmission {
+struct ScopeOperationAdmission {
     binding: Option<Arc<ScopeStackLifetime>>,
     _binding_activity: Option<ScopeActivityGuard>,
     _activation_activity: ScopeActivityGuard,
@@ -3524,10 +3524,10 @@ impl WorkerHostRuntimeState {
             .insert(scope_stack_identifier.to_owned());
     }
 
-    fn admit_scope_push(
+    fn admit_scope_operation(
         &self,
         scope: Option<&ScopeContext>,
-    ) -> Result<(Option<StoredInvocationContext>, ScopePushAdmission), Status> {
+    ) -> Result<(Option<StoredInvocationContext>, ScopeOperationAdmission), Status> {
         let stacks = self
             .scope_stacks
             .lock()
@@ -3547,10 +3547,10 @@ impl WorkerHostRuntimeState {
             .map(|scope| self.select_scope_context(&stacks, scope))
             .transpose()?;
         let binding = scope.map(|scope| stacks[&scope.scope_stack_id].lifetime.clone());
-        let admission = ScopePushAdmission {
+        let admission = ScopeOperationAdmission {
             _binding_activity: binding
                 .as_ref()
-                .map(|binding| ScopeActivityGuard::new(&binding.pushes)),
+                .map(|binding| ScopeActivityGuard::new(&binding.operations)),
             binding,
             _activation_activity: ScopeActivityGuard::new(&self.scope_activity),
         };
@@ -3596,8 +3596,8 @@ impl WorkerHostRuntimeState {
         let lifetime = stored.lifetime.clone();
         let cleanup_runtime = runtime.clone();
         runtime.spawn(async move {
-            let mut pushes = lifetime.pushes.subscribe();
-            let _ = pushes.wait_for(|active| *active == 0).await;
+            let mut operations = lifetime.operations.subscribe();
+            let _ = operations.wait_for(|active| *active == 0).await;
             cleanup_runtime.spawn_blocking(move || {
                 let _activity = activity;
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -4560,7 +4560,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             .authorize(&credentials.activation_id, &credentials.auth_token)?;
         nemo_relay_worker_proto::validation::validate(&request)
             .map_err(Status::invalid_argument)?;
-        let (context, admission) = self.state.admit_scope_push(request.scope.as_ref())?;
+        let (context, admission) = self.state.admit_scope_operation(request.scope.as_ref())?;
         let push = || {
             push_scope(
                 PushScopeParams::builder()
@@ -4679,26 +4679,35 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         };
         let output = optional_envelope_to_json(request.output).map_err(status_from_flow)?;
         let metadata = optional_envelope_to_json(request.metadata).map_err(status_from_flow)?;
-        let handle = {
+        let handle = self
+            .state
+            .scope_handles
+            .lock()
+            .map_err(|err| Status::internal(format!("scope handle lock poisoned: {err}")))?
+            .get(&request.scope_handle_id)
+            .cloned()
+            .ok_or_else(|| Status::not_found("scope handle not found"))?;
+        let scope = (!handle.scope_stack_id.is_empty()).then(|| ScopeContext {
+            scope_stack_id: handle.scope_stack_id.clone(),
+            parent_scope_id: String::new(),
+        });
+        // Admission and revocation share the stack lock. Once admitted, cleanup
+        // waits for this pop to publish its output and metadata before unwinding.
+        let (_context, _admission) = self.state.admit_scope_operation(scope.as_ref())?;
+        let _reservation = {
             let handles =
                 self.state.scope_handles.lock().map_err(|err| {
                     Status::internal(format!("scope handle lock poisoned: {err}"))
                 })?;
-            let handle = handles
+            let current = handles
                 .get(&request.scope_handle_id)
+                .filter(|current| Arc::ptr_eq(&current.pop_active, &handle.pop_active))
                 .ok_or_else(|| Status::not_found("scope handle not found"))?;
-            if handle.pop_active.swap(true, Ordering::AcqRel) {
+            if current.pop_active.swap(true, Ordering::AcqRel) {
                 return Err(Status::failed_precondition("scope is already closing"));
             }
-            handle.clone()
+            ScopePopReservation(handle.pop_active.clone())
         };
-        let _reservation = ScopePopReservation(handle.pop_active.clone());
-        if !handle.scope_stack_id.is_empty() {
-            self.state.selected_scope_context(Some(&ScopeContext {
-                scope_stack_id: handle.scope_stack_id.clone(),
-                parent_scope_id: String::new(),
-            }))?;
-        }
         let result = handle.context.run(|| {
             pop_scope(
                 PopScopeParams::builder()

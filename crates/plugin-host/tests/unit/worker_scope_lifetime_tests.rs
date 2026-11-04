@@ -457,3 +457,118 @@ fn repeated_scope_drains_track_unbound_cleanup_after_the_handle_map_is_empty() {
     assert!(state.scope_stacks.lock().unwrap().is_empty());
     assert_eq!(stack.read().unwrap().scopes().len(), 1);
 }
+
+#[test]
+fn scope_cleanup_waits_for_admitted_pops_and_preserves_end_payloads() {
+    for bound in [false, true] {
+        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let state = Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        ));
+        let service = WorkerHostRuntimeService {
+            state: state.clone(),
+        };
+        let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let name = if bound {
+            "admitted-pop-bound"
+        } else {
+            "admitted-pop-unbound"
+        };
+        nemo_relay_runtime::api::subscriber::register_subscriber(name, {
+            let events = events.clone();
+            Arc::new(move |event| {
+                if event.name() == name && event.scope_category() == Some(ScopeCategory::End) {
+                    events.lock().unwrap().push(event.clone());
+                }
+            })
+        })
+        .unwrap();
+        let _subscriber = SubscriberCleanup(name);
+        let stack_id = if bound {
+            runtime.block_on(create_stack(&service))
+        } else {
+            String::new()
+        };
+        let mut request = push_request(&stack_id, "", name).into_inner();
+        if !bound {
+            request.scope = None;
+        }
+        let handle_id = runtime
+            .block_on(service.push_scope(Request::new(request)))
+            .unwrap()
+            .into_inner()
+            .scope_handle_id;
+        let handle = state.scope_handles.lock().unwrap()[&handle_id].clone();
+        let native_stack = handle.context.scope_stack.clone();
+        let held = native_stack.write().unwrap();
+        let popping = {
+            let runtime = runtime.clone();
+            let state = state.clone();
+            let handle_id = handle_id.clone();
+            std::thread::spawn(move || {
+                runtime.block_on(WorkerHostRuntimeService { state }.pop_scope(Request::new(
+                    PopScopeRequest {
+                        credentials: credentials(),
+                        scope_handle_id: handle_id,
+                        output: Some(pb::JsonValue {
+                            json: br#"{"done":true}"#.to_vec(),
+                        }),
+                        metadata: Some(pb::JsonValue {
+                            json: br#"{"source":"worker"}"#.to_vec(),
+                        }),
+                        ..Default::default()
+                    },
+                )))
+            })
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !handle.pop_active.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            handle.pop_active.load(Ordering::Acquire),
+            "pop must reserve its handle"
+        );
+        assert_eq!(
+            *state.scope_activity.borrow(),
+            1,
+            "cleanup must track an admitted pop"
+        );
+        let lifetime = bound.then(|| {
+            state.scope_stacks.lock().unwrap()[&stack_id]
+                .lifetime
+                .clone()
+        });
+        if bound {
+            state.revoke_scope_stack(&stack_id, runtime.handle());
+            assert_eq!(*lifetime.as_ref().unwrap().operations.borrow(), 1);
+        }
+        state.close_scope_admission().unwrap();
+        let draining = {
+            let state = state.clone();
+            runtime.spawn(async move { state.drain_owned_scopes().await })
+        };
+        assert!(state.scope_handles.lock().unwrap().contains_key(&handle_id));
+        assert!(!draining.is_finished(), "drain must wait for admitted work");
+        drop(held);
+        popping.join().unwrap().unwrap();
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), draining)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        });
+        assert!(state.scope_handles.lock().unwrap().is_empty());
+        assert_eq!(native_stack.read().unwrap().scopes().len(), 1);
+        nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1, "scope must end exactly once");
+        assert_eq!(events[0].output(), Some(&serde_json::json!({"done":true})));
+        assert_eq!(
+            events[0].metadata(),
+            Some(&serde_json::json!({"source":"worker"}))
+        );
+    }
+}
