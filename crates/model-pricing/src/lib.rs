@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use nemo_relay_types::codec::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage,
+    AnnotatedLlmResponse, ApiSpecificResponse, CACHE_WRITE_ONE_HOUR_SECONDS, CostEstimate,
+    CostSource, Usage,
 };
 
 const PRICING_CATALOG_VERSION: u32 = 1;
@@ -308,8 +309,8 @@ impl ModelPricing {
             return input_tokens_with_cache(usage, uncached);
         }
         let cache_outside_prompt = match self.prompt_cache.read_accounting {
-            CacheReadAccounting::IncludedInPromptTokens => [None, usage.cache_write_tokens],
-            CacheReadAccounting::Separate => [usage.cache_read_tokens, usage.cache_write_tokens],
+            CacheReadAccounting::IncludedInPromptTokens => [None, usage.cache_write_total()],
+            CacheReadAccounting::Separate => [usage.cache_read_tokens, usage.cache_write_total()],
         };
         cache_outside_prompt
             .into_iter()
@@ -327,9 +328,15 @@ impl ModelPricing {
         }
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         let cache_read_tokens = usage.cache_read_tokens.unwrap_or(0);
-        let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0);
-        let cache_write_1h_tokens = usage.cache_write_1h_tokens.unwrap_or(0);
-        let cache_write_5m_tokens = cache_write_tokens.checked_sub(cache_write_1h_tokens)?;
+        let cache_write_tokens = usage.cache_write_total().unwrap_or(0);
+        let cache_write_1h_tokens = usage
+            .cache_write_tokens
+            .iter()
+            .flatten()
+            .filter(|write| write.duration == Some(CACHE_WRITE_ONE_HOUR_SECONDS))
+            .fold(0_u64, |total, write| total.saturating_add(write.count));
+        // Every other duration is priced at the default cache-write rate.
+        let cache_write_5m_tokens = cache_write_tokens.saturating_sub(cache_write_1h_tokens);
         let rates = self.rates_for(rate_tier_usage)?;
         let billable_prompt_tokens = self.billable_prompt_tokens(usage)?;
 

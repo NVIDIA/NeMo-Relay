@@ -67,6 +67,9 @@ type ResponseCacheToolClass = nemo_relay.ResponseCacheToolClass
 // ResponseCacheToolOverride refines a single tool on top of its resolved class.
 type ResponseCacheToolOverride = nemo_relay.ResponseCacheToolOverride
 
+// CacheWriteTokenCounts is prompt-cache write tokens retained for one cache duration.
+type CacheWriteTokenCounts = nemo_relay.CacheWriteTokenCounts
+
 // CacheUsage is normalized LLM token usage for cache telemetry.
 type CacheUsage = nemo_relay.CacheUsage
 

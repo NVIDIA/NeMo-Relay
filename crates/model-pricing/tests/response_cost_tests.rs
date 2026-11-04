@@ -40,8 +40,10 @@ fn full_response() -> AnnotatedLlmResponse {
             completion_tokens: Some(20),
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
-            cache_write_tokens: Some(3),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         }),
@@ -186,7 +188,10 @@ fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
         prompt_tokens: Some(1_000),
         completion_tokens: Some(500),
         cache_read_tokens: Some(100),
-        cache_write_tokens: Some(10),
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 10,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         ..Usage::default()
     };

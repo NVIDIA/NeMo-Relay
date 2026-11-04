@@ -103,7 +103,7 @@ class TestDynamicConfigContract:
                 "prompt_tokens": 300,
                 "completion_tokens": 50,
                 "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
+                "cache_write_tokens": [{"count": 0}],
             },
             request_facts={
                 "provider": "anthropic",
@@ -270,7 +270,7 @@ class TestDynamicConfigContract:
                 "prompt_tokens": 300,
                 "completion_tokens": 50,
                 "cache_read_tokens": 150,
-                "cache_write_tokens": 999,
+                "cache_write_tokens": [{"count": 999}],
             },
             request_facts={
                 "provider": "openai",

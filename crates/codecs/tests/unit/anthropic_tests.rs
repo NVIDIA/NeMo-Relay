@@ -4,6 +4,7 @@
 //! Unit tests for anthropic in the NeMo Relay core crate.
 
 use super::*;
+use crate::response::CacheWriteTokenCounts;
 use serde_json::json;
 
 use super::super::request::{
@@ -91,8 +92,19 @@ fn test_decode_full_response() {
     assert_eq!(usage.completion_tokens, Some(256));
     assert_eq!(usage.total_tokens, Some(1280));
     assert_eq!(usage.cache_read_tokens, Some(0));
-    assert_eq!(usage.cache_write_tokens, Some(512));
-    assert_eq!(usage.cache_write_1h_tokens, Some(200));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 312,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 200,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -142,8 +154,19 @@ fn test_decode_response_usage_prefers_iteration_totals() {
     assert_eq!(usage.completion_tokens, Some(283));
     assert_eq!(usage.total_tokens, Some(438));
     assert_eq!(usage.cache_read_tokens, Some(23));
-    assert_eq!(usage.cache_write_tokens, Some(35));
-    assert_eq!(usage.cache_write_1h_tokens, Some(22));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 13,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 22,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -173,8 +196,19 @@ fn test_decode_response_uses_matching_top_level_one_hour_split_when_iterations_o
         .usage
         .unwrap();
 
-    assert_eq!(usage.cache_write_tokens, Some(50));
-    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 30,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 20,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -204,8 +238,13 @@ fn test_decode_response_does_not_apply_top_level_split_to_larger_iteration_total
         .usage
         .unwrap();
 
-    assert_eq!(usage.cache_write_tokens, Some(70));
-    assert_eq!(usage.cache_write_1h_tokens, None);
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![CacheWriteTokenCounts {
+            count: 70,
+            duration: None
+        }])
+    );
 }
 
 #[test]
@@ -349,7 +388,7 @@ fn test_decode_response_usage_mapping() {
     assert_eq!(usage.completion_tokens, Some(50));
     assert_eq!(usage.total_tokens, Some(150));
     assert_eq!(usage.cache_read_tokens, Some(25));
-    assert_eq!(usage.cache_write_tokens, Some(10));
+    assert_eq!(usage.cache_write_total(), Some(10));
     assert_eq!(usage.uncached_input_tokens, Some(100));
 }
 
@@ -1711,7 +1750,7 @@ fn anthropic_streaming_codec_preserves_usage_across_partial_updates() {
     assert_eq!(usage.completion_tokens, Some(5));
     assert_eq!(usage.total_tokens, Some(105));
     assert_eq!(usage.cache_read_tokens, Some(25));
-    assert_eq!(usage.cache_write_tokens, Some(10));
+    assert_eq!(usage.cache_write_total(), Some(10));
 }
 
 #[test]

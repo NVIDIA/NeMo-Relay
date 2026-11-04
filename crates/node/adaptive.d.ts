@@ -170,13 +170,20 @@ export interface ComponentSpec {
   config: AdaptivePluginConfig;
 }
 
+/** Prompt-cache write tokens retained for one cache duration. */
+export interface CacheWriteTokenCounts {
+  count: number;
+  /** Cache duration in seconds, omitted when the provider does not say. */
+  duration?: number;
+}
+
 /** Normalized LLM token usage for cache telemetry. */
 export interface CacheUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
   cache_read_tokens?: number;
-  cache_write_tokens?: number;
+  cache_write_tokens?: CacheWriteTokenCounts[];
   cost?: Json;
 }
 

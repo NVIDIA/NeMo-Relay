@@ -4,6 +4,7 @@
 //! Unit tests for types in the NeMo Relay FFI crate.
 
 use super::*;
+use nemo_relay_types::codec::response::CacheWriteTokenCounts;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
@@ -696,8 +697,16 @@ fn test_annotated_event_accessors_and_codec_handles() {
             completion_tokens: Some(5),
             total_tokens: Some(15),
             cache_read_tokens: None,
-            cache_write_tokens: Some(4),
-            cache_write_1h_tokens: Some(2),
+            cache_write_tokens: Some(vec![
+                CacheWriteTokenCounts {
+                    count: 2,
+                    duration: None,
+                },
+                CacheWriteTokenCounts {
+                    count: 2,
+                    duration: Some(3_600),
+                },
+            ]),
             uncached_input_tokens: None,
             cost: Some(nemo_relay_types::codec::response::CostEstimate {
                 total: Some(0.000_01),
@@ -742,8 +751,8 @@ fn test_annotated_event_accessors_and_codec_handles() {
     assert!(annotated_response_value.get("model_provider").is_none());
     assert_eq!(annotated_response_value["trace"], json!(true));
     assert_eq!(
-        annotated_response_value["usage"]["cache_write_1h_tokens"],
-        json!(2)
+        annotated_response_value["usage"]["cache_write_tokens"],
+        json!([{"count": 2}, {"count": 2, "duration": 3600}])
     );
     assert_eq!(
         annotated_response_value["usage"]["cost"]["pricing_provider"],
