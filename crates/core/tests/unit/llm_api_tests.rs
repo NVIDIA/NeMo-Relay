@@ -2848,13 +2848,15 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
 }
 
 #[test]
-fn responses_history_projection_recognizes_native_user_and_system_roles() {
+fn responses_history_projection_recognizes_native_user_and_instruction_roles() {
     for with_item_ids in [false, true] {
         let mut system =
             json!({"type": "message", "role": "system", "content": "Keep instructions"});
+        let mut developer = json!({"type": "message", "role": "developer", "content": "Keep developer instructions"});
         let mut user = json!({"type": "message", "role": "user", "content": "Current question"});
         if with_item_ids {
             system["id"] = json!("msg-system");
+            developer["id"] = json!("msg-developer");
             user["id"] = json!("msg-user");
             user["future_field"] = json!({"preserve": true});
         }
@@ -2862,7 +2864,7 @@ fn responses_history_projection_recognizes_native_user_and_system_roles() {
         let output =
             json!({"type": "custom_tool_call_output", "call_id": "call-1", "output": "42"});
         for prior_history in [false, true] {
-            let mut input = vec![system.clone()];
+            let mut input = vec![system.clone(), developer.clone()];
             if prior_history {
                 input.extend([
                     json!({"role": "user", "content": "Previous question"}),
@@ -2882,14 +2884,14 @@ fn responses_history_projection_recognizes_native_user_and_system_roles() {
                 &mut annotation,
                 Some(&codec),
             );
-            assert_eq!(annotation.unwrap().messages.len(), 4);
+            assert_eq!(annotation.unwrap().messages.len(), 5);
             assert_eq!(
                 observable.content["input"],
-                json!([system, user, call, output])
+                json!([system, developer, user, call, output])
             );
             assert_eq!(
                 original.content["input"].as_array().unwrap().len(),
-                if prior_history { 6 } else { 4 }
+                if prior_history { 7 } else { 5 }
             );
         }
     }

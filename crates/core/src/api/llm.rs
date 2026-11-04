@@ -399,6 +399,7 @@ fn request_message_role(message: &Message) -> Option<&str> {
     match message {
         Message::User { .. } => Some("user"),
         Message::System { .. } => Some("system"),
+        Message::Developer { .. } => Some("developer"),
         Message::ProviderNative {
             provider,
             kind,
@@ -421,7 +422,7 @@ fn project_llm_request_to_current_user_turn(
     if !request_turn_projection_needed(
         &annotation.messages,
         &|message| request_message_role(message) == Some("user"),
-        &|message| request_message_role(message) == Some("system"),
+        &|message| matches!(request_message_role(message), Some("system" | "developer")),
     ) {
         return;
     }
@@ -452,7 +453,7 @@ fn limit_annotated_request_history_to_current_user_turn(
     retain_current_request_turn(
         &mut annotated_request.messages,
         |message| request_message_role(message) == Some("user"),
-        |message| request_message_role(message) == Some("system"),
+        |message| matches!(request_message_role(message), Some("system" | "developer")),
     )
 }
 
