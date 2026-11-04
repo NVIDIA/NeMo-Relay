@@ -431,6 +431,7 @@ class TestObservabilityConfigHelpers:
             "max_queue_size": 2048,
             "max_export_batch_size": 512,
             "scheduled_delay_millis": 1000,
+            "completed_span_context_ttl_millis": 60000,
         }
         assert OpenTelemetryMetricSectionConfig().to_dict() == {
             "enabled": False,
@@ -444,6 +445,30 @@ class TestObservabilityConfigHelpers:
         assert section["logs"] == logs.to_dict()
         assert section["metrics"] == metrics.to_dict()
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
+
+    @pytest.mark.parametrize("retention_milliseconds", [60_000, 300_000])
+    def test_log_context_retention_survives_serialization_and_validation(self, retention_milliseconds: int) -> None:
+        logs = OpenTelemetryLogSectionConfig(completed_span_context_ttl_millis=retention_milliseconds)
+        configuration = plugin.PluginConfig(
+            components=[ComponentSpec(ObservabilityConfig(opentelemetry=OpenTelemetrySectionConfig(logs=logs)))]
+        )
+
+        assert logs.to_dict()["completed_span_context_ttl_millis"] == retention_milliseconds
+        report = plugin.validate_exact(configuration)
+        assert report["config"]["diagnostics"] == []
+
+        for document in (configuration.to_dict(), report["resolved_config"]):
+            components = document["components"]
+            assert isinstance(components, list)
+            component = components[0]
+            assert isinstance(component, dict)
+            component_configuration = component["config"]
+            assert isinstance(component_configuration, dict)
+            opentelemetry_configuration = component_configuration["opentelemetry"]
+            assert isinstance(opentelemetry_configuration, dict)
+            log_configuration = opentelemetry_configuration["logs"]
+            assert isinstance(log_configuration, dict)
+            assert log_configuration["completed_span_context_ttl_millis"] == retention_milliseconds
 
     @pytest.mark.parametrize("signal", ["logs", "metrics"])
     @pytest.mark.parametrize("prefixes", [None, [], ["deployment.", "nv.client."], ["nv.*"]])
