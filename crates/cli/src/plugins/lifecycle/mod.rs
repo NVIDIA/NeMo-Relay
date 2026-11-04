@@ -2267,6 +2267,19 @@ fn active_dynamic_plugin_components_from_scopes(
                 resolved_plugin.plugin_id
             )));
         };
+        if record.spec.enabled
+            && !record.is_tombstoned()
+            && record.status.validation.compatibility == DynamicPluginCheckState::Invalid
+        {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "dynamic_plugin_incompatible",
+                plugin_id = record.metadata.id.as_str();
+                "Skipping enabled dynamic plugin '{}': {}. Remove its old registration with `nemo-relay plugins remove`, then rebuild and reinstall the plugin.",
+                record.metadata.id,
+                record.status.validation.message.as_deref().unwrap_or("invalid compatibility")
+            );
+        }
         if record.is_tombstoned()
             || !record.spec.enabled
             || record.status.validation.compatibility == DynamicPluginCheckState::Invalid
