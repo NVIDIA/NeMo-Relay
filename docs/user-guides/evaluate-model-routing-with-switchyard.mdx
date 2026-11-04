@@ -65,10 +65,8 @@ running the comparison. The example uses NVIDIA-hosted inference.
 </Card>
 </CardGroup>
 
-The example uses OpenAI Chat Completions. pi's Relay integration is a proof of
-concept with version-sensitive hooks; it is one harness choice. Confirm the
-[Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
-before substituting another harness or API.
+Confirm the [Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
+before choosing a harness or API.
 Use Switchyard's [model selection guide](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/model_selection/)
 to check candidate models against your tools, context, and output requirements.
 
@@ -227,11 +225,13 @@ The pi recipe uses Switchyard's local reference server; this guide uses the Rela
 
 
 
-## Run the Brev example
+## <Icon icon="rocket" size={6} /> Run the Brev example
 
 Follow this section from a fresh VM through the evidence checks. The workload
 uses pi with NVIDIA-hosted inference and the Switchyard native plugin; other
 supported model-handling processes remain deployment choices.
+The example uses OpenAI Chat Completions. pi's Relay integration is a proof of
+concept with version-sensitive hooks; repeat acceptance when changing versions.
 
 ### 1. Provision and connect to a VM
 
