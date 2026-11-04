@@ -1,5 +1,5 @@
 ---
-title: "Evaluate Model Routing with Switchyard"
+title: "Routing Models with NeMo Switchyard"
 description: "Compare fixed-model and routed agent tasks using acceptance, model selection, usage, and latency."
 position: 7
 hide-nav-links: true
@@ -20,6 +20,12 @@ two NVIDIA model targets, and a judge. Switchyard runs inside the Relay process
 handling model calls.
 The outcome is a scorecard for your policy decision; monetary savings require
 validated prices as well as measured usage.
+
+<Tip title="Try the complete example on Brev">
+[Run the Brev example](#run-the-brev-example) to install pi, Relay, and the
+Switchyard plugin, then compare fixed and routed coding tasks. All example
+setup is included; the linked quickstarts and reference pages are supplemental.
+</Tip>
 
 ## Before you start
 
@@ -153,64 +159,11 @@ continuation. Each independent task must have a distinct session identity.
 See [classifier routing](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/llm_classifier_routing/)
 for judge requirements, thresholds, and session-affinity options.
 
-<Accordion title="Brev example: prepare pi and the native plugin">
-Use a disposable CPU VM and the persistent pi extension from the
-[pi quickstart](/getting-started/quick-start/pi):
-
-```bash
-npm install --global @earendil-works/pi-coding-agent@0.84.0
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
-NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
-export PATH="$HOME/.local/bin:$PATH"
-nemo-relay install pi
-git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
-cd relay-routing/docs/user-guides/_examples/model-routing
-SWITCHYARD_MANIFEST=$(bash install-plugin.sh /tmp/relay-switchyard-bundle)
-export SWITCHYARD_MANIFEST
-```
-
-The helper downloads the Linux x86_64 bundle and SHA-256 sidecar from
-[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2),
-then verifies before extraction. Other supported architectures can use the
-[Relay plugin installer](/configure-plugins/plugin-configuration-files).
-</Accordion>
-
 ## 3. Run comparable work through all policies
 
 Use independent task acceptance checks. A successful model call or agent exit
 does not establish that the requested code works. Check the selected model,
 served model, classifier recovery, and truncated calls alongside task results.
-
-<Accordion title="Brev example: run the comparison">
-Check the [shared runtime setup](/user-guides/about#example-runtimes), then
-choose models that your key can access:
-
-```bash
-export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-export EFFICIENT_MODEL=YOUR_EFFICIENT_MODEL
-export CAPABLE_MODEL=YOUR_CAPABLE_MODEL
-export JUDGE_MODEL=YOUR_JSON_CAPABLE_JUDGE
-IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
-export NVIDIA_API_KEY
-python3.12 run.py --output /tmp/relay-routing --repeat 3
-python3.12 summarize.py /tmp/relay-routing
-```
-
-The runner uses fresh scaffolds for incident-ID validation, retry delays, and
-dependency planning. The latter includes cycles, transitive blocking, lexical
-topological order, and a 10,000-node chain. It tests a broader capability boundary;
-observe the judge's actual selection rather than assuming it chooses the capable model.
-
-Three tasks, three policies, and three repetitions produce 27 attempts, with
-policy order rotated between trials. Use `--repeat 1` for an initial check.
-External acceptance runs outside the agent's working directory. Every arm has
-the same tools and 16,384-token answer budget. Failures remain in `results.json`;
-the overall command returns nonzero if any arm fails.
-
-Choose available models from [build.nvidia.com](https://build.nvidia.com/explore/discover).
-The API base URL is `https://integrate.api.nvidia.com/v1`; requests use
-`/chat/completions`. Confirm that your key can access each target before starting.
-</Accordion>
 
 ## 4. Interpret task quality and routing together
 
@@ -231,20 +184,6 @@ Confirm the served model and acceptance result. A capable selection caused by
 an invalid judge verdict does not demonstrate successful classification.
 Keep missing usage or pricing marked unknown.
 </Note>
-
-<Accordion title="Brev example: locate the evidence">
-
-| Evidence | Inspect |
-| --- | --- |
-| Task acceptance | `results.json`, generated files, and `acceptance.log` |
-| Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
-| Judge recovery | Decision `evidence.source` and `reason_code` |
-| Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
-| Usage and truncation | `summary.json`, answer/routing metrics, and incomplete model calls |
-
-Judge HTTP success does not establish a valid verdict. Review final JSON and
-recovery reasons alongside the task's acceptance log.
-</Accordion>
 
 ### Add cost when prices are known
 
@@ -286,8 +225,167 @@ For other usage examples, see the
 and [standalone pi recipe](https://nvidia-nemo.github.io/Switchyard/integrations/pi/).
 The pi recipe uses Switchyard's local reference server; this guide uses the Relay plugin.
 
-## Cleanup and next steps
+
+
+## Run the Brev example
+
+Follow this section from a fresh VM through the evidence checks. The workload
+uses pi with NVIDIA-hosted inference and the Switchyard native plugin; other
+supported model-handling processes remain deployment choices.
+
+### 1. Provision and connect to a VM
+
+In the [Brev Console](https://brev.nvidia.com/), create a fresh instance using
+these recommended starting resources. See [Brev provisioning](https://docs.nvidia.com/brev/cli/instance-creation)
+for instance selection; available CPU types depend on your organization and provider.
+
+| Setting | Recommendation |
+| --- | --- |
+| Operating system | Ubuntu 24.04 LTS, x86_64 |
+| CPU and memory | 4 vCPUs and 16 GB RAM |
+| Storage | At least 40 GB |
+| GPU | None; inference runs on the model provider |
+| Access | Administrator account with sudo and outbound HTTPS |
+
+These are starting resources for the example, not Relay sizing requirements.
+Use a separate VM from the other examples, because system-wide plugin policy
+can affect other Relay processes on the same host.
+
+On your **local computer**, install the Brev CLI if needed. On macOS:
+
+```bash
+brew install brevdev/homebrew-brev/brev
+```
+
+For other operating systems, use the [Brev CLI installation instructions](https://docs.nvidia.com/brev/getting-started/quickstart).
+Connect to the instance you created:
+
+```bash
+brev login
+brev refresh
+brev list
+brev shell YOUR_INSTANCE
+```
+
+Run the remaining setup in **Bash on the VM host**.
+
+### 2. Install the runtimes
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git python3.12 python3.12-venv xz-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+python3.12 --version
+uv --version
+git --version
+```
+
+Install Node.js 24.13.1 system-wide so login shells can find the same runtime:
+
+```bash
+curl -fsS https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz -o /tmp/node-v24.13.1-linux-x64.tar.xz
+curl -fsS https://nodejs.org/dist/v24.13.1/SHASUMS256.txt -o /tmp/node-24.13.1-SHASUMS256.txt
+(cd /tmp && awk '$2 == "node-v24.13.1-linux-x64.tar.xz"' node-24.13.1-SHASUMS256.txt | sha256sum --check)
+sudo tar -xJf /tmp/node-v24.13.1-linux-x64.tar.xz -C /usr/local --strip-components=1
+node --version
+npm --version
+```
+
+Confirm the required platform before downloading the plugin:
+
+```bash
+uname -m
+getconf GNU_LIBC_VERSION
+python3.12 -c 'import sys; assert sys.version_info >= (3, 12); print("Python ready")'
+node --version
+```
+
+Expect `x86_64`, a glibc version, Python 3.12+, and Node.js 24.13.1.
+
+### 3. Install Relay, pi, and the plugin
+
+Install the pinned pi and Relay versions, register the extension, and acquire
+the native plugin bundle:
+
+```bash
+sudo npm install --global --prefix /usr/local @earendil-works/pi-coding-agent@0.84.0
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
+NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
+export PATH="$HOME/.local/bin:$PATH"
+nemo-relay install pi
+git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
+cd relay-routing/docs/user-guides/_examples/model-routing
+SWITCHYARD_MANIFEST=$(bash install-plugin.sh /tmp/relay-switchyard-bundle)
+export SWITCHYARD_MANIFEST
+```
+
+The helper downloads the Linux x86_64 bundle and SHA-256 sidecar from
+[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2),
+then verifies before extraction. Other supported architectures can use the
+[Relay plugin installer](/configure-plugins/plugin-configuration-files).
+
+<Note title="The runner manages the example configuration">
+Do not manually copy the earlier `plugins.toml` or `routes.toml` into system
+configuration. The runner writes isolated route, plugin, and pi configuration,
+enables and probes the native plugin, and starts/stops its task gateways.
+You supply the plugin manifest, model IDs, and provider credentials.
+</Note>
+
+### 4. Configure inference and run one comparison
+
+Choose model IDs that your NVIDIA key can access. Use tool-capable answer
+models and a judge that supports JSON verdicts. Enter credentials in the same
+shell you use to run the comparison:
+
+```bash
+export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+export EFFICIENT_MODEL=YOUR_EFFICIENT_MODEL
+export CAPABLE_MODEL=YOUR_CAPABLE_MODEL
+export JUDGE_MODEL=YOUR_JSON_CAPABLE_JUDGE
+IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
+export NVIDIA_API_KEY
+python3.12 run.py --output /tmp/relay-routing --repeat 1
+python3.12 summarize.py /tmp/relay-routing
+```
+
+The runner uses fresh scaffolds for incident-ID validation, retry delays, and
+dependency planning. The latter includes cycles, transitive blocking, lexical
+topological order, and a 10,000-node chain. It tests a broader capability boundary;
+observe the judge's actual selection rather than assuming it chooses the capable model.
+
+The first check runs three tasks across three policies, for nine attempts.
+For a repeated evaluation, choose a new output directory and use `--repeat 3`
+(27 attempts); policy order rotates between trials.
+External acceptance runs outside the agent's working directory. Every arm has
+the same tools and 16,384-token answer budget. Failures remain in `results.json`;
+the overall command returns nonzero if any arm fails.
+
+Choose available models from [build.nvidia.com](https://build.nvidia.com/explore/discover).
+The API base URL is `https://integrate.api.nvidia.com/v1`; requests use
+`/chat/completions`. Confirm that your key can access each target before starting.
+
+### 5. Inspect the evidence
+
+| Evidence | Inspect |
+| --- | --- |
+| Task acceptance | `results.json`, generated files, and `acceptance.log` |
+| Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
+| Judge recovery | Decision `evidence.source` and `reason_code` |
+| Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
+| Usage and truncation | `summary.json`, answer/routing metrics, and incomplete model calls |
+
+Judge HTTP success does not establish a valid verdict. Review final JSON and
+recovery reasons alongside the task's acceptance log.
+
+Use the interpretation guidance above to compare task acceptance, served models,
+usage, and elapsed time. A completed comparison can contain failed tasks; retain
+those results. It does not need to demonstrate savings or favor the routed policy.
+If setup fails before tasks start, check the plugin probe, model access, and the
+selected runtime versions before repeating in a new output directory.
+
+### 6. Clean up
 
 The runner stops each task gateway. Retain the scorecard and logs, then remove
 only your chosen output and plugin-bundle directories. Leave other users' pi
-settings and plugin installations in place.
+settings and plugin installations in place. Stop or delete the Brev VM when done.
