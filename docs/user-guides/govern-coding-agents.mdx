@@ -176,16 +176,16 @@ reconnect approved clients. See [credential lifecycle](/daemon/configuration#rep
 
 ## 4. Verify attribution, activity, and privacy
 
-Accept one user first, then repeat with both sessions active:
+Accept one user first, then repeat with multiple concurrent sessions:
 
 | Check | Pass condition |
 | --- | --- |
-| Worker isolation | Two ready worker IDs, with processes owned separately by Alice and Bob. |
+| Worker isolation | Ready workers run under their users' OS accounts. |
 | Task completion | Each repository contains the implementation and tests; the task contract and independent checks pass. |
 | Captured work | Supported model and tool spans are present and connected to the expected task or turn. |
 | Attribution | Record which worker/session and run time belong to each OS account; confirm the corresponding trace. |
-| Privacy | With the synthetic policy, exported task content contains `[REDACTED]` instead of the synthetic contact. |
-| Independent lifetime | Closing Alice removes her worker after shutdown; Bob can complete another captured request. |
+| Privacy | Restricted fields are absent or redacted according to the approved telemetry policy. |
+| Independent lifetime | A user's worker stops after its final session ends; other users' captured work continues. |
 
 The trace's `nemo_relay.uuid` and `nemo_relay.parent_uuid` establish scope identity
 and parentage; `nemo_relay.session.instance_id` identifies the emitted session
@@ -195,12 +195,11 @@ Do not infer a person from the shared `service_name` alone.
 
 ## Next steps
 
-Restore metadata-only capture before introducing real data. Repeat acceptance
-after changing a harness, Relay version, provider route, or policy. Add a
-validated [pricing catalog](/configure-plugins/model-pricing) if your audit
+Repeat acceptance after changing a harness, Relay version, provider route, or
+policy. Add a validated [pricing catalog](/configure-plugins/model-pricing) if your audit
 pipeline also needs cost attribution.
 
-## Run the Brev example
+## <Icon icon="rocket" size={6} /> Run the Brev example
 
 Complete this section in order on a fresh host. It installs the shared service,
 managed policy, and user credentials described above. Supporting deployment
@@ -410,7 +409,9 @@ At each harness prompt, enter:
 
 ```text
 Read /opt/nvidia/share/relay-user-guide/task.txt and complete it in the current repository. Use local files and tests only.
-``` Keep Alice's session open while starting Bob.
+```
+
+Keep Alice's session open while starting Bob.
 In another terminal on your **local computer**, forward Phoenix:
 
 ```bash
