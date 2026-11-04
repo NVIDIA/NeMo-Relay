@@ -3,8 +3,11 @@
 
 use super::*;
 
+static HOST_LEASE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn close_result_is_published_before_a_retry_can_reset_completion() {
+    let _lease = HOST_LEASE.lock().await;
     let activation = nemo_relay_plugin_host::initialize_exact(PluginConfig::default())
         .await
         .expect("empty plugin host must initialize");
@@ -16,7 +19,7 @@ async fn close_result_is_published_before_a_retry_can_reset_completion() {
     let finish_state = Arc::clone(&state);
     let finish = std::thread::spawn(move || {
         finish_state.finish_with_hook(
-            Some(activation),
+            activation,
             Err(Arc::new(Error::generic_failure("first close failed"))),
             || {
                 entered_tx.send(()).expect("test must observe publication");
@@ -43,4 +46,43 @@ async fn close_result_is_published_before_a_retry_can_reset_completion() {
     assert!(state.completion.borrow().is_none());
 
     activation.close().expect("retry cleanup must succeed");
+}
+
+#[tokio::test]
+async fn teardown_worker_exits_once_the_activation_is_closed() {
+    let _lease = HOST_LEASE.lock().await;
+    let activation = nemo_relay_plugin_host::initialize_exact(PluginConfig::default())
+        .await
+        .expect("empty plugin host must initialize");
+    let state = Arc::new(DynamicPluginCloseState::new(activation));
+    let (teardown, requests) = std::sync::mpsc::channel();
+    let worker_state = Arc::clone(&state);
+    let worker = std::thread::spawn(move || run_dynamic_plugin_teardown(worker_state, requests));
+
+    state.request_close(&teardown);
+    worker.join().expect("worker must not panic");
+
+    assert!(state.wait_for_close().await.is_ok());
+    assert!(!state.active());
+    assert!(state.take_active().is_none());
+}
+
+#[tokio::test]
+async fn teardown_worker_closes_an_active_activation_when_its_sender_is_dropped() {
+    let _lease = HOST_LEASE.lock().await;
+    let activation = nemo_relay_plugin_host::initialize_exact(PluginConfig::default())
+        .await
+        .expect("empty plugin host must initialize");
+    let state = Arc::new(DynamicPluginCloseState::new(activation));
+    let (teardown, requests) = std::sync::mpsc::channel::<Box<CorePluginHostActivation>>();
+    let worker_state = Arc::clone(&state);
+    let worker = std::thread::spawn(move || run_dynamic_plugin_teardown(worker_state, requests));
+
+    assert!(state.active());
+    drop(teardown);
+    worker.join().expect("worker must not panic");
+
+    assert!(state.wait_for_close().await.is_ok());
+    assert!(!state.active());
+    assert!(state.take_active().is_none());
 }
