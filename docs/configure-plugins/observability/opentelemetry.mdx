@@ -1341,15 +1341,6 @@ exported as `gen_ai.agent.id`, which identifies a hosted agent resource.
 
 ### Tool Identity
 
-OpenAI Responses custom tool calls and results use the standard `tool_call` and
-`tool_call_response` message parts in the GenAI projection. Their `id` is the
-provider `call_id`, not the output item ID. Free-form custom input remains a
-string, including when its text is valid JSON. Request annotations retain the
-native items for lossless provider encoding. OpenInference input/output messages
-and ATIF response tool calls preserve the same invocation IDs and input values.
-These records identify the provider wrapper; they do not establish which inner
-tool executions belong to it.
-
 Tool identity comes from instrumentation metadata and the typed tool-call ID,
 never from similarly named fields in tool arguments or results. Nonblank string
 metadata supports `gen_ai.tool.name`, `gen_ai.tool.type` / `tool_type`,
