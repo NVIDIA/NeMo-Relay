@@ -2286,13 +2286,15 @@ fn resolve_dynamic_plugin_refs(
     let mut seen_plugin_ids = HashSet::new();
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
-        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path)
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "invalid dynamic plugin manifest referenced by {}: {error}",
-                    source.display()
-                ))
-            })?;
+        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest_for_inspection(
+            &manifest_path,
+        )
+        .map_err(|error| {
+            CliError::Config(format!(
+                "invalid dynamic plugin manifest referenced by {}: {error}",
+                source.display()
+            ))
+        })?;
         let plugin_id = manifest.plugin.id.trim().to_owned();
         if !seen_plugin_ids.insert(plugin_id.clone()) {
             return Err(CliError::Config(format!(
