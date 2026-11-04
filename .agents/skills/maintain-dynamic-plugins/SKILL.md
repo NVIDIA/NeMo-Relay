@@ -20,21 +20,21 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   subscribers synchronous and preserve raw synchronous ABI registrations.
 - Define closed worker transport structures in protobuf when generated clients
   must enforce their fields. Keep open application payloads lossless by using
-  `JsonValue` or `JsonEnvelope` rather than `google.protobuf.Value`.
+  `JsonValue` or `JsonObject` rather than `google.protobuf.Value`.
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
-  components. Enabled dynamic records may synthesize internal component specs;
-  disabled records stay inspectable but unloaded.
+  components. Enabled records can create internal component specs. Disabled records remain
+  available for inspection but do not load.
 - Require migrated worker plugins to regenerate their bindings, rebuild, and
   declare a `compat.relay` range covering the new contract. Recommend
   `>=1.0.0,<2.0` for the current worker SDK.
 - Treat `compat.relay` as the plugin author's compatibility assertion, not
   proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
-- The worker contract uses `nvidia.nemo.relay.worker.v1` and contract version `1.0.0`.
-  Native ABI v4 permits
-  append-only host-table extensions guarded by `struct_size`; existing fields
-  must remain frozen at their original offsets. Incompatible native JSON,
-  reordered or replaced native fields, or incompatible worker protobuf changes
-  must bump `native_api` or `worker_protocol`.
+- The worker protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
+  The native host uses ABI v8 and accepts v7 callback layouts. Guard append-only
+  extensions with `struct_size`. Keep existing fields at their original offsets.
+  A breaking native JSON contract needs a new `native_api` value. A breaking C
+  layout needs a new ABI version. A breaking worker contract needs a new protocol
+  identity.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins

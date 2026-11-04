@@ -6,10 +6,9 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-A plugin turns reusable runtime behavior into a named, configurable component. It can
-observe Relay events, remove sensitive fields from observability records, reject or
-rewrite tool and model requests, wrap real execution, or combine those responsibilities
-when one configuration contract genuinely controls them.
+A plugin gives reusable runtime behavior a name and configuration. It can observe
+events, remove sensitive data, reject requests, or change tool and model calls.
+One plugin can combine these tasks when the same configuration controls them.
 
 The smallest useful plugin has four visible stages:
 
@@ -34,10 +33,12 @@ and how much control the application keeps over dependencies.
 
 ## Choose the Execution Model
 
+Compare these models before choosing where your plugin runs:
+
 | Consideration | Language-Binding Plugin | Native Rust Plugin | gRPC Worker Plugin |
 |---|---|---|---|
 | Process boundary | Runs in the application process through the loaded Rust, Python, or Node.js binding. | Runs in the Relay process as a dynamically loaded Rust shared library. | Runs in a separate process and communicates with Relay through `nvidia.nemo.relay.worker.v1`. |
-| Callback overhead | Lowest setup and dispatch complexity for application-owned code. Python and Node.js callbacks still cross their binding boundary. | Avoids a process hop and JSON envelopes, making it the strongest fit for latency- or throughput-sensitive reusable middleware. | Adds gRPC dispatch, protobuf conversion, and worker scheduling to callback paths. |
+| Callback overhead | Lowest setup and dispatch complexity for application-owned code. Python and Node.js callbacks still cross their binding boundary. | Avoids gRPC calls and protobuf conversion. Native ABI calls can still serialize JSON. | Adds gRPC dispatch, protobuf conversion, and worker scheduling to callback paths. |
 | Expected latency and throughput | Usually the practical default when behavior already lives with the application. Measure language-runtime costs on hot paths. | Best qualitative fit when per-call overhead matters enough to justify native packaging. This guide does not claim benchmark numbers. | Best chosen for isolation or runtime flexibility, not for minimum callback latency. Streaming callbacks retain the same boundary for every chunk. |
 | Dependency isolation | Shares the application environment and its dependency constraints. | Shares the host address space and native dependency environment. | Keeps Python, Rust, or custom command dependencies in the worker environment. |
 | Failure impact | A fatal callback or runtime failure can affect the application process. | A memory-safety defect, panic across an unsupported boundary, or native crash can terminate or corrupt the host process. | A worker crash terminates that plugin process. Relay still treats the worker as trusted code, and process separation is not a security sandbox. |
@@ -45,7 +46,7 @@ and how much control the application keeps over dependencies.
 | Platform specificity | Follows the application binding and its existing deployment target. | Requires a compatible binary for each operating system and architecture. | The command and environment must run on the target, but the protocol is language-neutral. |
 | Trust | Has the application's in-process authority. | Requires full in-process trust and is subject to native-loading policy. | Uses an authenticated local endpoint, but the worker remains trusted and can request host runtime operations. |
 | Cancellation | Follows the binding callback and managed-call lifecycle. | Typed async middleware receives cooperative cancellation through the host-owned call; a synchronous subscriber must return promptly. | Relay propagates cooperative cancellation. The worker must stop expensive work and downstream continuation calls when cancellation is observed. |
-| Development speed | Fastest path for application teams because code, tests, and dependencies stay in one project. | Requires Rust, native packaging, and compatibility testing. | The Python SDK is convenient for isolated Python dependencies; the Rust SDK offers a compiled worker; a custom command requires implementing the protocol. |
+| Development speed | Fastest path for application teams because code, tests, and dependencies stay in one project. | Requires Rust, native packaging, and compatibility testing. | The Python SDK is convenient for isolated Python dependencies; the Rust SDK offers a compiled worker; a custom command must implement the protocol. |
 
 Language-binding plugins are appropriate for application-owned behavior such as adding a
 tenant header, enforcing a local model policy, or installing an event subscriber beside
@@ -55,33 +56,32 @@ artifact solves a concrete operational problem.
 
 Native Rust plugins suit reusable middleware whose callback latency or throughput is
 important enough to justify platform-specific binaries and full in-process trust. A
-native plugin uses manifest compatibility `compat.native_api = "1"`; the current SDK
-uses C host-table ABI v7. Relay 0.10 rejects v2-v6 compiled callback layouts, so native
-plugins must rebuild for this release even though the authored
-manifest label remains `native_api = "1"`.
-Those are different version axes, as the [Native ABI Reference](/build-plugins/native/native-abi-reference)
-explains.
+native plugin declares `compat.native_api = "1"` in its manifest. The current host
+provides ABI v8 and accepts v7 callback layouts. Scope-stack inspection needs ABI
+v8. Relay 0.10 introduced ABI v7 and rejects v2-v6 callback layouts.
+The manifest API label and host ABI version serve different purposes. Refer to the
+[Native ABI Reference](/build-plugins/native/native-abi-reference) for details.
 
 Worker plugins suit dependencies that should live outside the application environment,
 teams that need a different runtime, or deployments that want a separate crash boundary.
 That separation comes with gRPC, protobuf, and scheduling overhead. The Python and
-Rust SDKs implement the same `nvidia.nemo.relay.worker.v1` contract. A custom command worker is an advanced
-protocol implementation path rather than a fourth plugin model.
+Rust SDKs implement the same `nvidia.nemo.relay.worker.v1` contract. A custom
+command worker implements this protocol itself.
 
-Relay 0.8 makes the tool result explicit at every dynamic boundary. A managed tool
-callback and its continuation return a `ToolExecutionResult`: the application payload in
-`result` and an optional opaque `annotation`. A tool execution intercept returns that
-same pair plus Relay-owned pending marks. Native and worker plugins built for an earlier
-release must rebuild for this contract.
+Relay 0.8 introduced `ToolExecutionResult` at every dynamic boundary. A managed
+tool callback and its continuation return the application payload in `result`
+and an optional opaque `annotation`. A tool execution intercept returns the same
+pair plus Relay-owned pending marks. Plugins built before Relay 0.8 must rebuild
+for this contract.
 
-Relay 0.10 adds codec context to every LLM execution callback in language
-bindings, native plugins, and worker SDKs. Every native plugin must rebuild for
-ABI v7. Workers that register a non-streaming or streaming LLM execution
-intercept must update their callback signatures, rebuild, and set
-`compat.relay` to begin at `0.10.0`. The authored `native_api = "1"` remains
-unchanged. Relay 1.0 changes the worker protocol identity to
-`nvidia.nemo.relay.worker.v1`.
-Rebuild workers and update their manifests for that typed contract.
+Relay 0.10 added codec context to LLM execution callbacks and introduced native
+ABI v7. Native plugins built for older ABIs must rebuild. Workers with LLM
+execution intercepts must also update their callback signatures. The manifest
+value `native_api = "1"` stays the same.
+
+Relay 1.0 changes the worker protocol identity to
+`nvidia.nemo.relay.worker.v1`. Rebuild workers and set
+`compat.relay = ">=1.0.0,<2.0"` in their manifests for the current SDK.
 
 Codec access belongs to that execution callback. For a non-streaming call, it
 expires when the callback finishes. For a streaming call, request codec access
@@ -90,20 +90,22 @@ object does not extend either lifetime.
 
 ## Match Behavior to a Plugin
 
+Use these examples to choose a model:
+
 | Desired Behavior | Good Starting Model | Why |
 |---|---|---|
 | Add deployment metadata to every model request from one service | Language-binding plugin | The behavior is application-owned, can be tested beside the call site, and needs no extra artifact. |
 | Distribute a high-volume request policy across several Relay applications | Native Rust plugin | In-process typed callbacks avoid the worker boundary, while a manifest provides reusable packaging. |
 | Run a Python detector with dependencies that conflict with the host environment | Python gRPC worker | The managed worker environment isolates those packages while preserving the full plugin registration contract. |
 | Ship a compiled policy service without loading code into the host address space | Rust gRPC worker | The worker remains separately deployable and crash-isolated while using the supported SDK. |
-| Implement `nvidia.nemo.relay.worker.v1` from another language or existing service executable | Custom command worker | The protocol is language-neutral, but you own handshake, authentication, cancellation, envelopes, and shutdown behavior. |
+| Implement `nvidia.nemo.relay.worker.v1` from another language or existing service executable | Custom command worker | The protocol is language-neutral, but you own handshake, authentication, message validation, cancellation, and shutdown. |
 
 Whichever model you choose, the shared contract comes first. [Plugin Shape](/build-plugins/fundamentals/plugin-shape)
 explains lifecycle and ownership, [Configuration and Validation](/build-plugins/fundamentals/configuration-and-validation)
 defines the operator-facing boundary, and [PluginContext](/build-plugins/fundamentals/plugin-context)
 describes every registration surface. Each model-specific section then follows a
-complete path from invalid configuration through activation, representative execution,
-observable verification, and teardown.
+path through configuration checks, activation, example calls, result checks, and
+cleanup.
 
 Plugins can also own gates that control whether another global runtime registration is
 included in future snapshots. Read

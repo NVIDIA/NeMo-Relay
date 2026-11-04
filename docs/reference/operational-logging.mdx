@@ -288,7 +288,8 @@ await runtime.error("cache request failed", target="payments.client", fields={"e
 </Tab>
 </Tabs>
 
-Rust native plugins require a host with native ABI v6 or newer. Workers use the typed `Log` operation in
+Native logging was introduced in ABI v6. The current host supports v7 and v8
+callback layouts. Workers use the typed `Log` operation in
 `nvidia.nemo.relay.worker.v1.RelayHostRuntimeService`.
 
 ## TOML Configuration
@@ -347,7 +348,7 @@ format = "jsonl"
 Each entry in `[[logging.sinks]]` or `[[daemon.logging.sinks]]` accepts
 `failure_policy`:
 
-| Value | Behavior when the file cannot be opened |
+| Value | Behavior When the File Cannot Be Opened |
 | --- | --- |
 | `required` (default) | Logging initialization fails and startup reports the error. |
 | `optional` | Relay disables this sink for the logging runtime's lifetime and continues with the other sinks. |

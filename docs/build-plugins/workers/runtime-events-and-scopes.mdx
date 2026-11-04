@@ -6,12 +6,14 @@ position: 34
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Worker code cannot manipulate host [scope](/about-nemo-relay/concepts/scopes) objects
-directly. The SDK exposes an
-authenticated `PluginRuntime` proxy whose operations preserve the invocation's captured
-scope context while the `RelayHostRuntime` service performs the real work.
+Worker code cannot change host [scope](/about-nemo-relay/concepts/scopes) objects
+directly. It uses an authenticated `PluginRuntime` proxy. The proxy preserves the
+callback's captured scope context. `RelayHostRuntimeService` performs the operation
+in the host.
 
 ## Runtime Operation Map
+
+Use these SDK methods for host operations:
 
 | Intent | Rust Worker SDK | Python Worker SDK |
 |---|---|---|
@@ -68,20 +70,20 @@ let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
 Each call reads fresh root-to-top UUID/type entries, including the implicit
 root. Earlier snapshots survive later push/pop unchanged. Unbound calls return
 `None`; actively bound root-only stacks return their root. Invalid, foreign,
-expired, cancelled, or dropped bindings return explicit errors. A missing RPC
-on an older host returns unsupported functionality, including for unbound
-calls. The operation never substitutes an ambient host-thread stack.
+expired, cancelled, or dropped bindings return explicit errors. A host that does
+not implement the RPC returns an unsupported-functionality error, including for
+unbound calls. The operation never substitutes an ambient host-thread stack.
 
 Scope UUIDs are actual runtime identities; `scope_stack_id`, activation IDs,
-and invocation IDs remain transport capabilities. Synthetic propagation
-entries retain their stored types, including Unknown. See the
+and invocation IDs remain transport capabilities. Imported propagation entries retain their stored types, including `Unknown`.
+Refer to the
 [visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack)
 for callback timing and Agent-lifetime limitations.
 
 ## Control a Registration from a Background Task
 
-Worker gates are callback-based. Relay invokes the callback through `nvidia.nemo.relay.worker.v1` while it
-constructs a middleware or publication snapshot. Callback, transport, and timeout
+Worker gates use callbacks. Relay calls them through
+`nvidia.nemo.relay.worker.v1` while building a middleware or publication snapshot. Callback, transport, and timeout
 failures leave the target enabled. Keep callbacks fast and side-effect free.
 
 The following worker flows discover the observability plugin's OpenTelemetry subscriber
@@ -273,7 +275,7 @@ have independent parentage. The `finally` block drops the stack even if isolated
 emission fails or the callback is cancelled.
 
 ```python
-from nemo_relay_plugin import Json, PluginContext
+from nemo_relay_plugin import Json, PluginContext, ScopeType
 
 async def emit_runtime_events(ctx: PluginContext, tag: str, settings: dict[str, Json]) -> None:
     handle = await ctx.runtime.push_scope(
@@ -378,11 +380,11 @@ failed work supplies failure metadata and then propagates the original callback 
 
 ## Clean Up Under Failure
 
-The examples use a structured cleanup sequence: capture the previous binding, create an
-isolated stack only when configured, bind it, push a scope, run plugin work, pop the scope
-with success or error metadata, restore the previous binding, and drop the isolated
-stack. Python uses `try`/`finally`; Rust uses explicit result handling and awaits cleanup
-before returning.
+The examples first capture the previous binding. If configured, they create and
+bind an isolated stack. They then push a scope and run the plugin work. During
+cleanup, they pop the scope with success or error metadata, restore the previous
+binding, and drop the isolated stack. Python uses `try`/`finally`. Rust handles
+each result and awaits cleanup before returning.
 
 Shutdown can race with these operations. The worker stops accepting new invocations,
 cancels active callbacks, and continues only the bounded cleanup that the SDK can still

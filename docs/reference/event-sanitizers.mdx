@@ -220,10 +220,9 @@ convention.
 ## Dynamic Plugins
 
 Rust native plugins receive the three registration methods on their typed
-plugin context. Python `nvidia.nemo.relay.worker.v1` workers receive the same methods on
-`PluginContext`, and their callbacks can be synchronous or asynchronous. The
-worker protocol is `nvidia.nemo.relay.worker.v1` and defines the following stable registration
-surface values:
+plugin context. Python workers receive the same methods on `PluginContext`.
+Their callbacks can be synchronous or asynchronous. The
+`nvidia.nemo.relay.worker.v1` protocol defines these registration surface values:
 
 - `REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL = 30`
 - `REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL = 31`

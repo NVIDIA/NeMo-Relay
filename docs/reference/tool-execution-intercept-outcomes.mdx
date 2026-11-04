@@ -261,7 +261,7 @@ optional `tool_call_id` in `ToolExecutionInvocation`.
 Managed callbacks, continuations, and execute helpers use the same logical
 result in their native type or object shape:
 
-| Surface | Managed callback or continuation result |
+| Surface | Managed Callback or Continuation Result |
 | --- | --- |
 | Python | `ToolExecutionResult(result, annotation=None)` |
 | Rust | `ToolExecutionResult { result, annotation }` and its constructors |
@@ -271,7 +271,7 @@ result in their native type or object shape:
 
 Execution intercepts add lifecycle-owned pending marks to that shape:
 
-| Surface | Execution-intercept outcome |
+| Surface | Execution-intercept Outcome |
 | --- | --- |
 | Python | `ToolExecutionInterceptOutcome` |
 | Rust and native API 1 | `ToolExecutionInterceptOutcome` |
@@ -292,14 +292,14 @@ while retaining those worker result messages.
 Relay 1.0 requires the `nvidia.nemo.relay.worker.v1` worker protocol. Regenerate
 worker protobuf bindings or rebuild with the updated SDK, and declare
 `compat.relay = ">=1.0.0,<2.0"`. The current native host supplies ABI v8 and retains
-v7 callback compatibility; scope-stack inspection requires v8.
+v7 callback compatibility. Scope-stack inspection requires v8.
 Future incompatible contract changes must increment the corresponding native
 API or worker protocol version.
 
 ## Migration
 
-This release deliberately replaces raw tool execution results. Make these
-changes together:
+When upgrading from a release before Relay 0.8, make these tool-result changes
+together:
 
 1. Wrap every managed tool callback return in `ToolExecutionResult`.
 2. Treat every execution intercept's `next(args)` return as
@@ -343,5 +343,4 @@ hosts them. For release-specific upgrade actions, refer to the
 LLM request intercepts use a different outcome because they must preserve an
 annotated request and codec authority. That contract is described in [LLM
 Request Intercept Outcomes](/reference/llm-request-intercept-outcomes). Worker
-authors can trace both outcome envelopes through the [gRPC protocol
-reference](/build-plugins/workers/grpc-v1-protocol).
+authors can refer to both outcome types in the [gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol).

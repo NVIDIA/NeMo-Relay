@@ -18,7 +18,8 @@ Start with the package updates. Then review the sections for the features you us
 
 Upgrade the Rust host, `nemo-relay-worker`, and Python `nemo-relay-plugin` together.
 The active protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
-Crate and wheel releases follow the Relay package version independently of the contract version.
+Crate and wheel releases follow the Relay package version. The contract has its
+own version. Follow these steps to migrate a worker:
 
 1. Rebuild SDK workers or regenerate custom bindings from
    `crates/worker-proto/proto/nvidia/nemo/relay/worker/v1/`.
@@ -29,13 +30,16 @@ Crate and wheel releases follow the Relay package version independently of the c
 Persisted registrations for an unsupported worker protocol remain removable.
 Run `nemo-relay plugins remove <plugin-id>` to remove the old registration, then
 reinstall the rebuilt worker. Unsupported workers cannot be newly registered or
-enabled; their authored manifests and handshakes must use the current protocol.
+enabled. Validation refreshes do not clear their invalid compatibility status.
+Their manifests and handshakes must use the current protocol.
 
-Custom workers must implement the new service names, nested credentials,
-surface-specific invocation oneofs, dedicated response types, and executable
-validation rules. JSON remains only for application and provider-owned values.
-An explicit `no_context` snapshot result means no scope stack is bound; an empty
-result oneof is invalid. Runtime failures use standard gRPC statuses.
+Custom workers must use the new service names, credentials, request types, and
+response types. Each invocation selects one callback type through a protobuf
+`oneof`. Run the schema validation rules before executing callbacks. Use JSON
+only for open application and provider values.
+
+A `no_context` snapshot result means no scope stack is bound. A missing result
+alternative is invalid. Runtime failures use standard gRPC status codes.
 
 The old `grpc-v1` schema and generated bindings have been removed. Historical
 definitions remain in Git history, and no automatic adapter is provided. Refer to the

@@ -12,11 +12,12 @@ The canonical protobuf files live under
 `crates/worker-proto/proto/nvidia/nemo/relay/worker/v1/`.
 Crate and wheel release versions remain independent of this contract version.
 
-Upgrade the host and workers together. Worker manifests must declare
-`compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and workers must regenerate
-bindings or rebuild with the updated SDK. The old `grpc-v1` identifier and
-`nemo.relay.worker.v1` services are incompatible. The old schema and generated
-bindings have been removed; historical definitions remain in Git history.
+Upgrade the host and workers together. Set
+`compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"` in worker manifests. Regenerate custom bindings or
+rebuild workers with the new SDK. Old `grpc-v1` workers cannot connect. The old
+schema and generated bindings have been removed. Their definitions remain in
+Git history.
 
 SDK callbacks use shared domain types in Rust and authoring dictionaries and
 dataclasses in Python. Private converters translate those values into typed
@@ -28,10 +29,10 @@ The fully qualified service is
 `nvidia.nemo.relay.worker.v1.PluginWorkerService`. Each RPC has its own
 `<Method>Request` and `<Method>Response` message.
 
-All requests contain nested `Credentials` with the activation ID and token.
-Authentication precedes validation and dispatch. Handshake proposes a
-`ProtocolIdentity` with the exact name and contract version. Lifecycle replies
-carry a typed `WorkerIdentity`.
+Each request contains `Credentials` with the activation ID and token. The server
+checks credentials before validating the message or running a callback. Handshake
+proposes a `ProtocolIdentity` with the exact name and contract version. Lifecycle
+replies carry a typed `WorkerIdentity`. The following table describes each RPC:
 
 | RPC | Contract |
 | --- | --- |
@@ -49,11 +50,12 @@ These are separate from the authenticated worker lifecycle `Health` RPC.
 
 ## Registration Surfaces
 
-The `InvokeRequest.invocation` oneof determines the surface. There is no parallel
-surface field that can contradict the selected input. Registration plans retain
-`RegistrationSurface` enum values, local names, priorities, and break-chain flags.
+The `InvokeRequest.invocation` oneof selects the callback type. There is no
+separate surface field that could conflict with the selected input. Registration
+plans carry each callback's surface, local name, priority, and break-chain flag.
+Each callback type accepts these success results:
 
-| Surface | Successful result |
+| Surface | Successful Result |
 | --- | --- |
 | Subscriber | `completed` |
 | Event metadata injector | `metadata_additions`, a `JsonObject` |
@@ -71,13 +73,14 @@ ATOF events retain UUIDs, timestamps, category profiles, and runtime propagation
 fields. Scope sanitizer inputs must match their start or end lifecycle phase.
 Closed LLM models represent message roles, multimodal parts, provider-specific
 fields, tool choices, finish reasons, and optional empty collections explicitly.
-Application/provider extension fields remain lossless JSON.
+Application and provider extensions use JSON. Rust conversions follow the
+native SDK's number limits, as described below.
 
 ## Host Runtime Service
 
 Workers call `nvidia.nemo.relay.worker.v1.RelayHostRuntimeService` on the host endpoint.
-Requests use nested credentials. Scope and capability handles belong to the
-activation and invocation that issued them.
+Requests contain credentials. Each scope or access handle belongs to the
+activation or callback that created it. The service provides these RPCs:
 
 | RPC | Contract |
 | --- | --- |
@@ -99,29 +102,32 @@ activation and invocation that issued them.
 | `EncodeLlmCodecRequest` | Apply a normalized annotation to the original typed request. |
 | `DecodeLlmCodecResponse` | Decode a completed provider response through its response codec capability. |
 
-Request and response codec capabilities are distinct. Explicit codec `none`
-differs from a resolved opaque codec; only a resolved codec can carry access
-capability. Capabilities expire when the owning callback finishes or is cancelled.
-Streaming execution has a request codec and no completed-response codec.
+Request and response codecs have separate access handles. An explicit `none`
+means that no codec is selected. A selected codec can carry a host-issued access
+handle. Access ends when the callback finishes or is cancelled. For streaming
+calls, it lasts until the stream finishes or closes. Streaming execution has a
+request codec but no completed-response codec.
 
-Continuation calls may repeat or overlap while the owning interceptor is active.
-Each call uses an isolated scope-stack branch. Finish continuation work before
-returning from the interceptor. Re-raise original downstream errors to preserve
-their invocation-bound provenance; a replacement error is a plugin failure.
+Continuation calls can repeat or overlap while the interceptor is active. Each
+call uses an isolated copy of the scope stack. Finish this work before returning
+from the interceptor. Return or re-raise the original downstream error to preserve
+its source. A new error counts as a plugin failure.
 
 ### Codec References and Provider Data
 
 Built-in, runtime-registered, and dynamic codecs use the same `LlmCodecReference`
-fields: an open identity namespace (`kind`) and optional stable `id`. These are
-metadata, not a codec selector or provider catalogue. `LlmCodecContext` carries the
-invocation-scoped capability that authorizes operations on the actual host codec.
+fields: an open namespace (`kind`) and an optional stable `id`. These fields
+describe the codec; they do not select a provider or codec implementation.
+`LlmCodecContext` carries the access handle for the host's selected codec.
 
-Shared annotated request and response structures remain typed. Their
-`api_specific` data is lossless JSON for every codec flavor, using the same domain
-representation as the native SDK. Provider fields and custom codec schemas do not
-require protobuf changes. The transport validates JSON syntax and structural
-requirements; provider interpretation belongs to the codec and shared domain
-adapters. The host enforces capability ownership, direction, and lifetime.
+Shared annotated requests and responses use typed messages. Their `api_specific`
+fields use the native SDK's JSON representation for every codec. Rust converters
+preserve signed and unsigned 64-bit integers and finite 64-bit floating-point
+values. They do not preserve decimal spelling or precision beyond those types.
+
+Provider fields and custom codecs do not need protobuf changes. The transport
+checks JSON syntax and required message fields. The codec interprets provider
+data. The host checks who owns an access handle, its direction, and its lifetime.
 
 ### Scope Snapshot Extension
 
@@ -156,7 +162,8 @@ the session opens. Both values must agree. The SDK checks contract versions and
 its local safety ceilings. It then uses the host's exact request and response
 limits, queue capacity, retry count, and per-attempt timeout.
 
-A mismatch or unsupported limit produces an inactive `unsupported` helper.
+A mismatch, unsupported limit, or malformed session response produces an inactive
+`unsupported` helper. This includes a session ID that is not 16 bytes long.
 Plugin execution continues. The SDK does not negotiate different limits or use
 local delivery defaults. Bootstrap calls have a separate local safety timeout.
 Flush and shutdown drain also have local bounds. These are separate from the
@@ -185,8 +192,8 @@ Receipts and sequence handling follow these rules:
 
 - Retrying the last request with identical content returns its receipt without
   counting the observation again. Conflicts, gaps, and older sequences fail.
-- Malformed requests do not consume a sequence. A structurally valid request
-  rejected during admission consumes a sequence and returns a terminal `Rejected`
+- Malformed requests do not consume a sequence. A valid request that passes
+  admission but fails policy consumes a sequence and returns a terminal `Rejected`
   receipt.
 - `Recorded` confirms in-memory counts. Evidence can be retained, truncated, or
   dropped. `Registered`, `Closed`, and `Disabled` add no occurrences.
@@ -308,11 +315,11 @@ environment.
 
 ## Validation and Errors
 
-The host and SDKs enforce Protovalidate annotations before dispatch, along with
-JSON syntax and protobuf timestamp/duration validity. Required oneofs, enum
-membership, UUIDs, nonempty identities, and cross-field constraints are executable.
-Authentication, capability ownership, bounded frames, and stateful sequencing
-are checked independently.
+The host and SDKs run Protovalidate checks before calling callbacks. They also
+check JSON syntax, timestamps, and durations. Schema rules enforce required
+alternatives, enum values, UUIDs, nonempty IDs, and relationships between fields.
+Runtime code separately checks credentials, access rights, message sizes, and
+operation order. Failures use the following error forms:
 
 | Failure | Representation |
 | --- | --- |
@@ -330,9 +337,9 @@ return empty dedicated response messages. Empty or contradictory result oneofs
 are malformed; they do not mean allow, unchanged, or successful completion.
 
 `JsonValue` contains UTF-8 JSON bytes and preserves JSON null and large integers.
-`JsonObject` represents an object map. There are no schema-tagged JSON envelopes
-for closed Relay structures. Contract identity is negotiated once through the
-protocol identity, rather than duplicated on each payload.
+`JsonObject` represents a JSON object. Closed Relay structures use typed protobuf
+messages, not schema-tagged JSON envelopes. Handshake checks the contract identity.
+Payloads do not repeat it.
 
 ## Cancellation and Shutdown
 

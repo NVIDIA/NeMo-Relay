@@ -15,12 +15,12 @@ commitment. For release-specific changes and known limitations, refer to
 
 ## Platforms and Architectures
 
-| Surface | Linux x86_64 | Linux ARM64 | macOS x86_64 | macOS ARM64 | Windows x86_64 | Windows ARM64 | Limitations |
+| Surface | Linux X86_64 | Linux ARM64 | macOS X86_64 | macOS ARM64 | Windows X86_64 | Windows ARM64 | Limitations |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Core Library | Required CI coverage | Required CI coverage | Not in the current CI matrix | Required CI coverage | Non-blocking CI coverage | Non-blocking CI coverage | Rust is the source of truth. Python and Node.js packages require their supported runtimes; Go and raw C FFI remain experimental and source-first. |
 | CLI Application | Published `x86_64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` assets | Published `aarch64-unknown-linux-gnu` and `aarch64-unknown-linux-musl` assets | No published release asset | Published `aarch64-apple-darwin` asset | Published `x86_64-pc-windows-msvc` asset | Published `aarch64-pc-windows-msvc` asset | Intel macOS has no prebuilt CLI asset. Use a source install on unsupported platforms. |
 | Native Plugins | Build for the host ABI | Build for the host ABI | Build and validate locally | Build for the host ABI | Build for the host ABI; CI is non-blocking | Build for the host ABI; CI is non-blocking | Native plugins run in-process and are not sandboxed. Rebuild for the host ABI and compatible Relay version. |
-| gRPC Worker Plugins | Depends on the selected worker runtime | Depends on the selected worker runtime | Build and validate locally | Depends on the selected worker runtime | Depends on the selected worker runtime | Depends on the selected worker runtime | Workers run as local child processes over `nvidia.nemo.relay.worker.v1`, not as a security sandbox. Python workers are unsupported on Windows ARM64. Refer to the worker runtime matrix for runtime-specific requirements. |
+| gRPC Worker Plugins | Depends on the selected worker runtime | Depends on the selected worker runtime | Build and validate locally | Depends on the selected worker runtime | Depends on the selected worker runtime | Depends on the selected worker runtime | Workers run as local child processes over `nvidia.nemo.relay.worker.v1`. They are not a security sandbox. Python workers are unsupported on Windows ARM64. Refer to the worker runtime matrix for runtime-specific requirements. |
 
 ### Linux Distribution Notes
 
@@ -45,7 +45,7 @@ gRPC worker plugins run as local processes. Package and test each worker for
 its Relay host platform. This matrix does not make a compatibility claim for
 emulated or cross-architecture worker execution.
 
-| Worker runtime | Linux x86_64 | Linux ARM64 | macOS x86_64 | macOS ARM64 | Windows x86_64 | Windows ARM64 | Requirements and limitations |
+| Worker Runtime | Linux X86_64 | Linux ARM64 | macOS X86_64 | macOS ARM64 | Windows X86_64 | Windows ARM64 | Requirements and Limitations |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Python | Worker E2E CI coverage | Not separately worker E2E validated | Build and validate locally | Worker E2E CI coverage | Worker E2E CI coverage; CI is non-blocking | Unsupported: no usable `grpcio` wheel | Use `runtime = "python"`, a `module:function` entrypoint, and `source.manifest_root`. `nemo-relay plugins add` creates and retains the managed Python environment. Package dependencies for the target host. |
 | Rust | Host-compatible executable; core CI coverage | Host-compatible executable; core CI coverage | Build and validate locally | Host-compatible executable; core CI coverage | Host-compatible executable; core CI is non-blocking | Host-compatible executable; core CI is non-blocking | Use `runtime = "rust"` and provide an executable that implements `nvidia.nemo.relay.worker.v1`. |
@@ -65,7 +65,7 @@ and transparent runs. `nemo-relay install pi` is the exception: it writes a
 directory and never runs pi, so it checks no version — diagnostics and transparent
 runs still do.
 
-| Agent | Minimum version | Supported CLI capabilities | Current limitations |
+| Agent | Minimum Version | Supported CLI Capabilities | Current Limitations |
 | --- | --- | --- | --- |
 | Claude Code | 2.1.121 | Persistent install, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Claude desktop, web, and application sessions are unsupported unless they expose the same local hook and gateway controls. Optimization requires gateway-routed LLM traffic and available hooks. |
 | Codex CLI | 0.143.0 | Persistent install, transparent run, 9 supported plugin hooks, local gateway routing, and pre-tool security | Cloud or remote tasks that bypass the local machine have partial or no LLM capture. The plugin hook schema has no `SessionEnd`; Relay finalizes the cumulative session snapshot at `Stop`. Encrypted Codex multi-agent v2 payloads cannot be decrypted or reliably linked. |

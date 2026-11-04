@@ -31,11 +31,11 @@ Daemon workers support all LLM middleware types for calls with and without
 streaming. Refer to [LLM Middleware](/daemon/reference#llm-middleware) for
 supported provider APIs and response behavior.
 
-The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
-six LLM registrations, and a conditional middleware gate make 17 surfaces. Registration names are component-local;
-[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
-registration metadata and enforced by the host after it merges visible
-[middleware](/about-nemo-relay/concepts/middleware).
+These callback types make 17 surfaces: one event metadata injector, one subscriber,
+three event sanitizers, five tool registrations, six LLM registrations, and one
+conditional middleware gate. Registration names are local to each component.
+The host applies [priority and `break_chain`](/build-plugins/fundamentals/plugin-context)
+after merging the visible [middleware](/about-nemo-relay/concepts/middleware).
 
 By default, Relay gives short callbacks, such as request interceptors and
 guardrails, 30 seconds to return. Set a different deadline in
@@ -47,7 +47,7 @@ stream. The caller can cancel these callbacks. Relay then releases their
 continuations, codec capabilities, and scope state.
 
 Timeout errors name the callback and its registration surface. For example,
-`surface=TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
+`surface=REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
 timed out. The error also shows the time limit: `worker RPC timed out after 30000ms`.
 
 When a worker call ends or times out, Relay drops its active provider futures and

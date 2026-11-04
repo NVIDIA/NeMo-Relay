@@ -269,7 +269,7 @@ re-export the same `ToolExecutionContext` type. Its native fields and worker
 accessor methods remain available. The following table lists the shared contracts
 and required behavior:
 
-| Authoring Capability | Shared Domain Contract | New Worker Wire Format | Adoption Requirements |
+| Authoring Capability | Shared Domain Contract | Worker Wire Format | Required Behavior |
 | --- | --- | --- | --- |
 | Plugin identity and registration | Component configuration, diagnostics, and explicit multiple-component policy | Handshake, Validate, Register, RegistrationPlan | The shared facade preserves `plugin_kind`/`plugin_id`, mutable registration, `Send`/`Sync`, and backend-specific defaults. |
 | Events and metadata | Event, EventSanitizeFields, PendingMarkSpec, typed metadata maps | Per-surface invocation and result alternatives | Same transformations, event parentage, and null/presence behavior through both adapters. |

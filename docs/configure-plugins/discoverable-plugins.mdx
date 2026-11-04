@@ -7,11 +7,14 @@ position: 3
 SPDX-License-Identifier: Apache-2.0 */}
 Use this guide to install and manage discoverable plugins with the
 `nemo-relay plugins` CLI commands. For settings in `plugins.toml` and the
-interactive editor, see [Configure](/configure-plugins/plugin-configuration-files).
-For activation through a language SDK, see [Initialize](/configure-plugins/initialize-plugins). Discoverable plugins are separate from built-in `[[components]]`:
-their `relay-plugin.toml` manifest describes a native shared library or a
-`nvidia.nemo.relay.worker.v1` worker, while `plugins.toml` records where Relay can find it and
-stores its component configuration.
+interactive editor, refer to [Configure](/configure-plugins/plugin-configuration-files).
+For activation through a language SDK, refer to
+[Initialize](/configure-plugins/initialize-plugins).
+
+Discoverable plugins are separate from built-in `[[components]]`. Their
+`relay-plugin.toml` manifest describes a native shared library or a
+`nvidia.nemo.relay.worker.v1` worker. `plugins.toml` stores the manifest location
+and the component configuration.
 
 <Warning>
 Discoverable plugins are trusted extensions. Native plugins run in the gateway
