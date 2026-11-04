@@ -51,57 +51,197 @@ One available value and its selected unit.
 
 One typed cumulative resource-limit event counter.
 
+#### Methods
+
+##### `ResourceLimitEventCount`
+
+```python
+def ResourceLimitEventCount(resource: ResourceLimitResource, event: ResourceLimitEventKind, count: ResourceMeasurement[int | float, CountUnit] | None) -> None
+```
+
+Create an instance.
+
 ### `AcceleratorDeviceMetrics`
 
 Device-wide accelerator measurements.
+
+#### Methods
+
+##### `AcceleratorDeviceMetrics`
+
+```python
+def AcceleratorDeviceMetrics(vendor: AcceleratorVendor, device_identifier: str, device_index: int | None, memory_used: ResourceMeasurement[int | float, CapacityUnit] | None, compute_utilization: ResourceMeasurement[float, UtilizationUnit] | None) -> None
+```
+
+Create an instance.
 
 ### `AcceleratorProcessMetrics`
 
 Accelerator measurements attributed to one process in the selected scope.
 
+#### Methods
+
+##### `AcceleratorProcessMetrics`
+
+```python
+def AcceleratorProcessMetrics(vendor: AcceleratorVendor, device_identifier: str, device_index: int | None, process_id: int, memory_used: ResourceMeasurement[int | float, CapacityUnit] | None, compute_utilization: ResourceMeasurement[float, UtilizationUnit] | None) -> None
+```
+
+Create an instance.
+
 ### `FilesystemCapacityMetrics`
 
 Capacity for one configured filesystem path.
+
+#### Methods
+
+##### `FilesystemCapacityMetrics`
+
+```python
+def FilesystemCapacityMetrics(path: str, total_capacity: ResourceMeasurement[int | float, CapacityUnit] | None, available_capacity: ResourceMeasurement[int | float, CapacityUnit] | None, free_capacity: ResourceMeasurement[int | float, CapacityUnit] | None) -> None
+```
+
+Create an instance.
 
 ### `CpuMetrics`
 
 CPU measurements and CPU limit events.
 
+#### Methods
+
+##### `CpuMetrics`
+
+```python
+def CpuMetrics(user_time: ResourceMeasurement[int | float, DurationUnit] | None, system_time: ResourceMeasurement[int | float, DurationUnit] | None, total_time: ResourceMeasurement[int | float, DurationUnit] | None, consumption_rate: ResourceMeasurement[float, CpuUnit] | None, throttled_time: ResourceMeasurement[int | float, DurationUnit] | None, effective_limit: ResourceMeasurement[float, CpuUnit] | None, some_pressure_stall_time: ResourceMeasurement[int | float, DurationUnit] | None, full_pressure_stall_time: ResourceMeasurement[int | float, DurationUnit] | None, limit_events: list[ResourceLimitEventCount]) -> None
+```
+
+Create an instance.
+
 ### `MemoryMetrics`
 
 System and process memory measurements and memory limit events.
+
+#### Methods
+
+##### `MemoryMetrics`
+
+```python
+def MemoryMetrics(system_used: ResourceMeasurement[int | float, CapacityUnit] | None, system_total: ResourceMeasurement[int | float, CapacityUnit] | None, system_available: ResourceMeasurement[int | float, CapacityUnit] | None, resident: ResourceMeasurement[int | float, CapacityUnit] | None, private: ResourceMeasurement[int | float, CapacityUnit] | None, physical_footprint: ResourceMeasurement[int | float, CapacityUnit] | None, virtual_memory: ResourceMeasurement[int | float, CapacityUnit] | None, peak_resident: ResourceMeasurement[int | float, CapacityUnit] | None, limit: ResourceMeasurement[int | float, CapacityUnit] | None, environment_accounted: ResourceMeasurement[int | float, CapacityUnit] | None, some_pressure_stall_time: ResourceMeasurement[int | float, DurationUnit] | None, full_pressure_stall_time: ResourceMeasurement[int | float, DurationUnit] | None, out_of_memory_event_count: ResourceMeasurement[int | float, CountUnit] | None, limit_events: list[ResourceLimitEventCount]) -> None
+```
+
+Create an instance.
 
 ### `ProcessMetrics`
 
 Process counts, limits, handles, and descriptors.
 
+#### Methods
+
+##### `ProcessMetrics`
+
+```python
+def ProcessMetrics(active_count: ResourceMeasurement[int | float, CountUnit] | None, descendant_count: ResourceMeasurement[int | float, CountUnit] | None, thread_count: ResourceMeasurement[int | float, CountUnit] | None, lifetime_creation_count: ResourceMeasurement[int | float, CountUnit] | None, open_file_descriptor_count: ResourceMeasurement[int | float, CountUnit] | None, windows_handle_count: ResourceMeasurement[int | float, CountUnit] | None, limit_events: list[ResourceLimitEventCount]) -> None
+```
+
+Create an instance.
+
 ### `DiskMetrics`
 
 Disk I/O for the measured process scope and filesystem capacity.
+
+#### Methods
+
+##### `DiskMetrics`
+
+```python
+def DiskMetrics(read_data: ResourceMeasurement[int | float, DataUnit] | None, write_data: ResourceMeasurement[int | float, DataUnit] | None, read_throughput: ResourceMeasurement[float, BandwidthUnit] | None, write_throughput: ResourceMeasurement[float, BandwidthUnit] | None, read_operations: ResourceMeasurement[int | float, CountUnit] | None, write_operations: ResourceMeasurement[int | float, CountUnit] | None, filesystems: list[FilesystemCapacityMetrics]) -> None
+```
+
+Create an instance.
 
 ### `GpuMetrics`
 
 Accelerator device-wide and process-attributed measurements.
 
+#### Methods
+
+##### `GpuMetrics`
+
+```python
+def GpuMetrics(device_metrics: list[AcceleratorDeviceMetrics] | None, process_metrics: list[AcceleratorProcessMetrics] | None) -> None
+```
+
+Create an instance.
+
 ### `NetworkTrafficMetrics`
 
 System interface traffic counters and transfer rates.
+
+#### Methods
+
+##### `NetworkTrafficMetrics`
+
+```python
+def NetworkTrafficMetrics(received_data: ResourceMeasurement[int | float, DataUnit] | None, transmitted_data: ResourceMeasurement[int | float, DataUnit] | None, receive_throughput: ResourceMeasurement[float, BandwidthUnit] | None, transmit_throughput: ResourceMeasurement[float, BandwidthUnit] | None, received_packets: ResourceMeasurement[int | float, CountUnit] | None, transmitted_packets: ResourceMeasurement[int | float, CountUnit] | None, receive_errors: ResourceMeasurement[int | float, CountUnit] | None, transmit_errors: ResourceMeasurement[int | float, CountUnit] | None) -> None
+```
+
+Create an instance.
 
 ### `NetworkInterfaceMetrics`
 
 Traffic measured on one system network interface.
 
+#### Methods
+
+##### `NetworkInterfaceMetrics`
+
+```python
+def NetworkInterfaceMetrics(name: str, traffic: NetworkTrafficMetrics) -> None
+```
+
+Create an instance.
+
 ### `NetworkMetrics`
 
 System-wide traffic, independent of the process measurement scope.
+
+#### Methods
+
+##### `NetworkMetrics`
+
+```python
+def NetworkMetrics(measurement_scope: MeasurementScope, system: NetworkTrafficMetrics, interfaces: list[NetworkInterfaceMetrics]) -> None
+```
+
+Create an instance.
 
 ### `ProcessSamplingMetadata`
 
 Coverage of process queries used for process-summed measurements.
 
+#### Methods
+
+##### `ProcessSamplingMetadata`
+
+```python
+def ProcessSamplingMetadata(visible_processes: int, sampled_processes: int, field_sampled_processes: dict[str, int]) -> None
+```
+
+Create an instance.
+
 ### `ResourceMetricsSnapshot`
 
 One point-in-time observation, its metadata, and enabled categories.
+
+#### Methods
+
+##### `ResourceMetricsSnapshot`
+
+```python
+def ResourceMetricsSnapshot(timestamp: datetime, operating_system: OperatingSystem, measurement_scope: MeasurementScope, process_sampling: ProcessSamplingMetadata | None, cpu: CpuMetrics | None, memory: MemoryMetrics | None, process: ProcessMetrics | None, disk: DiskMetrics | None, gpu: GpuMetrics | None, network: NetworkMetrics | None) -> None
+```
+
+Create an instance.
 
 ## Functions
 

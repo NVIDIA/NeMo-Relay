@@ -29,6 +29,14 @@ Policy for unsupported PII redaction configuration.
 
 #### Methods
 
+##### `ConfigPolicy`
+
+```python
+def ConfigPolicy(unknown_component: UnsupportedBehavior = ..., unknown_field: UnsupportedBehavior = ..., unsupported_value: UnsupportedBehavior = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -42,6 +50,14 @@ Serialize this policy to the canonical JSON object shape.
 Deterministic built-in redaction backend settings.
 
 #### Methods
+
+##### `BuiltinConfig`
+
+```python
+def BuiltinConfig(preset: Literal['trajectory_context'] | None = ..., action: Literal['remove', 'redact', 'regex_replace', 'hash', 'mask'] = ..., target_paths: list[str] = ..., target_path_globs: list[str] = ..., pattern: str | None = ..., detector: str | None = ..., replacement: str | None = ..., mask_char: str | None = ..., unmasked_prefix: int | None = ..., unmasked_suffix: int | None = ..., custom_mark_payload_policy: Literal['preserve', 'redact_all_leaves'] | None = ..., metric_string_attribute_allowlist: dict[str, list[str]] | None = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -57,6 +73,14 @@ Future local-model backend seam settings.
 
 #### Methods
 
+##### `LocalModelConfig`
+
+```python
+def LocalModelConfig(backend: str | None = ..., model_id: str | None = ..., detector_profile: str | None = ..., allow_network: bool | None = ..., max_latency_ms: int | None = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -71,6 +95,14 @@ Canonical config document for the top-level PII redaction component.
 
 #### Methods
 
+##### `PiiRedactionConfig`
+
+```python
+def PiiRedactionConfig(version: int = ..., mode: Literal['builtin', 'local_model'] = ..., input: bool = ..., output: bool = ..., tool_input: bool = ..., tool_output: bool = ..., mark: bool = ..., priority: int = ..., codec: Literal['openai_chat', 'openai_responses', 'anthropic_messages', 'oci_genai', 'gemini_generate_content'] | str | None = ..., builtin: BuiltinConfig | None = ..., local: LocalModelConfig | None = ..., policy: ConfigPolicy = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -84,6 +116,14 @@ Serialize this PII redaction config to the canonical JSON object shape.
 Top-level PII redaction component wrapper.
 
 #### Methods
+
+##### `ComponentSpec`
+
+```python
+def ComponentSpec(config: PiiRedactionConfig | JsonObject, enabled: bool = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 

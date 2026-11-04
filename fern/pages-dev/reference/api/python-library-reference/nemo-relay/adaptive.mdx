@@ -33,6 +33,14 @@ Policy for unsupported adaptive configuration.
 
 #### Methods
 
+##### `ConfigPolicy`
+
+```python
+def ConfigPolicy(unknown_component: UnsupportedBehavior = ..., unknown_field: UnsupportedBehavior = ..., unsupported_value: UnsupportedBehavior = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -46,6 +54,14 @@ Serialize this policy to the canonical JSON object shape.
 Adaptive state backend selection.
 
 #### Methods
+
+##### `BackendSpec`
+
+```python
+def BackendSpec(kind: str, config: JsonObject = ...) -> None
+```
+
+Create an instance.
 
 ##### `in_memory`
 
@@ -77,6 +93,14 @@ Adaptive state configuration.
 
 #### Methods
 
+##### `StateConfig`
+
+```python
+def StateConfig(backend: BackendSpec) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -90,6 +114,14 @@ Serialize this state config to the canonical JSON object shape.
 Built-in adaptive telemetry subscriber settings.
 
 #### Methods
+
+##### `TelemetryConfig`
+
+```python
+def TelemetryConfig(subscriber_name: str | None = ..., learners: list[str] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -105,6 +137,14 @@ Built-in adaptive hints injection settings.
 
 #### Methods
 
+##### `AdaptiveHintsConfig`
+
+```python
+def AdaptiveHintsConfig(priority: int = ..., break_chain: bool = ..., inject_header: bool = ..., inject_body_path: str = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -118,6 +158,14 @@ Serialize this adaptive-hints config to the canonical JSON object shape.
 Built-in adaptive tool scheduling settings.
 
 #### Methods
+
+##### `ToolParallelismConfig`
+
+```python
+def ToolParallelismConfig(priority: int = ..., mode: Literal['observe_only', 'inject_hints', 'schedule'] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -133,6 +181,14 @@ Prompt-stability classification thresholds for ACG.
 
 #### Methods
 
+##### `AcgStabilityThresholds`
+
+```python
+def AcgStabilityThresholds(stable_threshold: float = ..., semi_stable_threshold: float = ..., min_observations_for_full_confidence: int = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -146,6 +202,14 @@ Serialize these ACG stability thresholds to the canonical JSON object shape.
 Adaptive Cache Governor settings.
 
 #### Methods
+
+##### `AcgConfig`
+
+```python
+def AcgConfig(provider: Literal['anthropic', 'openai', 'passthrough'] = ..., observation_window: int = ..., priority: int = ..., stability_thresholds: AcgStabilityThresholds | None = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -161,6 +225,14 @@ One tool caching class (also the shape of the `default` default bucket).
 
 #### Methods
 
+##### `ToolClass`
+
+```python
+def ToolClass(cacheable: bool = ..., ttl_seconds: int | None = ..., bypass_rate: float | None = ..., tool_version: str | None = ..., arg_skip: list[str] = ..., members: list[str] = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -174,6 +246,14 @@ Serialize this tool class to the canonical JSON object shape.
 Per-tool refinement applied on top of the tool's resolved class.
 
 #### Methods
+
+##### `ToolOverride`
+
+```python
+def ToolOverride(cacheable: bool | None = ..., ttl_seconds: int | None = ..., bypass_rate: float | None = ..., tool_version: str | None = ..., arg_skip: list[str] | None = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -189,6 +269,14 @@ Opt-in tool-result cache settings.
 
 #### Methods
 
+##### `ToolCacheConfig`
+
+```python
+def ToolCacheConfig(enabled: bool = ..., priority: int = ..., cache_errors: bool = ..., default: ToolClass = ..., classes: dict[str, ToolClass] = ..., overrides: dict[str, ToolOverride] = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -202,6 +290,14 @@ Serialize this tool-cache config to the canonical JSON object shape.
 Opt-in LLM response and tool-result cache settings.
 
 #### Methods
+
+##### `ResponseCacheConfig`
+
+```python
+def ResponseCacheConfig(ttl_seconds: int = ..., namespace: str = ..., priority: int = ..., bypass_rate: float = ..., cache_nondeterministic: bool = ..., key_strategy: ResponseCacheKeyStrategy = ..., header_allowlist: list[str] = ..., backend: BackendSpec = ..., tools: ToolCacheConfig | None = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -217,6 +313,14 @@ Canonical config document for the top-level adaptive component.
 
 #### Methods
 
+##### `AdaptiveConfig`
+
+```python
+def AdaptiveConfig(version: int = ..., agent_id: str | None = ..., state: StateConfig | None = ..., telemetry: TelemetryConfig | None = ..., adaptive_hints: AdaptiveHintsConfig | None = ..., tool_parallelism: ToolParallelismConfig | None = ..., acg: AcgConfig | None = ..., policy: ConfigPolicy = ..., response_cache: ResponseCacheConfig | None = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -230,6 +334,14 @@ Serialize this adaptive config to the canonical JSON object shape.
 Top-level adaptive component wrapper.
 
 #### Methods
+
+##### `ComponentSpec`
+
+```python
+def ComponentSpec(config: AdaptiveConfig | JsonObject, enabled: bool = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 

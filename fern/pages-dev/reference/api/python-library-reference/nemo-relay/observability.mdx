@@ -21,6 +21,14 @@ Policy for unsupported observability configuration.
 
 #### Methods
 
+##### `ConfigPolicy`
+
+```python
+def ConfigPolicy(unknown_component: UnsupportedBehavior = ..., unknown_field: UnsupportedBehavior = ..., unsupported_value: UnsupportedBehavior = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -34,6 +42,14 @@ Serialize this policy to the canonical JSON object shape.
 Stream sink for raw ATOF events.
 
 #### Methods
+
+##### `AtofStreamSinkConfig`
+
+```python
+def AtofStreamSinkConfig(url: str, transport: Literal['http_post', 'websocket', 'ndjson'] = ..., headers: dict[str, str] = ..., header_env: dict[str, str] = ..., timeout_millis: int = ..., field_name_policy: Literal['preserve', 'replace_dots'] = ..., name: str | None = ..., header_file: dict[str, str] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -49,6 +65,14 @@ Multi-sink raw ATOF export settings.
 
 #### Methods
 
+##### `AtofConfig`
+
+```python
+def AtofConfig(enabled: bool = ..., sinks: list[AtofFileSinkConfig | AtofStreamSinkConfig] | None = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -63,6 +87,14 @@ Filesystem destination for raw ATOF JSONL events.
 
 #### Methods
 
+##### `AtofFileSinkConfig`
+
+```python
+def AtofFileSinkConfig(output_directory: str | None = ..., filename: str | None = ..., mode: Literal['append', 'overwrite'] = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -74,6 +106,14 @@ def to_dict() -> JsonObject
 S3-compatible remote storage settings for ATIF trajectory upload.
 
 #### Methods
+
+##### `S3StorageConfig`
+
+```python
+def S3StorageConfig(bucket: str = ..., key_prefix: str | None = ..., access_key_id: str | None = ..., secret_access_key_var: str | None = ..., session_token_var: str | None = ..., region: str | None = ..., endpoint_url: str | None = ..., allow_http: bool | None = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -89,6 +129,14 @@ HTTP endpoint settings for ATIF trajectory upload.
 
 #### Methods
 
+##### `HttpStorageConfig`
+
+```python
+def HttpStorageConfig(endpoint: str = ..., headers: dict[str, str] = ..., header_env: dict[str, str] = ..., timeout_millis: int = ..., header_file: dict[str, str] = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -102,6 +150,14 @@ Serialize this HTTP storage config to the canonical JSON object shape.
 Per-top-level-agent ATIF file export settings.
 
 #### Methods
+
+##### `AtifConfig`
+
+```python
+def AtifConfig(enabled: bool = ..., agent_name: str = ..., agent_version: str | None = ..., model_name: str = ..., tool_definitions: list[JsonObject] | None = ..., extra: JsonObject | None = ..., output_directory: str | None = ..., filename_template: str = ..., storage: list[S3StorageConfig | HttpStorageConfig] | None = ..., include_observed_events: bool = ..., include_llm_requests: bool = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -117,6 +173,14 @@ One typed OpenTelemetry OTLP destination.
 
 #### Methods
 
+##### `OpenTelemetryEndpointConfig`
+
+```python
+def OpenTelemetryEndpointConfig(type: Literal['full', 'gen_ai', 'openinference'], endpoint: str, mark_projection: Literal['inherit', 'event', 'tool'] = ..., mark_exclude_names: list[str] = ..., attribute_mappings: list[dict[str, str]] = ..., transport: Literal['http_binary', 'grpc'] = ..., service_name: str = ..., service_namespace: str | None = ..., service_version: str | None = ..., instrumentation_scope: str = ..., timeout_millis: int = ..., headers: dict[str, str] = ..., header_env: dict[str, str] = ..., resource_attributes: dict[str, str] = ..., max_queue_size: int | None = ..., max_export_batch_size: int | None = ..., scheduled_delay_millis: int | None = ..., completed_span_context_ttl_millis: int | None = ..., promote_metadata_prefixes: list[str] = ..., promote_resource_metadata_prefixes: list[str] = ..., header_file: dict[str, str] = ..., tls: OpenTelemetryTlsConfig | None = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -130,6 +194,14 @@ Serialize this endpoint to the canonical plugin shape.
 One local file destination for projected OTLP spans.
 
 #### Methods
+
+##### `OpenTelemetryFileSinkConfig`
+
+```python
+def OpenTelemetryFileSinkConfig(output_directory: str, type: Literal['full', 'gen_ai', 'openinference'] = ..., filename: str | None = ..., format: Literal['json_lines', 'proto'] = ..., mode: Literal['append', 'overwrite'] = ..., mark_projection: Literal['inherit', 'event', 'tool'] = ..., mark_exclude_names: list[str] = ..., attribute_mappings: list[dict[str, str]] = ..., service_name: str = ..., service_namespace: str | None = ..., service_version: str | None = ..., instrumentation_scope: str = ..., resource_attributes: dict[str, str] = ..., max_queue_size: int | None = ..., max_export_batch_size: int | None = ..., scheduled_delay_millis: int | None = ..., completed_span_context_ttl_millis: int | None = ..., promote_metadata_prefixes: list[str] = ..., promote_resource_metadata_prefixes: list[str] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -145,6 +217,14 @@ One signal-specific OTLP destination for logs or metrics.
 
 #### Methods
 
+##### `OpenTelemetrySignalEndpointConfig`
+
+```python
+def OpenTelemetrySignalEndpointConfig(endpoint: str, transport: Literal['http_binary', 'grpc'] = ..., headers: dict[str, str] = ..., header_env: dict[str, str] = ..., resource_attributes: dict[str, str] = ..., service_name: str = ..., service_namespace: str | None = ..., service_version: str | None = ..., instrumentation_scope: str = ..., timeout_millis: int = ..., header_file: dict[str, str] = ..., promote_resource_metadata_prefixes: list[str] = ..., tls: OpenTelemetryTlsConfig | None = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -158,6 +238,14 @@ Serialize this signal endpoint to the canonical plugin shape.
 OTLP log pipeline settings sourced from non-metric marks.
 
 #### Methods
+
+##### `OpenTelemetryLogSectionConfig`
+
+```python
+def OpenTelemetryLogSectionConfig(enabled: bool = ..., endpoints: list[OpenTelemetrySignalEndpointConfig] | None = ..., minimum_severity: Literal['trace', 'debug', 'info', 'warn', 'warning', 'error'] = ..., max_queue_size: int = ..., max_export_batch_size: int = ..., scheduled_delay_millis: int = ..., completed_span_context_ttl_millis: int = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -173,6 +261,14 @@ OTLP metric pipeline settings sourced from metric marks.
 
 #### Methods
 
+##### `OpenTelemetryMetricSectionConfig`
+
+```python
+def OpenTelemetryMetricSectionConfig(enabled: bool = ..., endpoints: list[OpenTelemetrySignalEndpointConfig] | None = ..., export_interval_millis: int = ..., temporality: Literal['cumulative', 'delta', 'low_memory'] = ..., max_instruments: int = ..., cardinality_limit: int = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -186,6 +282,14 @@ Serialize this metric section to the canonical plugin shape.
 Multi-endpoint OpenTelemetry plugin settings.
 
 #### Methods
+
+##### `OpenTelemetrySectionConfig`
+
+```python
+def OpenTelemetrySectionConfig(enabled: bool = ..., endpoints: list[OpenTelemetryEndpointConfig] = ..., logs: OpenTelemetryLogSectionConfig | None = ..., metrics: OpenTelemetryMetricSectionConfig | None = ..., file_sinks: list[OpenTelemetryFileSinkConfig] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 
@@ -201,6 +305,14 @@ Canonical config document for the top-level observability component.
 
 #### Methods
 
+##### `ObservabilityConfig`
+
+```python
+def ObservabilityConfig(version: int = ..., atof: AtofConfig | None = ..., atif: AtifConfig | None = ..., opentelemetry: OpenTelemetrySectionConfig | None = ..., policy: ConfigPolicy = ..., enable_full_payloads: bool = ..., insecure_http_hosts: list[str] | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_dict`
 
 ```python
@@ -214,6 +326,14 @@ Serialize this observability config to the canonical JSON object shape.
 Top-level observability component wrapper.
 
 #### Methods
+
+##### `ComponentSpec`
+
+```python
+def ComponentSpec(config: ObservabilityConfig | JsonObject, enabled: bool = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_dict`
 

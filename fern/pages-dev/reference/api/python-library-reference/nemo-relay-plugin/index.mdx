@@ -23,9 +23,29 @@ Observability fields returned by event sanitizer callbacks.
 
 Structured identity of the codec active for one worker invocation.
 
+#### Methods
+
+##### `LlmCodecIdentity`
+
+```python
+def LlmCodecIdentity(kind: str, id: str | None = None) -> None
+```
+
+Create an instance.
+
 ### `RuntimeDiagnostic`
 
 One bounded runtime diagnostic reported by the Relay host.
+
+#### Methods
+
+##### `RuntimeDiagnostic`
+
+```python
+def RuntimeDiagnostic(code: str, message: str, count: int) -> None
+```
+
+Create an instance.
 
 ### `RuntimeRegistrationKind(str, Enum)`
 
@@ -39,19 +59,57 @@ Owner categories reported by host registration discovery.
 
 Owner metadata for a discovered runtime registration.
 
+#### Methods
+
+##### `RuntimeRegistrationOwner`
+
+```python
+def RuntimeRegistrationOwner(kind: RuntimeRegistrationOwnerKind, plugin_kind: str | None = None, component_ordinal: int | None = None) -> None
+```
+
+Create an instance.
+
 ### `RuntimeRegistrationIdentity`
 
 Structured identity for a global gateable runtime registration.
 
+#### Methods
+
+##### `RuntimeRegistrationIdentity`
+
+```python
+def RuntimeRegistrationIdentity(kind: RuntimeRegistrationKind, local_name: str, effective_name: str, owner: RuntimeRegistrationOwner) -> None
+```
+
+Create an instance.
+
 ### `ConditionalMiddlewareGuardrailHandle`
 
 Opaque activation-owned key for removing a worker-created gate.
+
+#### Methods
+
+##### `ConditionalMiddlewareGuardrailHandle`
+
+```python
+def ConditionalMiddlewareGuardrailHandle(_value: str, _callback_name: str) -> None
+```
+
+Create an instance.
 
 ### `RuntimeDiagnostics`
 
 Bounded snapshot of active host runtime diagnostics.
 
 #### Methods
+
+##### `RuntimeDiagnostics`
+
+```python
+def RuntimeDiagnostics(entries: tuple[RuntimeDiagnostic, ...]) -> None
+```
+
+Create an instance.
 
 ##### `get`
 
@@ -67,6 +125,14 @@ Request codec context shared by sanitizer and execution callbacks.
 
 #### Methods
 
+##### `LlmSanitizeRequestContext`
+
+```python
+def LlmSanitizeRequestContext(codec: LlmCodecIdentity, _runtime: 'PluginRuntime | None' = None, _capability_id: str | None = None, _invocation_id: str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `resolve_codec`
 
 ```python
@@ -81,6 +147,14 @@ Response codec context shared by sanitizer and execution callbacks.
 
 #### Methods
 
+##### `LlmSanitizeResponseContext`
+
+```python
+def LlmSanitizeResponseContext(codec: LlmCodecIdentity, _runtime: 'PluginRuntime | None' = None, _capability_id: str | None = None, _invocation_id: str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `resolve_codec`
 
 ```python
@@ -94,6 +168,14 @@ Return the active response-codec proxy for this invocation.
 Invocation-scoped async proxy for an active request codec.
 
 #### Methods
+
+##### `WorkerRequestCodec`
+
+```python
+def WorkerRequestCodec(_runtime: 'PluginRuntime', _capability_id: str, _invocation_id: str) -> None
+```
+
+Create an instance.
 
 ##### `decode`
 
@@ -117,6 +199,14 @@ Invocation-scoped async proxy for an active response codec.
 
 #### Methods
 
+##### `WorkerResponseCodec`
+
+```python
+def WorkerResponseCodec(_runtime: 'PluginRuntime', _capability_id: str, _invocation_id: str) -> None
+```
+
+Create an instance.
+
 ##### `decode`
 
 ```python
@@ -129,11 +219,29 @@ Decode a wire response with the active host codec.
 
 Directional codec context for one LLM execution invocation.
 
+#### Methods
+
+##### `LlmExecutionContext`
+
+```python
+def LlmExecutionContext(request_codec: LlmRequestContext, response_codec: LlmResponseContext | None) -> None
+```
+
+Create an instance.
+
 ### `DataSchema`
 
 Identify the schema of a mark's opaque data payload.
 
 #### Methods
+
+##### `DataSchema`
+
+```python
+def DataSchema(name: str, version: str) -> None
+```
+
+Create an instance.
 
 ##### `to_json`
 
@@ -177,6 +285,14 @@ Describe one problem found while validating plugin configuration.
 
 #### Methods
 
+##### `ConfigDiagnostic`
+
+```python
+def ConfigDiagnostic(level: DiagnosticLevel | str, code: str, message: str, component: str | None = None, field: str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -191,6 +307,14 @@ Describe a mark Relay emits under a managed lifecycle scope.
 
 #### Methods
 
+##### `PendingMarkSpec`
+
+```python
+def PendingMarkSpec(name: str, category: EventCategory | str | None = None, category_profile: Json | None = None, data: Json | None = None, metadata: Json | None = None, data_schema: DataSchema | Mapping[str, Json] | None = None, severity: LogSeverity | str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -204,6 +328,14 @@ Convert this pending mark to its canonical JSON object.
 Identify the schema of an opaque optimization contribution payload.
 
 #### Methods
+
+##### `LlmOptimizationDataSchema`
+
+```python
+def LlmOptimizationDataSchema(name: str, version: str) -> None
+```
+
+Create an instance.
 
 ##### `to_json`
 
@@ -227,6 +359,14 @@ Identify one model for optimization accounting and repricing.
 
 #### Methods
 
+##### `LlmOptimizationModel`
+
+```python
+def LlmOptimizationModel(model: str, provider: str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -249,6 +389,14 @@ Describe the counterfactual and effective models for one optimization.
 
 #### Methods
 
+##### `LlmOptimizationModelTransition`
+
+```python
+def LlmOptimizationModelTransition(baseline: LlmOptimizationModel | None = None, effective: LlmOptimizationModel | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -270,6 +418,14 @@ Decode a canonical model transition.
 Retain token evidence independently from monetary pricing.
 
 #### Methods
+
+##### `LlmOptimizationTokens`
+
+```python
+def LlmOptimizationTokens(prompt_tokens: int | None = None, completion_tokens: int | None = None, cache_read_tokens: int | None = None, cache_write_tokens: int | None = None, total_tokens: int | None = None) -> None
+```
+
+Create an instance.
 
 ##### `to_json`
 
@@ -297,6 +453,14 @@ Describe baseline, effective, and explicitly saved token evidence.
 
 #### Methods
 
+##### `LlmOptimizationTokenImpact`
+
+```python
+def LlmOptimizationTokenImpact(baseline: LlmOptimizationTokens | None = None, effective: LlmOptimizationTokens | None = None, saved: LlmOptimizationTokens | None = None, quality: LlmOptimizationEvidenceQuality | str | None = None, estimation_method: str | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -318,6 +482,14 @@ Decode a canonical token impact.
 One plugin's lossless, forward-compatible optimization evidence.
 
 #### Methods
+
+##### `LlmOptimizationContribution`
+
+```python
+def LlmOptimizationContribution(producer: str, kind: str, applied: bool = False, id: str | None = None, sequence: int | None = None, model_transition: LlmOptimizationModelTransition | None = None, token_impact: LlmOptimizationTokenImpact | None = None, payload_schema: LlmOptimizationDataSchema | None = None, payload: Json | None = None, extra: dict[str, Json] = ...) -> None
+```
+
+Create an instance.
 
 ##### `to_json`
 
@@ -341,6 +513,14 @@ Canonical result returned by a Python worker LLM request intercept.
 
 #### Methods
 
+##### `LlmRequestInterceptOutcome`
+
+```python
+def LlmRequestInterceptOutcome(request: LlmRequest, annotated_request: AnnotatedLlmRequest | None = None, pending_marks: list[PendingMarkSpec] = ..., optimization_contributions: list[LlmOptimizationContribution] = ...) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -353,11 +533,29 @@ Convert this outcome to the canonical worker-envelope payload.
 
 Per-call context provided to a tool execution intercept.
 
+#### Methods
+
+##### `ToolExecutionContext`
+
+```python
+def ToolExecutionContext(tool_name: str, args: Json, tool_call_id: str | None = None) -> None
+```
+
+Create an instance.
+
 ### `ToolExecutionResult`
 
 Canonical application-visible result of tool execution.
 
 #### Methods
+
+##### `ToolExecutionResult`
+
+```python
+def ToolExecutionResult(result: Json, annotation: Json | None = None) -> None
+```
+
+Create an instance.
 
 ##### `to_json`
 
@@ -381,6 +579,14 @@ Canonical result returned by a Python worker tool execution intercept.
 
 #### Methods
 
+##### `ToolExecutionInterceptOutcome`
+
+```python
+def ToolExecutionInterceptOutcome(result: Json, pending_marks: list[PendingMarkSpec] = ..., *, annotation: Json | None = None) -> None
+```
+
+Create an instance.
+
 ##### `to_json`
 
 ```python
@@ -397,9 +603,29 @@ Identify the semantic category of a Relay execution scope.
 
 Canonical scope UUID and semantic type from the visible stack.
 
+#### Methods
+
+##### `ScopeStackEntry`
+
+```python
+def ScopeStackEntry(scope_id: str, scope_type: ScopeType) -> None
+```
+
+Create an instance.
+
 ### `ScopeStackSnapshot`
 
 Detached root-to-top entries including implicit and synthetic roots.
+
+#### Methods
+
+##### `ScopeStackSnapshot`
+
+```python
+def ScopeStackSnapshot(scopes: list[ScopeStackEntry]) -> None
+```
+
+Create an instance.
 
 ### `WorkerPlugin`
 

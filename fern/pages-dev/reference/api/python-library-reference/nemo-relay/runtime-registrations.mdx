@@ -27,9 +27,29 @@ Owner categories reported by runtime registration discovery.
 
 Owner metadata for a discovered runtime registration.
 
+#### Methods
+
+##### `RuntimeRegistrationOwner`
+
+```python
+def RuntimeRegistrationOwner(kind: RuntimeRegistrationOwnerKind, plugin_kind: str | None, component_ordinal: int | None) -> None
+```
+
+Create an instance.
+
 ### `RuntimeRegistrationIdentity`
 
 Structured identity for a global gateable registration.
+
+#### Methods
+
+##### `RuntimeRegistrationIdentity`
+
+```python
+def RuntimeRegistrationIdentity(kind: RuntimeRegistrationKind, local_name: str, effective_name: str, owner: RuntimeRegistrationOwner) -> None
+```
+
+Create an instance.
 
 ## Functions
 
