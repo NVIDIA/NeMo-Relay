@@ -255,6 +255,7 @@ response = await nemo_relay.llm.execute(
 ```ts
 import {
   OpenAIChatCodec,
+  flushSubscribers,
   registerLlmRequestIntercept,
 } from 'nemo-relay-node';
 import {
@@ -311,6 +312,7 @@ const response = await typedLlmExecute(
     responseCodec: codec,
   },
 );
+await flushSubscribers();
 ```
 </Tab>
 
