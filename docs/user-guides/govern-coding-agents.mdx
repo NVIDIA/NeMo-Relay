@@ -1,5 +1,5 @@
 ---
-title: "Deploy Relay to Govern Coding Agents Across an Organization"
+title: "Deploy Relay Across Organization Coding Agents"
 description: "Deploy managed workers, apply telemetry policy, and verify supported coding-agent activity."
 position: 6
 hide-nav-links: true
@@ -20,6 +20,12 @@ network routes require your organization's additional controls.
 The optional [NVIDIA Brev](https://brev.nvidia.com/) example runs either
 [Anthropic Claude Code](https://claude.com/product/claude-code) or
 [OpenAI Codex](https://github.com/openai/codex) under two Linux users.
+
+<Tip title="Try the complete example on Brev">
+[Run the Brev example](#run-the-brev-example) to provision a shared daemon and
+observe two independent Linux users running the same coding harness. The example
+installs its policy and routing tokens; no separate daemon setup is needed first.
+</Tip>
 
 ## Before you start
 
@@ -158,19 +164,154 @@ has mode 0600 and its newly created directory has mode 0700. Hooks, MCP registra
 and provider routing must use the same token.
 
 <Note title="Trust boundaries on a shared host">
-Bob cannot read Alice's owner-only token file under normal account permissions;
-root and processes running as Alice can. This token selects a managed identity;
+A different user cannot read an owner-only token file under normal account
+permissions; root and processes running as its owner can. This token selects a managed identity;
 it does not replace provider authentication or enterprise SSO.
 
 Other local users can query the loopback worker-status endpoint. It exposes
-operational state without a username mapping. Keep it
-on loopback for this example. Removing a token file does not revoke its existing
+operational state without a username mapping. Keep this endpoint within your trusted operational network. Removing a token file does not revoke its existing
 daemon binding: restart the daemon to clear bindings, then provision and
 reconnect approved clients. See [credential lifecycle](/daemon/configuration#replace-a-client-token).
 </Note>
 
-<Accordion title="Brev example: provision two users with one harness">
-Install Relay from a stable, pinned installer and select one harness for both users:
+## 4. Verify attribution, activity, and privacy
+
+Accept one user first, then repeat with both sessions active:
+
+| Check | Pass condition |
+| --- | --- |
+| Worker isolation | Two ready worker IDs, with processes owned separately by Alice and Bob. |
+| Task completion | Each repository contains the implementation and tests; the task contract and independent checks pass. |
+| Captured work | Supported model and tool spans are present and connected to the expected task or turn. |
+| Attribution | Record which worker/session and run time belong to each OS account; confirm the corresponding trace. |
+| Privacy | With the synthetic policy, exported task content contains `[REDACTED]` instead of the synthetic contact. |
+| Independent lifetime | Closing Alice removes her worker after shutdown; Bob can complete another captured request. |
+
+The trace's `nemo_relay.uuid` and `nemo_relay.parent_uuid` establish scope identity
+and parentage; `nemo_relay.session.instance_id` identifies the emitted session
+where supplied. These are not employee usernames. Join session evidence with
+worker lifecycle logs, process ownership, and your enrollment inventory.
+Do not infer a person from the shared `service_name` alone.
+
+## Next steps
+
+Restore metadata-only capture before introducing real data. Repeat acceptance
+after changing a harness, Relay version, provider route, or policy. Add a
+validated [pricing catalog](/configure-plugins/model-pricing) if your audit
+pipeline also needs cost attribution.
+
+## Run the Brev example
+
+Complete this section in order on a fresh host. It installs the shared service,
+managed policy, and user credentials described above. Supporting deployment
+references are optional.
+
+### 1. Provision and connect to a VM
+
+In the [Brev Console](https://brev.nvidia.com/), create a fresh instance using
+these recommended starting resources. See [Brev provisioning](https://docs.nvidia.com/brev/cli/instance-creation)
+for instance selection; available CPU types depend on your organization and provider.
+
+| Setting | Recommendation |
+| --- | --- |
+| Operating system | Ubuntu 24.04 LTS, x86_64 |
+| CPU and memory | 4 vCPUs and 16 GB RAM |
+| Storage | At least 40 GB |
+| GPU | None; inference runs on the model provider |
+| Access | Administrator account with sudo and outbound HTTPS |
+
+These are starting resources for the example, not Relay sizing requirements.
+Use a separate VM from the other examples, because system-wide plugin policy
+can affect other Relay processes on the same host.
+
+On your **local computer**, install the Brev CLI if needed. On macOS:
+
+```bash
+brew install brevdev/homebrew-brev/brev
+```
+
+For other operating systems, use the [Brev CLI installation instructions](https://docs.nvidia.com/brev/getting-started/quickstart).
+Connect to the instance you created:
+
+```bash
+brev login
+brev refresh
+brev list
+brev shell YOUR_INSTANCE
+```
+
+Run the remaining setup in **Bash on the VM host**. For the coding-agent example,
+PID 1 must be systemd; a workspace container does not satisfy that requirement.
+
+### 2. Install the runtimes and choose one harness
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git python3.12 python3.12-venv xz-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+python3.12 --version
+uv --version
+git --version
+```
+
+Install Node.js 24.13.1 system-wide so login shells can find the same runtime:
+
+```bash
+curl -fsS https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz -o /tmp/node-v24.13.1-linux-x64.tar.xz
+curl -fsS https://nodejs.org/dist/v24.13.1/SHASUMS256.txt -o /tmp/node-24.13.1-SHASUMS256.txt
+(cd /tmp && awk '$2 == "node-v24.13.1-linux-x64.tar.xz"' node-24.13.1-SHASUMS256.txt | sha256sum --check)
+sudo tar -xJf /tmp/node-v24.13.1-linux-x64.tar.xz -C /usr/local --strip-components=1
+node --version
+npm --version
+```
+
+Choose **one** harness to install for both users. Each user will authenticate
+separately after provisioning; a laptop login does not sign in a Linux account.
+
+<Tabs>
+<Tab title="Both users: Claude Code">
+
+```bash
+sudo npm install --global --prefix /usr/local @anthropic-ai/claude-code@2.1.309
+claude --version
+```
+
+</Tab>
+<Tab title="Both users: Codex">
+
+```bash
+sudo npm install --global --prefix /usr/local @openai/codex@0.164.0
+codex --version
+```
+
+</Tab>
+</Tabs>
+
+A deployment can support multiple harnesses. This example selects one to keep
+the two-user setup consistent. Provider subscriptions or API access must permit
+the selected usage; both accounts need their own authenticated session.
+
+Confirm the host before installing the daemon:
+
+```bash
+uname -m
+ps -p 1 -o comm=
+sudo -v
+python3.12 -c 'import sys, tomllib; assert sys.version_info >= (3, 12); print("Python ready")'
+for account in alice bob nemo-relay; do
+  if id "$account" >/dev/null 2>&1; then
+    echo "Existing account: $account. Use a fresh VM."
+  fi
+done
+```
+
+Expect `x86_64`, `systemd`, successful sudo/Python checks, and no existing-account
+messages. The provisioning script also refuses existing deployment files.
+
+### 3. Provision the managed deployment
+
+Install Relay and provision the selected harness:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
@@ -182,8 +323,7 @@ cd relay-coding-agents/docs/user-guides/_examples/coding-agents
 sudo bash deploy.sh "$(command -v nemo-relay)" claude "$(command -v python3.12)"
 ```
 
-Use `codex` in the deployment command for the Codex variant. Install that harness
-where both new users' login shells can find it. The provisioning script:
+Use `codex` in the deployment command if you installed Codex. The provisioning script:
 
 - Creates Alice, Bob, and the dedicated service account, with private home directories.
 - Installs Relay and the selected read-only managed bundle under `/opt/nvidia`.
@@ -191,9 +331,14 @@ where both new users' login shells can find it. The provisioning script:
 - Installs policy under `/etc/nemo-relay` and a systemd service on loopback port 47632.
 - Prepares managed Codex settings and a local plugin marketplace when Codex is selected.
 
-It refuses to overwrite existing users or deployment files. Check Python 3.12
-explicitly: with uv, install it using `uv python install 3.12` and pass the
-absolute path from `uv python find 3.12`.
+<Note title="Provisioning handles the manual deployment steps">
+Do not copy the policy or run `nemo-relay daemon token ensure --json` from the
+earlier guide steps. `deploy.sh` installs the example policy and creates a private
+routing token for each user. Provider login and harness plugin registration still
+happen inside each user's account below.
+</Note>
+
+Check the service with `sudo systemctl is-active nemo-relay.service`; expect `active`.
 
 Start Phoenix in another terminal with `uvx --from arize-phoenix phoenix serve`.
 For the synthetic redaction check only, opt into payloads before starting sessions:
@@ -204,11 +349,24 @@ sudo systemctl restart nemo-relay.service
 ```
 
 Use only the supplied synthetic task with that policy.
-</Accordion>
 
-<Accordion title="Brev example: authenticate and start each user">
-Connect with `brev shell YOUR_INSTANCE`. In separate administrator terminals,
-enter `sudo -iu alice` and `sudo -iu bob`. Inside **each** account, follow the
+### 4. Authenticate and start both users
+
+Open two local terminals and run `brev shell YOUR_INSTANCE` in each.
+From those **administrator shells**, enter the two accounts:
+
+```bash
+# First terminal
+sudo -iu alice
+```
+
+```bash
+# Second terminal
+sudo -iu bob
+```
+
+Use `exit` to return to the administrator shell before switching users. Alice
+and Bob have no example password; run sudo from the original administrator account. Inside **each** account, follow the
 same chosen harness tab. A laptop login does not sign in a different Linux user.
 
 <Tabs>
@@ -248,33 +406,22 @@ authentication option; see [Codex authentication](https://developers.openai.com/
 </Tabs>
 
 Review plugin/hook trust prompts and retain required command approvals.
-Ask the agent to read `/opt/nvidia/share/relay-user-guide/task.txt` and complete
-it in the current repository. Keep Alice's session open while starting Bob.
-From your local machine, forward Phoenix with
-`brev port-forward YOUR_INSTANCE --port 6006:6006`.
-</Accordion>
+At each harness prompt, enter:
 
-## 4. Verify attribution, activity, and privacy
+```text
+Read /opt/nvidia/share/relay-user-guide/task.txt and complete it in the current repository. Use local files and tests only.
+``` Keep Alice's session open while starting Bob.
+In another terminal on your **local computer**, forward Phoenix:
 
-Accept one user first, then repeat with both sessions active:
+```bash
+brev port-forward YOUR_INSTANCE --port 6006:6006
+```
 
-| Check | Pass condition |
-| --- | --- |
-| Worker isolation | Two ready worker IDs, with processes owned separately by Alice and Bob. |
-| Task completion | Each repository contains the implementation and tests; the task contract and independent checks pass. |
-| Captured work | Supported model and tool spans are present and connected to the expected task or turn. |
-| Attribution | Record which worker/session and run time belong to each OS account; confirm the corresponding trace. |
-| Privacy | With the synthetic policy, exported task content contains `[REDACTED]` instead of the synthetic contact. |
-| Independent lifetime | Closing Alice removes her worker after shutdown; Bob can complete another captured request. |
+Open [Phoenix](http://localhost:6006).
 
-The trace's `nemo_relay.uuid` and `nemo_relay.parent_uuid` establish scope identity
-and parentage; `nemo_relay.session.instance_id` identifies the emitted session
-where supplied. These are not employee usernames. Join session evidence with
-worker lifecycle logs, process ownership, and your enrollment inventory.
-Do not infer a person from the shared `service_name` alone.
+### 5. Verify independent activity
 
-<Accordion title="Brev example: inspect workers and task results">
-
+Run these commands from an **administrator shell** while both sessions remain open:
 ```bash
 curl -fsS http://127.0.0.1:47632/_nemo_relay/v1/workers/status
 ps -eo user,pid,args | grep -E '[n]emo-relay daemon (mcp|worker)'
@@ -293,15 +440,15 @@ find service `relay-managed-coding-agents` at each task's time. Inspect the
 A successful process exit is insufficient: noninteractive harnesses can return
 zero while policy prevents the task's commands. Check the files and run the tests.
 Validate ASCII prefixes as well as ASCII digits; Unicode lookalikes must be rejected.
-</Accordion>
 
-## Cleanup and next steps
+Expect two ready workers and successful independent task checks for both users.
+Record each account's worker/session and task time, then inspect its model/tool
+trace and synthetic redaction in Phoenix. Close Alice's session, wait for its
+worker to shut down, and ask Bob to run his tests again. Confirm Bob's worker
+remains available and the follow-up produces a new captured turn.
 
-Close both sessions, retain required evidence, and follow
-[Remove a Deployment](/daemon/operations#remove-a-deployment), or delete the
-disposable VM. Stop only the Phoenix process you started.
+### 6. Clean up
 
-Restore metadata-only capture before introducing real data. Repeat acceptance
-after changing a harness, Relay version, provider route, or policy. Add a
-validated [pricing catalog](/configure-plugins/model-pricing) if your audit
-pipeline also needs cost attribution.
+Close both harnesses and retain the evidence. Restore metadata-only capture
+before using real data. For this disposable example, stop Phoenix and delete the
+VM, or follow [Remove a Deployment](/daemon/operations#remove-a-deployment).
