@@ -122,6 +122,21 @@ describe('adaptive runtime bridge', () => {
     }
   });
 
+  it('runs overlapping lifecycle calls in call order', async () => {
+    const registerFirst = new adaptive.AdaptiveRuntime(acgRuntimeConfig('anthropic'));
+    const registered = registerFirst.register();
+    const shutDown = registerFirst.shutdown();
+    await registered;
+    await shutDown;
+    assert.throws(() => registerFirst.deregister(), { message: 'adaptive runtime already shut down' });
+
+    const shutdownFirst = new adaptive.AdaptiveRuntime(acgRuntimeConfig('anthropic'));
+    const shutDownEarly = shutdownFirst.shutdown();
+    const registeredLate = assert.rejects(shutdownFirst.register(), { message: 'adaptive runtime already shut down' });
+    await shutDownEarly;
+    await registeredLate;
+  });
+
   it('rejects invalid latency sensitivity values', () => {
     assert.throws(() => adaptive.setLatencySensitivity(0), /positive/);
   });

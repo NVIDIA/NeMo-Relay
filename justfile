@@ -1048,6 +1048,59 @@ is_true() {
             ;;
     esac
 }
+
+install_locked_napi_cross_toolchain() {
+    local target="$1"
+    local toolchains="$NEMO_RELAY_REPO_ROOT/scripts/napi-cross"
+    local host_arch=""
+    local package=""
+    local package_json=""
+    local package_version=""
+    local archive=""
+    local version=""
+    local cache=""
+    local stage=""
+    host_arch="$(node -p 'process.arch')"
+    case "${host_arch}:${target}" in
+        x64:x86_64-unknown-linux-gnu)
+            package='@napi-rs/cross-toolchain-x64-target-x86_64'
+            ;;
+        arm64:aarch64-unknown-linux-gnu)
+            package='@napi-rs/cross-toolchain-arm64-target-aarch64'
+            ;;
+        *)
+            echo "Error: --use-napi-cross on ${host_arch} for ${target} has no locked toolchain package" >&2
+            exit 1
+            ;;
+    esac
+    npm ci --prefix "$toolchains" --ignore-scripts --no-audit --no-fund
+    package_json="$(node -p "require.resolve(process.argv[1] + '/package.json', { paths: [process.argv[2]] })" "$package" "$toolchains")"
+    package_version="$(node -p "require(process.argv[1]).version" "$package_json")"
+    version="$(node -p "require('@napi-rs/cross-toolchain/package.json').version")"
+    if [[ "$package_version" != "$version" ]]; then
+        echo "Error: ${package}@${package_version} in scripts/napi-cross does not match @napi-rs/cross-toolchain@${version} required by @napi-rs/cli; pin both to one version" >&2
+        exit 1
+    fi
+    cache="${HOME}/.napi-rs/cross-toolchain/${version}/${target}"
+    if [[ -f "${cache}/package.json" ]]; then
+        return 0
+    fi
+    archive="$(node -p "require(require.resolve(process.argv[1], { paths: [process.argv[2]] })).toolchainPath" "$package" "$toolchains")"
+    mkdir -p "$(dirname "$cache")"
+    stage="$(mktemp -d "$(dirname "$cache")/.${target}.XXXXXX")"
+    if ! tar -xJf "$archive" -C "$stage"; then
+        rm -rf "$stage"
+        echo "Error: failed to extract ${archive}" >&2
+        exit 1
+    fi
+    if [[ ! -f "${stage}/package.json" ]]; then
+        rm -rf "$stage"
+        echo "Error: ${package} did not contain a toolchain package.json" >&2
+        exit 1
+    fi
+    rm -rf "$cache"
+    mv "$stage" "$cache"
+}
 '''
 
 # validate quickstart metadata, referenced files, and checker tests (no guide execution)
@@ -2057,7 +2110,6 @@ package-node:
     {{ bash_helpers }}
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
-    linux_glibc_version="{{ linux_glibc_version }}"
     node_platform="{{ node_platform }}"
     node_target="{{ node_target }}"
     node_build_strategy="{{ node_build_strategy }}"
@@ -2088,31 +2140,40 @@ package-node:
         dev) build_args=(build-debug --) ;;
         *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
     esac
-    if [[ -n "$node_target" ]]; then
-        build_args+=(--target "$node_target")
-    fi
-    if [[ "$node_target" == *-unknown-linux-musl ]]; then
-        # Native plugins must share the Node host's dynamically linked musl libc.
-        export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static"
-    fi
-    if [[ "$node_build_strategy" == "zig" ]]; then
-        # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
-        # Zig version pin aligned with that lockfile version.
-        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
-        activate_project_venv
-        prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(--zig)
-        if [[ "$node_target" == *-unknown-linux-gnu ]]; then
-            build_args+=(--zig-abi-suffix "$linux_glibc_version")
-        fi
-    elif is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
-        # Preserve the local CI-style build behavior when no cross target is set.
-        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
-        activate_project_venv
-        prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(--zig --zig-abi-suffix "$linux_glibc_version")
-    fi
+    case "$node_build_strategy" in
+        native)
+            if [[ -n "$node_target" ]]; then
+                build_args+=(--target "$node_target")
+            fi
+            ;;
+        napi-cross)
+            # Links against glibc 2.17.
+            if [[ "$node_target" != *-unknown-linux-gnu ]]; then
+                echo "Error: node_build_strategy=napi-cross needs a *-unknown-linux-gnu node_target, got '$node_target'" >&2
+                exit 1
+            fi
+            build_args+=(--use-napi-cross --target "$node_target")
+            ;;
+        zig)
+            # Zig is provided by the uv.lock `ziglang` entry.
+            if [[ "$node_target" != *-unknown-linux-musl ]]; then
+                echo "Error: node_build_strategy=zig needs a *-unknown-linux-musl node_target, got '$node_target'" >&2
+                exit 1
+            fi
+            uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
+            activate_project_venv
+            prepend_ziglang_to_path "$(project_python_executable)"
+            build_args+=(--cross-compile --target "$node_target")
+            ;;
+        *)
+            echo "Error: unsupported node_build_strategy '$node_build_strategy' (native, napi-cross, zig)" >&2
+            exit 1
+            ;;
+    esac
     npm install --workspace=nemo-relay-node --ignore-scripts
+    if [[ "$node_build_strategy" == napi-cross ]]; then
+        install_locked_napi_cross_toolchain "$node_target"
+    fi
     npm run --workspace=nemo-relay-node "${build_args[@]}"
     if [[ -z "$node_platform" ]]; then
         case "$(uname -s)-$(uname -m)" in

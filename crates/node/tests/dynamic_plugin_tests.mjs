@@ -458,7 +458,8 @@ enabled = true
       ]);
       disposedActivation = activation;
 
-      assert.equal(activation[Symbol.asyncDispose], lib.PluginHostActivation.prototype.close);
+      assert.ok(Object.getOwnPropertySymbols(lib.PluginHostActivation.prototype).includes(Symbol.asyncDispose));
+      assert.equal(typeof activation[Symbol.asyncDispose], 'function');
       assert.equal('[Symbol.asyncDispose]' in lib.PluginHostActivation.prototype, false);
       const toolResult = await executeTool('node_native_async_dispose_tool');
       assert.equal(toolResult.result.native_plugin_tool_execution, true);
