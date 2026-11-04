@@ -594,6 +594,9 @@ fn system_instructions_json(instructions: &MessageContent) -> Option<String> {
 }
 
 fn input_message(message: &Message) -> Json {
+    if let Some(portable) = crate::codec::openai_responses::custom_tool_message(message) {
+        return input_message(&portable);
+    }
     let (role, name, mut parts) = match message {
         Message::System { content, name } => ("system", name.as_ref(), content_parts(content)),
         Message::Developer { content, name } => {

@@ -7631,3 +7631,19 @@ fn raw_provider_turn_detection_respects_assistant_and_system_roles() {
     assert_raw_provider_projection(&chat, Some("unchanged"));
     assert_eq!(raw_provider_user_message(&chat), None);
 }
+
+#[test]
+fn atif_custom_calls_keep_invocation_ids_and_do_not_parse_free_form_input() {
+    let input = "{\"literal\":\"text\"}";
+    let calls = extract_tool_calls(&json!({"output": [
+        {"type": "function_call", "id": "fc-item", "call_id": "call-function", "name": "lookup", "arguments": "{}"},
+        {"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "arguments": "unrelated", "function": {"name": "unrelated", "arguments": "unrelated"}},
+        {"type": "custom_tool_call", "id": "not-a-call-id", "name": "exec", "input": "text(1)"}
+    ]})).unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].tool_call_id, "call-function");
+    assert_eq!(calls[0].arguments, json!({}));
+    assert_eq!(calls[1].tool_call_id, "call-wrapper");
+    assert_eq!(calls[1].function_name, "exec");
+    assert_eq!(calls[1].arguments, json!(input));
+}

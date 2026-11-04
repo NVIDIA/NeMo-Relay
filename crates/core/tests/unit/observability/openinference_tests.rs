@@ -5318,3 +5318,42 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
     assert!(!attributes.contains_key("llm.token_count.total"));
     assert!(!attributes.contains_key("llm.token_count.prompt_details.cache_read"));
 }
+
+#[test]
+fn openinference_custom_call_history_preserves_call_and_result_ids() {
+    use crate::codec::openai_responses::OpenAIResponsesCodec;
+    use crate::codec::traits::LlmCodec;
+    let input = "await tools.exec_command({cmd: 'pwd'})";
+    let request = OpenAIResponsesCodec.decode(&crate::api::llm::LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"input": [
+            {"type": "custom_tool_call", "call_id": "call-wrapper", "name": "exec", "input": input},
+            {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"}
+        ]}),
+    }).unwrap();
+    let mut attrs = Vec::new();
+    push_annotated_input_messages(&mut attrs, &request.messages, 0);
+    let attrs = attrs
+        .into_iter()
+        .map(|a| (a.key.to_string(), a.value.to_string()))
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(attrs["llm.input_messages.0.message.role"], "assistant");
+    assert_eq!(
+        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.id"],
+        "call-wrapper"
+    );
+    assert_eq!(
+        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.name"],
+        "exec"
+    );
+    assert_eq!(
+        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments"],
+        serde_json::to_string(&input).unwrap()
+    );
+    assert_eq!(attrs["llm.input_messages.1.message.role"], "tool");
+    assert_eq!(
+        attrs["llm.input_messages.1.message.tool_call_id"],
+        "call-wrapper"
+    );
+    assert_eq!(attrs["llm.input_messages.1.message.content"], "done");
+}

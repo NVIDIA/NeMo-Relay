@@ -8085,3 +8085,60 @@ fn gen_ai_projection_reads_cache_tokens_by_the_declared_api_shape() {
         );
     }
 }
+
+#[test]
+fn gen_ai_custom_call_messages_preserve_wrapper_ids_and_free_form_input() {
+    use crate::codec::openai_responses::OpenAIResponsesCodec;
+    use crate::codec::traits::{LlmCodec, LlmResponseCodec};
+    let input = "{\"literal\":\"free form, not parsed arguments\"}";
+    let call = json!({"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input});
+    let codec = OpenAIResponsesCodec;
+    let request = codec.decode(&crate::api::llm::LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"input": [call.clone(), {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"}]}),
+    }).unwrap();
+    let response = codec
+        .decode_response(&json!({"status": "completed", "output": [call]}))
+        .unwrap();
+    let start = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "custom",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    );
+    let end = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "custom",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(response))
+                .build(),
+        ),
+    );
+    let attrs = attr_map(&crate::observability::otel_genai::start_attributes(&start));
+    let messages: Json = serde_json::from_str(&attrs["gen_ai.input.messages"]).unwrap();
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "assistant", "parts": [{"type": "tool_call", "id": "call-wrapper", "name": "exec", "arguments": input}]},
+            {"role": "tool", "parts": [{"type": "tool_call_response", "id": "call-wrapper", "response": "done"}]}
+        ])
+    );
+    let attrs = attr_map(&crate::observability::otel_genai::end_attributes(&end));
+    let messages: Json = serde_json::from_str(&attrs["gen_ai.output.messages"]).unwrap();
+    assert_eq!(
+        messages[0]["parts"],
+        json!([{ "type": "tool_call", "id": "call-wrapper", "name": "exec", "arguments": input }])
+    );
+}

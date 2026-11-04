@@ -1297,7 +1297,7 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
 
 /// Try to promote provider tool calls from a raw LLM response into `AtifToolCall` entries.
 ///
-/// Supports generic/OpenAI Chat `tool_calls`, OpenAI Responses `function_call`
+/// Supports generic/OpenAI Chat `tool_calls`, OpenAI Responses function and custom call
 /// output items, and Anthropic `tool_use` content blocks. Provider-specific ID
 /// semantics are preserved so later observations can correlate to the call.
 ///
@@ -1312,7 +1312,7 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
             tool_calls.iter().collect::<Vec<_>>(),
             ToolCallOrigin::Generic,
         )
-    } else if let Some(function_calls) = openai_responses_function_call_items(output) {
+    } else if let Some(function_calls) = openai_responses_tool_call_items(output) {
         (function_calls, ToolCallOrigin::OpenAiResponses)
     } else {
         (
@@ -1326,7 +1326,11 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         let mut id = tool_call_id_for_origin(tc_obj, origin)
             .unwrap_or("")
             .to_string();
-        let func = tc_obj.get("function").and_then(Json::as_object);
+        let is_custom = matches!(origin, ToolCallOrigin::OpenAiResponses)
+            && tc_obj.get("type").and_then(Json::as_str) == Some("custom_tool_call");
+        let func = (!is_custom)
+            .then(|| tc_obj.get("function").and_then(Json::as_object))
+            .flatten();
         let name = func
             .and_then(|f| f.get("name"))
             .or_else(|| tc_obj.get("name"))
@@ -1344,7 +1348,11 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
             .or_else(|| tc_obj.get("arguments"))
             .or_else(|| tc_obj.get("args"))
             .or_else(|| tc_obj.get("input"));
-        let arguments = normalize_tool_arguments(raw_arguments);
+        let arguments = if is_custom {
+            tc_obj.get("input").cloned().unwrap_or(Json::Null)
+        } else {
+            normalize_tool_arguments(raw_arguments)
+        };
         // Skip entries with no id and no name — they are not meaningful.
         if id.is_empty() && name.is_empty() {
             continue;
@@ -1518,14 +1526,17 @@ fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
         .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
 }
 
-fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
+fn openai_responses_tool_call_items(output: &Json) -> Option<Vec<&Json>> {
     let items = output
         .as_object()
         .and_then(|object| object.get("output"))
         .and_then(Json::as_array)?;
     let function_call_items = items
         .iter()
-        .filter(|item| item.get("type").and_then(Json::as_str) == Some("function_call"))
+        .filter(|item| {
+            item.get("type").and_then(Json::as_str) == Some("function_call")
+                || crate::codec::openai_responses::custom_tool_call_fields(item).is_some()
+        })
         .collect::<Vec<_>>();
     (!function_call_items.is_empty()).then_some(function_call_items)
 }

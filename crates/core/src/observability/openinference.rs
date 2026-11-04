@@ -315,6 +315,8 @@ fn push_annotated_input_messages(
 ) {
     let mut next_index = start_index;
     for message in messages {
+        let portable = crate::codec::openai_responses::custom_tool_message(message);
+        let message = portable.as_ref().unwrap_or(message);
         if let Message::User { content, .. } = message
             && let Some(parts) = exclusive_tool_result_parts(content)
         {
@@ -376,6 +378,26 @@ fn push_annotated_input_messages(
                 None,
             ),
         };
+        if let Message::ToolCallItem {
+            call_id,
+            name,
+            arguments,
+            ..
+        } = message
+        {
+            let prefix = format!("llm.input_messages.{index}.message.tool_calls.0.tool_call");
+            attributes.push(KeyValue::new(format!("{prefix}.id"), call_id.clone()));
+            attributes.push(KeyValue::new(
+                format!("{prefix}.function.name"),
+                name.clone(),
+            ));
+            if let Some(arguments) = to_json_string(arguments) {
+                attributes.push(KeyValue::new(
+                    format!("{prefix}.function.arguments"),
+                    arguments,
+                ));
+            }
+        }
         push_message_role(attributes, "llm.input_messages", index, role);
         if let Some(content) = content {
             push_message_text_value(attributes, "llm.input_messages", index, content);
