@@ -307,6 +307,17 @@ the `subagent_end_without_start` mark. Neither mark opens a new turn, including
 when the stop arrives after the turn has closed. To find all unmatched Claude
 stops in OpenTelemetry logs, include both mark names in `nemo_relay.mark.name`.
 
+## Notifications
+
+Claude Code `Notification` hooks produce `notification` marks without opening a
+turn. Notifications within an active turn or an explicitly correlated subagent
+keep that parent. Between turns, a notification does not create a new turn just
+to hold the mark.
+
+ATOF retains these marks, and the `full` and `openinference` projections can
+export them. The `gen_ai` projection omits marks. A notification mark does not
+establish the purpose of a separate model call.
+
 ## Hook Limitations
 
 Claude Code hooks are available only when Claude Code loads the persistent NeMo
