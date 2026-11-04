@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
@@ -659,6 +659,7 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
         cleanup_node_environment();
         return Err(error);
     }
+    crate::promise_call::mark_env_exiting_on_process_exit(&env)?;
     let activation: JsFunction = exports.get_named_property("PluginHostActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;
@@ -1126,79 +1127,68 @@ struct ScopedJsonCall {
 fn scoped_json_callback_tsfn_from_wrapper(
     env: &Env,
     callback: JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedJsonCall>| {
-            let value = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.value)?,
-                )
-            };
-            let scope_stack = ScopeStack {
-                inner: ctx.value.context.scope_stack,
-                publication_buffer: ctx.value.context.publication_buffer,
-            }
-            .into_instance(ctx.env)?;
-            Ok(vec![
-                value,
-                unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
-                match ctx.value.context.propagation_parent_uuid {
-                    Some(parent_uuid) => ctx.env.create_string(&parent_uuid)?.into_unknown(),
-                    None => ctx.env.get_undefined()?.into_unknown(),
+) -> napi::Result<callable::ReplyTsfn<ScopedJsonCall>> {
+    callable::reply_tsfn(env, &callback, |env, call: ScopedJsonCall| {
+        let value = callable::json_to_js_unknown(env, call.value)?;
+        let scope_stack = ScopeStack {
+            inner: call.context.scope_stack,
+            publication_buffer: call.context.publication_buffer,
+        }
+        .into_instance(*env)?;
+        Ok(vec![
+            value,
+            js_unknown_from_raw(env, &scope_stack),
+            match call.context.propagation_parent_uuid {
+                Some(parent_uuid) => env.create_string(&parent_uuid)?.into_unknown(),
+                None => env.get_undefined()?.into_unknown(),
+            },
+            match call.context.propagation_context {
+                // SAFETY: `to_napi_value` created the raw value in `env`.
+                Some(context) => unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        env.raw(),
+                        PropagationContext::to_napi_value(
+                            env.raw(),
+                            propagation_context_to_napi(context),
+                        )?,
+                    )
                 },
-                match ctx.value.context.propagation_context {
-                    Some(context) => unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            ctx.env.raw(),
-                            PropagationContext::to_napi_value(
-                                ctx.env.raw(),
-                                propagation_context_to_napi(context),
-                            )?,
-                        )
-                    },
-                    None => ctx.env.get_undefined()?.into_unknown(),
-                },
-            ])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
+                None => env.get_undefined()?.into_unknown(),
+            },
+        ])
+    })
 }
 
 fn scoped_json_callback_tsfn(
     env: &Env,
     func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+) -> napi::Result<callable::ReplyTsfn<ScopedJsonCall>> {
     scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
 }
 
-fn scoped_tool_execution_fn(
-    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
-) -> ToolExecutionNextFn {
+fn scoped_tool_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> ToolExecutionNextFn {
     let func = Arc::new(func);
     Arc::new(move |args: Json| {
         let func = func.clone();
         let context = ScopedCallbackContext::capture();
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
+            callable::call_with_reply(
+                &func,
                 ScopedJsonCall {
                     value: args,
                     context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
+                move |value| {
+                    let _ = tx.send(value);
                 },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS tool execution callback: {status:?}",
-                )));
-            }
+            )
+            .map_err(|refusal| {
+                FlowError::Internal(format!(
+                    "failed to queue JS tool execution callback: {refusal}"
+                ))
+            })?;
             let result = rx
                 .await
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
@@ -1210,9 +1200,7 @@ fn scoped_tool_execution_fn(
     })
 }
 
-fn scoped_llm_execution_fn(
-    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
-) -> LlmExecutionNextFn {
+fn scoped_llm_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> LlmExecutionNextFn {
     let func = Arc::new(func);
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
@@ -1220,118 +1208,28 @@ fn scoped_llm_execution_fn(
         let request = serde_json::to_value(request).unwrap_or(Json::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
+            callable::call_with_reply(
+                &func,
                 ScopedJsonCall {
                     value: request,
                     context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
+                move |value| {
+                    let _ = tx.send(value);
                 },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS LLM execution callback: {status:?}",
-                )));
-            }
+            )
+            .map_err(|refusal| {
+                FlowError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {refusal}"
+                ))
+            })?;
             let result = rx
                 .await
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             callable::unwrap_middleware_result(result, "JS LLM execution callback failed")
         })
     })
-}
-
-fn middleware_tool_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(String, Json)>| {
-            let name = ctx.env.create_string_from_std(ctx.value.0)?;
-            let args = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.1)?,
-                )
-            };
-            Ok(vec![js_unknown_from_raw(&ctx.env, &name), args])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_json_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_llm_sanitize_request_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<
-    ThreadsafeFunction<(Json, callable::JsLlmSanitizeRequestContext), ErrorStrategy::Fatal>,
-> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(
-            Json,
-            callable::JsLlmSanitizeRequestContext,
-        )>| {
-            let first = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.0)?,
-                )
-            };
-            let context = callable::js_llm_sanitize_request_context_to_napi(&ctx.env, ctx.value.1)?;
-            Ok(vec![first, context])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_llm_sanitize_response_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<
-    ThreadsafeFunction<(Json, callable::JsLlmSanitizeResponseContext), ErrorStrategy::Fatal>,
-> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(
-            Json,
-            callable::JsLlmSanitizeResponseContext,
-        )>| {
-            let first = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.0)?,
-                )
-            };
-            let context =
-                callable::js_llm_sanitize_response_context_to_napi(&ctx.env, ctx.value.1)?;
-            Ok(vec![first, context])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2273,7 +2171,7 @@ fn decode_conditional_gate_result(value: Json) -> napi::Result<Option<String>> {
 
 struct NodeConditionalMiddlewareGuardrail {
     direct: PersistentJsFunction,
-    thread_safe: ThreadsafeFunction<(Vec<String>, String), ErrorStrategy::Fatal>,
+    thread_safe: callable::ReplyTsfn<(Vec<String>, String)>,
     registration_thread: std::thread::ThreadId,
 }
 
@@ -2303,19 +2201,19 @@ impl NodeConditionalMiddlewareGuardrail {
             );
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let status = self.thread_safe.call_with_return_value(
+        callable::call_with_reply(
+            &self.thread_safe,
             (kinds, registration_name),
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: Json| {
+            move |value| {
                 let _ = tx.send(decode_conditional_gate_result(value));
-                Ok(())
             },
-        );
-        if status != napi::Status::Ok {
-            return Err(napi::Error::from_reason(format!(
-                "conditional gate callback scheduling failed: {status:?}"
-            )));
-        }
+        )
+        .map_err(|refusal| {
+            napi::Error::from_reason(format!(
+                "conditional gate callback scheduling failed: {refusal}"
+            ))
+        })?;
         recv_conditional_gate_result(rx, CONDITIONAL_GATE_CALLBACK_TIMEOUT)
     }
 }
@@ -2327,23 +2225,21 @@ fn node_conditional_middleware_guardrail(
     let guardrail = callable::safe_conditional_gate_callback(env, guardrail)?;
     let direct = PersistentJsFunction::new(env, &guardrail)?;
     let registration_thread = std::thread::current().id();
-    let mut thread_safe = guardrail.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Vec<String>, String)>| {
+    let thread_safe = callable::reply_tsfn(
+        env,
+        &guardrail,
+        |env, (kinds, registration_name): (Vec<String>, String)| {
+            // SAFETY: `to_napi_value` created the raw array in `env`.
             let kinds = unsafe {
                 JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Vec::<String>::to_napi_value(ctx.env.raw(), ctx.value.0)?,
+                    env.raw(),
+                    Vec::<String>::to_napi_value(env.raw(), kinds)?,
                 )
             };
-            let registration_name = ctx.env.create_string_from_std(ctx.value.1)?;
-            Ok(vec![
-                kinds,
-                js_unknown_from_raw(&ctx.env, &registration_name),
-            ])
+            let registration_name = env.create_string_from_std(registration_name)?;
+            Ok(vec![kinds, js_unknown_from_raw(env, &registration_name)])
         },
     )?;
-    thread_safe.unref(env)?;
     Ok(Arc::new(NodeConditionalMiddlewareGuardrail {
         direct,
         thread_safe,
@@ -2416,7 +2312,7 @@ impl Drop for PersistentJsFunction {
 
 struct NodePluginValidateCallback {
     direct: PersistentJsFunction,
-    thread_safe: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    thread_safe: callable::ReplyTsfn<Json>,
     registration_thread: std::thread::ThreadId,
 }
 
@@ -2427,24 +2323,22 @@ impl NodePluginValidateCallback {
         }
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let status = self.thread_safe.call_with_return_value(
+        callable::call_with_reply(
+            &self.thread_safe,
             plugin_config,
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: Option<Json>| {
-                let result = callable::unwrap_middleware_result(
-                    callback_json(value),
-                    "JS plugin validate callback failed",
-                )
-                .map_err(|error| napi::Error::from_reason(error.to_string()));
+            move |value| {
+                let result =
+                    callable::unwrap_middleware_result(value, "JS plugin validate callback failed")
+                        .map_err(|error| napi::Error::from_reason(error.to_string()));
                 let _ = tx.send(result);
-                Ok(())
             },
-        );
-        if status != napi::Status::Ok {
-            return Err(napi::Error::from_reason(format!(
-                "failed to queue JS plugin validate callback: {status:?}"
-            )));
-        }
+        )
+        .map_err(|refusal| {
+            napi::Error::from_reason(format!(
+                "failed to queue JS plugin validate callback: {refusal}"
+            ))
+        })?;
         rx.recv()
             .map_err(|_| napi::Error::from_reason("JS plugin validate completion channel closed"))?
     }
@@ -2453,7 +2347,7 @@ impl NodePluginValidateCallback {
 struct NodePlugin {
     plugin_kind: String,
     validate: Option<NodePluginValidateCallback>,
-    register: ThreadsafeFunction<NodePluginRegisterCall, ErrorStrategy::Fatal>,
+    register: callable::ReplyTsfn<NodePluginRegisterCall>,
 }
 
 impl Plugin for NodePlugin {
@@ -2506,23 +2400,23 @@ impl Plugin for NodePlugin {
                 registrations: registrations.clone(),
             };
             let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
-            let status = self.register.call_with_return_value(
+            let queued = callable::call_with_reply(
+                &self.register,
                 payload,
                 ThreadsafeFunctionCallMode::NonBlocking,
-                move |value: Json| {
+                move |value| {
                     let result = callable::unwrap_middleware_result(
-                        callback_json(Some(value)),
+                        value,
                         "JS plugin register callback failed",
                     )
                     .map(|_| ())
                     .map_err(|error| error.to_string());
                     let _ = tx.send(result);
-                    Ok(())
                 },
             );
-            let result = if status != napi::Status::Ok {
+            let result = if let Err(refusal) = queued {
                 Err(PluginError::RegistrationFailed(format!(
-                    "failed to queue JS plugin register callback: {status:?}"
+                    "failed to queue JS plugin register callback: {refusal}"
                 )))
             } else {
                 rx.recv()
@@ -2861,52 +2755,20 @@ pub fn clear_last_callback_error() {
     clear_recorded_callback_error();
 }
 
-/// Internal test helper: invoke a closed JS tool callback wrapper and return the fallback value.
-#[napi(js_name = "__testClosedToolCallback")]
-pub async fn test_closed_tool_callback(
-    callback: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-    name: String,
-    args: Json,
-) -> Result<Json> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_tool_fn(callback);
-    let fallback = args.clone();
-    match wrapped(name, args).await {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            record_callback_error(error.to_string());
-            Ok(fallback)
-        }
+/// Internal test helper: queue a call on a closed reply callback and return the refusal.
+#[napi(js_name = "__testClosedReplyCallback")]
+pub fn test_closed_reply_callback(env: Env, callback: JsFunction, value: Json) -> Result<String> {
+    let wrapper = callback_factory::wrap_execution_callback(&env, &callback)?;
+    let reply = callable::reply_tsfn(&env, &wrapper, |env, value: Json| {
+        Ok(vec![callable::json_to_js_unknown(env, value)?])
+    })?;
+    reply.clone().abort()?;
+    match callable::call_with_reply(&reply, value, ThreadsafeFunctionCallMode::Blocking, |_| {}) {
+        Ok(()) => Err(napi::Error::from_reason(
+            "closed reply callback accepted a call",
+        )),
+        Err(refusal) => Ok(refusal.to_string()),
     }
-}
-
-/// Internal test helper: model a closed JS LLM request sanitizer.
-#[napi(js_name = "__testClosedLlmSanitizeRequestCallback")]
-pub fn test_closed_llm_sanitize_request_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    request: Json,
-) -> Result<Option<Json>> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let llm_request: LlmRequest = serde_json::from_value(request)
-        .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    drop(llm_request);
-    record_callback_error("nemo_relay: failed to queue JS LLM sanitize request callback");
-    Ok(None)
-}
-
-/// Internal test helper: model a closed JS LLM response sanitizer.
-#[napi(js_name = "__testClosedLlmResponseCallback")]
-pub fn test_closed_llm_response_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    response: Json,
-) -> Option<Json> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    drop(response);
-    record_callback_error("nemo_relay: failed to queue JS LLM sanitize response callback");
-    None
 }
 
 /// Resolve a stream callback future whose queue step already failed.
@@ -4222,7 +4084,7 @@ napi_event_guardrail_api!(
 macro_rules! napi_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4264,8 +4126,7 @@ napi_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_request_guardrail,
     core_registry_api::register_tool_sanitize_request_guardrail,
-    core_registry_api::deregister_tool_sanitize_request_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::deregister_tool_sanitize_request_guardrail
 );
 
 napi_guardrail_tool_api!(
@@ -4281,8 +4142,7 @@ napi_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_response_guardrail,
     core_registry_api::register_tool_sanitize_response_guardrail,
-    core_registry_api::deregister_tool_sanitize_response_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::deregister_tool_sanitize_response_guardrail
 );
 
 /// Register a guardrail that conditionally gates tool execution.
@@ -4328,7 +4188,7 @@ pub fn deregister_tool_conditional_execution_guardrail(name: String) -> Result<b
 macro_rules! napi_intercept_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4375,8 +4235,7 @@ napi_intercept_tool_api!(
     /// Returns `true` if an intercept with that name was found and removed.
     deregister_tool_request_intercept,
     core_registry_api::register_tool_request_intercept,
-    core_registry_api::deregister_tool_request_intercept,
-    callable::wrap_js_tool_request_intercept_fn
+    core_registry_api::deregister_tool_request_intercept
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
@@ -4809,7 +4668,7 @@ napi_scope_event_guardrail_api!(
 macro_rules! napi_scope_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4858,8 +4717,7 @@ napi_scope_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_request_guardrail,
     core_registry_api::scope_register_tool_sanitize_request_guardrail,
-    core_registry_api::scope_deregister_tool_sanitize_request_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::scope_deregister_tool_sanitize_request_guardrail
 );
 
 napi_scope_guardrail_tool_api!(
@@ -4876,8 +4734,7 @@ napi_scope_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_response_guardrail,
     core_registry_api::scope_register_tool_sanitize_response_guardrail,
-    core_registry_api::scope_deregister_tool_sanitize_response_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::scope_deregister_tool_sanitize_response_guardrail
 );
 
 /// Register a scope-local guardrail that conditionally gates tool execution.
@@ -4932,7 +4789,7 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 macro_rules! napi_scope_intercept_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4985,8 +4842,7 @@ napi_scope_intercept_tool_api!(
     /// Returns `true` if an intercept with that name was found and removed from the specified scope.
     scope_deregister_tool_request_intercept,
     core_registry_api::scope_register_tool_request_intercept,
-    core_registry_api::scope_deregister_tool_request_intercept,
-    callable::wrap_js_tool_request_intercept_fn
+    core_registry_api::scope_deregister_tool_request_intercept
 );
 
 /// Register a scope-local tool execution intercept following the middleware chain pattern.
@@ -6466,11 +6322,9 @@ pub fn register_plugin(
         Some(func) => {
             let direct = PersistentJsFunction::new(&env, &func)?;
             let callback = callable::safe_middleware_callback(&env, &func)?;
-            let mut thread_safe = callback.create_threadsafe_function(
-                0,
-                |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-            )?;
-            thread_safe.unref(&env)?;
+            let thread_safe = callable::reply_tsfn(&env, &callback, |env, plugin_config: Json| {
+                Ok(vec![callable::json_to_js_unknown(env, plugin_config)?])
+            })?;
             Some(NodePluginValidateCallback {
                 direct,
                 thread_safe,
@@ -6480,29 +6334,16 @@ pub fn register_plugin(
         None => None,
     };
     let register = callable::safe_middleware_callback(&env, &register)?;
-    let mut register_tsfn = register
-        .create_threadsafe_function::<NodePluginRegisterCall, JsUnknown, _, ErrorStrategy::Fatal>(
-            0,
-            move |ctx: napi::threadsafe_function::ThreadSafeCallContext<NodePluginRegisterCall>| {
-                let plugin_config = unsafe {
-                    JsUnknown::from_raw_unchecked(
-                        ctx.env.raw(),
-                        Json::to_napi_value(ctx.env.raw(), ctx.value.plugin_config)?,
-                    )
-                };
-                let plugin_context = build_plugin_context(
-                    &ctx.env,
-                    ctx.value.namespace_prefix,
-                    ctx.value.registrations,
-                )?;
-                Ok(vec![
-                    plugin_config,
-                    js_unknown_from_raw(&ctx.env, &plugin_context),
-                ])
-            },
-        )?;
-    register_tsfn.unref(&env)?;
-
+    let register_tsfn =
+        callable::reply_tsfn(&env, &register, |env, call: NodePluginRegisterCall| {
+            let plugin_config = callable::json_to_js_unknown(env, call.plugin_config)?;
+            let plugin_context =
+                build_plugin_context(env, call.namespace_prefix, call.registrations)?;
+            Ok(vec![
+                plugin_config,
+                js_unknown_from_raw(env, &plugin_context),
+            ])
+        })?;
     register_plugin_impl(Arc::new(NodePlugin {
         plugin_kind,
         validate: validate_callback,
