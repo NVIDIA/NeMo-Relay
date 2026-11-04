@@ -363,6 +363,22 @@ fn helper_provider_client(http1_only: bool) -> Result<PooledClient, TransportErr
     Ok(client)
 }
 
+/// Plaintext providers need neither TLS roots nor automatic request replay.
+fn plaintext_provider_client() -> Client<HttpConnector, RelayBody> {
+    static CLIENT: OnceLock<Client<HttpConnector, RelayBody>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            let mut connector = HttpConnector::new();
+            connector.enforce_http(true);
+            connector.set_nodelay(true);
+            connector.set_connect_timeout(Some(CONNECT_TIMEOUT));
+            let mut builder = pooled_builder();
+            builder.retry_canceled_requests(false);
+            builder.build(connector)
+        })
+        .clone()
+}
+
 /// Builds a pooled cleartext HTTP/1.1 client with persistent connections and `TCP_NODELAY`.
 #[cfg(test)]
 pub(crate) fn pooled_http_client() -> PooledHttpClient {
@@ -441,9 +457,9 @@ where
         && reqwest::Url::parse(&request.uri().to_string())
             .is_ok_and(|url| crate::configuration::remote_http(&url))
     {
-        // Hyper neither follows redirects nor consults proxy environment variables. Reuse the
-        // non-retrying pool so plaintext model content is never replayed automatically.
-        helper_provider_client(false)?.request(request)
+        // Hyper neither follows redirects nor consults proxy environment variables. The dedicated
+        // pool avoids TLS root loading and never automatically replays plaintext model content.
+        plaintext_provider_client().request(request)
     } else {
         configured.request(request)
     })

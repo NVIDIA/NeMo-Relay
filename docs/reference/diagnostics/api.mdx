@@ -251,6 +251,15 @@ The HTTP error body has this form:
 ```
 
 An `unsupported_schema` response also includes `supported_schema_version`.
+Rust HTTP integrations can share `DiagnosticHttpError` and `DiagnosticHttpReason`
+from `nemo_relay_types::diagnostics`. These types define the error envelope and
+numeric HTTP status mapping without depending on an HTTP framework. They are
+separate from the snapshot-only `DiagnosticReadReason` contract. Consumers must
+check the reason as well as the status: different failures share a status.
+`DiagnosticHttpError::from_response` accepts at most 1024 bytes, recognizes known
+reasons whose status agrees, and ignores additional fields. Unknown reasons,
+malformed bodies, and status mismatches require a conservative fallback.
+
 Startup can fail with `invalid_limits` or `allocation_failed`. Binding lifecycle
 errors such as `not_initialized`, `configuration_conflict`, and
 `fork_requires_exec` are separate from snapshot failures.

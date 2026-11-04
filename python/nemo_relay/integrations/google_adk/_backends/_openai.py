@@ -24,10 +24,10 @@ from nemo_relay.integrations.google_adk._backends._responses import RESPONSES_CO
 from nemo_relay.integrations.google_adk._serialization import (
     RECORDED_ID_KEY,
 )
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Mapping
+    from collections.abc import AsyncIterator, Awaitable
 
     from google.adk.integrations.openai import OpenAILlm, OpenAIResponsesLlm
     from openai import AsyncOpenAI, AsyncStream
@@ -46,10 +46,10 @@ def openai_chat_backend(model: OpenAILlm) -> Backend:
     """Return Chat Completions backend for model's client, and swap client's completions resource."""
     client = model._openai_client
     swap_class(client.chat.completions, _completions_methods)
-    return Backend(_provider(client), CHAT_CODEC, client_headers=True)
+    return Backend(_provider(client), CHAT_CODEC, client_headers=True, model=model.model)
 
 
-def openai_responses_backend(model: OpenAIResponsesLlm) -> Backend:
+def openai_responses_backend(model: OpenAIResponsesLlm, request_model: str | None) -> Backend:
     """Return Responses backend for model's client, and swap client's responses resource.
 
     Provider: `azure` for `AzureOpenAIResponsesLlm`, otherwise client's provider.
@@ -57,7 +57,7 @@ def openai_responses_backend(model: OpenAIResponsesLlm) -> Backend:
     client = model._openai_client
     swap_class(client.responses, _responses_methods)
     provider = "azure" if isinstance(model, AzureOpenAIResponsesLlm) else _provider(client)
-    return Backend(provider, RESPONSES_CODEC, client_headers=True)
+    return Backend(provider, RESPONSES_CODEC, client_headers=True, model=request_model or model.model)
 
 
 def _provider(client: AsyncOpenAI) -> _Provider:
@@ -77,7 +77,7 @@ class _Complete(Protocol):
     def __call__(self, resource: AsyncCompletions, /, **kwargs: object) -> Awaitable[ChatCompletion | _ChatStream]: ...
 
 
-def _completions_methods(cls: type[AsyncCompletions]) -> Mapping[str, object]:
+def _completions_methods(cls: type[AsyncCompletions]) -> Methods[AsyncCompletions]:
     """Return `AsyncCompletions` methods that send attempt's request headers.
 
     Methods also record completion id, model, and usage on attempt. `LlmResponse` drops id, model, and usage cost.
@@ -114,7 +114,7 @@ class _Respond(Protocol):
     def __call__(self, resource: AsyncResponses, /, **kwargs: object) -> Awaitable[Response | _ResponsesStream]: ...
 
 
-def _responses_methods(cls: type[AsyncResponses]) -> Mapping[str, object]:
+def _responses_methods(cls: type[AsyncResponses]) -> Methods[AsyncResponses]:
     """Return `AsyncResponses` methods that send attempt's request headers.
 
     Methods also record usage on attempt. `LlmResponse` drops usage cost.

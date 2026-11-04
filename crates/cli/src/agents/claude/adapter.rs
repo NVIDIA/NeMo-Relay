@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::agents::shared::adapters::{
     AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
 };
-use crate::events::AgentKind;
+use crate::events::{AgentKind, NormalizedEvent};
 
 /// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
 ///
@@ -44,6 +44,23 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             compaction: &[],
         },
     );
+    let events = events
+        .into_iter()
+        .map(|event| match event {
+            NormalizedEvent::HookMark(mut event)
+                if event.event_name.eq_ignore_ascii_case("StopFailure") =>
+            {
+                event.payload["status"] = json!("error");
+                event.metadata["otel.status_code"] = json!("ERROR");
+                if let Some(error) = event.payload.get("error").and_then(Value::as_str) {
+                    event.metadata["error.type"] = json!(error);
+                    event.metadata["otel.status_description"] = json!(error);
+                }
+                NormalizedEvent::TurnEnded(event)
+            }
+            event => event,
+        })
+        .collect();
     let response = json!({ "continue": true });
     AdapterOutcome { events, response }
 }

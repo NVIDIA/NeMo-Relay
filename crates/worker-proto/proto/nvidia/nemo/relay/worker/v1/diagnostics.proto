@@ -1,0 +1,637 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines diagnostic delivery policy, accounting, provenance, and snapshot models.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+
+// Host-owned limits and contract identities required for diagnostic admission.
+message DiagnosticCapabilities {
+  // Required protocol name and semantic contract version to confirm during handshake.
+  ProtocolIdentity protocol = 1 [(buf.validate.field).required = true];
+  // These transport contracts start at 1.0.0; core catalogue revisions do not.
+  string snapshot_contract_version = 2 [(buf.validate.field).string = {const: "1.0.0"}];
+  // Core diagnostic catalogue revision, independent of the worker contract version.
+  uint32 catalogue_version = 3;
+  // Whether the host accepts diagnostic recording for this activation.
+  bool enabled = 4;
+  // Whether separately authorized context-wide snapshot reads are granted.
+  bool can_read_context = 5;
+  // Host bound on component admission or requested component page size.
+  uint32 max_components = 6 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 8
+  }];
+  // Maximum plugin-defined diagnostic extensions admitted in the session.
+  uint32 max_extensions = 7 [(buf.validate.field).uint32 = {
+    gte: 0
+    lte: 16
+  }];
+  // Maximum encoded component and code registration metadata admitted by the host.
+  uint32 max_metadata_bytes = 8 [(buf.validate.field).uint32 = {
+    gte: 0
+    lte: 16384
+  }];
+  // Complete encoded SubmitDiagnosticRequest, including credentials and sequence.
+  uint32 max_request_bytes = 9 [(buf.validate.field).uint32 = {
+    gte: 258
+    lte: 16384
+  }];
+  // Maximum diagnostic detail bytes permitted by the host.
+  uint32 max_detail_bytes = 10 [(buf.validate.field).uint32 = {
+    gte: 0
+    lte: 16384
+  }];
+  // Maximum trajectory correlation bytes permitted by the host.
+  uint32 max_correlation_bytes = 11 [(buf.validate.field).uint32 = {
+    gte: 0
+    lte: 16384
+  }];
+  // Maximum complete encoded diagnostic response size.
+  uint32 max_response_bytes = 12 [(buf.validate.field).uint32 = {
+    gte: 256
+    lte: 131072
+  }];
+  // Queue capacity excludes the one in-flight submission.
+  uint32 max_pending_submissions = 13 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 32
+  }];
+  // Maximum submission attempts, including the initial attempt.
+  uint32 retry_attempts = 14 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 8
+  }];
+  // Deadline for each diagnostic submission attempt, from one millisecond to ten seconds.
+  google.protobuf.Duration retry_timeout_duration = 15 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).duration = {
+      gte: {nanos: 1000000}
+      lte: {seconds: 10}
+    }
+  ];
+  // Supported authenticated remote-provenance contract version, initially 1.0.0.
+  string provenance_contract_version = 16 [(buf.validate.field).string = {const: "1.0.0"}];
+  // Grants side-effect-free source discovery only; unsupported or denied is false.
+  bool can_read_discovery = 17;
+  // Grants bounded memory inspection only; it never starts resource collection.
+  bool can_inspect_memory = 18;
+}
+
+// Observed operation outcome, independent of diagnostic severity.
+enum DiagnosticObservationOutcome {
+  // Unspecified maps to the runtime's unknown observation outcome.
+  DIAGNOSTIC_OBSERVATION_OUTCOME_UNSPECIFIED = 0;
+  // The observed operation succeeded.
+  DIAGNOSTIC_OBSERVATION_OUTCOME_SUCCESS = 1;
+  // The observed operation failed.
+  DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE = 2;
+}
+
+// Evidence severity accepted by diagnostic delivery.
+enum DiagnosticObservationSeverity {
+  // No value supplied; invalid where this contract requires an explicit value.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_UNSPECIFIED = 0;
+  // Detailed trace evidence.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_TRACE = 1;
+  // Diagnostic evidence for debugging.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_DEBUG = 2;
+  // Informational evidence.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_INFO = 3;
+  // Warning evidence without an implied failure outcome.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_WARNING = 4;
+  // Error evidence; severity alone does not determine outcome.
+  DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR = 5;
+}
+
+// Declares one plugin-defined diagnostic classification and its allowed causes.
+message DiagnosticExtensionDefinition {
+  // Identity within the enclosing declaration; preserve its exact case and spelling.
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 32
+  }];
+  // Human-readable classification description, bounded by diagnostic admission policy.
+  string description = 2 [(buf.validate.field).string = {max_bytes: 256}];
+  // Observed operation outcome; severity does not determine success or failure.
+  DiagnosticObservationOutcome outcome = 3 [(buf.validate.field).enum = {defined_only: true}];
+  // Admitted failure-class names for this diagnostic extension.
+  repeated string allowed_failure_classes = 4;
+}
+
+// Selects an existing catalogue name or an activation-local extension definition.
+message DiagnosticCodeDefinition {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof definition {
+    option (buf.validate.oneof).required = true;
+    // Canonical built-in diagnostic code name; the host validates admission rights.
+    string builtin_name = 1;
+    // Plugin-defined classification admitted in this session namespace.
+    DiagnosticExtensionDefinition extension = 2;
+  }
+}
+
+// Registers a bounded diagnostic component and an ordered list of code handles.
+message DiagnosticComponentRegistration {
+  // Callback identity within its plugin component, before host qualification.
+  string local_name = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Ordered code declarations; returned code handles use one-based positions in this list.
+  repeated DiagnosticCodeDefinition codes = 2;
+}
+
+// Records a positive occurrence delta using admitted component and code handles.
+message DiagnosticObservation {
+  // One-based component handle admitted in this diagnostic session.
+  uint32 component = 1 [(buf.validate.field).uint32.gt = 0];
+  // One-based code handle admitted for this component.
+  uint32 code = 2 [(buf.validate.field).uint32.gt = 0];
+  // Optional admitted failure-class name for this observation.
+  optional string failure_class = 3;
+  // Explicit observed operation outcome.
+  DiagnosticObservationOutcome outcome = 4 [(buf.validate.field).enum = {defined_only: true}];
+  // Evidence severity, independent of its observed operation outcome.
+  DiagnosticObservationSeverity severity = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Positive occurrence delta, not an absolute counter.
+  uint64 count = 6 [(buf.validate.field).uint64.gt = 0];
+  // Source observation time, preserved through projections.
+  google.protobuf.Timestamp observe_time = 7;
+  // Optional restricted diagnostic detail, bounded by the host policy.
+  optional string detail = 8 [(buf.validate.field).string = {max_bytes: 16384}];
+  // Optional trajectory session correlation, not the diagnostic transport session UUID.
+  optional string session_id = 9 [(buf.validate.field).string = {max_bytes: 16384}];
+  // Optional trajectory request correlation; it is not an authority token.
+  optional string request_id = 10 [(buf.validate.field).string = {max_bytes: 16384}];
+}
+
+// Closes a component handle without deleting its retained accounting.
+message DiagnosticComponentClose {
+  // Admitted component handle for delivery, or optional component selector/diagnostic location.
+  uint32 component = 1;
+}
+
+// Terminal admission outcome for an ordered diagnostic submission.
+enum DiagnosticReceiptStatus {
+  // No value supplied; invalid where this contract requires an explicit value.
+  DIAGNOSTIC_RECEIPT_STATUS_UNSPECIFIED = 0;
+  // Occurrence accounting was committed.
+  DIAGNOSTIC_RECEIPT_STATUS_RECORDED = 1;
+  // Collection is disabled; no evidence is recorded.
+  DIAGNOSTIC_RECEIPT_STATUS_DISABLED = 2;
+  // An admitted operation was rejected and its sequence consumed.
+  DIAGNOSTIC_RECEIPT_STATUS_REJECTED = 3;
+  // Component registration and code handles were admitted.
+  DIAGNOSTIC_RECEIPT_STATUS_REGISTERED = 4;
+  // The selected component or session was closed.
+  DIAGNOSTIC_RECEIPT_STATUS_CLOSED = 5;
+}
+
+// Evidence retention disposition, independent of occurrence accounting.
+enum DiagnosticEvidenceRetention {
+  // No value supplied; invalid where this contract requires an explicit value.
+  DIAGNOSTIC_EVIDENCE_RETENTION_UNSPECIFIED = 0;
+  // Requested evidence was retained.
+  DIAGNOSTIC_EVIDENCE_RETENTION_RETAINED = 1;
+  // Evidence was retained with bounded truncation.
+  DIAGNOSTIC_EVIDENCE_RETENTION_TRUNCATED = 2;
+  // Evidence was omitted while accepted accounting remains available.
+  DIAGNOSTIC_EVIDENCE_RETENTION_DROPPED = 3;
+}
+
+// Reports sequence consumption, admission outcome, and retained evidence disposition.
+message DiagnosticReceipt {
+  option (buf.validate.message).cel = {
+    id: "diagnostic_receipt.registration"
+    message: "registered components require a positive handle and code count"
+    expression: "this.status != 4 || (this.component > 0 && this.code_count > 0)"
+  };
+  option (buf.validate.message).cel = {
+    id: "diagnostic_receipt.evidence"
+    message: "evidence retention must be specified exactly when an observation was recorded"
+    expression: "(this.status == 1) == (this.evidence != 0)"
+  };
+
+  // Sequence of the acknowledged or attributed submission; identical retries reuse it.
+  uint64 submission_sequence = 1;
+  // Required recognized state reported by the enclosing lifecycle or admission operation.
+  DiagnosticReceiptStatus status = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Host recording revision associated with accepted diagnostic evidence.
+  uint64 host_sequence = 3;
+  // Whether recorded evidence was retained, truncated, or dropped independently of accounting.
+  // This must be specified for recorded observations and unspecified for all other statuses.
+  DiagnosticEvidenceRetention evidence = 4 [(buf.validate.field).enum.defined_only = true];
+  // Component handle assigned to a successful component registration.
+  uint32 component = 5;
+  // Code handles are one-based positions in the admitted registration.
+  uint32 code_count = 6;
+  // Fixed safe reason, never callback error text or request content.
+  string reason = 7;
+}
+
+// JSON output represents every uint64 diagnostic counter as a decimal string.
+message DiagnosticSnapshot {
+  // Core snapshot/catalogue revisions, independent of the worker contract.
+  uint32 schema_version = 1;
+  // Catalogue revision. Preserve unknown names without assigning them meaning.
+  uint32 catalogue_version = 2;
+  // Source identity preserved through collection and projection.
+  DiagnosticSourceIdentity source = 3 [(buf.validate.field).required = true];
+  // Source capture time; it is not a collector receipt timestamp.
+  google.protobuf.Timestamp capture_time = 4 [(buf.validate.field).required = true];
+  // Latest source update revision; reads do not increment it.
+  uint64 sequence = 5;
+  // Whole-context lifetime accounting, independent of component/event selectors. Hosts must
+  // authorize access to this context-wide view before exposing it.
+  DiagnosticLifetimeSummary lifetime = 6 [(buf.validate.field).required = true];
+  // Bounded rows, one per selected retained component instance.
+  repeated DiagnosticComponentSnapshot components = 7;
+  // Bounded selected recent evidence.
+  repeated DiagnosticEvent events = 8;
+  // Availability, scope, integration, and loss limitations.
+  DiagnosticCoverage coverage = 9 [(buf.validate.field).required = true];
+  // Next bounded page, subject to mutation and retention validation.
+  DiagnosticCursor continuation = 10;
+}
+
+// Identifies the process incarnation that owns diagnostic accounting.
+message DiagnosticSourceIdentity {
+  // Unique incarnation assigned before logging initialization.
+  string instance_id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Descriptive operating system process ID, never an identity key.
+  optional uint32 process_id = 2;
+  // Producer-defined role, such as embedded runtime, gateway, broker, or worker.
+  string process_role = 3;
+  // Relay package version producing the evidence.
+  string relay_version = 4;
+}
+
+// Identifies a logical component and one registration incarnation.
+message DiagnosticComponentIdentity {
+  // Stable logical name, excluding request and session identifiers.
+  string key = 1;
+  // Unique registration instance, distinguishing replacement components.
+  string instance_id = 2 [(buf.validate.field).string = {uuid: true}];
+  // Source-local registration generation, increasing when a logical key is replaced.
+  uint64 generation = 3;
+}
+
+// Correlates component responsibility without creating additional counter dimensions.
+message DiagnosticComponentOwnership {
+  // Subscriber registration associated with this attribution, when applicable.
+  optional string subscriber_instance_id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Plugin registration associated with this attribution, when applicable.
+  optional string plugin_instance_id = 2 [(buf.validate.field).string = {uuid: true}];
+  // Bounded identity of the committed configuration.
+  optional string configuration_id = 3;
+  // Bounded runtime responsibility for an embedded or process owner.
+  optional string responsibility = 4;
+}
+
+// Captures the refresh generation and ownership at observation time.
+message DiagnosticOrigin {
+  // Refresh generation associated with the originating work or observation.
+  uint64 refresh_generation = 1;
+  // Original bounded owner and configuration attribution.
+  DiagnosticComponentOwnership ownership = 2 [(buf.validate.field).required = true];
+}
+
+// Preserves catalogue and failure-class names, including unknown future names.
+message DiagnosticClassification {
+  // Catalogue names remain open for future readers; admission still validates.
+  string canonical_code = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Cause name; absent for successful observations and notices.
+  optional string failure_class = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Carries independently optional plugin execution and lifecycle phase names.
+message DiagnosticPluginContext {
+  // Observed execution name, when known; never inferred from a code.
+  optional string execution = 1;
+  // Observed lifecycle phase or policy-gate context, when known.
+  optional string phase = 2;
+}
+
+// Retained diagnostic text with explicit truncation state.
+message DiagnosticDetail {
+  // Text copied within admitted byte capacity; bounding does not sanitize it.
+  string message = 1;
+  // Whether the original text exceeded its retained byte allowance.
+  bool truncated = 2;
+}
+
+// Optional trajectory correlation, excluded from aggregation keys.
+message DiagnosticCorrelation {
+  // Trajectory session associated with the observation, when known.
+  optional string session_id = 1;
+  // Request associated with the observation, when known.
+  optional string request_id = 2;
+}
+
+// Preserves authenticated worker provenance and the host's receipt timing.
+message RemoteDiagnosticOrigin {
+  // Host-issued diagnostic session/source incarnation.
+  string source_instance_id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Host-issued plugin activation incarnation, distinct from the session.
+  string activation_instance_id = 2 [(buf.validate.field).string = {uuid: true}];
+  // Ordered terminal submission sequence; not the host event sequence.
+  uint64 submission_sequence = 3 [(buf.validate.field).uint64.gt = 0];
+  // Optional producer-reported wall time, with unknown clock uncertainty.
+  google.protobuf.Timestamp observe_time = 4;
+  // Host wall time at acceptance, also used as the event observation time.
+  google.protobuf.Timestamp receive_time = 5 [(buf.validate.field).required = true];
+  // Host monotonic elapsed time at acceptance, relative to context startup.
+  uint64 accepted_elapsed_millis = 6;
+}
+
+// One retained observation, its attribution, occurrence delta, and optional evidence.
+message DiagnosticEvent {
+  // Unique source-local update sequence; it is not an occurrence counter.
+  uint64 sequence = 1;
+  // Source observation time, preserved through projections.
+  google.protobuf.Timestamp observe_time = 2 [(buf.validate.field).required = true];
+  // Registration that owned the original observation.
+  DiagnosticComponentIdentity component = 3 [(buf.validate.field).required = true];
+  // Original configuration attribution, preserved through component refresh.
+  DiagnosticOrigin origin = 4 [(buf.validate.field).required = true];
+  // Authenticated remote submission provenance, absent for local observations.
+  RemoteDiagnosticOrigin remote = 5;
+  // Canonical event classification; never reconstructed from a latest message.
+  DiagnosticClassification classification = 6 [(buf.validate.field).required = true];
+  // Bounded plugin-operation wire facts, excluded from aggregation keys.
+  DiagnosticPluginContext context = 7 [(buf.validate.field).required = true];
+  // Evidence severity, independent of its observed operation outcome.
+  DiagnosticObservationSeverity severity = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Explicit observed operation outcome.
+  DiagnosticObservationOutcome outcome = 9 [(buf.validate.field).enum = {defined_only: true}];
+  // Bounded optional evidence; absence does not imply a missing counter.
+  DiagnosticDetail detail = 10;
+  // Input occurrence delta represented by this recording call.
+  uint64 count = 11;
+  // Restricted caller correlation, excluded from aggregation identity.
+  DiagnosticCorrelation correlation = 12 [(buf.validate.field).required = true];
+}
+
+// Unsigned count that stops at its maximum. After that limit, it is a lower bound.
+message DiagnosticCount {
+  // Exact count unless saturation has occurred.
+  uint64 value = 1;
+  // Whether an overflowing increment made the value a lower bound.
+  bool saturated = 2;
+}
+
+// Outcome and recording totals for an explicitly identified accounting scope.
+message DiagnosticTotals {
+  // Accepted recording calls, one per call regardless of occurrence delta.
+  DiagnosticCount recorded_events_total = 1 [(buf.validate.field).required = true];
+  // Accepted occurrence deltas across all outcomes and codes.
+  DiagnosticCount occurrences_total = 2 [(buf.validate.field).required = true];
+  // Previously retained events owned by this component or context and evicted.
+  DiagnosticCount history_evictions_total = 3 [(buf.validate.field).required = true];
+  // Occurrences whose owning operation explicitly succeeded.
+  DiagnosticCount successes_total = 4 [(buf.validate.field).required = true];
+  // Occurrences whose owning operation explicitly failed.
+  DiagnosticCount failures_total = 5 [(buf.validate.field).required = true];
+  // Occurrences without an established operation outcome.
+  DiagnosticCount unspecified_total = 6 [(buf.validate.field).required = true];
+}
+
+// Lifetime totals and monotonic elapsed time for a source or component.
+message DiagnosticLifetimeSummary {
+  // Whole-context or whole-component-instance accounting, as named by the view.
+  DiagnosticTotals totals = 1 [(buf.validate.field).required = true];
+  // Monotonic elapsed lifetime measured by the source at capture.
+  uint64 elapsed_millis = 2;
+  // Wall-clock correlation time of the latest observed lifetime failure.
+  google.protobuf.Timestamp last_failure_time = 3;
+  // Monotonic elapsed time since that failure; absence never means recovery.
+  optional uint64 since_last_failure_millis = 4;
+}
+
+// Accounting for the component's current refresh generation and ownership.
+message DiagnosticRefreshSummary {
+  // Component-local generation increased by a successful refresh.
+  uint64 generation = 1;
+  // Wall-clock correlation anchor for the successful refresh.
+  google.protobuf.Timestamp start_time = 2 [(buf.validate.field).required = true];
+  // Monotonic elapsed duration since the refresh boundary.
+  uint64 elapsed_millis = 3;
+  // Current configuration and owner attribution for this counting period.
+  DiagnosticComponentOwnership ownership = 4 [(buf.validate.field).required = true];
+  // Counts for this current period, independently reserved from lifetime totals.
+  DiagnosticTotals totals = 5 [(buf.validate.field).required = true];
+}
+
+// Lifetime occurrence count and latest observation time for one admitted code.
+message DiagnosticCounter {
+  // Canonical code; the component instance comes from the containing row.
+  string code = 1;
+  // Accepted occurrences, independent of optional recent detail.
+  DiagnosticCount occurrences = 2 [(buf.validate.field).required = true];
+  // Source time when this retained counter was last updated.
+  google.protobuf.Timestamp last_observe_time = 3 [(buf.validate.field).required = true];
+}
+
+// Outcome counts for one source-local elapsed-time interval.
+message DiagnosticWindowBucket {
+  // Inclusive elapsed offset from the component's monotonic start.
+  uint64 start_elapsed_millis = 1;
+  // Exclusive nominal bucket end; coverage describes the observed portion.
+  uint64 end_elapsed_millis = 2;
+  // Explicit successful-operation occurrences observed in this interval.
+  DiagnosticCount successes = 3 [(buf.validate.field).required = true];
+  // Explicit failed-operation occurrences observed in this interval.
+  DiagnosticCount failures = 4 [(buf.validate.field).required = true];
+  // Occurrences with no established operation outcome in this interval.
+  DiagnosticCount unspecified = 5 [(buf.validate.field).required = true];
+}
+
+// Availability of a diagnostic feature, window, or snapshot.
+enum DiagnosticAvailability {
+  // No value supplied; invalid where this contract requires an explicit value.
+  DIAGNOSTIC_AVAILABILITY_UNSPECIFIED = 0;
+  // The requested evidence or feature is available.
+  DIAGNOSTIC_AVAILABILITY_AVAILABLE = 1;
+  // The requested evidence is currently unavailable.
+  DIAGNOSTIC_AVAILABILITY_UNAVAILABLE = 2;
+  // The implementation does not support this feature.
+  DIAGNOSTIC_AVAILABILITY_UNSUPPORTED = 3;
+  // No observation has established evidence for this feature.
+  DIAGNOSTIC_AVAILABILITY_NEVER_OBSERVED = 4;
+  // Collection is disabled; no evidence is recorded.
+  DIAGNOSTIC_AVAILABILITY_DISABLED = 5;
+}
+
+// Reports the temporal extent and completeness of a diagnostic window.
+message DiagnosticWindowCoverage {
+  // Availability of the admitted window series.
+  DiagnosticAvailability availability = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Earliest covered monotonic elapsed offset within this component lifetime.
+  uint64 start_elapsed_millis = 2;
+  // Latest covered monotonic elapsed offset at capture time.
+  uint64 end_elapsed_millis = 3;
+  // The first returned bucket is only partly inside the covered interval.
+  bool partial_start = 4;
+  // The last returned bucket is still being observed or partly selected.
+  bool partial_end = 5;
+  // Known loss prevents treating the aggregate as a complete interval.
+  bool incomplete = 6;
+}
+
+// Bounded outcome history at one configured time resolution.
+message DiagnosticWindow {
+  // Duration of each fixed bucket.
+  uint64 resolution_millis = 1;
+  // Configured bucket slots; memory is independent of observation rate.
+  uint32 bucket_capacity = 2;
+  // Bounded selected aggregates; idle covered intervals may have zero values.
+  repeated DiagnosticWindowBucket buckets = 3;
+  // Actual interval and edge limitations.
+  DiagnosticWindowCoverage coverage = 4 [(buf.validate.field).required = true];
+}
+
+// A retained component row with lifetime, refresh, counters, and windows.
+message DiagnosticComponentSnapshot {
+  // Logical responsibility and registration incarnation.
+  DiagnosticComponentIdentity identity = 1 [(buf.validate.field).required = true];
+  // Source correlation time when the registration was admitted.
+  google.protobuf.Timestamp register_time = 2 [(buf.validate.field).required = true];
+  // Registration closure; retained summaries remain subject to bounded retention.
+  google.protobuf.Timestamp close_time = 3;
+  // Whole-component-instance lifetime accounting and source elapsed time.
+  DiagnosticLifetimeSummary lifetime = 4 [(buf.validate.field).required = true];
+  // The sole current refresh period, with explicitly scoped current ownership.
+  DiagnosticRefreshSummary since_refresh = 5 [(buf.validate.field).required = true];
+  // Selected lifetime code counters; no latest-message set is retained per code.
+  repeated DiagnosticCounter counters = 6;
+  // Admitted bounded component outcome windows, independent of refresh periods.
+  repeated DiagnosticWindow windows = 7;
+}
+
+// Reports retained bounds and whether the requested page was truncated.
+message DiagnosticRetention {
+  // Oldest sequence in the selected retained event history, if present.
+  optional uint64 oldest_event_sequence = 1;
+  // Latest sequence in the selected retained event history, if present.
+  optional uint64 latest_event_sequence = 2;
+  // Number of returned recent events.
+  uint64 events_retained = 3;
+  // Number of returned component-instance rows.
+  uint64 components_retained = 4;
+  // Query limits omitted otherwise matching retained evidence.
+  bool query_truncated = 5;
+}
+
+// Explicit counters for bounded-storage, admission, and projection losses.
+message DiagnosticLoss {
+  // Previously retained events reclaimed from the circular history.
+  DiagnosticCount events_evicted = 1 [(buf.validate.field).required = true];
+  // Accepted observations whose incoming event evidence was not retained.
+  DiagnosticCount events_omitted = 2 [(buf.validate.field).required = true];
+  // Closed component metadata reclaimed with dependent evidence.
+  DiagnosticCount components_evicted = 3 [(buf.validate.field).required = true];
+  // Component registrations rejected by admission limits.
+  DiagnosticCount components_rejected = 4 [(buf.validate.field).required = true];
+  // Code reservations or registrations rejected by admission limits.
+  DiagnosticCount keys_rejected = 5 [(buf.validate.field).required = true];
+  // Observations rejected before canonical counting.
+  DiagnosticCount observations_rejected = 6 [(buf.validate.field).required = true];
+  // Detail shortened within its configured byte allowance.
+  DiagnosticCount messages_truncated = 7 [(buf.validate.field).required = true];
+  // Incoming optional detail omitted without evicting a retained event.
+  DiagnosticCount details_omitted = 8 [(buf.validate.field).required = true];
+  // Correlation fields shortened within their own byte allowance.
+  DiagnosticCount correlations_truncated = 9 [(buf.validate.field).required = true];
+  // Safe correlation fields omitted because detail storage could not fit them.
+  DiagnosticCount correlations_omitted = 10 [(buf.validate.field).required = true];
+  // Metadata registrations rejected by their admission budget.
+  DiagnosticCount metadata_rejected = 11 [(buf.validate.field).required = true];
+  // Accepted summary-only deltas whose classification could not be admitted.
+  DiagnosticCount classifications_overflowed = 12 [(buf.validate.field).required = true];
+  // Window series rejected by their independent admission budget.
+  DiagnosticCount windows_rejected = 13 [(buf.validate.field).required = true];
+  // Query materializations rejected by bounded workspace admission.
+  DiagnosticCount queries_rejected = 14 [(buf.validate.field).required = true];
+  // Recording attempts for closed or replaced component registrations.
+  DiagnosticCount stale_observations = 15 [(buf.validate.field).required = true];
+  // Optional projection deliveries omitted for lack of bounded workspace.
+  DiagnosticCount projection_deliveries_omitted = 16 [(buf.validate.field).required = true];
+  // Projection callbacks whose panic was isolated after acceptance.
+  DiagnosticCount projections_panicked = 17 [(buf.validate.field).required = true];
+  // Cyclic or excessively deep projection chains suppressed.
+  DiagnosticCount projections_suppressed = 18 [(buf.validate.field).required = true];
+  // Unique sequence allocation has exhausted its representation.
+  bool sequence_saturated = 19;
+}
+
+// Availability and optional reason for one named diagnostic feature.
+message DiagnosticCapability {
+  // Bounded capability name, such as `otel`.
+  string name = 1;
+  // Availability of evidence from this capability.
+  DiagnosticAvailability availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Bounded explanatory reason, such as `not_integrated`.
+  optional string reason = 3;
+}
+
+// Aggregation scope of the reported lifetime summaries.
+enum DiagnosticSummaryScope {
+  // No value supplied; invalid where this contract requires an explicit value.
+  DIAGNOSTIC_SUMMARY_SCOPE_UNSPECIFIED = 0;
+  // Summaries describe the whole component lifetime, independently of page filters.
+  DIAGNOSTIC_SUMMARY_SCOPE_WHOLE_COMPONENT_LIFETIME = 1;
+}
+
+// Describes snapshot availability, aggregation scope, retention, and evidence loss.
+message DiagnosticCoverage {
+  // Availability of this diagnostic source context.
+  DiagnosticAvailability availability = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Scope of component summaries and component outcome windows.
+  DiagnosticSummaryScope summary_scope = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Bounded selected history boundaries and query omission.
+  DiagnosticRetention retention = 3 [(buf.validate.field).required = true];
+  // Reserved cumulative loss and capacity accounting.
+  DiagnosticLoss loss = 4 [(buf.validate.field).required = true];
+  // Producer integrations whose support or absence is explicitly advertised.
+  repeated DiagnosticCapability capabilities = 5;
+}
+
+// Canonical snapshot position; it does not grant transport read authority.
+message DiagnosticCursor {
+  // Source incarnation whose retained state was selected.
+  string source_instance_id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Source revision for detecting intervening mutations or reclamation.
+  uint64 sequence = 2;
+  // Next component-instance position in the bounded source ordering.
+  uint64 component_offset = 3;
+  // Next recent-event position in the bounded source ordering.
+  uint64 event_offset = 4;
+  // Source-validated fingerprint of the intersected query scope.
+  uint64 scope = 5;
+}

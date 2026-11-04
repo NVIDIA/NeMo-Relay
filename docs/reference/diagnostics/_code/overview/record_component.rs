@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay::diagnostics::{
+use nemo_relay_diagnostics::{
     BuiltinDiagnosticCode, Classification, ComponentRegistration, DiagnosticQuery, Diagnostics,
     DiagnosticsSettings, FailureClass, FailureCode, LoggingFailureCode, Observation,
     SourceIdentity, SuccessCode,
@@ -13,7 +13,7 @@ let diagnostics = Diagnostics::from_settings(
         instance_id: uuid::Uuid::now_v7(),
         process_id: Some(std::process::id()),
         process_role: "embedded".into(),
-        relay_version: "0.11.0".into(),
+        relay_version: "1.0.0".into(),
     },
     DiagnosticsSettings {
         enabled: true,

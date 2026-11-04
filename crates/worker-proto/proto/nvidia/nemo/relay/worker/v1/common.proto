@@ -1,0 +1,166 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines shared identities, credentials, lossless application JSON, and worker enums.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+
+// Protocol name nvidia.nemo.relay.worker.v1, contract version 1.0.0. Package/SDK releases are independent.
+message ProtocolIdentity {
+  // Exact worker protocol identifier: nvidia.nemo.relay.worker.v1.
+  string name = 1 [(buf.validate.field).string = {const: "nvidia.nemo.relay.worker.v1"}];
+  // Exact semantic contract version, initially 1.0.0.
+  string version = 2 [(buf.validate.field).string = {const: "1.0.0"}];
+}
+
+// Required on authenticated requests. Both strings must match the activation.
+message Credentials {
+  // Host-issued activation identity; the token is valid only for this activation.
+  string activation_id = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Host-issued secret token; never expose it in logs or callback arguments.
+  string auth_token = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Exactly one UTF-8 RFC 8259 value, without NaN/Infinity or trailing content.
+// Required payloads must contain bytes, including the bytes "null" for JSON null.
+// Numbers are never converted through google.protobuf.Value/double.
+message JsonValue {
+  // UTF-8 bytes containing exactly one RFC 8259 value; preserve integer precision and reject
+  // non-finite constants.
+  bytes json = 1 [(buf.validate.field).bytes = {
+    min_len: 1
+    max_len: 2147483647
+  }];
+}
+
+// Open object with structurally enforced string keys; each value is required.
+message JsonObject {
+  // Object entries with string keys and required lossless JSON values.
+  map<string, JsonValue> fields = 1;
+}
+
+// Presence-bearing lists preserve None versus Some([]) in runtime DTOs.
+message JsonArray {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated JsonValue values = 1;
+}
+
+// Presence-bearing string list; a present empty list differs from absence.
+message StringList {
+  // Ordered elements; a present empty wrapper preserves an explicitly empty collection.
+  repeated string values = 1;
+}
+
+// Application-owned schema identity; its version is not the worker version.
+message DataSchema {
+  // Nonempty application data-schema identity, independent of the worker contract.
+  string name = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Nonempty application schema version; it is not rewritten to the worker contract version.
+  string version = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Domain failure, never combined with a success value. RPC admission/auth/shape
+// failures use gRPC status. Retryable never authorizes replay of execution.
+message WorkerError {
+  // Stable machine-readable classification; text messages must not be used as codes.
+  string code = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Human-readable description; consumers must not infer control flow from this text.
+  string message = 2;
+  // Advisory error property; it never authorizes replaying execution callbacks or continuations.
+  bool retryable = 3;
+  // Preserve only when propagating this invocation's original downstream error.
+  optional string downstream_continuation_id = 4 [(buf.validate.field).string = {min_len: 1}];
+  // Optional upstream HTTP error status in 400..=599, independent of gRPC status.
+  optional uint32 http_status = 5 [(buf.validate.field).uint32 = {
+    gte: 400
+    lte: 599
+  }];
+}
+
+// Closed registration surfaces; unspecified and unknown values cannot be invoked.
+enum RegistrationSurface {
+  // No registration surface selected; invalid for registrations and invocations.
+  REGISTRATION_SURFACE_UNSPECIFIED = 0;
+  // Observes an event and completes without returning a rewritten value.
+  REGISTRATION_SURFACE_SUBSCRIBER = 1;
+  // Produces open metadata additions for an observed event.
+  REGISTRATION_SURFACE_EVENT_METADATA_INJECTOR = 2;
+  // Rewrites tool request arguments before execution.
+  REGISTRATION_SURFACE_TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
+  // Rewrites the application tool result after execution.
+  REGISTRATION_SURFACE_TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
+  // Allows or blocks execution of a tool request.
+  REGISTRATION_SURFACE_TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
+  // Rewrites a tool request within the ordered interceptor chain.
+  REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT = 13;
+  // Executes or delegates a managed tool call and may schedule marks.
+  REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT = 14;
+  // Rewrites a provider LLM request using its codec context.
+  REGISTRATION_SURFACE_LLM_SANITIZE_REQUEST_GUARDRAIL = 20;
+  // Rewrites a provider LLM response using its codec context.
+  REGISTRATION_SURFACE_LLM_SANITIZE_RESPONSE_GUARDRAIL = 21;
+  // Allows or blocks execution of an LLM request.
+  REGISTRATION_SURFACE_LLM_CONDITIONAL_EXECUTION_GUARDRAIL = 22;
+  // Rewrites a provider request or normalized annotation and may contribute evidence.
+  REGISTRATION_SURFACE_LLM_REQUEST_INTERCEPT = 23;
+  // Executes or delegates a unary LLM call with request and response codec access.
+  REGISTRATION_SURFACE_LLM_EXECUTION_INTERCEPT = 24;
+  // Executes or delegates streaming LLM output with request-only codec access.
+  REGISTRATION_SURFACE_LLM_STREAM_EXECUTION_INTERCEPT = 25;
+  // Replaces sanitizable fields of a mark before publication.
+  REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL = 30;
+  // Replaces sanitizable fields of a scope-start event before publication.
+  REGISTRATION_SURFACE_SCOPE_SANITIZE_START_GUARDRAIL = 31;
+  // Replaces sanitizable fields of a scope-end event before publication.
+  REGISTRATION_SURFACE_SCOPE_SANITIZE_END_GUARDRAIL = 32;
+  // Allows or blocks selected middleware registrations before they execute.
+  REGISTRATION_SURFACE_CONDITIONAL_MIDDLEWARE_GUARDRAIL = 40;
+}
+
+// Recognized runtime scope types, including the explicit unknown-category fallback.
+enum ScopeType {
+  // No value supplied; invalid where this contract requires an explicit value.
+  SCOPE_TYPE_UNSPECIFIED = 0;
+  // A runtime agent scope.
+  SCOPE_TYPE_AGENT = 1;
+  // A runtime function scope.
+  SCOPE_TYPE_FUNCTION = 2;
+  // A runtime tool scope.
+  SCOPE_TYPE_TOOL = 3;
+  // A runtime llm scope.
+  SCOPE_TYPE_LLM = 4;
+  // A runtime retriever scope.
+  SCOPE_TYPE_RETRIEVER = 5;
+  // A runtime embedder scope.
+  SCOPE_TYPE_EMBEDDER = 6;
+  // A runtime reranker scope.
+  SCOPE_TYPE_RERANKER = 7;
+  // A runtime guardrail scope.
+  SCOPE_TYPE_GUARDRAIL = 8;
+  // A runtime evaluator scope.
+  SCOPE_TYPE_EVALUATOR = 9;
+  // Application-defined scope category.
+  SCOPE_TYPE_CUSTOM = 10;
+  // Explicit fallback for an unrecognized open event category.
+  SCOPE_TYPE_UNKNOWN = 11;
+}
+
+// Log evidence severity; an unspecified submitted severity is invalid.
+enum LogSeverity {
+  // No value supplied; invalid where this contract requires an explicit value.
+  LOG_SEVERITY_UNSPECIFIED = 0;
+  // Detailed trace evidence.
+  LOG_SEVERITY_TRACE = 1;
+  // Diagnostic evidence for debugging.
+  LOG_SEVERITY_DEBUG = 2;
+  // Informational evidence.
+  LOG_SEVERITY_INFO = 3;
+  // Warning evidence without an implied failure outcome.
+  LOG_SEVERITY_WARN = 4;
+  // Error evidence; severity alone does not determine outcome.
+  LOG_SEVERITY_ERROR = 5;
+}

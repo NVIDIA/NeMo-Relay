@@ -12,9 +12,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::LlmRequestInterceptFn;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::runtime::LlmRequestInterceptFn;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
@@ -123,12 +123,20 @@ fn inject_agent_hints(
         return;
     };
 
-    let body = annotated
-        .as_mut()
-        .map(|annotated| &mut annotated.extra)
-        .or_else(|| request.content.as_object_mut());
-    if let Some(body) = body
-        && let Some((field, parents)) = injection.body_path.split_last()
+    let path = injection.body_path.as_slice();
+    let root = match annotated.as_mut() {
+        // `metadata` is a modeled request field. Write through it so the codec keeps the
+        // caller's existing metadata; an `extra["metadata"]` entry would replace it on encode.
+        Some(annotated) if path.len() > 1 && path[0] == "metadata" => annotated
+            .metadata
+            .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .map(|metadata| (metadata, &path[1..])),
+        Some(annotated) => Some((&mut annotated.extra, path)),
+        None => request.content.as_object_mut().map(|body| (body, path)),
+    };
+    if let Some((body, path)) = root
+        && let Some((field, parents)) = path.split_last()
     {
         // Missing parents are created; a parent that is not an object leaves the body unchanged.
         let mut target = Some(body);
@@ -215,7 +223,7 @@ impl AdaptiveHintsIntercept {
     }
 
     /// Converts this intercept into an [`LlmRequestInterceptFn`] suitable for
-    /// registration with [`register_llm_request_intercept`].
+    /// registration with [`register_llm_request_intercept`](nemo_relay_runtime::api::registry::register_llm_request_intercept).
     ///
     /// The returned closure reads the HotCache trie, builds AgentHints,
     /// injects them into the request headers and body, and returns the
@@ -245,8 +253,9 @@ impl AdaptiveHintsIntercept {
                     inject_agent_hints(&mut request, &mut annotated, &hints, &this.injection);
                 }
 
-                let outcome =
-                    nemo_relay::api::llm::LlmRequestInterceptOutcome::new(request, annotated);
+                let outcome = nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                );
                 Box::pin(async move { Ok(outcome) })
             },
         )

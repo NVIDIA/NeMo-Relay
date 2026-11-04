@@ -33,6 +33,19 @@ class DiagnosticsError(RuntimeError):
         self.reason = reason
 
 
+def _utf8_size(value: str, remaining: int) -> int:
+    # UTF-8 needs at least one byte per character. Bound the temporary copy.
+    if len(value) > remaining:
+        raise DiagnosticsError("invalid_query")
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise DiagnosticsError("invalid_query") from None
+    if size > remaining:
+        raise DiagnosticsError("invalid_query")
+    return size
+
+
 def _query_json(query: dict[str, Any] | None) -> str:
     if query is None:
         return "{}"
@@ -41,26 +54,14 @@ def _query_json(query: dict[str, Any] | None) -> str:
     admitted_bytes = 0
     nodes = 0
 
-    def utf8_size(value: str, remaining: int) -> int:
-        # UTF-8 needs at least one byte per character. Bound the temporary copy.
-        if len(value) > remaining:
-            raise DiagnosticsError("invalid_query")
-        try:
-            size = len(value.encode("utf-8"))
-        except UnicodeEncodeError:
-            raise DiagnosticsError("invalid_query") from None
-        if size > remaining:
-            raise DiagnosticsError("invalid_query")
-        return size
-
     def normalize(value: Any, key: str = "", depth: int = 0) -> Any:
         nonlocal admitted_bytes, nodes
         nodes += 1
         if nodes > MAX_QUERY_NODES or depth > MAX_QUERY_DEPTH or not isinstance(key, str):
             raise DiagnosticsError("invalid_query")
-        admitted_bytes += utf8_size(key, min(MAX_QUERY_FIELD_NAME_BYTES, MAX_QUERY_BYTES - admitted_bytes))
+        admitted_bytes += _utf8_size(key, min(MAX_QUERY_FIELD_NAME_BYTES, MAX_QUERY_BYTES - admitted_bytes))
         if isinstance(value, str):
-            admitted_bytes += utf8_size(value, MAX_QUERY_BYTES - admitted_bytes)
+            admitted_bytes += _utf8_size(value, MAX_QUERY_BYTES - admitted_bytes)
         if isinstance(value, dict):
             if len(value) > MAX_QUERY_OBJECT_FIELDS:
                 raise DiagnosticsError("invalid_query")
@@ -76,7 +77,7 @@ def _query_json(query: dict[str, Any] | None) -> str:
     chunks = []
     size = 0
     for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(normalize(query)):
-        size += utf8_size(chunk, MAX_QUERY_BYTES - size)
+        size += _utf8_size(chunk, MAX_QUERY_BYTES - size)
         chunks.append(chunk)
     return "".join(chunks)
 

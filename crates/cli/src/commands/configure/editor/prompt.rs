@@ -440,6 +440,18 @@ fn edit_api_key_helper(
                 })
                 .interact_text()
                 .map_err(prompt_error)?;
+            let cache_ttl_ms = Input::<u64>::with_theme(theme)
+                .with_prompt("Cache lifetime (milliseconds; 0 disables caching)")
+                .default(document.integer(&section, "cache_ttl_ms").unwrap_or(0))
+                .validate_with(|value: &u64| {
+                    if *value > i64::MAX as u64 {
+                        Err("cache TTL must fit a TOML integer")
+                    } else {
+                        Ok(())
+                    }
+                })
+                .interact_text()
+                .map_err(prompt_error)?;
             let schemes: &[&str] = if provider == "openai" {
                 &["Provider default", "bearer"]
             } else {
@@ -469,6 +481,8 @@ fn edit_api_key_helper(
                     command,
                     args,
                     timeout_ms,
+                    cache_ttl_ms,
+                    cache: Default::default(),
                     auth_scheme,
                 },
             )?;

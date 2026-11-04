@@ -9,7 +9,7 @@
 //!
 //! [`PassthroughPlugin`] implements [`ProviderPlugin`] by cloning the
 //! rewritten request unchanged and generating a [`TranslationReport`]
-//! where every intent is marked [`TranslationStatus::Ignored`] with
+//! where every intent is marked [`TranslationStatus::Ignored`](crate::acg::types::TranslationStatus::Ignored) with
 //! [`ReasonCode::NotRelevant`].
 
 use crate::acg::capability::BackendCapabilities;
@@ -20,7 +20,7 @@ use crate::acg::types::{ReasonCode, TranslationReport};
 ///
 /// Returns the `rewritten_request` as-is (cloned) and generates a
 /// [`TranslationReport`] where every intent is marked
-/// [`TranslationStatus::Ignored`] with [`ReasonCode::NotRelevant`].
+/// [`TranslationStatus::Ignored`](crate::acg::types::TranslationStatus::Ignored) with [`ReasonCode::NotRelevant`].
 ///
 /// # Usage
 ///

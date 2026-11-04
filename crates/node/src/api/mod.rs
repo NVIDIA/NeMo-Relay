@@ -20,17 +20,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 
-use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
-use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::resource_metrics as core_resource_metrics_api;
-use nemo_relay::api::resource_metrics::{
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
+use nemo_relay_plugin_host::resource_metrics as core_resource_metrics_api;
+use nemo_relay_plugin_host::resource_metrics::{
     AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
     CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics,
     GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics,
@@ -40,14 +42,17 @@ use nemo_relay::api::resource_metrics::{
     ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
     UtilizationUnit,
 };
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay_runtime::api::llm as core_llm_api;
+use nemo_relay_runtime::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_runtime::api::registry as core_registry_api;
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
     LlmJsonStream, ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
@@ -58,33 +63,31 @@ use nemo_relay::api::runtime::{
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
     with_scope_stack as with_scope_stack_handle,
 };
-use nemo_relay::api::scope as core_scope_api;
-use nemo_relay::api::scope::ScopeAttributes;
-use nemo_relay::api::subscriber as core_subscriber_api;
-use nemo_relay::api::tool as core_tool_api;
-use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::Usage;
-use nemo_relay::error::{FlowError, Result as FlowResult};
-use nemo_relay::plugin::dynamic::{
-    PluginHostActivation as CorePluginHostActivation, PluginHostReport,
-    initialize as initialize_impl, validate as validate_impl,
-    validate_exact as validate_exact_impl,
+use nemo_relay_runtime::api::scope as core_scope_api;
+use nemo_relay_runtime::api::scope::ScopeAttributes;
+use nemo_relay_runtime::api::subscriber as core_subscriber_api;
+use nemo_relay_runtime::api::tool as core_tool_api;
+use nemo_relay_runtime::api::tool::ToolAttributes;
+use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::Usage;
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
+use {
+    nemo_relay_plugin_host::ConfigDiagnostic, nemo_relay_plugin_host::DiagnosticLevel,
+    nemo_relay_plugin_host::Plugin, nemo_relay_plugin_host::PluginConfig,
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::PluginRegistration,
+    nemo_relay_plugin_host::deregister_plugin as deregister_plugin_impl,
+    nemo_relay_plugin_host::list_plugin_kinds as list_plugin_kinds_impl,
+    nemo_relay_plugin_host::register_plugin as register_plugin_impl,
+    nemo_relay_plugin_host::rollback_registrations,
 };
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    PluginRegistrationContext, deregister_plugin as deregister_plugin_impl,
-    list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
-    rollback_registrations,
+use {
+    nemo_relay_plugin_host::dynamic::PluginHostActivation as CorePluginHostActivation,
+    nemo_relay_plugin_host::dynamic::PluginHostReport,
+    nemo_relay_plugin_host::initialize as initialize_impl,
+    nemo_relay_plugin_host::validate as validate_impl,
+    nemo_relay_plugin_host::validate_exact as validate_exact_impl,
 };
-use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
-use nemo_relay_adaptive::acg::{
-    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
-};
-use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
 
@@ -113,7 +116,7 @@ fn register_node_environment() -> FlowResult<()> {
     let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    nemo_relay::logging::initialize_default_logging()?;
+    nemo_relay_logging::initialize_default_logging()?;
     NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
     Ok(())
 }
@@ -123,7 +126,7 @@ fn cleanup_node_environment() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
-        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+        && let Err(error) = nemo_relay_logging::shutdown_default_logging()
     {
         eprintln!("nemo-relay: operational logging shutdown failed: {error}");
     }
@@ -148,7 +151,7 @@ pub fn log(
     } else {
         format!("nemo_relay.node.{target}")
     };
-    nemo_relay::logging::emit_str(&level, &target, &message, fields)
+    nemo_relay_logging::emit_str(&level, &target, &message, fields)
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
@@ -258,7 +261,7 @@ impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorDeviceMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
@@ -280,7 +283,7 @@ impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeAcceleratorProcessMetrics {
-    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    vendor: nemo_relay_plugin_host::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
     process_id: u32,
@@ -581,14 +584,16 @@ pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> n
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
-    nemo_relay::api::runtime::ScopeStackHandle,
+    nemo_relay_runtime::api::runtime::ScopeStackHandle,
     Option<PublicationBuffer>,
 )> {
     Ok(callback_factory::callback_scope_stack(env)?
         .unwrap_or_else(|| (current_scope_stack_handle(), None)))
 }
 
-fn effective_scope_stack(env: &Env) -> napi::Result<nemo_relay::api::runtime::ScopeStackHandle> {
+fn effective_scope_stack(
+    env: &Env,
+) -> napi::Result<nemo_relay_runtime::api::runtime::ScopeStackHandle> {
     effective_scope_context(env).map(|(scope_stack, _)| scope_stack)
 }
 
@@ -600,19 +605,18 @@ fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> nap
 }
 
 fn effective_scope_top(
-    scope_stack: &nemo_relay::api::runtime::ScopeStackHandle,
-) -> nemo_relay::api::scope::ScopeHandle {
+    scope_stack: &nemo_relay_runtime::api::runtime::ScopeStackHandle,
+) -> nemo_relay_runtime::api::scope::ScopeHandle {
     with_scope_stack_handle(scope_stack.clone(), task_scope_top)
 }
 
 #[napi::module_init]
 fn init() {
+    nemo_relay_builtins::initialize_runtime();
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
-    register_adaptive_component()
-        .expect("node adaptive plugin component registration should succeed");
-    register_pii_redaction_component()
-        .expect("node pii redaction plugin component registration should succeed");
+    nemo_relay_builtins::plugin::ensure_builtin_plugins_registered()
+        .expect("node built-in plugin registration should succeed");
 }
 
 // Core publication executors and registry state live for the whole process.
@@ -655,6 +659,7 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
         cleanup_node_environment();
         return Err(error);
     }
+    crate::promise_call::mark_env_exiting_on_process_exit(&env)?;
     let activation: JsFunction = exports.get_named_property("PluginHostActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;
@@ -710,11 +715,11 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     Json::Object(metadata)
 }
 
-fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
+fn parse_otel_type(value: &str) -> napi::Result<nemo_relay_observability::OpenTelemetryType> {
     match value {
-        "full" => Ok(nemo_relay::observability::OpenTelemetryType::Full),
-        "gen_ai" => Ok(nemo_relay::observability::OpenTelemetryType::GenAi),
-        "openinference" => Ok(nemo_relay::observability::OpenTelemetryType::OpenInference),
+        "full" => Ok(nemo_relay_observability::OpenTelemetryType::Full),
+        "gen_ai" => Ok(nemo_relay_observability::OpenTelemetryType::GenAi),
+        "openinference" => Ok(nemo_relay_observability::OpenTelemetryType::OpenInference),
         other => Err(napi::Error::from_reason(format!(
             "type must be 'full', 'gen_ai', or 'openinference', got {other:?}",
         ))),
@@ -723,10 +728,10 @@ fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenT
 
 fn parse_otel_transport(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpTransport> {
+) -> napi::Result<nemo_relay_observability::otel::OtlpTransport> {
     match value.as_deref().unwrap_or("http_binary") {
-        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
-        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        "http_binary" => Ok(nemo_relay_observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay_observability::otel::OtlpTransport::Grpc),
         other => Err(napi::Error::from_reason(format!(
             "transport must be 'http_binary' or 'grpc', got {other:?}",
         ))),
@@ -735,20 +740,20 @@ fn parse_otel_transport(
 
 fn parse_mark_projection(
     value: Option<String>,
-) -> napi::Result<nemo_relay::observability::MarkProjection> {
+) -> napi::Result<nemo_relay_observability::MarkProjection> {
     serde_json::from_value(Json::String(value.unwrap_or_else(|| "inherit".to_string())))
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 fn parse_attribute_mappings(
     value: Option<Json>,
-) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+) -> napi::Result<Vec<nemo_relay_observability::OtlpAttributeMapping>> {
     let mappings = match value {
         Some(value) => serde_json::from_value(value)
             .map_err(|error| napi::Error::from_reason(format!("attributeMappings: {error}")))?,
         None => Vec::new(),
     };
-    nemo_relay::observability::validate_attribute_mappings(&mappings)
+    nemo_relay_observability::validate_attribute_mappings(&mappings)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     Ok(mappings)
 }
@@ -758,8 +763,8 @@ fn parse_otel_file_sink(
     filename: Option<&str>,
     format: Option<&str>,
     mode: Option<&str>,
-) -> napi::Result<nemo_relay::observability::otel::OtlpFileSinkSettings> {
-    nemo_relay::observability::otel::OtlpFileSinkSettings::from_parts(
+) -> napi::Result<nemo_relay_observability::otel::OtlpFileSinkSettings> {
+    nemo_relay_observability::otel::OtlpFileSinkSettings::from_parts(
         output_directory,
         filename,
         format,
@@ -770,7 +775,7 @@ fn parse_otel_file_sink(
 
 fn build_otel_config(
     options: OpenTelemetryConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
@@ -789,7 +794,7 @@ fn build_otel_config(
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
 
-    let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
+    let mut config = nemo_relay_observability::otel::OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
         .with_service_name(service_name)
@@ -824,7 +829,7 @@ fn build_otel_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -856,7 +861,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
         .transpose()?
         .unwrap_or_else(|| {
             u64::try_from(
-                nemo_relay::observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
+                nemo_relay_observability::otel::DEFAULT_COMPLETED_SPAN_CONTEXT_TTL.as_millis(),
             )
             .expect("the default completed span context TTL fits in u64 milliseconds")
         });
@@ -865,7 +870,7 @@ fn parse_completed_span_context_ttl_millis(value: Option<BigInt>) -> napi::Resul
 
 fn build_otel_log_config(
     options: OpenTelemetryLogConfig,
-) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+) -> napi::Result<nemo_relay_observability::otel_logs::OpenTelemetryLogConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -874,7 +879,7 @@ fn build_otel_log_config(
     }
     let completed_span_context_ttl_millis =
         parse_completed_span_context_ttl_millis(options.completed_span_context_ttl_millis)?;
-    let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
+    let mut config = nemo_relay_observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
         .with_transport(parse_otel_transport(options.transport)?)
         .with_service_name(
             options
@@ -926,7 +931,7 @@ fn build_otel_log_config(
 
 fn build_otel_metric_config(
     options: OpenTelemetryMetricConfig,
-) -> napi::Result<nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig> {
+) -> napi::Result<nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig> {
     let endpoint = options.endpoint.trim().to_string();
     if endpoint.is_empty() {
         return Err(napi::Error::from_reason(
@@ -934,7 +939,7 @@ fn build_otel_metric_config(
         ));
     }
     let mut config =
-        nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
+        nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
             .with_transport(parse_otel_transport(options.transport)?)
             .with_service_name(
                 options
@@ -981,8 +986,8 @@ fn build_otel_metric_config(
     Ok(config)
 }
 
-fn otel_runtime_diagnostics_json(
-    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+fn exporter_runtime_diagnostics_json(
+    diagnostics: nemo_relay_observability::ExporterRuntimeDiagnostics,
 ) -> Json {
     Json::Array(
         diagnostics
@@ -1001,11 +1006,11 @@ fn otel_runtime_diagnostics_json(
 
 fn build_atof_config(
     options: Option<AtofExporterConfig>,
-) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
+) -> napi::Result<nemo_relay_observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
     match options.r#type.as_deref().unwrap_or("file") {
         "file" => {
-            let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
+            let mut config = nemo_relay_observability::atof::AtofExporterConfig::new();
             if let Some(output_directory) = options.output_directory {
                 config = config.with_output_directory(PathBuf::from(output_directory));
             }
@@ -1013,7 +1018,7 @@ fn build_atof_config(
                 config = config.with_filename(filename);
             }
             if let Some(mode) = options.mode {
-                let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode)
+                let Some(mode) = nemo_relay_observability::atof::AtofExporterMode::parse(&mode)
                 else {
                     return Err(napi::Error::from_reason(
                         "mode must be 'append' or 'overwrite'",
@@ -1029,14 +1034,14 @@ fn build_atof_config(
                 .ok_or_else(|| napi::Error::from_reason("stream sink requires url"))?;
             let transport = options.transport.unwrap_or_else(|| "http_post".to_string());
             let Some(transport) =
-                nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
+                nemo_relay_observability::atof::AtofEndpointTransport::parse(&transport)
             else {
                 return Err(napi::Error::from_reason(
                     "stream transport must be 'http_post', 'websocket', or 'ndjson'",
                 ));
             };
             let mut sink =
-                nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
+                nemo_relay_observability::atof::AtofStreamSinkConfig::new(url, transport);
             if let Some(timeout_millis) = options.timeout_millis {
                 sink = sink.with_timeout_millis(timeout_millis.into());
             }
@@ -1045,7 +1050,7 @@ fn build_atof_config(
             }
             if let Some(field_name_policy) = options.field_name_policy {
                 let Some(field_name_policy) =
-                    nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                    nemo_relay_observability::atof::AtofEndpointFieldNamePolicy::parse(
                         &field_name_policy,
                     )
                 else {
@@ -1061,7 +1066,7 @@ fn build_atof_config(
             for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
                 sink = sink.with_header_env(key, variable);
             }
-            Ok(nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
+            Ok(nemo_relay_observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
         }
         _ => Err(napi::Error::from_reason(
             "ATOF sink type must be 'file' or 'stream'",
@@ -1097,7 +1102,7 @@ struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
     propagation_parent_uuid: Option<String>,
-    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
+    propagation_context: Option<nemo_relay_runtime::api::runtime::PropagationContext>,
 }
 
 impl ScopedCallbackContext {
@@ -1122,79 +1127,68 @@ struct ScopedJsonCall {
 fn scoped_json_callback_tsfn_from_wrapper(
     env: &Env,
     callback: JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedJsonCall>| {
-            let value = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.value)?,
-                )
-            };
-            let scope_stack = ScopeStack {
-                inner: ctx.value.context.scope_stack,
-                publication_buffer: ctx.value.context.publication_buffer,
-            }
-            .into_instance(ctx.env)?;
-            Ok(vec![
-                value,
-                unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
-                match ctx.value.context.propagation_parent_uuid {
-                    Some(parent_uuid) => ctx.env.create_string(&parent_uuid)?.into_unknown(),
-                    None => ctx.env.get_undefined()?.into_unknown(),
+) -> napi::Result<callable::ReplyTsfn<ScopedJsonCall>> {
+    callable::reply_tsfn(env, &callback, |env, call: ScopedJsonCall| {
+        let value = callable::json_to_js_unknown(env, call.value)?;
+        let scope_stack = ScopeStack {
+            inner: call.context.scope_stack,
+            publication_buffer: call.context.publication_buffer,
+        }
+        .into_instance(*env)?;
+        Ok(vec![
+            value,
+            js_unknown_from_raw(env, &scope_stack),
+            match call.context.propagation_parent_uuid {
+                Some(parent_uuid) => env.create_string(&parent_uuid)?.into_unknown(),
+                None => env.get_undefined()?.into_unknown(),
+            },
+            match call.context.propagation_context {
+                // SAFETY: `to_napi_value` created the raw value in `env`.
+                Some(context) => unsafe {
+                    JsUnknown::from_raw_unchecked(
+                        env.raw(),
+                        PropagationContext::to_napi_value(
+                            env.raw(),
+                            propagation_context_to_napi(context),
+                        )?,
+                    )
                 },
-                match ctx.value.context.propagation_context {
-                    Some(context) => unsafe {
-                        JsUnknown::from_raw_unchecked(
-                            ctx.env.raw(),
-                            PropagationContext::to_napi_value(
-                                ctx.env.raw(),
-                                propagation_context_to_napi(context),
-                            )?,
-                        )
-                    },
-                    None => ctx.env.get_undefined()?.into_unknown(),
-                },
-            ])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
+                None => env.get_undefined()?.into_unknown(),
+            },
+        ])
+    })
 }
 
 fn scoped_json_callback_tsfn(
     env: &Env,
     func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+) -> napi::Result<callable::ReplyTsfn<ScopedJsonCall>> {
     scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
 }
 
-fn scoped_tool_execution_fn(
-    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
-) -> ToolExecutionNextFn {
+fn scoped_tool_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> ToolExecutionNextFn {
     let func = Arc::new(func);
     Arc::new(move |args: Json| {
         let func = func.clone();
         let context = ScopedCallbackContext::capture();
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
+            callable::call_with_reply(
+                &func,
                 ScopedJsonCall {
                     value: args,
                     context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
+                move |value| {
+                    let _ = tx.send(value);
                 },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS tool execution callback: {status:?}",
-                )));
-            }
+            )
+            .map_err(|refusal| {
+                FlowError::Internal(format!(
+                    "failed to queue JS tool execution callback: {refusal}"
+                ))
+            })?;
             let result = rx
                 .await
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
@@ -1206,9 +1200,7 @@ fn scoped_tool_execution_fn(
     })
 }
 
-fn scoped_llm_execution_fn(
-    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
-) -> LlmExecutionNextFn {
+fn scoped_llm_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> LlmExecutionNextFn {
     let func = Arc::new(func);
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
@@ -1216,118 +1208,28 @@ fn scoped_llm_execution_fn(
         let request = serde_json::to_value(request).unwrap_or(Json::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let status = func.call_with_return_value(
+            callable::call_with_reply(
+                &func,
                 ScopedJsonCall {
                     value: request,
                     context,
                 },
                 ThreadsafeFunctionCallMode::Blocking,
-                move |value: Option<Json>| {
-                    let _ = tx.send(callback_json(value));
-                    Ok(())
+                move |value| {
+                    let _ = tx.send(value);
                 },
-            );
-            if status != napi::Status::Ok {
-                return Err(FlowError::Internal(format!(
-                    "failed to queue JS LLM execution callback: {status:?}",
-                )));
-            }
+            )
+            .map_err(|refusal| {
+                FlowError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {refusal}"
+                ))
+            })?;
             let result = rx
                 .await
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             callable::unwrap_middleware_result(result, "JS LLM execution callback failed")
         })
     })
-}
-
-fn middleware_tool_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(String, Json)>| {
-            let name = ctx.env.create_string_from_std(ctx.value.0)?;
-            let args = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.1)?,
-                )
-            };
-            Ok(vec![js_unknown_from_raw(&ctx.env, &name), args])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_json_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_llm_sanitize_request_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<
-    ThreadsafeFunction<(Json, callable::JsLlmSanitizeRequestContext), ErrorStrategy::Fatal>,
-> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(
-            Json,
-            callable::JsLlmSanitizeRequestContext,
-        )>| {
-            let first = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.0)?,
-                )
-            };
-            let context = callable::js_llm_sanitize_request_context_to_napi(&ctx.env, ctx.value.1)?;
-            Ok(vec![first, context])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-fn middleware_llm_sanitize_response_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<
-    ThreadsafeFunction<(Json, callable::JsLlmSanitizeResponseContext), ErrorStrategy::Fatal>,
-> {
-    let callback = callable::safe_middleware_callback(env, func)?;
-    let mut tsfn = callback.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(
-            Json,
-            callable::JsLlmSanitizeResponseContext,
-        )>| {
-            let first = unsafe {
-                JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.0)?,
-                )
-            };
-            let context =
-                callable::js_llm_sanitize_response_context_to_napi(&ctx.env, ctx.value.1)?;
-            Ok(vec![first, context])
-        },
-    )?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2269,7 +2171,7 @@ fn decode_conditional_gate_result(value: Json) -> napi::Result<Option<String>> {
 
 struct NodeConditionalMiddlewareGuardrail {
     direct: PersistentJsFunction,
-    thread_safe: ThreadsafeFunction<(Vec<String>, String), ErrorStrategy::Fatal>,
+    thread_safe: callable::ReplyTsfn<(Vec<String>, String)>,
     registration_thread: std::thread::ThreadId,
 }
 
@@ -2299,19 +2201,19 @@ impl NodeConditionalMiddlewareGuardrail {
             );
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let status = self.thread_safe.call_with_return_value(
+        callable::call_with_reply(
+            &self.thread_safe,
             (kinds, registration_name),
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: Json| {
+            move |value| {
                 let _ = tx.send(decode_conditional_gate_result(value));
-                Ok(())
             },
-        );
-        if status != napi::Status::Ok {
-            return Err(napi::Error::from_reason(format!(
-                "conditional gate callback scheduling failed: {status:?}"
-            )));
-        }
+        )
+        .map_err(|refusal| {
+            napi::Error::from_reason(format!(
+                "conditional gate callback scheduling failed: {refusal}"
+            ))
+        })?;
         recv_conditional_gate_result(rx, CONDITIONAL_GATE_CALLBACK_TIMEOUT)
     }
 }
@@ -2323,23 +2225,21 @@ fn node_conditional_middleware_guardrail(
     let guardrail = callable::safe_conditional_gate_callback(env, guardrail)?;
     let direct = PersistentJsFunction::new(env, &guardrail)?;
     let registration_thread = std::thread::current().id();
-    let mut thread_safe = guardrail.create_threadsafe_function(
-        0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Vec<String>, String)>| {
+    let thread_safe = callable::reply_tsfn(
+        env,
+        &guardrail,
+        |env, (kinds, registration_name): (Vec<String>, String)| {
+            // SAFETY: `to_napi_value` created the raw array in `env`.
             let kinds = unsafe {
                 JsUnknown::from_raw_unchecked(
-                    ctx.env.raw(),
-                    Vec::<String>::to_napi_value(ctx.env.raw(), ctx.value.0)?,
+                    env.raw(),
+                    Vec::<String>::to_napi_value(env.raw(), kinds)?,
                 )
             };
-            let registration_name = ctx.env.create_string_from_std(ctx.value.1)?;
-            Ok(vec![
-                kinds,
-                js_unknown_from_raw(&ctx.env, &registration_name),
-            ])
+            let registration_name = env.create_string_from_std(registration_name)?;
+            Ok(vec![kinds, js_unknown_from_raw(env, &registration_name)])
         },
     )?;
-    thread_safe.unref(env)?;
     Ok(Arc::new(NodeConditionalMiddlewareGuardrail {
         direct,
         thread_safe,
@@ -2371,11 +2271,11 @@ fn node_event_metadata_injector_fn(
 }
 
 type NodeLlmCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 type NodeLlmResponseCodec = (
-    Arc<dyn nemo_relay::codec::traits::LlmResponseCodec>,
+    Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>,
     Vec<Arc<PersistentJsFunction>>,
 );
 
@@ -2412,7 +2312,7 @@ impl Drop for PersistentJsFunction {
 
 struct NodePluginValidateCallback {
     direct: PersistentJsFunction,
-    thread_safe: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    thread_safe: callable::ReplyTsfn<Json>,
     registration_thread: std::thread::ThreadId,
 }
 
@@ -2423,24 +2323,22 @@ impl NodePluginValidateCallback {
         }
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let status = self.thread_safe.call_with_return_value(
+        callable::call_with_reply(
+            &self.thread_safe,
             plugin_config,
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: Option<Json>| {
-                let result = callable::unwrap_middleware_result(
-                    callback_json(value),
-                    "JS plugin validate callback failed",
-                )
-                .map_err(|error| napi::Error::from_reason(error.to_string()));
+            move |value| {
+                let result =
+                    callable::unwrap_middleware_result(value, "JS plugin validate callback failed")
+                        .map_err(|error| napi::Error::from_reason(error.to_string()));
                 let _ = tx.send(result);
-                Ok(())
             },
-        );
-        if status != napi::Status::Ok {
-            return Err(napi::Error::from_reason(format!(
-                "failed to queue JS plugin validate callback: {status:?}"
-            )));
-        }
+        )
+        .map_err(|refusal| {
+            napi::Error::from_reason(format!(
+                "failed to queue JS plugin validate callback: {refusal}"
+            ))
+        })?;
         rx.recv()
             .map_err(|_| napi::Error::from_reason("JS plugin validate completion channel closed"))?
     }
@@ -2449,7 +2347,7 @@ impl NodePluginValidateCallback {
 struct NodePlugin {
     plugin_kind: String,
     validate: Option<NodePluginValidateCallback>,
-    register: ThreadsafeFunction<NodePluginRegisterCall, ErrorStrategy::Fatal>,
+    register: callable::ReplyTsfn<NodePluginRegisterCall>,
 }
 
 impl Plugin for NodePlugin {
@@ -2490,7 +2388,7 @@ impl Plugin for NodePlugin {
     fn register<'a>(
         &'a self,
         plugin_config: &serde_json::Map<String, serde_json::Value>,
-        ctx: &'a mut PluginRegistrationContext,
+        ctx: &'a mut dyn nemo_relay_plugin_host::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
         let plugin_config = plugin_config.clone();
@@ -2502,23 +2400,23 @@ impl Plugin for NodePlugin {
                 registrations: registrations.clone(),
             };
             let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
-            let status = self.register.call_with_return_value(
+            let queued = callable::call_with_reply(
+                &self.register,
                 payload,
                 ThreadsafeFunctionCallMode::NonBlocking,
-                move |value: Json| {
+                move |value| {
                     let result = callable::unwrap_middleware_result(
-                        callback_json(Some(value)),
+                        value,
                         "JS plugin register callback failed",
                     )
                     .map(|_| ())
                     .map_err(|error| error.to_string());
                     let _ = tx.send(result);
-                    Ok(())
                 },
             );
-            let result = if status != napi::Status::Ok {
+            let result = if let Err(refusal) = queued {
                 Err(PluginError::RegistrationFailed(format!(
-                    "failed to queue JS plugin register callback: {status:?}"
+                    "failed to queue JS plugin register callback: {refusal}"
                 )))
             } else {
                 rx.recv()
@@ -2562,7 +2460,7 @@ pub struct PropagationContext {
 
 fn propagation_context_from_napi(
     context: PropagationContext,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let root_uuid = context
         .root_uuid
         .as_deref()
@@ -2573,7 +2471,7 @@ fn propagation_context_from_napi(
         .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
     let version = u16::try_from(context.version)
         .map_err(|_| napi::Error::from_reason("propagation context version is out of range"))?;
-    let context = nemo_relay::api::runtime::PropagationContext {
+    let context = nemo_relay_runtime::api::runtime::PropagationContext {
         version,
         root_uuid,
         parent_uuid,
@@ -2587,7 +2485,7 @@ fn propagation_context_from_napi(
 }
 
 pub(crate) fn propagation_context_to_napi(
-    context: nemo_relay::api::runtime::PropagationContext,
+    context: nemo_relay_runtime::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
         version: u32::from(context.version),
@@ -2601,7 +2499,7 @@ pub(crate) fn propagation_context_to_napi(
 fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let context = callback_factory::callback_propagation_context(env)?
         .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
     let mut context = propagation_context_from_napi(context)?;
@@ -2638,7 +2536,7 @@ fn callback_propagation_context(
 fn rootless_callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
-) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+) -> napi::Result<nemo_relay_runtime::api::runtime::PropagationContext> {
     let mut context = callback_propagation_context(env, parent_uuid)?;
     context.root_uuid = None;
     let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
@@ -2749,7 +2647,7 @@ pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::
 /// Deserialize and validate a Relay causal context from the JSON wire format.
 #[napi]
 pub fn propagation_context_from_json(value: String) -> napi::Result<PropagationContext> {
-    nemo_relay::api::runtime::PropagationContext::from_json(&value)
+    nemo_relay_runtime::api::runtime::PropagationContext::from_json(&value)
         .map(propagation_context_to_napi)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -2793,8 +2691,10 @@ pub fn current_scope_stack_snapshot(
     env: Env,
 ) -> napi::Result<Option<crate::types::ScopeStackSnapshot>> {
     let snapshot = match callback_factory::callback_scope_stack(&env)? {
-        Some((stack, _)) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
-        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+        Some((stack, _)) => {
+            nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack).map(Some)
+        }
+        None => nemo_relay_runtime::api::runtime::current_scope_stack_snapshot(),
     };
     snapshot
         .map(|snapshot| snapshot.map(Into::into))
@@ -2855,52 +2755,20 @@ pub fn clear_last_callback_error() {
     clear_recorded_callback_error();
 }
 
-/// Internal test helper: invoke a closed JS tool callback wrapper and return the fallback value.
-#[napi(js_name = "__testClosedToolCallback")]
-pub async fn test_closed_tool_callback(
-    callback: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-    name: String,
-    args: Json,
-) -> Result<Json> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_tool_fn(callback);
-    let fallback = args.clone();
-    match wrapped(name, args).await {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            record_callback_error(error.to_string());
-            Ok(fallback)
-        }
+/// Internal test helper: queue a call on a closed reply callback and return the refusal.
+#[napi(js_name = "__testClosedReplyCallback")]
+pub fn test_closed_reply_callback(env: Env, callback: JsFunction, value: Json) -> Result<String> {
+    let wrapper = callback_factory::wrap_execution_callback(&env, &callback)?;
+    let reply = callable::reply_tsfn(&env, &wrapper, |env, value: Json| {
+        Ok(vec![callable::json_to_js_unknown(env, value)?])
+    })?;
+    reply.clone().abort()?;
+    match callable::call_with_reply(&reply, value, ThreadsafeFunctionCallMode::Blocking, |_| {}) {
+        Ok(()) => Err(napi::Error::from_reason(
+            "closed reply callback accepted a call",
+        )),
+        Err(refusal) => Ok(refusal.to_string()),
     }
-}
-
-/// Internal test helper: model a closed JS LLM request sanitizer.
-#[napi(js_name = "__testClosedLlmSanitizeRequestCallback")]
-pub fn test_closed_llm_sanitize_request_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    request: Json,
-) -> Result<Option<Json>> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let llm_request: LlmRequest = serde_json::from_value(request)
-        .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    drop(llm_request);
-    record_callback_error("nemo_relay: failed to queue JS LLM sanitize request callback");
-    Ok(None)
-}
-
-/// Internal test helper: model a closed JS LLM response sanitizer.
-#[napi(js_name = "__testClosedLlmResponseCallback")]
-pub fn test_closed_llm_response_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    response: Json,
-) -> Option<Json> {
-    clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    drop(response);
-    record_callback_error("nemo_relay: failed to queue JS LLM sanitize response callback");
-    None
 }
 
 /// Resolve a stream callback future whose queue step already failed.
@@ -4216,7 +4084,7 @@ napi_event_guardrail_api!(
 macro_rules! napi_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4258,8 +4126,7 @@ napi_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_request_guardrail,
     core_registry_api::register_tool_sanitize_request_guardrail,
-    core_registry_api::deregister_tool_sanitize_request_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::deregister_tool_sanitize_request_guardrail
 );
 
 napi_guardrail_tool_api!(
@@ -4275,8 +4142,7 @@ napi_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed.
     deregister_tool_sanitize_response_guardrail,
     core_registry_api::register_tool_sanitize_response_guardrail,
-    core_registry_api::deregister_tool_sanitize_response_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::deregister_tool_sanitize_response_guardrail
 );
 
 /// Register a guardrail that conditionally gates tool execution.
@@ -4322,7 +4188,7 @@ pub fn deregister_tool_conditional_execution_guardrail(name: String) -> Result<b
 macro_rules! napi_intercept_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4369,8 +4235,7 @@ napi_intercept_tool_api!(
     /// Returns `true` if an intercept with that name was found and removed.
     deregister_tool_request_intercept,
     core_registry_api::register_tool_request_intercept,
-    core_registry_api::deregister_tool_request_intercept,
-    callable::wrap_js_tool_request_intercept_fn
+    core_registry_api::deregister_tool_request_intercept
 );
 
 /// Register a tool execution intercept following the middleware chain pattern.
@@ -4803,7 +4668,7 @@ napi_scope_event_guardrail_api!(
 macro_rules! napi_scope_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4852,8 +4717,7 @@ napi_scope_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_request_guardrail,
     core_registry_api::scope_register_tool_sanitize_request_guardrail,
-    core_registry_api::scope_deregister_tool_sanitize_request_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::scope_deregister_tool_sanitize_request_guardrail
 );
 
 napi_scope_guardrail_tool_api!(
@@ -4870,8 +4734,7 @@ napi_scope_guardrail_tool_api!(
     /// Returns `true` if a guardrail with that name was found and removed from the specified scope.
     scope_deregister_tool_sanitize_response_guardrail,
     core_registry_api::scope_register_tool_sanitize_response_guardrail,
-    core_registry_api::scope_deregister_tool_sanitize_response_guardrail,
-    callable::wrap_js_tool_fn
+    core_registry_api::scope_deregister_tool_sanitize_response_guardrail
 );
 
 /// Register a scope-local guardrail that conditionally gates tool execution.
@@ -4926,7 +4789,7 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 macro_rules! napi_scope_intercept_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
-     $core_register:path, $core_deregister:path, $wrapper:path) => {
+     $core_register:path, $core_deregister:path) => {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
@@ -4979,8 +4842,7 @@ napi_scope_intercept_tool_api!(
     /// Returns `true` if an intercept with that name was found and removed from the specified scope.
     scope_deregister_tool_request_intercept,
     core_registry_api::scope_register_tool_request_intercept,
-    core_registry_api::scope_deregister_tool_request_intercept,
-    callable::wrap_js_tool_request_intercept_fn
+    core_registry_api::scope_deregister_tool_request_intercept
 );
 
 /// Register a scope-local tool execution intercept following the middleware chain pattern.
@@ -5486,7 +5348,7 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct AtifExporter {
-    inner: nemo_relay::observability::atif::AtifExporter,
+    inner: nemo_relay_observability::atif::AtifExporter,
 }
 
 #[napi]
@@ -5502,7 +5364,7 @@ impl AtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay_observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -5510,7 +5372,7 @@ impl AtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay_plugin_host::exporter::atif(session_id, agent_info),
         })
     }
 
@@ -5583,7 +5445,7 @@ pub struct AtofExporterConfig {
 /// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 #[napi]
 pub struct AtofExporter {
-    inner: nemo_relay::observability::atof::AtofExporter,
+    inner: nemo_relay_observability::atof::AtofExporter,
 }
 
 #[napi]
@@ -5592,7 +5454,7 @@ impl AtofExporter {
     /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::atof::AtofExporter::new(build_atof_config(config)?)
+        let inner = nemo_relay_plugin_host::exporter::atof(build_atof_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -5639,6 +5501,12 @@ impl AtofExporter {
         self.inner
             .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Return delivery diagnostics recorded by this exporter's stream sink.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 }
 
@@ -5701,7 +5569,7 @@ pub struct OpenTelemetryTlsConfig {
     pub private_key: Option<String>,
 }
 
-impl From<OpenTelemetryTlsConfig> for nemo_relay::observability::OpenTelemetryTlsConfig {
+impl From<OpenTelemetryTlsConfig> for nemo_relay_observability::OpenTelemetryTlsConfig {
     fn from(value: OpenTelemetryTlsConfig) -> Self {
         Self {
             certificate: value.certificate,
@@ -5758,7 +5626,7 @@ pub struct OpenTelemetryFileSinkConfig {
 
 fn build_otel_file_sink_config(
     options: OpenTelemetryFileSinkConfig,
-) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryFileSinkConfig> {
+) -> napi::Result<nemo_relay_observability::otel::OpenTelemetryFileSinkConfig> {
     let otel_type = parse_otel_type(&options.r#type)?;
     let directory = options.output_directory.trim();
     if directory.is_empty() {
@@ -5773,7 +5641,7 @@ fn build_otel_file_sink_config(
         options.mode.as_deref(),
     )?;
     let mut config =
-        nemo_relay::observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
+        nemo_relay_observability::otel::OpenTelemetryFileSinkConfig::new(otel_type, sink)
             .with_instrumentation_scope(
                 options
                     .instrumentation_scope
@@ -5801,7 +5669,7 @@ fn build_otel_file_sink_config(
         .with_mark_exclude_names(
             options
                 .mark_exclude_names
-                .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
+                .unwrap_or_else(nemo_relay_observability::default_mark_exclude_names),
         )
         .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
         .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default())
@@ -5816,7 +5684,7 @@ fn build_otel_file_sink_config(
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
-    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay_observability::otel::OpenTelemetrySubscriber,
 }
 
 #[napi]
@@ -5824,17 +5692,15 @@ impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
-            build_otel_config(config)?,
-        )
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry(build_otel_config(config)?)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
 
     /// Create a subscriber that writes OTLP to a local file.
     #[napi(factory)]
     pub fn file_sink(config: OpenTelemetryFileSinkConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new_file_sink(
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_file(
             build_otel_file_sink_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -5870,7 +5736,7 @@ impl OpenTelemetrySubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying tracer provider.
@@ -5929,7 +5795,7 @@ pub struct OpenTelemetryLogConfig {
 /// Subscriber that exports severity-tagged marks through OTLP logs.
 #[napi]
 pub struct OpenTelemetryLogSubscriber {
-    inner: nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+    inner: nemo_relay_observability::otel_logs::OpenTelemetryLogSubscriber,
 }
 
 #[napi]
@@ -5937,10 +5803,9 @@ impl OpenTelemetryLogSubscriber {
     /// Create a log subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryLogConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber::new(
-            build_otel_log_config(config)?,
-        )
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let inner =
+            nemo_relay_plugin_host::exporter::opentelemetry_logs(build_otel_log_config(config)?)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -5973,7 +5838,7 @@ impl OpenTelemetryLogSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying logger provider.
@@ -6030,7 +5895,7 @@ pub struct OpenTelemetryMetricConfig {
 /// Subscriber that records metric marks and exports them through OTLP metrics.
 #[napi]
 pub struct OpenTelemetryMetricSubscriber {
-    inner: nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+    inner: nemo_relay_observability::otel_metrics::OpenTelemetryMetricSubscriber,
 }
 
 #[napi]
@@ -6038,7 +5903,7 @@ impl OpenTelemetryMetricSubscriber {
     /// Create a metric subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: OpenTelemetryMetricConfig) -> napi::Result<Self> {
-        let inner = nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber::new(
+        let inner = nemo_relay_plugin_host::exporter::opentelemetry_metrics(
             build_otel_metric_config(config)?,
         )
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
@@ -6072,7 +5937,7 @@ impl OpenTelemetryMetricSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying meter provider.
@@ -6122,7 +5987,7 @@ struct CacheRequestFactsOptions {
 enum NodeAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_relay::plugin::ConfigReport,
+        report: nemo_relay_plugin_host::ConfigReport,
     },
     Ready(CoreAdaptiveRuntime),
 }
@@ -6338,7 +6203,7 @@ impl AdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> napi::Result<nemo_relay::plugin::ConfigReport> {
+) -> napi::Result<nemo_relay_plugin_host::ConfigReport> {
     let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
@@ -6457,11 +6322,9 @@ pub fn register_plugin(
         Some(func) => {
             let direct = PersistentJsFunction::new(&env, &func)?;
             let callback = callable::safe_middleware_callback(&env, &func)?;
-            let mut thread_safe = callback.create_threadsafe_function(
-                0,
-                |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
-            )?;
-            thread_safe.unref(&env)?;
+            let thread_safe = callable::reply_tsfn(&env, &callback, |env, plugin_config: Json| {
+                Ok(vec![callable::json_to_js_unknown(env, plugin_config)?])
+            })?;
             Some(NodePluginValidateCallback {
                 direct,
                 thread_safe,
@@ -6471,29 +6334,16 @@ pub fn register_plugin(
         None => None,
     };
     let register = callable::safe_middleware_callback(&env, &register)?;
-    let mut register_tsfn = register
-        .create_threadsafe_function::<NodePluginRegisterCall, JsUnknown, _, ErrorStrategy::Fatal>(
-            0,
-            move |ctx: napi::threadsafe_function::ThreadSafeCallContext<NodePluginRegisterCall>| {
-                let plugin_config = unsafe {
-                    JsUnknown::from_raw_unchecked(
-                        ctx.env.raw(),
-                        Json::to_napi_value(ctx.env.raw(), ctx.value.plugin_config)?,
-                    )
-                };
-                let plugin_context = build_plugin_context(
-                    &ctx.env,
-                    ctx.value.namespace_prefix,
-                    ctx.value.registrations,
-                )?;
-                Ok(vec![
-                    plugin_config,
-                    js_unknown_from_raw(&ctx.env, &plugin_context),
-                ])
-            },
-        )?;
-    register_tsfn.unref(&env)?;
-
+    let register_tsfn =
+        callable::reply_tsfn(&env, &register, |env, call: NodePluginRegisterCall| {
+            let plugin_config = callable::json_to_js_unknown(env, call.plugin_config)?;
+            let plugin_context =
+                build_plugin_context(env, call.namespace_prefix, call.registrations)?;
+            Ok(vec![
+                plugin_config,
+                js_unknown_from_raw(env, &plugin_context),
+            ])
+        })?;
     register_plugin_impl(Arc::new(NodePlugin {
         plugin_kind,
         validate: validate_callback,
@@ -6770,7 +6620,7 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
@@ -6783,7 +6633,7 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay_plugin_host::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;

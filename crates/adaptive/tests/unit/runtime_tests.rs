@@ -3,11 +3,13 @@
 
 //! Unit tests for runtime in the NeMo Relay adaptive crate.
 
-use nemo_relay::api::llm::{LlmRequest, llm_request_intercepts};
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::llm::{LlmRequest, llm_request_intercepts};
+use nemo_relay_runtime::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay_runtime::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
+};
 use serde_json::{Map, Value as Json};
 
 use crate::config::{
@@ -18,10 +20,9 @@ use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use {nemo_relay_plugin_host::ConfigPolicy, nemo_relay_plugin_host::UnsupportedBehavior};
 
-#[cfg(feature = "redis-backend")]
 const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
 fn reset_runtime_context() {
@@ -131,7 +132,6 @@ async fn build_backend_supports_in_memory_and_rejects_unknown_kinds() {
     }
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn build_backend_redis_requires_url_and_maps_invalid_client_urls() {
     let missing_url = build_backend(&BackendSpec {
@@ -164,7 +164,6 @@ async fn build_backend_redis_requires_url_and_maps_invalid_client_urls() {
     }
 }
 
-#[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn build_backend_redis_supports_success_path_when_server_is_available() {
     if std::env::var_os(REDIS_TEST_ENV).is_none() {
@@ -201,27 +200,6 @@ async fn build_backend_redis_supports_success_path_when_server_is_available() {
         .await
         .expect("expected empty run listing");
     assert!(runs.is_empty());
-}
-
-#[cfg(not(feature = "redis-backend"))]
-#[tokio::test(flavor = "current_thread")]
-async fn build_backend_redis_reports_feature_disabled_when_compiled_out() {
-    let disabled = build_backend(&BackendSpec {
-        kind: "redis".to_string(),
-        config: serde_json::Map::from_iter([(
-            "url".to_string(),
-            Json::String("redis://127.0.0.1/".to_string()),
-        )]),
-    })
-    .await;
-
-    match disabled {
-        Err(AdaptiveError::InvalidConfig(message)) => {
-            assert!(message.contains("not enabled"));
-        }
-        Err(other) => panic!("unexpected feature-disabled error: {other}"),
-        Ok(_) => panic!("expected redis backend to be disabled in this build"),
-    }
 }
 
 #[test]
@@ -319,7 +297,7 @@ fn validate_config_reports_unknown_backend_and_acg_provider_per_policy() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "adaptive.unknown_backend"
-                && diag.level == nemo_relay::plugin::DiagnosticLevel::Warning)
+                && diag.level == nemo_relay_plugin_host::DiagnosticLevel::Warning)
     );
     assert!(
         warn_report

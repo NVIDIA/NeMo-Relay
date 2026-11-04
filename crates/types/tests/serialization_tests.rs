@@ -893,3 +893,17 @@ fn metric_attributes_insert_replaces_by_key_in_sorted_order() {
     );
     assert!(MetricAttributes::default().is_empty());
 }
+
+#[test]
+fn tool_execution_context_debug_omits_arguments() {
+    let context = nemo_relay_types::api::tool::ToolExecutionContext {
+        tool_name: "lookup".into(),
+        args: json!({"secret": "credential"}),
+        tool_call_id: Some("call-1".into()),
+    };
+    let debug = format!("{context:?}");
+    assert!(debug.contains("lookup"));
+    assert!(debug.contains("call-1"));
+    assert!(!debug.contains("secret"));
+    assert!(!debug.contains("credential"));
+}

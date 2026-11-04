@@ -10,7 +10,7 @@ use std::ptr;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nemo_relay::plugin::PluginRegistrationContext;
+use nemo_relay_plugin_host::HostPluginRegistrationContext;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
@@ -568,7 +568,10 @@ unsafe extern "C" fn llm_exec_intercept_cb(
     unsafe { next_fn(native_json, next_ctx) }
 }
 
-unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
+unsafe extern "C" fn collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    chunk_json: *const c_char,
+) -> i32 {
     let chunk: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(chunk_json) }
             .to_str()
@@ -576,9 +579,10 @@ unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
     )
     .unwrap();
     lock_unpoisoned(collected_chunks()).push(chunk);
+    0
 }
 
-unsafe extern "C" fn finalizer_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     *lock_unpoisoned(finalizer_calls()) += 1;
     CString::new(json!({"finalized": true}).to_string())
         .unwrap()
@@ -817,6 +821,56 @@ fn atof_exporter_writes_raw_jsonl_events() {
         nemo_relay_atof_exporter_free(exporter);
         nemo_relay_scope_stack_free(stack);
     }
+}
+
+#[test]
+fn atof_exporter_runtime_diagnostics_json_reports_the_snapshot_and_null_pointers() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let dir = temp_dir("ffi-atof-diagnostics");
+    let output_directory = cstring(dir.to_str().unwrap());
+    let mode = cstring("overwrite");
+    let filename = cstring("events.jsonl");
+    let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_create(
+                output_directory.as_ptr(),
+                mode.as_ptr(),
+                filename.as_ptr(),
+                &mut exporter,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+
+    let mut diagnostics_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_runtime_diagnostics_json(exporter, &mut diagnostics_json)
+        },
+        NemoRelayStatus::Ok
+    );
+    assert_eq!(unsafe { take_string(diagnostics_json) }.unwrap(), "[]");
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_runtime_diagnostics_json(
+                ptr::null(),
+                &mut diagnostics_json,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_runtime_diagnostics_json(exporter, ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { api::nemo_relay_atof_exporter_shutdown(exporter) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { nemo_relay_atof_exporter_free(exporter) };
 }
 
 #[test]

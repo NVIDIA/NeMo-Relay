@@ -19,18 +19,18 @@ use std::task::{Context, Poll};
 
 use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction};
-use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
+use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nemo_relay::api::runtime::subscriber_dispatcher::{
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
     with_task_nested_publication_buffer,
 };
-use nemo_relay::api::runtime::{
+use nemo_relay_runtime::api::runtime::{
     LlmStreamInner, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
     ScopeStackHandle, capture_propagation_context, current_scope_stack,
 };
-use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay_types::error::{FlowError, Result as FlowResult};
 
 use crate::api::{PropagationContext, propagation_context_to_napi};
 use crate::callback_factory;
@@ -75,7 +75,10 @@ pub type JsonStreamNextFn = Arc<
     dyn Fn(
             Json,
         ) -> Pin<
-            Box<dyn Future<Output = FlowResult<nemo_relay::api::runtime::LlmJsonStream>> + Send>,
+            Box<
+                dyn Future<Output = FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream>>
+                    + Send,
+            >,
         > + Send
         + Sync,
 >;
@@ -653,8 +656,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Flag raised by an environment cleanup hook. A hook registered after napi-rs's runtime
-/// hook runs before the runtime drops.
+pub(crate) const ENV_SHUTTING_DOWN: &str = "Node environment is shutting down";
+
 pub(crate) fn env_teardown_flag(env: &Env) -> napi::Result<Arc<AtomicBool>> {
     ENV_TEARDOWN.with(|slot| {
         if let Some(flag) = slot.borrow().as_ref() {
@@ -670,6 +673,24 @@ pub(crate) fn env_teardown_flag(env: &Env) -> napi::Result<Arc<AtomicBool>> {
 
 pub(crate) fn reset_env_teardown() {
     ENV_TEARDOWN.with(|slot| slot.replace(None));
+}
+
+pub(crate) fn mark_env_exiting_on_process_exit(env: &Env) -> napi::Result<()> {
+    let flag = env_teardown_flag(env)?;
+    let mark = env.create_function_from_closure("__nemo_relay_mark_env_exiting", move |ctx| {
+        flag.store(true, Ordering::Release);
+        ctx.env.get_undefined()
+    })?;
+    let process: JsObject = env.get_global()?.get_named_property("process")?;
+    let once: JsFunction = process.get_named_property("once")?;
+    once.call(
+        Some(&process),
+        &[
+            env.create_string("exit")?.into_unknown(),
+            mark.into_unknown(),
+        ],
+    )?;
+    Ok(())
 }
 
 /// Threadsafe function left to Node once it is closing or its environment tears down.
@@ -786,9 +807,16 @@ impl PromiseAwareFn {
     }
 
     fn from_wrapper(env: &Env, wrapper: &JsFunction) -> napi::Result<Self> {
+        let teardown = env_teardown_flag(env)?;
         let mut tsfn =
-            env.create_threadsafe_function(wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
+            env.create_threadsafe_function(wrapper, 0, move |ctx: ThreadSafeCallContext<CallArgs>| {
                 let completion = ctx.value.completion.clone();
+                if teardown.load(Ordering::Acquire) {
+                    completion.send_error(FlowError::Internal(format!(
+                        "JS middleware callback skipped: {ENV_SHUTTING_DOWN}"
+                    )));
+                    return Err(napi::Error::from_reason(ENV_SHUTTING_DOWN));
+                }
                 let result = (|| {
                     let next = match ctx.value.next {
                         Some(next) => {
@@ -990,7 +1018,7 @@ impl PromiseAwareFn {
         &self,
         args: Json,
         next: JsonStreamNextFn,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next), None)
             .await
     }
@@ -1001,7 +1029,7 @@ impl PromiseAwareFn {
         &self,
         build_arg0: Arg0Builder,
         next: JsonStreamNextFn,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, Some(next), None)
             .await
     }
@@ -1011,7 +1039,7 @@ impl PromiseAwareFn {
         &self,
         args: Json,
         stream_cancellation: &StreamCancellation,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         self.call_with_stream_next_inner(
             PrimaryArg::Json(args),
             false,
@@ -1027,7 +1055,7 @@ impl PromiseAwareFn {
         spread: bool,
         next: Option<JsonStreamNextFn>,
         stream_cancellation: Option<&StreamCancellation>,
-    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+    ) -> FlowResult<nemo_relay_runtime::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (chunk_sender, chunk_receiver) =
             tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
@@ -1075,14 +1103,14 @@ impl PromiseAwareFn {
             .await
             .map_err(|e| FlowError::Internal(e.to_string()))??;
         cancellation_guard.disarm();
-        Ok(nemo_relay::api::runtime::LlmJsonStream::from_closeable(
-            JsCallbackStream {
+        Ok(
+            nemo_relay_runtime::api::runtime::LlmJsonStream::from_closeable(JsCallbackStream {
                 receiver: tokio_stream::wrappers::ReceiverStream::new(chunk_receiver),
                 completion: stream_completion,
                 closed,
                 cancellation,
-            },
-        ))
+            }),
+        )
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.

@@ -185,14 +185,10 @@ in how their component kind becomes available to the host:
 
 ## Built-In Plugin Components
 
-The core runtime registers the `observability`, `nemo_guardrails`, and
-`pricing` components before lookup, validation, and initialization. The CLI and
-the Python and Node.js bindings also register `adaptive` and `pii_redaction`.
-Direct Rust applications must register Adaptive and PII Redaction from their
-component crates before validating or initializing either kind:
-`nemo_relay_adaptive::plugin_component::register_adaptive_component()` and
-`nemo_relay_pii_redaction::component::register_pii_redaction_component()`.
-Applications can still register custom plugins.
+All SDKs and the CLI register `observability`, `resource_metrics`, `pricing`,
+`adaptive`, and `pii_redaction` automatically through the shared built-in
+composition. Configuration controls activation; registration alone does not
+activate a component. Applications can also register custom plugins.
 
 ### Adaptive
 
@@ -203,10 +199,9 @@ This matters conceptually because adaptive behavior is configured and activated
 through the same component lifecycle as other plugins. Direct Rust applications
 follow this sequence:
 
-1. Call `nemo_relay_adaptive::plugin_component::register_adaptive_component()`.
-2. Validate the config.
-3. Initialize the plugin system.
-4. Inspect the activation result if needed.
+1. Validate the config.
+2. Initialize the plugin system.
+3. Inspect the activation result if needed.
 
 Detailed adaptive configuration belongs in
 [Adaptive Configuration](/configure-plugins/adaptive/configuration),
@@ -215,7 +210,7 @@ Detailed adaptive configuration belongs in
 
 ### Observability
 
-The core crate ships a built-in `observability` plugin component for Agent
+The shared composition includes a built-in `observability` plugin component for Agent
 Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format
 (ATIF), and typed OpenTelemetry exporters. Each exporter section is disabled
 unless its section sets `enabled = true`, and subscriber names are inferred
@@ -224,34 +219,18 @@ from the plugin namespace instead of exposed in public config.
 Detailed observability plugin configuration belongs in
 [Observability Configuration](/configure-plugins/observability/configuration).
 
-### NeMo Guardrails
-
-The core crate also ships a built-in `nemo_guardrails` plugin component. The
-built-in integration is deprecated and scheduled for removal in NeMo Relay
-0.9. There is no replacement in NeMo Relay 0.8; any replacement will target 0.9
-or later. Do not use the built-in component for new deployments.
-
-The current user-facing paths are the remote backend for Guardrails-service
-integration and the Python-backed local backend that runs `nemoguardrails`
-through a subprocess worker.
-
-Detailed Guardrails plugin configuration belongs in
-[NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration).
-
 ### PII Redaction
 
 The `pii_redaction` component sanitizes emitted observability payloads without
-changing real callback arguments or results. The CLI and primary language
-bindings register this component. Direct Rust applications must call
-`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
-before they validate or initialize a PII Redaction component.
+changing real callback arguments or results. All SDKs and the CLI register this
+component automatically.
 
 Configure actions, detectors, targets, and backend modes through [PII Redaction
 Configuration](/configure-plugins/pii-redaction/configuration).
 
 ### Model Pricing
 
-The core crate ships a built-in `pricing` component. It loads catalog sources
+The shared composition includes a built-in `pricing` component. It loads catalog sources
 that response codecs can use to annotate managed or manually observed LLM
 responses with cost estimates. Configure catalog sources through
 [Model Pricing](/configure-plugins/model-pricing).

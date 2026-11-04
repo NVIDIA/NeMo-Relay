@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,15 +18,7 @@ import (
 	"unsafe"
 )
 
-const (
-	cargoManifestName = "Cargo.toml"
-	goNativeToolName  = "go-native-tool"
-)
-
-var (
-	workspacePackagePattern = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
-	workspaceVersionPattern = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
-)
+const goNativeToolName = "go-native-tool"
 
 func withPluginHostStubs(t *testing.T) {
 	t.Helper()
@@ -396,7 +387,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 
 [compat]
-relay = "=%s"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -414,7 +405,7 @@ sha256 = "sha256:%s"
 [load]
 library = %q
 symbol = "nemo_relay_fixture_native_plugin"
-`, relayWorkspaceVersion(t), library, artifactDigest(t, library), library)
+`, library, artifactDigest(t, library), library)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write native plugin manifest: %v", err)
 	}
@@ -431,8 +422,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = "=%s"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -449,65 +440,9 @@ sha256 = "sha256:%s"
 [load]
 runtime = "rust"
 entrypoint = %q
-`, relayWorkspaceVersion(t), executable, artifactDigest(t, executable), executable)
+`, executable, artifactDigest(t, executable), executable)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write worker plugin manifest: %v", err)
 	}
 	return manifest
-}
-
-func relayWorkspaceVersion(t *testing.T) string {
-	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	payload, err := os.ReadFile(filepath.Join(repoRoot, cargoManifestName))
-	if err != nil {
-		t.Fatalf("read workspace Cargo.toml: %v", err)
-	}
-	version, err := workspaceVersionFromCargoTOML(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return version
-}
-
-func workspaceVersionFromCargoTOML(payload []byte) (string, error) {
-	section := workspacePackagePattern.FindSubmatch(payload)
-	if section == nil {
-		return "", errors.New("workspace Cargo.toml has no [workspace.package] section")
-	}
-	version := workspaceVersionPattern.FindSubmatch(section[1])
-	if version == nil {
-		return "", errors.New("workspace package version not found")
-	}
-	if len(version[1]) != 0 {
-		return string(version[1]), nil
-	}
-	return string(version[2]), nil
-}
-
-func TestWorkspaceVersionFromCargoTOML(t *testing.T) {
-	for _, test := range []struct {
-		name, payload, want, wantErr string
-	}{
-		{"standard", "[workspace.package]\nversion = \"0.8.0\"\n", "0.8.0", ""},
-		{"literal", "[workspace.package]\nversion = '0.8.1'\n", "0.8.1", ""},
-		{"missing section", "[package]\nversion = \"0.8.0\"\n", "", "no [workspace.package] section"},
-		{"missing version", "[workspace.package]\nedition = \"2024\"\n", "", "version not found"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := workspaceVersionFromCargoTOML([]byte(test.payload))
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("error = %v, want %q", err, test.wantErr)
-				}
-				return
-			}
-			if err != nil || got != test.want {
-				t.Fatalf("version = %q, error = %v", got, err)
-			}
-		})
-	}
 }

@@ -91,21 +91,25 @@ class _RestrictedUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 
-def _serialize_dataclass_instance(value: DataclassInstance) -> Json:
+def _serialize_dataclass_instance(value: DataclassInstance, *, preserve_null_fields: bool = False) -> Json:
     return {
-        field_info.name: _serialize_value(field_value)
-        for field_info in dataclasses.fields(value)
-        if (field_value := getattr(value, field_info.name)) is not None
+        dataclass_field.name: _serialize_value(field_value, preserve_null_fields=preserve_null_fields)
+        for dataclass_field in dataclasses.fields(value)
+        if not preserve_null_fields or dataclass_field.init
+        if (field_value := getattr(value, dataclass_field.name)) is not None or preserve_null_fields
     }
 
 
-def _serialize_value(value: object) -> Json:
+def _serialize_value(value: object, *, preserve_null_fields: bool = False) -> Json:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _serialize_dataclass_instance(cast(DataclassInstance, value))
+        return _serialize_dataclass_instance(cast(DataclassInstance, value), preserve_null_fields=preserve_null_fields)
     if isinstance(value, list):
-        return [_serialize_value(item) for item in value]
+        return [_serialize_value(item, preserve_null_fields=preserve_null_fields) for item in value]
     if isinstance(value, dict):
-        return {cast(str, key): _serialize_value(item) for key, item in value.items()}
+        return {
+            cast(str, key): _serialize_value(item, preserve_null_fields=preserve_null_fields)
+            for key, item in value.items()
+        }
     if hasattr(value, "model_dump"):
         try:
             return cast(_SupportsModelDump, value).model_dump(mode="json")
@@ -243,7 +247,7 @@ class DataclassCodec(Codec[T]):
         Returns:
             Json: JSON-compatible dictionary representation of ``value``.
         """
-        return _serialize_dataclass_instance(cast(DataclassInstance, value))
+        return _serialize_dataclass_instance(cast(DataclassInstance, value), preserve_null_fields=True)
 
     def from_json(self, data: Json) -> T:
         """Deserialize JSON data into a dataclass instance.
@@ -791,6 +795,10 @@ async def llm_stream_execute(
         ``collector`` receives typed chunks, but the returned stream still
         yields the raw JSON chunk values produced by the underlying runtime.
 
+        When stopping early, await ``stream.aclose()`` to finish cleanup.
+        If the source iterator provides ``aclose()``, the wrapper awaits it
+        when forwarding ends, including early closure and conversion failures.
+
     Example::
 
         import nemo_relay
@@ -838,8 +846,14 @@ async def llm_stream_execute(
     """
 
     async def _json_func(request_inner: LLMRequest) -> AsyncIterator[Json]:
-        async for typed_chunk in func(request_inner):
-            yield chunk_json_codec.to_json(typed_chunk)
+        source_iterator = func(request_inner)
+        try:
+            async for typed_chunk in source_iterator:
+                yield chunk_json_codec.to_json(typed_chunk)
+        finally:
+            close_source_iterator = getattr(source_iterator, "aclose", None)
+            if close_source_iterator is not None:
+                await close_source_iterator()
 
     def _json_collector(json_chunk: Json) -> None:
         collector(chunk_json_codec.from_json(json_chunk))

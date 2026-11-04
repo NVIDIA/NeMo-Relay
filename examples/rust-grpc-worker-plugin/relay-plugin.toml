@@ -8,8 +8,8 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.10.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false

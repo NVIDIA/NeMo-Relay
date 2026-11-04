@@ -22,10 +22,10 @@ from nemo_relay.integrations.google_adk._serialization import (
     token_counts,
     with_uncached,
 )
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from google.adk.models.google_llm import Gemini
     from google.genai.models import AsyncModels
@@ -86,7 +86,7 @@ def _wire(model: type[BaseModel], value: Json) -> Json:
 GEMINI_CODEC: Final = AdkCodec(_read)
 
 
-def gemini_backend(model: Gemini) -> Backend:
+def gemini_backend(model: Gemini, request_model: str | None) -> Backend:
     """Return backend for model's client: `vertex_ai` for Vertex AI client, `gemini` otherwise.
 
     Swap client's models resource to record each response, unless model uses interactions API.
@@ -95,10 +95,10 @@ def gemini_backend(model: Gemini) -> Backend:
     if not model.use_interactions_api:
         swap_class(client.aio.models, _models_methods)
     provider = "vertex_ai" if client.vertexai else "gemini"
-    return Backend(provider, GEMINI_CODEC, client_headers=False)
+    return Backend(provider, GEMINI_CODEC, client_headers=False, model=request_model)
 
 
-def _models_methods(cls: type[AsyncModels]) -> Mapping[str, object]:
+def _models_methods(cls: type[AsyncModels]) -> Methods[AsyncModels]:
     """Return `AsyncModels` methods that record response id and URL context on current attempt.
 
     `LlmResponse` drops `response_id` and first candidate's `url_context_metadata`.

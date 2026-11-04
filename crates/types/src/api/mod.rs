@@ -15,3 +15,6 @@ pub mod resource_metrics;
 pub mod scope;
 /// Tool DTOs and attributes.
 pub mod tool;
+
+/// Middleware callback and invocation contracts.
+pub mod runtime;

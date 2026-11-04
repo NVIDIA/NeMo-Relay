@@ -19,7 +19,6 @@ const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = path.resolve(nodeDir, '../..');
 const fixtureTarget = path.join(repoRoot, 'target', 'node-dynamic-plugin-fixtures');
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-dynamic-'));
-const relayVersion = JSON.parse(readFileSync(path.join(nodeDir, 'package.json'), 'utf8')).version;
 
 let nativeManifestRef;
 let workerManifestRef;
@@ -65,7 +64,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 
 [compat]
-relay = ${tomlString(`=${relayVersion}`)}
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -101,8 +100,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = ${tomlString(`=${relayVersion}`)}
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -211,8 +210,8 @@ before(() => {
   mkdirSync(isolatedConfigHome, { recursive: true });
   process.chdir(tempRoot);
   process.env.XDG_CONFIG_HOME = isolatedConfigHome;
-  const nativeFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
-  const workerFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
+  const nativeFixture = path.join(repoRoot, 'crates', 'plugin-host', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
+  const workerFixture = path.join(repoRoot, 'crates', 'plugin-host', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
   buildFixture(nativeFixture);
   buildFixture(workerFixture);
   nativeManifestRef = writeNativeManifest(path.join(fixtureTarget, 'debug', nativeLibraryName()));
@@ -351,7 +350,7 @@ enabled = true
           const request = nativeRequest();
           request.content.marker_path = markerPath;
           request.content.mode = mode;
-          stream = await lib.llmStreamCallExecute('native-fixture-cleanup-stream', request, async function* () {
+          stream = await lib.llmStreamCallExecute('native-fixture-cleanup-stream', request, () => {
             throw new Error('native fixture should replace the provider');
           });
           assert.deepEqual(await stream.next(), { token: 'first' });
@@ -389,7 +388,7 @@ enabled = true
         const request = nativeRequest();
         request.content.marker_path = markerPath;
         request.content.mode = mode;
-        stream = await lib.llmStreamCallExecute('worker-fixture-cleanup-stream', request, async function* () {
+        stream = await lib.llmStreamCallExecute('worker-fixture-cleanup-stream', request, () => {
           throw new Error('worker fixture should replace the provider');
         });
         assert.deepEqual(await stream.next(), { token: 'first' });

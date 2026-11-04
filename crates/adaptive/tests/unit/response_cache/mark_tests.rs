@@ -5,7 +5,7 @@
 
 use std::{hint::black_box, time::Duration};
 
-use nemo_relay::codec::model_pricing::{
+use nemo_relay_model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 

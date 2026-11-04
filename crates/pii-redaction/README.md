@@ -56,7 +56,7 @@ sanitizes emitted observability payloads through NeMo Relay sanitize guardrails.
 
 ## Installation
 
-Install the plugin crate alongside the core runtime:
+Install the plugin crate alongside the Rust SDK:
 
 ```bash
 cargo add nemo-relay nemo-relay-pii-redaction
@@ -71,12 +71,9 @@ cargo test -p nemo-relay-pii-redaction
 
 ## Getting Started
 
-Register the plugin component before validating or initializing plugin
-configuration that includes a `pii_redaction` component:
-
-```rust
-nemo_relay_pii_redaction::component::register_pii_redaction_component()?;
-```
+All SDKs and the CLI register `pii_redaction` automatically. Plugin configuration
+controls activation. Custom embeddings using `nemo-relay-plugin-host` directly
+can call this crate's component registration helper to choose their component set.
 
 A profile-array config can apply multiple policies across every supported
 sanitization surface:
@@ -156,12 +153,16 @@ exception names.
 Normalized LLM annotations retain message roles and content-part kinds; model,
 tool, provider, and metric names; request tuning parameters; finish reasons;
 token and cache usage; and normalized cost amounts, currency, and source
-classification. Content strings and application identifiers use the configured
+classification. Content strings and other application identifiers use the configured
 replacement, which defaults to `[REDACTED]`. Opaque typed fields become `{}`;
 approved typed numeric and boolean analytics remain available. Pricing provenance,
 routing metadata, optimization contribution evidence, and unknown fields are
 discarded. Relay event, parent, trace, and span identifiers are not sanitizer
 fields, so trajectory hierarchy remains available.
+
+Tool-call correlation IDs remain unchanged across LLM messages and tool
+lifecycle events so exporters can associate results with the correct calls.
+Response IDs and other application identifiers still use the replacement marker.
 
 Provider, model, tool, and metric names are intentional free-form exceptions.
 Producers must not place user content, secrets, or personal identifiers in those

@@ -288,7 +288,6 @@ fn evidence_availability_is_explicit_and_not_inferred_from_an_empty_list() {
     }
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn generated_schema_keeps_diagnostic_numbers_as_strings() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
@@ -309,7 +308,6 @@ fn generated_schema_keeps_diagnostic_numbers_as_strings() {
     );
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn numeric_schema_and_deserializer_agree_at_every_u64_maximum_prefix() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticNumber)).unwrap();
@@ -352,7 +350,6 @@ fn numeric_schema_and_deserializer_agree_at_every_u64_maximum_prefix() {
     }
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn identity_and_observation_schemas_preserve_wire_formats() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
@@ -869,7 +866,6 @@ fn canonical_name_helpers_reject_unrecognized_names() {
     }
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn shared_payload_schema_admits_names_as_strings() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
@@ -959,7 +955,6 @@ fn origin_generation_query_is_lossless_without_a_historical_summary_selector() {
     );
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn snapshot_schema_version_matches_decoder_and_numeric_wire_notation() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
@@ -1101,7 +1096,6 @@ fn memory_page_wire_quantities_are_lossless_and_versioned() {
     assert!(serde_json::from_value::<DiagnosticMemoryPage>(wire).is_err());
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn memory_schema_uses_versioned_envelope_and_lossless_aggregate_fields() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticMemoryPage)).unwrap();

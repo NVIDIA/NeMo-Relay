@@ -21,6 +21,7 @@ demonstrations.
 | Tool sanitizers and policy | Sync or async callback, normalized by the SDK. | Closure returning a boxed or inferred future. | Sanitized JSON or an optional block reason. |
 | Tool request intercept | Sync or async callback. | Async closure. | Complete rewritten JSON request. |
 | Tool execution intercept | Async callback with `ToolNext`. | Async closure with cloneable `ToolNext`. | `ToolExecutionInterceptOutcome`, which preserves the downstream `result` and optional `annotation` plus Relay-owned accounting. |
+| Conditional middleware guardrail | Sync or async callback over registration kinds and name. | Async closure over registration kinds and name. | Optional block reason for the selected middleware registration. |
 | LLM sanitizers | Sync or async callback with an invocation-scoped codec context. | Async closure with typed request or response context. | Optional sanitized payload. |
 | LLM policy and request intercept | Sync or async callback. | Async closure. | Optional block reason or full request-intercept outcome with annotations. |
 | Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
@@ -30,11 +31,11 @@ Daemon workers support all LLM middleware types for calls with and without
 streaming. Refer to [LLM Middleware](/daemon/reference#llm-middleware) for
 supported provider APIs and response behavior.
 
-The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
-and six LLM registrations make 16 surfaces. Registration names are component-local;
-[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
-registration metadata and enforced by the host after it merges visible
-[middleware](/about-nemo-relay/concepts/middleware).
+These callback types make 17 surfaces: one event metadata injector, one subscriber,
+three event sanitizers, five tool registrations, six LLM registrations, and one
+conditional middleware gate. Registration names are local to each component.
+The host applies [priority and `break_chain`](/build-plugins/fundamentals/plugin-context)
+after merging the visible [middleware](/about-nemo-relay/concepts/middleware).
 
 By default, Relay gives short callbacks, such as request interceptors and
 guardrails, 30 seconds to return. Set a different deadline in
@@ -46,7 +47,7 @@ stream. The caller can cancel these callbacks. Relay then releases their
 continuations, codec capabilities, and scope state.
 
 Timeout errors name the callback and its registration surface. For example,
-`surface=TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
+`surface=REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
 timed out. The error also shows the time limit: `worker RPC timed out after 30000ms`.
 
 When a worker call ends or times out, Relay drops its active provider futures and
@@ -59,9 +60,9 @@ stop.
 
 Choose a worker language to register a callback that proposes metadata additions:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import Event, EventMetadata, EventSanitizeFields, Json, LlmRequest, LlmSanitizeRequestContext
 
 async def add_plugin_context(event: Event) -> EventMetadata:
@@ -74,9 +75,8 @@ ctx.register_event_metadata_injector(
     priority=0,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 use std::collections::BTreeMap;
 
 use nemo_relay_worker::Json;
@@ -92,8 +92,8 @@ context.register_event_metadata_injector(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Relay sends the immutable Event snapshot through the existing unary `Invoke` RPC. It
 validates and merges accepted additions before Event sanitizers run. A callback error
@@ -189,9 +189,9 @@ referenced it.
 Request intercepts affect real execution. The LLM form returns more than a provider
 request because Relay must carry its normalized annotation and accounting separately.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from nemo_relay_plugin import AnnotatedLlmRequest, Json, LlmOptimizationContribution, LlmRequest, LlmRequestInterceptOutcome, PendingMarkSpec
 
 priority = requests["priority"]
@@ -235,9 +235,8 @@ ctx.register_llm_request_intercept(
     break_chain=break_chain,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 context.register_llm_request_intercept(
     "documentation_llm_request",
     config.requests.priority,
@@ -277,8 +276,8 @@ context.register_llm_request_intercept(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Returning only `rewritten` would be the wrong callback result for this surface. The tool
 request intercept does return JSON directly because it has no annotated request or LLM
@@ -324,9 +323,9 @@ stream, the Python task receives `asyncio.CancelledError` and the Rust callback 
 aborted. Cleanup belongs in `finally` or a drop-safe guard. Acknowledged cancellation
 does not prove that external blocking work has stopped.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 priority = execution["priority"]
 emit_pending_marks = execution["emit_pending_marks"]
 tag = settings["tag"]
@@ -413,9 +412,8 @@ ctx.register_llm_stream_execution_intercept(
     priority=priority,
 )
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 context.register_tool_execution_intercept(
     "documentation_tool_execution",
     config.execution.priority,
@@ -476,8 +474,8 @@ context.register_llm_stream_execution_intercept(
     },
 );
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 `LlmExecutionContext` describes the codecs selected by the host for this
 managed invocation. `request_codec` is always present as an identity-bearing

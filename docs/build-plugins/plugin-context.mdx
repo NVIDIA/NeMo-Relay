@@ -95,9 +95,9 @@ the visible request still looks correct.
 The distinction is easiest to see in code. Each wrapper forwards both fields from the
 downstream result, then adds the pending mark without exposing it to the application.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 from collections.abc import Awaitable, Callable
 
 from nemo_relay import Json, PendingMarkSpec, ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult
@@ -117,9 +117,8 @@ context.register_tool_execution_intercept(
     "tool_execution", execution_priority, tool_execution
 )
 ```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
+
+```js title="Node.js"
 context.registerToolExecutionIntercept(
   'tool_execution',
   executionPriority,
@@ -132,9 +131,8 @@ context.registerToolExecutionIntercept(
   },
 );
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 context.register_tool_execution_intercept(
     "tool_execution",
     execution_priority,
@@ -152,8 +150,8 @@ context.register_tool_execution_intercept(
     },
 )?;
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 Each binding's tool execution registration receives a `ToolExecutionContext`
 and the continuation. The context exposes the tool name, the arguments entering

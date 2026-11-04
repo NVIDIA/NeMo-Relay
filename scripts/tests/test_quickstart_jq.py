@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Exercise the documented jq expressions without running agents or inference."""
+
+import copy
+import json
+import re
+import shutil
+import subprocess
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+GUIDES = ("hermes", "claude-code", "codex", "pi")
+
+
+def events_for(guide: str) -> list[dict]:
+    """Build paired scopes with the turn category and name required by a guide."""
+    custom_turn = guide in {"claude-code", "codex"}
+    category = "custom" if custom_turn else "agent"
+    name = f"{guide}-turn" if custom_turn else "demo-agent"
+    events = []
+    for index, (scope_category, scope_name) in enumerate(
+        ((category, name), ("tool", "emit_marker"), ("llm", "demo-provider")), start=1
+    ):
+        for phase in ("start", "end"):
+            events.append(
+                {
+                    "atof_version": "0.1",
+                    "kind": "scope",
+                    "scope_category": phase,
+                    "category": scope_category,
+                    "name": scope_name,
+                    "uuid": f"00000000-0000-4000-8000-{index:012d}",
+                    "parent_uuid": None if index == 1 else "00000000-0000-4000-8000-000000000001",
+                }
+            )
+    return events
+
+
+class QuickstartJqTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        binary = shutil.which("jq")
+        if binary is None:
+            raise RuntimeError("jq is required for Quick Start checks; install jq and rerun just check-quickstarts")
+        cls.binary = binary
+
+    def expressions(self, guide):
+        """Read the copyable expressions rather than maintain a second verifier."""
+        page = ROOT / "docs/getting-started/quick-start" / f"{guide}.mdx"
+        source = page.read_text(encoding="utf-8")
+        markers = re.findall(r"jq -eRs '([^']*)'", source)
+        events = re.findall(r"jq -se '([^']*)'", source)
+        self.assertEqual(len(markers), 1, page)
+        self.assertEqual(len(events), 1, page)
+        return markers[0], events[0]
+
+    def run_jq(self, flags, expression, content):
+        return subprocess.run(
+            [self.binary, flags, expression], input=content, capture_output=True, text=True, timeout=10, check=False
+        )
+
+    def test_event_verifiers_accept_complete_scopes_and_reject_bad_evidence(self):
+        for guide in GUIDES:
+            _, expression = self.expressions(guide)
+            valid = events_for(guide)
+            cases = {"complete": (valid, 0), "empty": ([], 1)}
+            for category in {event["category"] for event in valid}:
+                cases[f"missing-{category}-end"] = (
+                    [
+                        event
+                        for event in valid
+                        if not (event["category"] == category and event["scope_category"] == "end")
+                    ],
+                    1,
+                )
+            for key in ("uuid", "name", "parent_uuid"):
+                broken = copy.deepcopy(valid)
+                broken[-1][key] = "mismatch"
+                cases[f"mismatched-{key}"] = (broken, 1)
+            for key in ("atof_version", "kind"):
+                broken = copy.deepcopy(valid)
+                broken[0][key] = "invalid"
+                cases[f"invalid-{key}"] = (broken, 1)
+            if guide in {"claude-code", "codex"}:
+                broken = copy.deepcopy(valid)
+                for event in broken[:2]:
+                    event["name"] = "unrelated-turn"
+                cases["wrong-turn-name"] = (broken, 1)
+
+            for label, (fixture, expected) in cases.items():
+                with self.subTest(guide=guide, fixture=label):
+                    content = "".join(json.dumps(event) + "\n" for event in fixture)
+                    result = self.run_jq("-se", expression, content)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    self.assertEqual(result.stdout.strip(), "true" if expected == 0 else "false")
+            with self.subTest(guide=guide, fixture="malformed-json"):
+                result = self.run_jq("-se", expression, "{broken json")
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_marker_verifiers_require_the_exact_tool_marker(self):
+        for guide in GUIDES:
+            expression, _ = self.expressions(guide)
+            for content, expected in (
+                ("RELAY_QUICKSTART_TOOL_OK", 0),
+                ("  RELAY_QUICKSTART_TOOL_OK\n", 0),
+                ("", 1),
+                ("wrong marker", 1),
+                ("RELAY_QUICKSTART_TOOL_OK extra", 1),
+            ):
+                with self.subTest(guide=guide, content=content):
+                    result = self.run_jq("-eRs", expression, content)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

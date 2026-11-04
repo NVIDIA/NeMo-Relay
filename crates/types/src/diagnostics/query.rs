@@ -11,8 +11,7 @@ use uuid::Uuid;
 ///
 /// Scope validation prevents continuation widening; the token is not authority.
 /// A host must intersect requested selection with its own authorization scope.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticCursor {
     /// Source incarnation whose retained state was selected.
     pub source_instance_id: Uuid,
@@ -27,8 +26,9 @@ pub struct DiagnosticCursor {
 }
 
 /// Portable bounded selection; consumers never reset or mutate evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiagnosticQuery {
     /// Optional required snapshot version; omission selects this runtime's version.

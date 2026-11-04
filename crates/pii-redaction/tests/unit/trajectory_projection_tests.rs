@@ -5,8 +5,8 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::resolve::response_codec;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::codec::response_codec;
 
 use crate::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer};
 

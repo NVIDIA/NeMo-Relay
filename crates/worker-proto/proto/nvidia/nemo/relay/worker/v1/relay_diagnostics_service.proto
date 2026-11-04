@@ -1,0 +1,161 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines RelayDiagnosticsService and its dedicated RPC request and response messages.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/diagnostic_memory.proto";
+import "nvidia/nemo/relay/worker/v1/diagnostic_read.proto";
+import "nvidia/nemo/relay/worker/v1/diagnostics.proto";
+
+// Diagnostic admission, limits, retry policy, and read authorization are separate
+// from execution. ReadDiagnosticPage is denied unless explicit authority exists.
+service RelayDiagnosticsService {
+  // Returns the host's independent diagnostic limits, contracts, and read authority.
+  rpc GetDiagnosticCapabilities(GetDiagnosticCapabilitiesRequest) returns (GetDiagnosticCapabilitiesResponse);
+  // Opens or returns this activation's live diagnostic session with confirmed policy.
+  rpc OpenDiagnosticSession(OpenDiagnosticSessionRequest) returns (OpenDiagnosticSessionResponse);
+  // Admits the next ordered diagnostic operation, preserving replay and receipt semantics.
+  rpc SubmitDiagnostic(SubmitDiagnosticRequest) returns (SubmitDiagnosticResponse);
+  // Reads one bounded diagnostic page only when separate read authority has been granted.
+  rpc ReadDiagnosticPage(ReadDiagnosticPageRequest) returns (ReadDiagnosticPageResponse);
+  // Reads side-effect-free diagnostic discovery under separately granted authority.
+  rpc GetDiagnosticDiscovery(GetDiagnosticDiscoveryRequest) returns (GetDiagnosticDiscoveryResponse);
+  // Inspects bounded retained diagnostic backing and existing resource samples without collecting.
+  rpc InspectDiagnosticMemory(InspectDiagnosticMemoryRequest) returns (InspectDiagnosticMemoryResponse);
+}
+
+// Queries diagnostic policy using activation credentials, without opening a session.
+message GetDiagnosticCapabilitiesRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+}
+
+// Returns the host's bounded diagnostic delivery and read policy.
+message GetDiagnosticCapabilitiesResponse {
+  // Required host policy; session-open values must match the advertised capabilities.
+  DiagnosticCapabilities capabilities = 1 [(buf.validate.field).required = true];
+}
+
+// Requests a session with exactly the diagnostic contracts advertised by the host.
+message OpenDiagnosticSessionRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Required protocol name and semantic contract version to confirm during handshake.
+  ProtocolIdentity protocol = 2 [(buf.validate.field).required = true];
+  // Supported diagnostic snapshot transport version, initially 1.0.0.
+  string snapshot_contract_version = 3 [(buf.validate.field).string = {const: "1.0.0"}];
+  // Supported authenticated remote-provenance contract version, initially 1.0.0.
+  string provenance_contract_version = 4 [(buf.validate.field).string = {const: "1.0.0"}];
+}
+
+// Returns the activation's session identity and the confirmed host policy.
+message OpenDiagnosticSessionResponse {
+  // Exactly 16 UUID bytes; also the producer source incarnation.
+  bytes session_id = 1 [(buf.validate.field).bytes.len = 16];
+  // Required host policy; session-open values must match the advertised capabilities.
+  DiagnosticCapabilities capabilities = 2 [(buf.validate.field).required = true];
+}
+
+// Sends one ordered operation per request. Identical retries keep the sequence and content.
+// A rejection before admission does not consume the sequence. An admitted policy rejection
+// returns REJECTED and consumes the sequence. This service never retries execution callbacks.
+message SubmitDiagnosticRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Host-issued diagnostic session UUID encoded as exactly 16 bytes.
+  bytes session_id = 2 [(buf.validate.field).bytes.len = 16];
+  // Positive session-local sequence starting at one; identical retries reuse it.
+  uint64 sequence = 3 [(buf.validate.field).uint64.gt = 0];
+  // Exactly one recognized alternative is required when this message is present.
+  oneof operation {
+    option (buf.validate.oneof).required = true;
+    // Registers component metadata and code handles as the next ordered operation.
+    DiagnosticComponentRegistration register_component = 4;
+    // Records one positive observation delta as the next ordered operation.
+    DiagnosticObservation record = 5;
+    // Closes an admitted component handle as the next ordered operation.
+    DiagnosticComponentClose close_component = 6;
+    // Closes the diagnostic session and stops further submissions for that activation.
+    google.protobuf.Empty close_session = 7;
+  }
+}
+
+// Acknowledges one ordered diagnostic submission with its admission receipt.
+message SubmitDiagnosticResponse {
+  // Required host receipt for this submission and sequence.
+  DiagnosticReceipt receipt = 1 [(buf.validate.field).required = true];
+}
+
+// Requests snapshot evidence only under the activation's separately granted read authority.
+message ReadDiagnosticPageRequest {
+  // Required credentials authenticate this activation; they do not grant read authority.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Full shared query; requested selection must be intersected with host authorization.
+  DiagnosticQuery query = 2 [(buf.validate.field).required = true];
+}
+
+// Returns snapshot evidence or a portable domain read failure; transport failures use gRPC status.
+message ReadDiagnosticPageResponse {
+  // Exactly one result is required; a failed read must not look like empty evidence.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Evidence owned by this result, with its original scope and coverage.
+    DiagnosticSnapshot snapshot = 1;
+    // Stable shared read reason, separate from authentication or transport status.
+    DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+  }
+}
+
+// Requests discovery evidence only under the activation's separately granted read authority.
+message GetDiagnosticDiscoveryRequest {
+  // Required credentials authenticate this activation; they do not grant read authority.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+}
+
+// Returns discovery evidence or a portable domain read failure; transport failures use gRPC status.
+message GetDiagnosticDiscoveryResponse {
+  // Exactly one result is required; a failed read must not look like empty evidence.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Evidence owned by this result, with its original scope and coverage.
+    DiagnosticDiscovery discovery = 1;
+    // Stable shared read reason, separate from authentication or transport status.
+    DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+  }
+}
+
+// Requests memory evidence only under the activation's separately granted read authority.
+message InspectDiagnosticMemoryRequest {
+  // Required credentials authenticate this activation; they do not grant read authority.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Full shared query; requested selection must be intersected with host authorization.
+  DiagnosticQuery query = 2 [(buf.validate.field).required = true];
+}
+
+// Returns memory evidence or a portable domain read failure; transport failures use gRPC status.
+message InspectDiagnosticMemoryResponse {
+  // Exactly one result is required; a failed read must not look like empty evidence.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Evidence owned by this result, with its original scope and coverage.
+    DiagnosticMemoryPage memory = 1;
+    // Stable shared read reason, separate from authentication or transport status.
+    DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+  }
+}

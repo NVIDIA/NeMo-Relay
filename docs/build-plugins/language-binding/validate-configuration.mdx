@@ -21,9 +21,9 @@ The following implementations return the same
 [diagnostic fields](/build-plugins/fundamentals/configuration-and-validation) while
 using each binding's native configuration types:
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
+<CodeBlocks>
+
+```python title="Python"
 def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]]:
     diagnostics: list[dict[str, str]] = []
     allowed_top_level = {"tag", *GROUP_FIELDS}
@@ -105,9 +105,8 @@ class DocumentationPlugin:
     def validate(self, config: dict[str, Any]) -> list[dict[str, str]]:
         return validate_documentation_config(config)
 ```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
+
+```js title="Node.js"
 function validateDocumentationConfig(config) {
   const diagnostics = [];
   const topLevel = new Set(['tag', ...Object.keys(GROUP_FIELDS)]);
@@ -212,9 +211,8 @@ const documentationPlugin = {
   },
 };
 ```
-</Tab>
-<Tab title="Rust" language="rust">
-```rust
+
+```rust title="Rust"
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -281,8 +279,8 @@ fn validate_with_policy(
     diagnostics
 }
 ```
-</Tab>
-</Tabs>
+
+</CodeBlocks>
 
 The checked implementations continue beyond these excerpts by checking every boolean,
 integer, string, and string-array field. The important ordering is visible here: report

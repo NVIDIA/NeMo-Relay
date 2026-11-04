@@ -4,7 +4,7 @@
 //! Coverage tests for error in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_relay::plugin::PluginError;
+use nemo_relay_plugin_host::PluginError;
 
 #[test]
 fn test_not_found_display() {
@@ -81,7 +81,6 @@ fn test_plugin_error_conversion_maps_all_variants() {
     assert_eq!(format!("{registration}"), "registration failed: subscriber");
 }
 
-#[cfg(feature = "redis-backend")]
 #[test]
 fn test_redis_error_variant_exists() {
     // Verify that the Redis variant exists and displays correctly.

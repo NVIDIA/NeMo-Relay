@@ -7,7 +7,7 @@ use super::*;
 
 use std::fs;
 
-use nemo_relay::api::scope::{ScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay_runtime::api::scope::{ScopeHandle, ScopeType as CoreScopeType};
 use pyo3::types::{PyDict, PyModule};
 use serde_json::json;
 
@@ -377,7 +377,7 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
 
         let guard = locked_runtime.inner.try_lock().unwrap();
         let _llm_request = crate::py_types::PyLLMRequest {
-            inner: nemo_relay::api::llm::LlmRequest {
+            inner: nemo_relay_runtime::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
                     "messages": [{"role": "user", "content": "hello"}],

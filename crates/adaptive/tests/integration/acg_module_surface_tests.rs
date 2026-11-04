@@ -101,10 +101,10 @@ fn acg_module_surface_variable_extractor_keeps_regex_detection_behavior() {
 
 #[test]
 fn acg_module_surface_policy_and_ir_builder_symbols_compile_from_canonical_namespace() {
-    use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
     use nemo_relay_adaptive::acg::ir_builder::build_prompt_ir;
     use nemo_relay_adaptive::acg::policy::{CachePolicy, PolicyEnvelope};
     use nemo_relay_adaptive::acg::{ModelClass, SharingScope};
+    use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 
     let _: Option<PolicyEnvelope<CachePolicy>> = None;
 
@@ -170,11 +170,11 @@ fn acg_module_surface_policy_and_ir_builder_symbols_compile_from_canonical_names
 
 #[test]
 fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_system_message() {
-    use nemo_relay::codec::request::{
-        AnnotatedLlmRequest, FunctionDefinition, Message, MessageContent, ToolDefinition,
-    };
     use nemo_relay_adaptive::acg::ir_builder::build_prompt_ir;
     use nemo_relay_adaptive::acg::prompt_ir::{BlockContentType, PromptRole};
+    use nemo_relay_types::codec::request::{
+        AnnotatedLlmRequest, FunctionDefinition, Message, MessageContent, ToolDefinition,
+    };
 
     let request = AnnotatedLlmRequest {
         instructions: None,
