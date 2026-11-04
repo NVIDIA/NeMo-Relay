@@ -4,18 +4,6 @@
 //! Build script for the NeMo Relay worker gRPC protocol crate.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Compile the existing contract separately so its API stays available while
-    // the replacement descriptors and consumers are introduced independently.
-    {
-        let mut legacy = prost_build::Config::new();
-        legacy.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
-        legacy.boxed(".nemo.relay.worker.v1.LlmInvocation.execution_codec_context");
-        tonic_prost_build::configure().compile_with_config(
-            legacy,
-            &["proto/nemo/relay/worker/v1/plugin_worker.proto"],
-            &["proto"],
-        )?;
-    }
     // Track the complete import graph, including supporting DTO schemas.
     println!("cargo:rerun-if-changed=proto");
     let protos = [

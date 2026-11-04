@@ -24,10 +24,9 @@ only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
 The new package name and protocol identity are `nvidia.nemo.relay.worker.v1`.
-Its contract version is `1.0.0`. This change adds generated bindings, conversions,
-validation, and tests alongside `grpc-v1`. The old Rust `v1` module and JSON
-helpers remain available. The host and SDKs switch together in a later change.
-That change also removes the old API.
+Its contract version is `1.0.0`. The host, Rust SDK, and Python SDK use this
+contract. Upgrade and rebuild them together. The old `grpc-v1` schema and Rust
+`v1` module have been removed. Rebuild old workers and update their manifests.
 
 ## Protocol Surface
 

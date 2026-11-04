@@ -146,7 +146,7 @@ repos:
 
       - id: python-worker-proto-check
         name: Python worker protobuf contract tests
-        entry: just check-worker-proto
+        entry: just check-python-worker-proto
         language: system
         files: '^((?:crates/worker-proto/buf\.yaml|crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py)|crates/worker-proto/proto/.*|python/tests/plugin/test_nvidia_worker_proto_v1\.py|python/plugin/(build_backend\.py|pyproject\.toml)|justfile)$'
         pass_filenames: false

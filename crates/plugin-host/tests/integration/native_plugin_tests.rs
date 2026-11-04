@@ -1344,7 +1344,7 @@ fn native_loader_rejects_missing_library() {
     let manifest_ref = write_manifest_text(ManifestOptions {
         manifest_dir: manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &missing_library.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -1442,7 +1442,7 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &relative_library.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -1491,7 +1491,7 @@ fn native_loader_rejects_abi_v3_plugins() {
     let manifest_ref = write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native_v3",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin_v3",
         integrity: None,
@@ -1519,7 +1519,7 @@ fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
         let manifest_ref = write_manifest_text(ManifestOptions {
             manifest_dir: fixture.manifest_dir.path(),
             plugin_id,
-            relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+            relay: ">=1.0.0,<2.0",
             library: &fixture.library_path.to_string_lossy(),
             symbol,
             integrity: None,
@@ -1546,7 +1546,7 @@ fn native_loader_rolls_back_partially_loaded_plugins() {
     let missing_manifest = write_manifest_text(ManifestOptions {
         manifest_dir: missing_manifest_dir.path(),
         plugin_id: "fixture_native_missing",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &missing_library.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -1598,7 +1598,7 @@ fn native_loader_rejects_manifest_contract_errors_before_loading_library() {
         manifest_dir.path(),
         &native_manifest_text(
             "fixture_manifest_id",
-            &format!("={}", env!("CARGO_PKG_VERSION")),
+            ">=1.0.0,<2.0",
             "1",
             "libdoes-not-need-to-exist.so",
             "nemo_relay_fixture_native_plugin",
@@ -1639,7 +1639,7 @@ fn native_loader_rejects_manifest_contract_errors_before_loading_library() {
         manifest_dir.path(),
         &native_manifest_text(
             "fixture_native",
-            &format!("={}", env!("CARGO_PKG_VERSION")),
+            ">=1.0.0,<2.0",
             "3",
             "libdoes-not-need-to-exist.so",
             "nemo_relay_fixture_native_plugin",
@@ -1664,8 +1664,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1697,7 +1697,7 @@ fn native_manifest_writer_escapes_toml_strings() {
     let manifest_ref = write_manifest_text(ManifestOptions {
         manifest_dir: manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: windows_style_library,
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: Some(r"sha256:abc\def"),
@@ -2701,7 +2701,7 @@ fn write_manifest(fixture: &BuiltFixture) -> PathBuf {
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -2712,7 +2712,7 @@ fn write_manifest_with_symbol(fixture: &BuiltFixture, symbol: &str) -> PathBuf {
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol,
         integrity: None,
@@ -2727,7 +2727,7 @@ fn write_manifest_with_plugin_id_and_symbol(
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id,
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol,
         integrity: None,
@@ -2738,7 +2738,7 @@ fn write_manifest_with_plugin_id(fixture: &BuiltFixture, plugin_id: &str) -> Pat
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id,
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
@@ -2749,7 +2749,7 @@ fn write_manifest_with_integrity(fixture: &BuiltFixture, integrity: &str) -> Pat
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
-        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: Some(integrity),

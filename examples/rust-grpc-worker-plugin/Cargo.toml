@@ -7,7 +7,7 @@ version.workspace = true
 license.workspace = true
 edition = "2024"
 publish = false
-description = "Complete Rust grpc-v1 worker example for NeMo Relay"
+description = "Complete Rust nvidia.nemo.relay.worker.v1 worker example for NeMo Relay"
 
 [dependencies]
 # First-party crates.

@@ -473,7 +473,7 @@ fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -1044,7 +1044,7 @@ fn native_test_adapter(
             diagnostic_read_context: false,
             diagnostics: Default::default(),
             plugin_kind: "test.native.adapter".into(),
-            relay_compat: "^0.8".into(),
+            relay_compat: ">=1.0.0,<2.0".into(),
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
@@ -5819,7 +5819,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -6780,7 +6780,7 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.async".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -7780,7 +7780,7 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.callback-errors".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -7939,7 +7939,7 @@ async fn native_callback_diagnostics_exclude_propagated_next_failures() {
         diagnostic_read_context: false,
         diagnostics,
         plugin_kind: "test.native.provenance".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -8033,7 +8033,7 @@ async fn native_tool_execution_context_preserves_fields_and_callback_boundaries(
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.tool-execution-context".into(),
-        relay_compat: ">=0.9,<1.0".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -9104,7 +9104,7 @@ async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_
         diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.intercept".into(),
-        relay_compat: "^0.10".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -9152,7 +9152,7 @@ manifest_version = 1
 id = "fixture.snapshot"
 kind = "rust_dynamic"
 [compat]
-relay = ">=0.10.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 [defaults]
 enabled = false
@@ -9206,7 +9206,7 @@ manifest_version = 1
 id = "fixture.retained-trust"
 kind = "rust_dynamic"
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 [defaults]
 enabled = false
@@ -9408,7 +9408,7 @@ async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details()
             Uuid::now_v7(),
         ),
         plugin_kind: "test.native.sanitizers".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -9547,7 +9547,7 @@ fn enabled_native_diagnostics_fixture(
             Uuid::now_v7(),
         ),
         plugin_kind: "test.native.accounting".into(),
-        relay_compat: "^0.8".into(),
+        relay_compat: ">=1.0.0,<2.0".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(plugin),
         _library: libloading::os::unix::Library::this().into(),

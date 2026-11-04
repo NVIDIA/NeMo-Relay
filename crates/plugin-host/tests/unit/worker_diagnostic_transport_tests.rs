@@ -59,37 +59,45 @@ async fn request_permits_are_reserved_before_decoder_and_retained_by_response() 
     assert_eq!(service.requests.available_permits(), 16);
 }
 
-fn read_request() -> http::Request<TonicBody> {
+fn read_request(method: &str) -> http::Request<TonicBody> {
     http::Request::builder()
-        .uri("/nemo.relay.worker.v1.RelayDiagnostics/ReadDiagnosticPage")
+        .uri(format!(
+            "/nvidia.nemo.relay.worker.v1.RelayDiagnosticsService/{method}"
+        ))
         .body(TonicBody::empty())
         .unwrap()
 }
 
 #[tokio::test]
 async fn read_quota_is_independent_and_released_on_cancellation_and_body_drop() {
-    let decoder = Decoder::default();
-    let mut service = BoundedService::with_test_limits(decoder.clone(), 16, 4);
-    let reads: Vec<_> = (0..4).map(|_| service.call(read_request())).collect();
-    let rejected = service.call(read_request()).await.unwrap();
-    assert_eq!(rejected.headers()["grpc-status"], "8");
-    assert_eq!(rejected.headers()[DIAGNOSTIC_NOT_CONSUMED_METADATA], "1");
-    assert_eq!(decoder.0.load(Ordering::Relaxed), 0);
-    // A full read budget must not prevent a submission.
-    let submission = service
-        .call(http::Request::new(TonicBody::empty()))
-        .await
-        .unwrap();
-    assert_eq!(decoder.0.load(Ordering::Relaxed), 1);
-    drop(reads);
-    assert_eq!(service.reads.available_permits(), 4);
-    assert_eq!(service.requests.available_permits(), 15);
-    let response = service.call(read_request()).await.unwrap();
-    assert_eq!(service.reads.available_permits(), 3);
-    drop(response);
-    drop(submission);
-    assert_eq!(service.reads.available_permits(), 4);
-    assert_eq!(service.requests.available_permits(), 16);
+    for method in [
+        "ReadDiagnosticPage",
+        "GetDiagnosticDiscovery",
+        "InspectDiagnosticMemory",
+    ] {
+        let decoder = Decoder::default();
+        let mut service = BoundedService::with_test_limits(decoder.clone(), 16, 4);
+        let reads: Vec<_> = (0..4).map(|_| service.call(read_request(method))).collect();
+        let rejected = service.call(read_request(method)).await.unwrap();
+        assert_eq!(rejected.headers()["grpc-status"], "8");
+        assert_eq!(rejected.headers()[DIAGNOSTIC_NOT_CONSUMED_METADATA], "1");
+        assert_eq!(decoder.0.load(Ordering::Relaxed), 0);
+        // A full read budget must not prevent a submission.
+        let submission = service
+            .call(http::Request::new(TonicBody::empty()))
+            .await
+            .unwrap();
+        assert_eq!(decoder.0.load(Ordering::Relaxed), 1);
+        drop(reads);
+        assert_eq!(service.reads.available_permits(), 4);
+        assert_eq!(service.requests.available_permits(), 15);
+        let response = service.call(read_request(method)).await.unwrap();
+        assert_eq!(service.reads.available_permits(), 3);
+        drop(response);
+        drop(submission);
+        assert_eq!(service.reads.available_permits(), 4);
+        assert_eq!(service.requests.available_permits(), 16);
+    }
 }
 
 #[derive(Clone)]
@@ -109,7 +117,10 @@ impl Service<http::Request<TonicBody>> for BlockedHandler {
 #[tokio::test(start_paused = true)]
 async fn handler_deadline_releases_permits_without_claiming_nonacceptance() {
     let mut service = BoundedService::with_test_limits(BlockedHandler, 1, 1);
-    let response = service.call(read_request()).await.unwrap();
+    let response = service
+        .call(read_request("ReadDiagnosticPage"))
+        .await
+        .unwrap();
     assert_eq!(response.headers()["grpc-status"], "4");
     assert!(
         !response
@@ -123,7 +134,10 @@ async fn handler_deadline_releases_permits_without_claiming_nonacceptance() {
 #[tokio::test(start_paused = true)]
 async fn response_body_deadline_releases_permits_when_delivery_is_dropped() {
     let mut service = BoundedService::with_test_limits(Decoder::default(), 1, 1);
-    let mut response = service.call(read_request()).await.unwrap();
+    let mut response = service
+        .call(read_request("ReadDiagnosticPage"))
+        .await
+        .unwrap();
     let result = std::future::poll_fn(|cx| Pin::new(response.body_mut()).poll_frame(cx)).await;
     let error = result.unwrap().unwrap_err();
     assert_eq!(error.code(), tonic::Code::DeadlineExceeded);

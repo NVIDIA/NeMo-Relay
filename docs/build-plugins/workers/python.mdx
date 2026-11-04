@@ -6,17 +6,15 @@ position: 31
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/python-grpc-worker-plugin` package uses the 1.0.0
-`nemo-relay-plugin` SDK and the shared documentation configuration. Its worker registers
-all 16 [surfaces](/build-plugins/workers/middleware-and-continuations), accepts
-synchronous and asynchronous callback forms where the
-Python SDK permits them, and relies on the SDK for protobuf stubs, the authenticated
-server, and cooperative task cancellation.
+The `examples/python-grpc-worker-plugin` package uses `nemo-relay-plugin` 1.0.0.
+It supports all 17 [callback types](/build-plugins/workers/middleware-and-continuations).
+Its configuration selects which callbacks to register. The SDK handles generated
+protobuf bindings, the authenticated server, and task cancellation.
 
 ## Internal Diagnostic Observations
 
 Use `await runtime.diagnostics()` to obtain diagnostics for the activation.
-The SDK negotiates delivery once and reuses the host's selected context. It does
+The SDK sets up delivery once and reuses the host's selected context. It does
 not create a worker-local store or enable diagnostic collection.
 
 This example matches the Rust native and Rust worker example. Register its
@@ -56,20 +54,20 @@ defines host limits, retries, and session authority.
 
 ## Test the Package
 
-Run the package's atomic tests before creating a managed environment:
+Run the package tests before creating a managed environment.
 
-1. Enter the example directory and run its self-contained test project.
+From the repository root, enter the example directory and run its tests:
 
-   ```bash
-   cd examples/python-grpc-worker-plugin
-   uv run --locked --group test pytest
-   ```
+```bash
+cd examples/python-grpc-worker-plugin
+uv run --locked --group test pytest
+```
 
-   Every test creates its own worker instance and mock host context, and any one test can
-   be selected by node ID without running the rest of the suite. The tests separate
-   configuration, JSON Schema, source digest, wheel packaging, registration metadata,
-   sanitizers, policies, request outcomes, continuations, streams, and runtime cleanup.
-   A digest mismatch is a packaging failure, not an activation warning.
+Every test creates its own worker instance and mock host context, and any one test can
+be selected by node ID without running the rest of the suite. The tests separate
+configuration, JSON Schema, source digest, wheel packaging, registration metadata,
+sanitizers, policies, request outcomes, continuations, streams, and runtime cleanup.
+A digest mismatch is a packaging failure, not an activation warning.
 
 ## Define the Installable Python Package
 
@@ -86,11 +84,11 @@ managed command.
 
 ## Configure the Snapshot Location
 
-Relay copies the worker runtime closure into an isolated activation snapshot before
-starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
-Relay to use a directory of your choice; Relay creates it when it does not exist. Choose a
-location outside every directory copied into a snapshot, including active plugin packages and
-external entrypoint directories:
+Before starting a worker, Relay copies its package and runtime files into an
+activation snapshot. This is a separate directory for that activation. Set
+`NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to choose
+where snapshots are stored. Relay creates the directory if needed. Keep it
+outside plugin packages and all copied entrypoint and library directories:
 
 ```powershell
 $env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
@@ -147,10 +145,10 @@ the installed module. Calculate the `<worker-source-sha256>` placeholder from th
 
 <Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
-The manifest targets Relay 1.0.0 and uses the context-aware tool execution
-contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext.call()` returns
-`ToolExecutionResult`, whose `result` contains the application payload and whose optional
-`annotation` remains adjacent opaque metadata. See the
+The manifest requires Relay 1.0 and the typed `nvidia.nemo.relay.worker.v1`
+protocol. `ToolNext.call()` returns `ToolExecutionResult`. Its `result` holds the
+application payload. Its optional `annotation` holds metadata that Relay does not
+read. Refer to the
 [protocol reference](/build-plugins/workers/grpc-v1-protocol) for the complete boundary.
 
 ## Install and Activate the Package
@@ -181,7 +179,7 @@ start the worker:
    ```
 
    The activation report should identify `examples.python_grpc_worker`, and the worker
-   handshake should advertise all 16 supported surfaces.
+   handshake should advertise all 17 supported surfaces.
 
 ## Verify Behavior and Clean Up
 
@@ -206,6 +204,6 @@ environment:
 
 `plugins remove` deletes the Relay-managed environment. Copying a Python worker manifest
 into `plugins.toml` is not an equivalent installation path because no attested environment
-would exist. Success means the managed environment is created and later removed, every
-feature group has an observable call-path result, cancellation cleanup runs, and no
-worker process remains after shutdown.
+would exist. Check that Relay creates and later removes the managed environment. Each feature
+group must produce the expected result. Cancellation must run cleanup, and no
+worker process should remain after shutdown.

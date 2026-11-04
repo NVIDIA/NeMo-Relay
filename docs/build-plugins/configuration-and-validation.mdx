@@ -6,10 +6,10 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Plugin configuration is an operator contract. Keep it portable JSON, make each setting's
-effect clear, and reject ambiguous input before Relay changes the runtime. Provider
-clients, callbacks, file handles, and resolved secret values belong in implementation
-state rather than in the configuration document.
+Plugin configuration tells operators how the plugin behaves. Use portable JSON,
+explain each setting, and reject unclear input before Relay changes runtime state.
+Keep provider clients, callbacks, file handles, and secret values in implementation
+state, not in the configuration document.
 
 The `runtime` group is independent of the request-policy group. When either runtime
 setting is enabled, the examples install a small tool-execution wrapper that emits marks
@@ -18,14 +18,16 @@ or manages an isolated stack. Disabling request rewriting, including with
 
 ## The Two Configuration Files Have Different Jobs
 
+Use each file for its own purpose:
+
 | File | Purpose |
 |---|---|
 | `plugins.toml` | Runtime configuration. It contains component kinds, `enabled` state, component-local `config`, validation policy, and references to discoverable manifests. Relay can layer discovered files with binding-provided configuration. |
-| `relay-plugin.toml` | [Package manifest](/build-plugins/package-discoverable-plugins) for one discoverable native library or `grpc-v1` worker. It declares identity, compatibility, entrypoint, optional JSON Schema, and integrity metadata. It does not replace the component configuration in `plugins.toml`. |
+| `relay-plugin.toml` | [Package manifest](/build-plugins/package-discoverable-plugins) for one discoverable native library or `nvidia.nemo.relay.worker.v1` worker. It declares identity, compatibility, entrypoint, optional JSON Schema, and integrity metadata. It does not replace the component configuration in `plugins.toml`. |
 
-The binding APIs use the same canonical document shape as `plugins.toml`: a document
-version, `components`, and `policy`. Each component has a `kind`, an `enabled` flag, and a
-component-local JSON object. Keys stay `snake_case` in Rust, Python, Node.js, JSON, and
+The binding APIs use the same document shape as `plugins.toml`: a version,
+`components`, and `policy`. Each component has a `kind`, an `enabled` flag, and
+its own JSON configuration object. Keys stay `snake_case` in Rust, Python, Node.js, JSON, and
 TOML even though Node.js API method names use `camelCase`.
 
 The following configuration activates every shared feature group and the native-only

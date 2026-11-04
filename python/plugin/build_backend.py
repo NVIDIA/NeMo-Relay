@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
-_REPOSITORY_ROOT = _PROJECT_ROOT.parents[1] / "crates/worker-proto"
 
 
 def _project_file(relative_path: str) -> Path:
@@ -28,42 +27,56 @@ def _project_file(relative_path: str) -> Path:
     return candidate
 
 
-_REPOSITORY_PROTO = _PROJECT_ROOT.parents[1] / "crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto"
-_SDIST_PROTO = _PROJECT_ROOT / "proto/plugin_worker.proto"
+_REPOSITORY_ROOT = _PROJECT_ROOT.parents[1] / "crates/worker-proto"
+_SDIST_ROOT = _PROJECT_ROOT / "proto"
 _GENERATED_DIR = _PROJECT_ROOT / "src/nemo_relay_plugin/_proto"
 _MANIFEST = _project_file("MANIFEST.in")
+_PACKAGE_PATH = Path("nvidia/nemo/relay/worker/v1")
 
 
 def generate_worker_proto(output_dir: Path = _GENERATED_DIR) -> None:
-    """Generate Python worker bindings from the canonical protobuf schema."""
-    proto = _proto_source()
+    """Generate the complete namespaced contract and its locked validation schema."""
+    source, lock = _proto_sources()
+    dependency = resolve_proto_dependencies(lock)
     output_dir.mkdir(parents=True, exist_ok=True)
+    for namespace in ("nvidia", "buf"):
+        shutil.rmtree(output_dir / namespace, ignore_errors=True)
+    for obsolete in output_dir.glob("*_pb2*.py*"):
+        obsolete.unlink()
+    shutil.copy2(dependency / "LICENSE", output_dir / "PROTOVALIDATE-LICENSE")
     protoc: Any = import_module("grpc_tools.protoc")
-    exit_code = protoc.main(
+    grpc_tools: Any = import_module("grpc_tools")
+    sources = sorted((source / _PACKAGE_PATH).glob("*.proto"))
+    result = protoc.main(
         [
             "grpc_tools.protoc",
-            f"-I{proto.parent}",
+            f"-I{source}",
+            f"-I{dependency}",
+            f"-I{Path(grpc_tools.__file__).parent / '_proto'}",
             f"--python_out={output_dir}",
+            f"--pyi_out={output_dir}",
             f"--grpc_python_out={output_dir}",
-            str(proto),
+            str(dependency / "buf/validate/validate.proto"),
+            *map(str, sources),
         ]
     )
-    if exit_code != 0:
-        raise RuntimeError(f"grpc_tools.protoc failed with exit code {exit_code}")
-
-    grpc_module = output_dir / "plugin_worker_pb2_grpc.py"
-    generated = grpc_module.read_text(encoding="utf-8")
-    absolute_import = "import plugin_worker_pb2 as plugin__worker__pb2"
-    if absolute_import not in generated:
-        raise RuntimeError("grpc_tools.protoc did not generate the expected worker protobuf import")
-    grpc_module.write_text(
-        generated.replace(
-            absolute_import,
-            "from . import plugin_worker_pb2 as plugin__worker__pb2",
-            1,
-        ),
-        encoding="utf-8",
-    )
+    if result:
+        raise RuntimeError(f"grpc_tools.protoc failed with exit code {result}")
+    # Keep generated packages private; installing this wheel must not populate
+    # the application's global NVIDIA or Buf Python namespaces. Protobuf descriptor
+    # package names remain unchanged: update the Buf Protovalidate lock and the
+    # Python protovalidate dependency pin together to keep descriptors identical.
+    for generated in sorted((*output_dir.rglob("*_pb2*.py"), *output_dir.rglob("*_pb2.pyi"))):
+        text = generated.read_text(encoding="utf-8")
+        text = re.sub(r"^from (nvidia\.|buf\.)", r"from nemo_relay_plugin._proto.\1", text, flags=re.MULTILINE)
+        text = re.sub(
+            r"(BuildTopDescriptorsAndMessages\(DESCRIPTOR, ')((?:nvidia|buf)\.)", r"\1nemo_relay_plugin._proto.\2", text
+        )
+        generated.write_text(text, encoding="utf-8")
+        for directory in (generated.parent, *generated.parent.parents):
+            if not directory.is_relative_to(output_dir):
+                break
+            (directory / "__init__.py").touch(exist_ok=True)
 
 
 def get_requires_for_build_wheel(config_settings: Any = None) -> list[str]:
@@ -118,18 +131,20 @@ def build_sdist(sdist_directory: str, config_settings: Any = None) -> str:
         return _setuptools_backend().build_sdist(sdist_directory, config_settings)
 
 
-def _proto_source() -> Path:
-    if _REPOSITORY_PROTO.is_file():
-        return _REPOSITORY_PROTO
-    if _SDIST_PROTO.is_file():
-        return _SDIST_PROTO
-    raise FileNotFoundError("could not find the worker protobuf schema")
+def _proto_sources() -> tuple[Path, Path]:
+    source = _REPOSITORY_ROOT / "proto"
+    lock = _REPOSITORY_ROOT / "buf.lock"
+    if (source / _PACKAGE_PATH / "plugin_worker_service.proto").is_file():
+        return source, lock
+    if (_SDIST_ROOT / _PACKAGE_PATH / "plugin_worker_service.proto").is_file():
+        return _SDIST_ROOT, _SDIST_ROOT / "buf.lock"
+    raise FileNotFoundError("could not find the complete worker protobuf contract")
 
 
 def resolve_proto_dependencies(lock: Path | None = None) -> Path:
     """Export the immutable Buf dependency into the project's ignored build cache."""
     if lock is None:
-        lock = _REPOSITORY_ROOT / "buf.lock"
+        _, lock = _proto_sources()
     match = re.search(r"name: buf\.build/bufbuild/protovalidate\s+commit: ([0-9a-f]{32})", lock.read_text())
     if match is None:
         raise ValueError("buf.lock must pin an immutable Protovalidate commit")
@@ -171,20 +186,19 @@ def resolve_proto_dependencies(lock: Path | None = None) -> Path:
 
 @contextlib.contextmanager
 def _staged_proto() -> Generator[None]:
-    proto_source = _proto_source()
-    staged_proto = proto_source != _SDIST_PROTO
-    if staged_proto:
-        _SDIST_PROTO.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(proto_source, _SDIST_PROTO)
+    source, lock = _proto_sources()
+    staged = source != _SDIST_ROOT
+    if staged:
+        if _SDIST_ROOT.exists():
+            raise FileExistsError(f"refusing to replace existing staged sources: {_SDIST_ROOT}")
     try:
+        if staged:
+            shutil.copytree(source / _PACKAGE_PATH, _SDIST_ROOT / _PACKAGE_PATH)
+            shutil.copy2(lock, _SDIST_ROOT / "buf.lock")
         yield
     finally:
-        if staged_proto:
-            _SDIST_PROTO.unlink(missing_ok=True)
-            try:
-                _SDIST_PROTO.parent.rmdir()
-            except OSError:
-                pass
+        if staged:
+            shutil.rmtree(_SDIST_ROOT, ignore_errors=True)
 
 
 @contextlib.contextmanager
@@ -194,9 +208,10 @@ def _sdist_manifest() -> Generator[None]:
         "\n".join(
             [
                 "include build_backend.py",
-                "include proto/plugin_worker.proto",
-                "global-exclude plugin_worker_pb2.py",
-                "global-exclude plugin_worker_pb2_grpc.py",
+                "recursive-include proto *.proto buf.lock",
+                "global-exclude *_pb2.py",
+                "global-exclude *_pb2.pyi",
+                "global-exclude *_pb2_grpc.py",
                 "",
             ]
         ),

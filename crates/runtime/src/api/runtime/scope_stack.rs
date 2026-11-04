@@ -756,6 +756,22 @@ pub fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandl
     Ok(Arc::new(RwLock::new(stack)))
 }
 
+/// Snapshot a visible stack through an explicitly selected parent scope.
+///
+/// Returns `None` when the parent is outside this stack. Descendant scopes and
+/// their local registrations are excluded without modifying the original stack.
+#[doc(hidden)]
+pub fn snapshot_scope_stack_through_scope(
+    handle: &ScopeStackHandle,
+    scope_uuid: &Uuid,
+) -> Result<Option<ScopeStackHandle>> {
+    let stack = handle
+        .read()
+        .map_err(|error| FlowError::Internal(format!("scope stack lock poisoned: {error}")))?
+        .snapshot_through_scope(scope_uuid);
+    Ok(stack.map(|stack| Arc::new(RwLock::new(stack))))
+}
+
 /// Create an isolated scope stack rooted below a supplied propagation context.
 ///
 /// The imported handles are synthetic bookkeeping only; Relay never emits their

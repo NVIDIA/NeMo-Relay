@@ -1225,58 +1225,8 @@ check-python-worker-proto:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    python_executable="$(uv_python_executable)"
-    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
-        echo "Skipping Python worker proto check on Windows ARM64"
-        exit 0
-    fi
-    tmp_dir="$(mktemp -d)"
-    cleanup_proto_tmp() {
-        rm -rf "$tmp_dir"
-    }
-    trap cleanup_proto_tmp EXIT
-    generate_python_worker_proto_files "$tmp_dir"
-    "$python_executable" - "$tmp_dir" <<'PY'
-    from pathlib import Path
-    import sys
+    run_python_worker_proto_tests
 
-    sys.path.insert(0, str(Path(sys.argv[1])))
-    import plugin_worker_pb2 as pb
-
-    assert pb.HandshakeRequest.DESCRIPTOR.fields_by_name["worker_protocol"].number == 4
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
-    assert {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods} == {
-        "Handshake", "Health", "Validate", "Register", "Invoke", "InvokeStream", "CancelInvocation", "Shutdown"
-    }
-    assert pb.SUBSCRIBER == 1
-    assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
-    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
-    assert execution_context.number == 11
-    assert execution_context.containing_oneof is None
-    assert {
-        field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields
-    } == {"request_sanitize_context", "response_sanitize_context"}
-    tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
-    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
-    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
-    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
-    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
-    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostic["code"].number == 1
-    assert runtime_diagnostic["message"].number == 2
-    assert runtime_diagnostic["count"].number == 3
-    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostics_response["entries"].number == 1
-    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
-    assert emit_mark["data_schema"].number == 7
-    assert emit_mark["severity"].number == 8
-    assert emit_mark["category"].number == 9
-    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
-    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
-    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
-    PY
 
 generate-test-plugin-lockfiles:
     #!/usr/bin/env bash
@@ -1655,6 +1605,8 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
+    worker_wheels=("$tmp"/wheels/nemo_relay_plugin-*.whl)
+    "$python_executable" -c 'from pathlib import Path; import sys; print("nemo-relay-plugin @ " + Path(sys.argv[1]).resolve().as_uri())' "${worker_wheels[0]}" > "$tmp/worker-constraints.txt"
     cargo build -p nemo-relay-cli --features __skip-implicit-config
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
@@ -1662,7 +1614,7 @@ test-python-plugin-e2e:
     : > "$config"
     printf '[plugins.policy.defaults]\nattestation = "integrity_only"\n' > "$tmp/plugins.toml"
     manifest="$NEMO_RELAY_REPO_ROOT/examples/python-grpc-worker-plugin/relay-plugin.toml"
-    PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
+    PIP_FIND_LINKS="$tmp/wheels" PIP_CONSTRAINT="$tmp/worker-constraints.txt" NEMO_RELAY_PYTHON="$python_executable" \
         "$cli" --config "$config" plugins add "$manifest"
     "$cli" --config "$config" plugins enable examples.python_grpc_worker
     environment_ref="$("$python_executable" -c \
