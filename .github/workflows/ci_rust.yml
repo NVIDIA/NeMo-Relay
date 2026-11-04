@@ -107,6 +107,19 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
+
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
@@ -255,6 +268,19 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
+
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
@@ -315,6 +341,9 @@ jobs:
           docker run --rm \
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --volume "$(command -v buf):/usr/local/bin/buf:ro" \
+            --volume "${{ steps.protoc.outputs.path }}/bin/protoc:/usr/local/bin/protoc:ro" \
+            --volume "${{ steps.protoc.outputs.path }}/include/google:/usr/local/include/google:ro" \
             --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
             --env NEMO_RELAY_RUST_TARGET="${{ matrix.target }}" \
             "${{ matrix.build_image }}" \

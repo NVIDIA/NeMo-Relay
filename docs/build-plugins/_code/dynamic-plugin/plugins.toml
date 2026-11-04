@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[plugins.dynamic]]
+manifest = "./documentation-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config]
+tag = "documentation"
+
+[plugins.dynamic.config.requests]
+enabled = true
+mode = "enforce"
+blocked_tools = ["dangerous_tool"]
+
+# Include this group only for a native typed plugin.
+[plugins.dynamic.config.executor]
+worker_threads = 2

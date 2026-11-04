@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::plugin_component::{
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::plugin::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
-use nemo_relay::plugin::PluginConfig;
+use nemo_relay_plugin_host::PluginConfig;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
@@ -185,12 +185,12 @@ async fn execute_live_run_with_dynamic(
     let target_resource_metrics = cli_process_tree_metrics_enabled(&gateway_config);
     let _resource_metrics_launch = if target_resource_metrics {
         Some(
-            nemo_relay::api::resource_metrics::prepare_cli_resource_metrics_process_tree()
+            nemo_relay_plugin_host::resource_metrics::prepare_cli_resource_metrics_process_tree()
                 .map_err(|error| {
-                    CliError::Launch(format!(
-                        "failed to prepare resource metrics process-tree target: {error}"
-                    ))
-                })?,
+                CliError::Launch(format!(
+                    "failed to prepare resource metrics process-tree target: {error}"
+                ))
+            })?,
         )
     } else {
         None
@@ -243,13 +243,13 @@ async fn supervise_prepared_run(
         })?;
         #[cfg(not(windows))]
         let result =
-            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+            nemo_relay_plugin_host::resource_metrics::target_resource_metrics_to_owned_process_tree(
                 child_process_id,
             );
         #[cfg(windows)]
         // SAFETY: The supervised child owns this live job. The API duplicates it here.
         let result = unsafe {
-            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+            nemo_relay_plugin_host::resource_metrics::target_resource_metrics_to_owned_process_tree(
                 child_process_id,
                 child.resource_metrics_job_handle(),
             )
@@ -270,7 +270,7 @@ async fn supervise_prepared_run_with_target(
     select_target: impl FnOnce(
         &super::SupervisedChild,
     ) -> Result<
-        Option<nemo_relay::api::resource_metrics::ResourceMetricsTargetGuard>,
+        Option<nemo_relay_plugin_host::resource_metrics::ResourceMetricsTargetGuard>,
         CliError,
     >,
 ) -> Result<ExitCode, CliError> {

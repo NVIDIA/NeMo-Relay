@@ -77,7 +77,7 @@ impl Session {
                 "tool_completion_timing": "upper_bound",
             }));
             metadata["source"] = json!("gateway");
-            self.apply_tool_execution_metadata(&mut metadata, owner);
+            self.apply_tool_execution_metadata(&mut metadata, owner, None);
             tool_call_end(
                 ToolCallEndParams::builder()
                     .handle(&tool.handle)

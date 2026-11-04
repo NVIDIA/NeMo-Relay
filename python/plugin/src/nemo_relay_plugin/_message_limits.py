@@ -106,6 +106,14 @@ class _OversizedRequest:
     size: int
 
 
+def _callback_name(details: Any) -> str | None:
+    raw_name = next((value for key, value in details.invocation_metadata if key == CALLBACK_METADATA), None)
+    try:
+        return raw_name.decode("utf-8") if raw_name is not None else None
+    except (UnicodeError, AttributeError):
+        return None
+
+
 class MessageLimitInterceptor(grpc.aio.ServerInterceptor):
     """Reject over-limit bytes before protobuf decoding, and bound each reply/chunk."""
 
@@ -118,13 +126,9 @@ class MessageLimitInterceptor(grpc.aio.ServerInterceptor):
         if handler is None:
             return None
         method = details.method.rsplit("/", 1)[-1]
-        worker = "/PluginWorker/" in details.method or ".PluginWorker/" in details.method
+        worker = details.method.startswith("/nvidia.nemo.relay.worker.v1.PluginWorkerService/")
         invocation = worker and method in ("Invoke", "InvokeStream")
-        raw_name = next((value for key, value in details.invocation_metadata if key == CALLBACK_METADATA), None)
-        try:
-            callback = raw_name.decode("utf-8") if raw_name is not None else None
-        except (UnicodeError, AttributeError):
-            callback = None
+        callback = _callback_name(details)
         limit = self._by_name.get(callback or "", self._default) if not worker or invocation else self._default
 
         def deserialize(raw: bytes) -> Any:

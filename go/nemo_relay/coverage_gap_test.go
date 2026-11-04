@@ -446,10 +446,6 @@ func assertExpiredCodecAndStreamErrors(t *testing.T) {
 	if _, err := (*LLMResponseSanitizeCodec)(nil).Decode(json.RawMessage(`{}`)); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
 		t.Fatalf("nil response codec Decode error = %v", err)
 	}
-	setLastErrorMessage("forced stream failure")
-	if _, err := llmStreamNextResult(-1, nil, nil, nil); err == nil {
-		t.Fatal("expected stream error status to propagate")
-	}
 }
 
 func assertStreamExporterPath(t *testing.T) {

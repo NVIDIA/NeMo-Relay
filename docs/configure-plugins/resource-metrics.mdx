@@ -915,15 +915,15 @@ Add these dependencies to your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-nemo-relay = "0.11.0"
+nemo-relay = "1.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Save the following code as `src/main.rs`, then run `cargo run`:
 
 ```rust
-use nemo_relay::api::resource_metrics;
-use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::resource_metrics;
+use nemo_relay::plugin::initialize;
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 
 #[tokio::main]

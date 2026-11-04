@@ -1,0 +1,276 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines PluginWorkerService and its dedicated RPC request and response messages.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/event.proto";
+import "nvidia/nemo/relay/worker/v1/llm.proto";
+import "nvidia/nemo/relay/worker/v1/runtime.proto";
+
+// nvidia.nemo.relay.worker.v1@1.0.0. Authentication, malformed input, and incompatible identity use
+// gRPC status. Callback/domain errors use the response's single result oneof.
+service PluginWorkerService {
+  // Authenticates and confirms plugin identity and worker contract before registration.
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  // Reports worker readiness and identity without installing callbacks.
+  rpc Health(HealthRequest) returns (HealthResponse);
+  // Returns structured configuration diagnostics without registering the component.
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  // Installs once per activation and semantic configuration, returning an idempotent plan.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Runs one registered unary callback and returns its surface-specific result.
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  // Runs a streaming LLM execution callback; errors are terminal stream items.
+  rpc InvokeStream(InvokeStreamRequest) returns (stream InvokeStreamResponse);
+  // Idempotently cancels active work and performs invocation resource cleanup.
+  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+  // Requests bounded drain and cleanup of the worker activation.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+// Authenticates an activation and proposes the exact worker contract and plugin identity.
+message HandshakeRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Plugin identity declared by the manifest and checked during activation.
+  string plugin_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Release version of the Relay host, independent of the worker contract version.
+  string relay_version = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Required protocol name and semantic contract version to confirm during handshake.
+  ProtocolIdentity protocol = 4 [(buf.validate.field).required = true];
+  // Host runtime endpoint supplied for authenticated worker-to-host calls.
+  string host_endpoint = 5 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Confirms worker identity, component multiplicity, and supported registration surfaces.
+message HandshakeResponse {
+  // Required worker identity for lifecycle responses.
+  WorkerIdentity identity = 1 [(buf.validate.field).required = true];
+  // Whether the plugin permits more than one configured component.
+  bool allows_multiple_components = 2;
+  // Recognized callback surfaces supported by this worker SDK.
+  repeated RegistrationSurface supported_surfaces = 3 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// Queries readiness using activation credentials; it may precede handshake.
+message HealthRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+}
+
+// Reports readiness and worker identity without implying registration success.
+message HealthResponse {
+  // Required recognized state reported by the enclosing lifecycle or admission operation.
+  WorkerHealthStatus status = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Human-readable description; consumers must not infer control flow from this text.
+  string message = 2;
+  // Required worker identity for lifecycle responses.
+  WorkerIdentity identity = 3 [(buf.validate.field).required = true];
+}
+
+// Validates one plugin configuration without installing callbacks.
+message ValidateRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Plugin identity declared by the manifest and checked during activation.
+  string plugin_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required application-owned config; JSON null represents no config.
+  JsonValue config = 3 [(buf.validate.field).required = true];
+}
+
+// Selects completed validation diagnostics or a validation callback failure.
+message ValidateResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Completed validation diagnostics; an empty list represents no reported diagnostics.
+    ConfigDiagnostics diagnostics = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Registration is idempotent for the same semantic config within an activation.
+// Concurrent repeats install once; changed config fails with FAILED_PRECONDITION.
+message RegisterRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Plugin identity declared by the manifest and checked during activation.
+  string plugin_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required application-owned configuration; encode JSON null when no configuration is supplied.
+  JsonValue config = 3 [(buf.validate.field).required = true];
+}
+
+// Selects the installed registration plan or a registration callback failure.
+message RegisterResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Successful declarative registration plan, including an explicitly empty plan.
+    RegistrationPlan plan = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Requires an invocation ID, a registration name, and one invocation alternative. The
+// alternative must match the registered callback type. The request has no separate surface
+// enum that could conflict with that alternative.
+message InvokeRequest {
+  option (buf.validate.message).cel = {
+    id: "invocation.event_kind"
+    message: "event sanitizer input must match its lifecycle surface"
+    expression: "(!has(this.mark_sanitize_guardrail) || has(this.mark_sanitize_guardrail.mark)) && (!has(this.scope_sanitize_start_guardrail) || (has(this.scope_sanitize_start_guardrail.scope) && this.scope_sanitize_start_guardrail.scope.scope_category == 1)) && (!has(this.scope_sanitize_end_guardrail) || (has(this.scope_sanitize_end_guardrail.scope) && this.scope_sanitize_end_guardrail.scope.scope_category == 2))"
+  };
+
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Exact callback registration identity; it must match callback metadata and the selected
+  // surface.
+  string registration_name = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 4;
+  // Exactly one recognized alternative is required when this message is present.
+  oneof invocation {
+    option (buf.validate.oneof).required = true;
+    // Observes an event and completes without returning a rewritten value.
+    Event subscriber = 10;
+    // Produces open metadata additions for an observed event.
+    Event event_metadata_injector = 11;
+    // Replaces sanitizable fields of a mark before publication.
+    Event mark_sanitize_guardrail = 12;
+    // Replaces sanitizable fields of a scope-start event before publication.
+    Event scope_sanitize_start_guardrail = 13;
+    // Replaces sanitizable fields of a scope-end event before publication.
+    Event scope_sanitize_end_guardrail = 14;
+    // Rewrites tool request arguments before execution.
+    ToolValueInvocation tool_sanitize_request_guardrail = 20;
+    // Rewrites the application tool result after execution.
+    ToolValueInvocation tool_sanitize_response_guardrail = 21;
+    // Allows or blocks execution of a tool request.
+    ToolValueInvocation tool_conditional_execution_guardrail = 22;
+    // Rewrites a tool request within the ordered interceptor chain.
+    ToolValueInvocation tool_request_intercept = 23;
+    // Executes or delegates a managed tool call and may schedule marks.
+    ToolExecutionInvocation tool_execution_intercept = 24;
+    // Rewrites a provider LLM request using its codec context.
+    LlmSanitizeRequestInvocation llm_sanitize_request_guardrail = 30;
+    // Rewrites a provider LLM response using its codec context.
+    LlmSanitizeResponseInvocation llm_sanitize_response_guardrail = 31;
+    // Allows or blocks execution of an LLM request.
+    LlmConditionalInvocation llm_conditional_execution_guardrail = 32;
+    // Rewrites a provider request or normalized annotation and may contribute evidence.
+    LlmRequestInvocation llm_request_intercept = 33;
+    // Executes or delegates a unary LLM call with request and response codec access.
+    LlmExecutionInvocation llm_execution_intercept = 34;
+    // Allows or blocks selected middleware registrations before they execute.
+    ConditionalMiddlewareInvocation conditional_middleware_guardrail = 40;
+  }
+}
+
+// One surface-specific success alternative or one callback/domain failure.
+message InvokeResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Explicit successful completion of a subscriber callback.
+    google.protobuf.Empty completed = 1;
+    // Only request/response LLM sanitizers may report unchanged.
+    google.protobuf.Empty unchanged = 2;
+    // Successful open metadata additions from an event metadata injector.
+    JsonObject metadata_additions = 3;
+    // Successful replacement fields from an event sanitizer; absent fields are cleared.
+    EventSanitizeFields event_sanitize = 4;
+    // Successful rewritten application value from a tool sanitizer or request interceptor.
+    JsonValue tool_value = 5;
+    // Explicit allow or block decision from a conditional guardrail.
+    GuardrailDecision guardrail = 6;
+    // Successful rewritten provider request from a request sanitizer.
+    LlmRequest llm_request = 7;
+    // Successful provider response from a response sanitizer or execution interceptor.
+    JsonValue llm_response = 8;
+    // Successful rewritten request, annotation, pending marks, and optimization evidence.
+    LlmRequestInterceptOutcome llm_request_outcome = 9;
+    // Successful canonical tool result and ordered pending marks.
+    ToolExecutionInterceptOutcome tool_execution_outcome = 10;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 11;
+  }
+}
+
+// Streaming is a distinct method with a request-only codec context.
+message InvokeStreamRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Exact callback registration identity; it must match callback metadata and the selected
+  // surface.
+  string registration_name = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Optional host binding selecting the stack and parent for this operation.
+  ScopeContext scope = 4;
+  // Model identity associated with the managed LLM operation.
+  string model_name = 5;
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 6 [(buf.validate.field).required = true];
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 7 [(buf.validate.field).string = {min_len: 1}];
+  // Required request codec identity and optional invocation-scoped access capability.
+  LlmCodecContext request_codec = 8 [(buf.validate.field).required = true];
+}
+
+// Exactly one item required. Error is terminal; clean EOF is successful closure.
+message InvokeStreamResponse {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof item {
+    option (buf.validate.oneof).required = true;
+    // Required provider-owned JSON chunk; empty bytes are invalid.
+    JsonValue value = 1;
+    // Callback or downstream domain failure; mutually exclusive with successful results.
+    WorkerError error = 2;
+  }
+}
+
+// Requests cancellation of one active invocation without replaying work.
+message CancelInvocationRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Nonempty host-issued invocation identity, unique among active callbacks.
+  string invocation_id = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Human-readable explanation for the decision; it does not carry additional authority.
+  string reason = 3;
+}
+
+// Idempotent: unknown/completed IDs return accepted=false, without resurrecting work.
+message CancelInvocationResponse {
+  // True when cancellation targeted active work; false for unknown or completed invocation IDs.
+  bool accepted = 1;
+  // Human-readable description; consumers must not infer control flow from this text.
+  string message = 2;
+}
+
+// Requests bounded worker drain and resource cleanup for the activation.
+message ShutdownRequest {
+  // Required activation credentials; invalid authentication fails before the operation executes.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // Human-readable explanation for the decision; it does not carry additional authority.
+  string reason = 2;
+}
+
+// Confirms successful admission of the worker shutdown request.
+message ShutdownResponse {}

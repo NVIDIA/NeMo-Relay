@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "documentation-plugin"
+enabled = true
+
+[components.config]
+tag = "documentation"
+
+[components.config.observe]
+enabled = true
+redact_keys = ["secret"]
+
+[components.config.requests]
+enabled = true
+mode = "enforce"
+blocked_tools = ["dangerous_tool"]
+blocked_models = ["restricted-model"]
+header_name = "x-nemo-relay-plugin"
+header_value = "documentation"
+priority = 20
+break_chain = false
+
+[components.config.execution]
+enabled = true
+priority = 30
+emit_pending_marks = true
+
+[components.config.runtime]
+emit_marks = true
+emit_isolated_scope = true
+
+# Include this group only for a native typed plugin.
+[components.config.executor]
+worker_threads = 2
+
+[policy]
+unknown_component = "error"
+unknown_field = "warn"
+unsupported_value = "error"

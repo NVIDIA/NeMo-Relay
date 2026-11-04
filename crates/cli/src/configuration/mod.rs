@@ -11,7 +11,7 @@ pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
-use nemo_relay::diagnostics::CliFailureCode;
+use nemo_relay_diagnostics::CliFailureCode;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
@@ -22,17 +22,20 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue};
-use nemo_relay::logging::LoggingConfig;
-use nemo_relay::plugin::dynamic::{
-    DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
-};
-use nemo_relay::plugin::{
-    PluginError, deduplicate_plugin_config_paths, merge_plugin_config_documents,
-};
+use nemo_relay_logging::LoggingConfig;
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use {
+    nemo_relay_plugin_host::PluginError, nemo_relay_plugin_host::deduplicate_plugin_config_paths,
+    nemo_relay_plugin_host::merge_plugin_config_documents,
+};
+use {
+    nemo_relay_plugin_host::dynamic::DYNAMIC_PLUGIN_MANIFEST_FILENAME,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifestLoad,
+};
 
 use crate::error::CliError;
 use crate::filesystem::{LockAttempt, try_lock_exclusive, try_lock_shared};
@@ -326,7 +329,7 @@ fn resolve_logging_from_document(
         CliError::Config(format!("failed to resolve logging configuration: {error}"))
     })?;
     LoggingConfig::from_toml_document(&document).map_err(|error| match error {
-        nemo_relay::error::FlowError::InvalidArgument(message) => CliError::Config(message),
+        nemo_relay_types::error::FlowError::InvalidArgument(message) => CliError::Config(message),
         other => CliError::Flow(other),
     })
 }
@@ -659,7 +662,21 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest(
 pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
     path: impl AsRef<Path>,
 ) -> Result<(DynamicPluginManifest, String, Vec<u8>), CliError> {
-    let path = path.as_ref();
+    load_bounded_dynamic_plugin_manifest_bytes_impl(path.as_ref(), false)
+}
+
+pub(crate) fn load_bounded_dynamic_plugin_manifest_for_inspection(
+    path: impl AsRef<Path>,
+) -> Result<(DynamicPluginManifest, String), CliError> {
+    let (manifest, normalized, _) =
+        load_bounded_dynamic_plugin_manifest_bytes_impl(path.as_ref(), true)?;
+    Ok((manifest, normalized))
+}
+
+fn load_bounded_dynamic_plugin_manifest_bytes_impl(
+    path: &Path,
+    inspect: bool,
+) -> Result<(DynamicPluginManifest, String, Vec<u8>), CliError> {
     let manifest_path = if path.is_dir() {
         path.join(DYNAMIC_PLUGIN_MANIFEST_FILENAME)
     } else {
@@ -682,8 +699,12 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
             normalized.display()
         ))
     })?;
-    let manifest = DynamicPluginManifest::parse_toml(contents)
-        .map_err(|error| CliError::Config(error.to_string()))?;
+    let manifest = if inspect {
+        DynamicPluginManifest::parse_toml_for_inspection(contents)
+    } else {
+        DynamicPluginManifest::parse_toml(contents)
+    }
+    .map_err(|error| CliError::Config(error.to_string()))?;
     Ok((manifest, normalized.to_string_lossy().into_owned(), bytes))
 }
 
@@ -1845,7 +1866,7 @@ pub(crate) fn explicit_plugin_config_path(
 
 fn implicit_plugin_config_paths(user_config_dir: Option<PathBuf>) -> Vec<PathBuf> {
     // The search-path logic lives in core; the gateway shares it so discovery stays identical.
-    nemo_relay::plugin::default_plugin_config_paths(user_config_dir)
+    nemo_relay_plugin_host::default_plugin_config_paths(user_config_dir)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -1882,7 +1903,7 @@ fn user_config_path() -> Option<PathBuf> {
 /// Resolves the nemo-relay user config DIRECTORY (without trailing filename). Delegates to core's
 /// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
-    nemo_relay::plugin::user_config_dir()
+    nemo_relay_plugin_host::user_config_dir()
 }
 
 /// Resolves the platform system config directory shared with the core plugin runtime.
@@ -1891,7 +1912,7 @@ pub(crate) fn system_config_dir() -> PathBuf {
     if let Some(path) = TEST_SYSTEM_CONFIG_DIR.with(|value| value.borrow().clone()) {
         return path;
     }
-    nemo_relay::plugin::system_config_dir()
+    nemo_relay_plugin_host::system_config_dir()
 }
 
 #[cfg(test)]
@@ -2265,13 +2286,15 @@ fn resolve_dynamic_plugin_refs(
     let mut seen_plugin_ids = HashSet::new();
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
-        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path)
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "invalid dynamic plugin manifest referenced by {}: {error}",
-                    source.display()
-                ))
-            })?;
+        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest_for_inspection(
+            &manifest_path,
+        )
+        .map_err(|error| {
+            CliError::Config(format!(
+                "invalid dynamic plugin manifest referenced by {}: {error}",
+                source.display()
+            ))
+        })?;
         let plugin_id = manifest.plugin.id.trim().to_owned();
         if !seen_plugin_ids.insert(plugin_id.clone()) {
             return Err(CliError::Config(format!(

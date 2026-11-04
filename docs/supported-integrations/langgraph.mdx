@@ -122,6 +122,60 @@ When `ToolNode` handles an error and returns a `ToolMessage` with
 span status to `ERROR`. The message still returns to LangGraph. Graph
 interrupts still pause the workflow as usual.
 
+## Middleware and Wrapper Ordering
+
+LangChain agents use the same middleware order when they run in LangGraph or
+through the LangGraph API. Both integrations use `NemoRelayMiddleware`.
+Place it before your middleware to record tool results after your wrappers
+return. Refer to
+[LangChain middleware ordering](/supported-integrations/langchain#middleware-ordering)
+for details.
+
+`configure_graph` adds callbacks that create scopes for graph runs. It does not
+change the middleware order. For Deep Agents, use the
+[middleware position option](/supported-integrations/deepagents#middleware-ordering).
+
+A standalone `ToolNode` uses tool call wrappers. It does not take an agent
+middleware list. `create_tool_node` sets the wrappers for you. It rejects custom
+`wrap_tool_call` and `awrap_tool_call` arguments.
+
+To combine your wrappers with Relay, create a `ToolNode` directly. Add your
+result changes inside Relay's wrapper. The following example uses `get_weather`
+from the earlier example. It adds a status line before Relay records the result:
+
+```python
+from langgraph.prebuilt import ToolNode
+from nemo_relay.integrations.langgraph import awrap_tool_call, wrap_tool_call
+
+def observed_tool_call(request, execute):
+    def execute_with_status(inner_request):
+        result = execute(inner_request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+    return wrap_tool_call(request, execute_with_status)
+
+async def observed_async_tool_call(request, execute):
+    async def execute_with_status(inner_request):
+        result = await execute(inner_request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+    return await awrap_tool_call(request, execute_with_status)
+
+tool_node = ToolNode(
+    [get_weather],
+    wrap_tool_call=observed_tool_call,
+    awrap_tool_call=observed_async_tool_call,
+)
+```
+
+Relay records the result with the status line. If you add the line after
+`wrap_tool_call` or `awrap_tool_call` returns, the graph still receives it.
+Relay's tool event and ATIF observation do not include it.
+
+This example uses a `ToolMessage` with string content. If your tool returns a
+command or content blocks, keep that structure when you change the result.
+Changes in later graph nodes are outside the recorded tool call.
+
 ## Served LangChain Agents
 
 When you export a LangChain agent for `langgraph dev` or `langgraph up`, add

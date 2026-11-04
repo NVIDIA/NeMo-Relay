@@ -8,10 +8,10 @@ use super::*;
 use std::sync::{Mutex, OnceLock};
 
 use crate::trie::data_models::{LlmCallPrediction, PredictionMetrics};
-use nemo_relay::api::runtime::current_scope_stack;
-use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::scope::{pop_scope, push_scope};
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_runtime::api::runtime::current_scope_stack;
+use nemo_relay_runtime::api::scope::ScopeType;
+use nemo_relay_runtime::api::scope::{pop_scope, push_scope};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -155,14 +155,14 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
     let req_fn = intercept.into_request_fn();
 
     let agent_scope = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("scope-agent")
             .scope_type(ScopeType::Agent)
             .build(),
     )
     .unwrap();
     let function_scope = push_scope(
-        nemo_relay::api::scope::PushScopeParams::builder()
+        nemo_relay_runtime::api::scope::PushScopeParams::builder()
             .name("step")
             .scope_type(ScopeType::Function)
             .parent(&agent_scope)
@@ -229,13 +229,13 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
     assert_eq!(returned_annotated, expected_annotated);
 
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&function_scope.uuid)
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_relay::api::scope::PopScopeParams::builder()
+        nemo_relay_runtime::api::scope::PopScopeParams::builder()
             .handle_uuid(&agent_scope.uuid)
             .build(),
     )
@@ -420,4 +420,73 @@ fn test_inject_agent_hints_follows_body_path_and_header_flag() {
         &HintInjection::new(true, "nvext..agent_hints"),
     );
     assert_eq!(request.content, serde_json::json!({}));
+}
+
+#[test]
+fn test_inject_agent_hints_merges_into_modeled_metadata_through_a_codec() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
+
+    let hints = manual_agent_hints(4, "agent", 1);
+    let original = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"user_id": "u1"}
+        }),
+    };
+    let mut request = original.clone();
+    let mut annotated = Some(OpenAIChatCodec.decode(&original).unwrap());
+
+    inject_agent_hints(
+        &mut request,
+        &mut annotated,
+        &hints,
+        &HintInjection::new(false, "metadata.relay_hints"),
+    );
+    let encoded = OpenAIChatCodec
+        .encode(annotated.as_ref().unwrap(), &original)
+        .unwrap();
+
+    // The user's metadata survives and the hints sit next to it.
+    assert_eq!(
+        encoded.content["metadata"],
+        serde_json::json!({
+            "user_id": "u1",
+            "relay_hints": serde_json::to_value(&hints).unwrap()
+        })
+    );
+}
+
+#[test]
+fn test_inject_agent_hints_creates_modeled_metadata_through_a_codec() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
+
+    let hints = manual_agent_hints(4, "agent", 1);
+    let original = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+    };
+    let mut request = original.clone();
+    let mut annotated = Some(OpenAIChatCodec.decode(&original).unwrap());
+
+    inject_agent_hints(
+        &mut request,
+        &mut annotated,
+        &hints,
+        &HintInjection::new(false, "metadata.relay_hints"),
+    );
+    let encoded = OpenAIChatCodec
+        .encode(annotated.as_ref().unwrap(), &original)
+        .unwrap();
+
+    assert_eq!(
+        encoded.content["metadata"],
+        serde_json::json!({"relay_hints": serde_json::to_value(&hints).unwrap()})
+    );
 }

@@ -315,6 +315,8 @@ fn credentials_switch_sources_and_round_trip_without_running_helpers() {
                     command: "never-execute-this-secret-command".into(),
                     args: vec!["argument with spaces".into(), "secret-argument\"\\".into()],
                     timeout_ms: 2345,
+                    cache_ttl_ms: 300000,
+                    cache: Default::default(),
                     auth_scheme: Some(AuthScheme::Bearer),
                 },
             )
@@ -336,6 +338,7 @@ fn credentials_switch_sources_and_round_trip_without_running_helpers() {
         assert_eq!(parsed.command, "never-execute-this-secret-command");
         assert_eq!(parsed.args, ["argument with spaces", "secret-argument\"\\"]);
         assert_eq!(parsed.timeout_ms, 2345);
+        assert_eq!(parsed.cache_ttl_ms, 300000);
         assert!(matches!(parsed.auth_scheme, Some(AuthScheme::Bearer)));
 
         document
@@ -373,6 +376,8 @@ fn helper_replacement_supports_nested_inline_and_dotted_tables_and_default_schem
                         command: "new-secret".into(),
                         args: Vec::new(),
                         timeout_ms: 10_000,
+                        cache_ttl_ms: 0,
+                        cache: Default::default(),
                         auth_scheme: None,
                     },
                 )
@@ -394,6 +399,8 @@ fn helper_replacement_supports_nested_inline_and_dotted_tables_and_default_schem
                 command: "helper".into(),
                 args: Vec::new(),
                 timeout_ms: 1,
+                cache_ttl_ms: 0,
+                cache: Default::default(),
                 auth_scheme: Some(AuthScheme::ApiKey),
             },
         )
@@ -432,6 +439,8 @@ fn invalid_credential_replacements_preserve_the_previous_source() {
                         command: command.into(),
                         args: Vec::new(),
                         timeout_ms,
+                        cache_ttl_ms: 0,
+                        cache: Default::default(),
                         auth_scheme,
                     }
                 )
@@ -473,9 +482,9 @@ fn inline_sink_arrays_support_edit_add_remove_and_preserve_toml_form() {
         let logging = if section == "logging" { &parsed["logging"] } else { &parsed["daemon"]["logging"] };
         let mut runtime_document = toml::map::Map::new();
         runtime_document.insert("logging".into(), logging.clone());
-        let runtime = nemo_relay::logging::LoggingConfig::from_toml_document(&toml::to_string(&runtime_document).unwrap()).unwrap();
+        let runtime = nemo_relay_logging::LoggingConfig::from_toml_document(&toml::to_string(&runtime_document).unwrap()).unwrap();
         assert_eq!(runtime.sinks.len(), 2);
-        let nemo_relay::logging::LogSinkConfig::File(sink) = &runtime.sinks[0];
+        let nemo_relay_logging::LogSinkConfig::File(sink) = &runtime.sinks[0];
         assert_eq!(sink.path, PathBuf::from("changed.log"));
         assert_eq!(sink.queue_capacity, 128);
         assert!(sink.rotation.is_some());
@@ -781,9 +790,9 @@ fn daemon_logging_edits_preserve_application_logging() {
     let daemon = crate::configuration::resolve_daemon_logging_config(Some(&document.path)).unwrap();
     crate::configuration::set_test_system_config_dir(previous_system);
     assert!(!daemon.stderr_enabled);
-    assert_eq!(daemon.level, nemo_relay::logging::LogLevel::Debug);
+    assert_eq!(daemon.level, nemo_relay_logging::LogLevel::Debug);
     assert_eq!(daemon.flush_interval_millis, 0);
-    let nemo_relay::logging::LogSinkConfig::File(sink) = &daemon.sinks[0];
+    let nemo_relay_logging::LogSinkConfig::File(sink) = &daemon.sinks[0];
     assert_eq!(sink.path, PathBuf::from("daemon.log"));
     assert_eq!(sink.queue_capacity, 128);
     assert!(sink.rotation.is_some());

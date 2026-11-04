@@ -8,10 +8,10 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::AnnotatedLlmResponse;
-use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay::plugin::PluginRegistrationContext;
+use nemo_relay_plugin_host::HostPluginRegistrationContext;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
@@ -666,7 +666,10 @@ unsafe extern "C" fn llm_exec_intercept_cb(
     unsafe { next_fn(native_json, next_ctx) }
 }
 
-unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
+unsafe extern "C" fn collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    chunk_json: *const c_char,
+) -> i32 {
     let chunk: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(chunk_json) }
             .to_str()
@@ -674,9 +677,10 @@ unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
     )
     .unwrap();
     lock_unpoisoned(collected_chunks()).push(chunk);
+    0
 }
 
-unsafe extern "C" fn finalizer_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     *lock_unpoisoned(finalizer_calls()) += 1;
     CString::new(json!({"finalized": true}).to_string())
         .unwrap()
@@ -760,22 +764,25 @@ struct PanickingFfiSanitizerCodec;
 impl LlmCodec for PanickingFfiSanitizerCodec {
     fn decode(
         &self,
-        _request: &nemo_relay::api::llm::LlmRequest,
-    ) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+        _request: &nemo_relay_runtime::api::llm::LlmRequest,
+    ) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         panic!("request decode panic")
     }
 
     fn encode(
         &self,
         _annotated: &AnnotatedLlmRequest,
-        _original: &nemo_relay::api::llm::LlmRequest,
-    ) -> nemo_relay::error::Result<nemo_relay::api::llm::LlmRequest> {
+        _original: &nemo_relay_runtime::api::llm::LlmRequest,
+    ) -> nemo_relay_types::error::Result<nemo_relay_runtime::api::llm::LlmRequest> {
         panic!("request encode panic")
     }
 }
 
 impl LlmResponseCodec for PanickingFfiSanitizerCodec {
-    fn decode_response(&self, _response: &Json) -> nemo_relay::error::Result<AnnotatedLlmResponse> {
+    fn decode_response(
+        &self,
+        _response: &Json,
+    ) -> nemo_relay_types::error::Result<AnnotatedLlmResponse> {
         panic!("response decode panic")
     }
 }
@@ -787,7 +794,7 @@ fn ffi_sanitizer_codec_entrypoints_contain_codec_panics() {
     let response_codec = FfiLlmSanitizeResponseCodec(
         Arc::new(PanickingFfiSanitizerCodec) as Arc<dyn LlmResponseCodec>
     );
-    let request = FfiLLMRequest(nemo_relay::api::llm::LlmRequest {
+    let request = FfiLLMRequest(nemo_relay_runtime::api::llm::LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"model": "gpt-test", "messages": []}),
     });

@@ -10,13 +10,21 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginFailure,
-    DynamicPluginFailurePhase, DynamicPluginKind, DynamicPluginLoadContract, DynamicPluginManifest,
-    DynamicPluginManifestLoad, DynamicPluginRecord, DynamicPluginValidationStatus, WorkerRuntime,
-};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use {
+    nemo_relay_plugin_host::dynamic::DynamicPluginCheckState,
+    nemo_relay_plugin_host::dynamic::DynamicPluginCompatibility,
+    nemo_relay_plugin_host::dynamic::DynamicPluginFailure,
+    nemo_relay_plugin_host::dynamic::DynamicPluginFailurePhase,
+    nemo_relay_plugin_host::dynamic::DynamicPluginKind,
+    nemo_relay_plugin_host::dynamic::DynamicPluginLoadContract,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifest,
+    nemo_relay_plugin_host::dynamic::DynamicPluginManifestLoad,
+    nemo_relay_plugin_host::dynamic::DynamicPluginRecord,
+    nemo_relay_plugin_host::dynamic::DynamicPluginValidationStatus,
+    nemo_relay_plugin_host::dynamic::WorkerRuntime,
+};
 
 #[cfg(test)]
 use crate::configuration::resolve_plugins_config;
@@ -2217,7 +2225,10 @@ fn active_dynamic_plugin_components_from_scopes(
                     .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
             })
             .filter(|record| {
-                !record.is_tombstoned() && record.spec.enabled && !optional_trust_failure(record)
+                !record.is_tombstoned()
+                    && record.spec.enabled
+                    && record.status.validation.compatibility != DynamicPluginCheckState::Invalid
+                    && !optional_trust_failure(record)
             })
             .filter_map(|record| match record.metadata.kind {
                 DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
@@ -2256,7 +2267,24 @@ fn active_dynamic_plugin_components_from_scopes(
                 resolved_plugin.plugin_id
             )));
         };
-        if record.is_tombstoned() || !record.spec.enabled || optional_trust_failure(record) {
+        if record.spec.enabled
+            && !record.is_tombstoned()
+            && record.status.validation.compatibility == DynamicPluginCheckState::Invalid
+        {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "dynamic_plugin_incompatible",
+                plugin_id = record.metadata.id.as_str();
+                "Skipping enabled dynamic plugin '{}': {}. Remove its old registration with `nemo-relay plugins remove`, then rebuild and reinstall the plugin.",
+                record.metadata.id,
+                record.status.validation.message.as_deref().unwrap_or("invalid compatibility")
+            );
+        }
+        if record.is_tombstoned()
+            || !record.spec.enabled
+            || record.status.validation.compatibility == DynamicPluginCheckState::Invalid
+            || optional_trust_failure(record)
+        {
             continue;
         }
         let host_config = host_config_by_id.get(&record.metadata.id).ok_or_else(|| {
@@ -2500,10 +2528,18 @@ fn hydrate_scoped_registries(
                 &policy,
                 &trust,
             )?;
-            scopes[scope_index]
-                .registry
-                .add(record)
-                .map_err(|error| CliError::Config(error.to_string()))?;
+            if record.status.validation.compatibility == DynamicPluginCheckState::Invalid {
+                let mut records = scopes[scope_index].registry.cloned_records(true);
+                records.push(record);
+                scopes[scope_index].registry =
+                    nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::from_records(records)
+                        .map_err(|error| CliError::Config(error.to_string()))?;
+            } else {
+                scopes[scope_index]
+                    .registry
+                    .add(record)
+                    .map_err(|error| CliError::Config(error.to_string()))?;
+            }
         }
         touched.insert(scope_index);
     }
@@ -2519,19 +2555,27 @@ fn validated_record_from_manifest(
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
     let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
+    let compatibility_error = manifest.validate().err();
     let mut record = manifest
-        .into_record(Some(manifest_ref))
+        .into_record_for_inspection(Some(manifest_ref))
         .map_err(|error| CliError::Config(error.to_string()))?;
     record.source.environment_ref = environment_ref;
     record.status.validation = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
-        compatibility: DynamicPluginCheckState::Valid,
+        compatibility: if compatibility_error.is_some() {
+            DynamicPluginCheckState::Invalid
+        } else {
+            DynamicPluginCheckState::Valid
+        },
         integrity: trust.integrity,
         environment,
         authenticity: trust.authenticity,
         policy_satisfied: policy.check_state(),
         checked_at: None,
-        message: Some(VALIDATION_MESSAGE.into()),
+        message: Some(
+            compatibility_error
+                .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
+        ),
     };
     record.status.startup_class = Some(policy.startup_class);
     record.status.attestation_mode = Some(policy.attestation_mode);
@@ -2587,19 +2631,28 @@ fn update_registry_validation_status(
         .and_then(|record| record.source.environment_ref.as_deref());
     let environment = environment_state(manifest, &scope.state_path, environment_ref);
     let environment_error = environment_last_error(plugin_id, environment, environment_ref);
+    let compatibility_error = manifest.validate().err();
     scope
         .registry
         .update_validation_status(
             plugin_id,
             DynamicPluginValidationStatus {
                 manifest: DynamicPluginCheckState::Valid,
-                compatibility: DynamicPluginCheckState::Valid,
+                compatibility: if compatibility_error.is_some() {
+                    DynamicPluginCheckState::Invalid
+                } else {
+                    DynamicPluginCheckState::Valid
+                },
                 integrity: trust.integrity,
                 environment,
                 authenticity: trust.authenticity,
                 policy_satisfied: policy.check_state(),
                 checked_at: None,
-                message: Some(VALIDATION_MESSAGE.into()),
+                message: Some(
+                    compatibility_error
+                        .as_ref()
+                        .map_or_else(|| VALIDATION_MESSAGE.into(), ToString::to_string),
+                ),
             },
         )
         .map_err(|error| CliError::Config(error.to_string()))?;
@@ -2680,8 +2733,12 @@ fn load_manifest_for_action(
     path: impl Into<PathBuf>,
 ) -> Result<(DynamicPluginManifest, String), CliError> {
     let path = path.into();
-    crate::configuration::load_bounded_dynamic_plugin_manifest(&path)
-        .map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
+    let result = if matches!(action, "hydrate" | "inspect" | "validate") {
+        crate::configuration::load_bounded_dynamic_plugin_manifest_for_inspection(&path)
+    } else {
+        crate::configuration::load_bounded_dynamic_plugin_manifest(&path)
+    };
+    result.map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
 }
 
 fn load_config_schema_for_manifest(
@@ -2727,7 +2784,7 @@ fn ensure_scope(
         scope,
         plugins_toml_path,
         state_path,
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new(),
     });
     scopes.len() - 1
 }
@@ -2745,9 +2802,9 @@ fn restore_plugins_toml(path: &std::path::Path, original: Option<&[u8]>) -> Resu
     Ok(())
 }
 
-fn optional_trust_failure(record: &nemo_relay::plugin::dynamic::DynamicPluginRecord) -> bool {
+fn optional_trust_failure(record: &nemo_relay_plugin_host::dynamic::DynamicPluginRecord) -> bool {
     record.status.startup_class
-        == Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional)
+        == Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Optional)
         && (record.status.validation.integrity == DynamicPluginCheckState::Invalid
             || record.status.validation.authenticity == DynamicPluginCheckState::Invalid)
 }
@@ -2757,9 +2814,19 @@ fn required_startup_failure(
     resolved_plugins: &[ResolvedDynamicPluginConfig],
 ) -> Option<String> {
     if entry.record.status.startup_class
-        != Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required)
+        != Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required)
     {
         return None;
+    }
+
+    if entry.record.status.validation.compatibility == DynamicPluginCheckState::Invalid {
+        return Some(format!(
+            "- {}: {}",
+            entry.record.metadata.id,
+            entry.record.status.validation.message.as_deref().unwrap_or(
+                "required dynamic plugin is incompatible; remove its old registration, then rebuild and reinstall the plugin"
+            )
+        ));
     }
 
     if entry.record.status.validation.policy_satisfied == DynamicPluginCheckState::Invalid {

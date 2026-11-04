@@ -24,7 +24,7 @@ use super::{
     FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
 };
-use nemo_relay::codec::response::FinishReason;
+use nemo_relay_types::codec::response::FinishReason;
 
 /// A resolved request codec available while an LLM request sanitizer runs.
 #[pyclass(name = "LlmSanitizeRequestCodec")]
@@ -842,8 +842,10 @@ impl PyOpenAIChatCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
-            inner_response_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
+            inner_codec: Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
+            ),
         }
     }
 
@@ -907,9 +909,9 @@ impl PyOpenAIResponsesCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
-            inner_response_codec: Arc::new(
-                nemo_relay::codec::openai_responses::OpenAIResponsesCodec,
+            inner_codec: Arc::new(nemo_relay_codecs::openai_responses::OpenAIResponsesCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
             ),
         }
     }
@@ -974,8 +976,10 @@ impl PyAnthropicMessagesCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
-            inner_response_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
+            inner_codec: Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
+            ),
         }
     }
 
@@ -1039,8 +1043,10 @@ impl PyOCIGenAIChatCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
-            inner_response_codec: Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
+            inner_codec: Arc::new(nemo_relay_codecs::oci_genai::OCIGenAIChatCodec),
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::OCIGenAI,
+            ),
         }
     }
 
@@ -1105,10 +1111,10 @@ impl PyGeminiGenerateContentCodec {
     pub(crate) fn new() -> Self {
         Self {
             inner_codec: Arc::new(
-                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+                nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec,
             ),
-            inner_response_codec: Arc::new(
-                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            inner_response_codec: nemo_relay_runtime::codec::response_codec(
+                nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
             ),
         }
     }

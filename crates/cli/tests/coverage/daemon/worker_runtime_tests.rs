@@ -1062,7 +1062,7 @@ async fn websocket_drain_cancels_a_pending_upstream_handshake() {
 
 #[test]
 fn managed_provider_transport_failures_preserve_operational_reasons() {
-    use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
+    use nemo_relay_types::error::{UpstreamFailure, UpstreamFailureClass};
     for (class, reason) in [
         (UpstreamFailureClass::Connection, Some("transport_error")),
         (UpstreamFailureClass::Timeout, Some("response_head_timeout")),
@@ -1203,37 +1203,37 @@ async fn model_catalog_workers_keep_provider_credentials_on_the_selected_upstrea
                 );
             }
             let app = router(state.clone());
-            for provider in ["openai", "anthropic"] {
-                for path in ["/models", "/v1/models"] {
-                    let mut request = Request::get(format!("{path}?limit=1"))
-                        .header(WORKER_TOKEN_HEADER, "data-secret");
-                    if provider == "anthropic" {
-                        request = request.header("anthropic-version", "2023-06-01");
-                    }
-                    let response = app
-                        .clone()
-                        .oneshot(request.body(Body::empty()).unwrap())
-                        .await
-                        .unwrap();
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let body = response.into_body().collect().await.unwrap().to_bytes();
-                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(observed["provider"], provider, "managed={managed}");
-                    assert_eq!(observed["uri"], "/v1/models?limit=1");
-                    let auth = if configured {
-                        Some(format!("Bearer configured-{provider}"))
-                    } else {
-                        (provider == "openai").then(|| "Bearer environment-openai".into())
-                    };
-                    assert_eq!(observed["authorization"], json!(auth));
-                    assert_eq!(
-                        observed["key"],
-                        json!(
-                            (!configured && provider == "anthropic")
-                                .then_some("environment-anthropic")
-                        )
-                    );
+            for (provider, path) in ["openai", "anthropic"]
+                .into_iter()
+                .flat_map(|provider| ["/models", "/v1/models"].map(|path| (provider, path)))
+            {
+                let mut request = Request::get(format!("{path}?limit=1"))
+                    .header(WORKER_TOKEN_HEADER, "data-secret");
+                if provider == "anthropic" {
+                    request = request.header("anthropic-version", "2023-06-01");
                 }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(observed["provider"], provider, "managed={managed}");
+                assert_eq!(observed["uri"], "/v1/models?limit=1");
+                let auth = if configured {
+                    Some(format!("Bearer configured-{provider}"))
+                } else {
+                    (provider == "openai").then(|| "Bearer environment-openai".into())
+                };
+                assert_eq!(observed["authorization"], json!(auth));
+                assert_eq!(
+                    observed["key"],
+                    json!(
+                        (!configured && provider == "anthropic").then_some("environment-anthropic")
+                    )
+                );
             }
             if let Some(runtime) = &state.managed {
                 runtime.close().await.unwrap();
@@ -1273,7 +1273,7 @@ async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_crede
         openai_base_url: format!("http://{address}/v1"),
         anthropic_base_url: format!("http://{address}/v1"),
         insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
-            address.ip().to_string(),
+            address.host().to_string(),
         ])
         .unwrap(),
         response_timeout_secs: 10,
@@ -1346,7 +1346,7 @@ async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_crede
 
 #[tokio::test]
 async fn diagnostic_reads_do_not_activate_pending_or_draining_workers_and_revoke_on_control_loss() {
-    use nemo_relay::diagnostics::*;
+    use nemo_relay_diagnostics::*;
     let context = Diagnostics::from_settings(
         Diagnostics::default().source().clone(),
         DiagnosticsSettings {

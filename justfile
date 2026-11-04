@@ -17,6 +17,10 @@ linux_glibc_version := "2.17"
 node_platform := ""
 node_target := ""
 node_build_strategy := "native"
+# Release packaging remains the default; source Quick Start runs use host dev builds.
+package_profile := "release"
+# Release CI packs the metapackage on Linux only; local host runs need both tarballs.
+node_metapackage := "false"
 
 bash_helpers := '''
 set -euo pipefail
@@ -193,6 +197,7 @@ generate_docs_api_references() {
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
+    uv run --no-sync python -m unittest scripts.tests.test_rust_library_reference
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py
 }
 
@@ -479,12 +484,21 @@ changed = []
 found_workspace_version = False
 local_dependencies = (
     "nemo-relay-types",
+    "nemo-relay-codecs",
+    "nemo-relay-model-pricing",
+    "nemo-relay-resource-metrics",
+    "nemo-relay-observability",
     "nemo-relay-worker-proto",
     "nemo-relay-worker",
+    "nemo-relay-diagnostics",
+    "nemo-relay-logging",
+    "nemo-relay-runtime",
+    "nemo-relay-plugin-host",
     "nemo-relay",
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
+    "nemo-relay-builtins",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -839,17 +853,27 @@ print(f"python/plugin/pyproject.toml version updated to {version}")
 PY
 }
 
+# Publish dependencies first, including dev dependencies used in package validation.
 published_cargo_packages() {
     printf '%s\n' \
         nemo-relay-types \
-        nemo-relay-plugin \
         nemo-relay-worker-proto \
+        nemo-relay-codecs \
+        nemo-relay-plugin \
         nemo-relay-worker \
-        nemo-relay \
+        nemo-relay-diagnostics \
+        nemo-relay-model-pricing \
+        nemo-relay-logging \
+        nemo-relay-observability \
+        nemo-relay-resource-metrics \
+        nemo-relay-runtime \
+        nemo-relay-plugin-host \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
+        nemo-relay-builtins \
         nemo-relay-ffi \
-        nemo-relay-cli
+        nemo-relay-cli \
+        nemo-relay
 }
 
 # Keep local wheel packaging aligned with the CI matrix without requiring raw
@@ -910,6 +934,37 @@ python_plugin_sync_args() {
     fi
 }
 
+run_python_worker_proto_tests() {
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
+    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
+        echo "Skipping Python worker proto tests on Windows ARM64"
+        return
+    fi
+    local requirements=""
+    requirements="$("$python_executable" - <<'PY'
+import tomllib
+from pathlib import Path
+
+locked = tomllib.loads(Path("uv.lock").read_text())["package"]
+for name in ("pytest", "pytest-asyncio"):
+    package = next(package for package in locked if package["name"] == name)
+    print(f"{name}=={package['version']}")
+dependencies = tomllib.loads(Path("python/plugin/pyproject.toml").read_text())["project"]["dependencies"]
+print(next(requirement for requirement in dependencies if requirement.startswith("protovalidate==")))
+PY
+)"
+    local test_dependencies=()
+    local requirement=""
+    while IFS= read -r requirement; do
+        test_dependencies+=(--with "$requirement")
+    done <<< "$requirements"
+    local grpcio_tools_version=""
+    grpcio_tools_version="$(python_plugin_grpcio_tools_version)"
+    uvx --from "grpcio-tools==$grpcio_tools_version" "${test_dependencies[@]}" python -m pytest \
+        python/tests/plugin/test_nvidia_worker_proto_v1.py -q -o asyncio_default_fixture_loop_scope=function
+}
+
 python_plugin_grpcio_tools_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -968,10 +1023,10 @@ prepare_test_plugin_fixtures() {
 
     cd "$NEMO_RELAY_REPO_ROOT"
     cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/native_plugin/Cargo.toml \
         --target-dir "$target_dir"
     cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml \
+        --manifest-path crates/plugin-host/tests/fixtures/worker_plugin/Cargo.toml \
         --target-dir "$target_dir"
 
     export NEMO_RELAY_TEST_NATIVE_PLUGIN="$target_dir/debug/$native_library"
@@ -1026,6 +1081,33 @@ is_true() {
 }
 '''
 
+# validate quickstart metadata, referenced files, and checker tests (no guide execution)
+check-quickstarts:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for Quick Start checks. Install jq and rerun just check-quickstarts." >&2
+        exit 1
+    fi
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    # Keep automatic checks explicit: guide shell/Python execution belongs to the manual workflow.
+    "$python_executable" -m unittest \
+        scripts.tests.test_quickstarts \
+        scripts.tests.test_quickstart_jq
+    "$python_executable" scripts/check-quickstarts.py check
+
+# Execute credential-free Quick Starts against explicit release, build, or local assets.
+[positional-arguments]
+test-quickstarts *args:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/run-quickstarts.py "$@"
+
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples
     #!/usr/bin/env bash
@@ -1048,7 +1130,7 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay --test documentation_examples
+    cargo test --locked -p nemo-relay-types -p nemo-relay --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
@@ -1056,6 +1138,13 @@ docs-api-reference:
     {{ bash_helpers }}
     ensure_docs_dependencies
     generate_docs_api_references
+
+# --set [package_profile=release|dev]
+build-cli:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build --locked --profile "{{ package_profile }}" -p nemo-relay-cli
 
 # --set [ci=true|false]
 build-rust:
@@ -1113,62 +1202,31 @@ generate-python-worker-proto:
     cd "$NEMO_RELAY_REPO_ROOT"
     generate_python_worker_proto_files python/plugin/src/nemo_relay_plugin/_proto
 
-check-python-worker-proto:
+# Lint, format, and independently test the current worker contract.
+# Install Buf 1.75.0 or newer, or set BUF to its executable path.
+check-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    buf_executable="${BUF:-buf}"
+    "$buf_executable" lint crates/worker-proto
+    "$buf_executable" format crates/worker-proto --path crates/worker-proto/proto/nvidia/nemo/relay/worker/v1 --diff --exit-code
+    run_python_worker_proto_tests
+
+# Resolve the locked validation dependency into the ignored build cache.
+resolve-worker-proto-deps:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     python_executable="$(uv_python_executable)"
-    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
-        echo "Skipping Python worker proto check on Windows ARM64"
-        exit 0
-    fi
-    tmp_dir="$(mktemp -d)"
-    cleanup_proto_tmp() {
-        rm -rf "$tmp_dir"
-    }
-    trap cleanup_proto_tmp EXIT
-    generate_python_worker_proto_files "$tmp_dir"
-    "$python_executable" - "$tmp_dir" <<'PY'
-    from pathlib import Path
-    import sys
+    "$python_executable" scripts/proto_dependencies.py
 
-    sys.path.insert(0, str(Path(sys.argv[1])))
-    import plugin_worker_pb2 as pb
+check-python-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    run_python_worker_proto_tests
 
-    assert pb.HandshakeRequest.DESCRIPTOR.fields_by_name["worker_protocol"].number == 4
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
-    assert {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods} == {
-        "Handshake", "Health", "Validate", "Register", "Invoke", "InvokeStream", "CancelInvocation", "Shutdown"
-    }
-    assert pb.SUBSCRIBER == 1
-    assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
-    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
-    assert execution_context.number == 11
-    assert execution_context.containing_oneof is None
-    assert {
-        field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields
-    } == {"request_sanitize_context", "response_sanitize_context"}
-    tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
-    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
-    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
-    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
-    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
-    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostic["code"].number == 1
-    assert runtime_diagnostic["message"].number == 2
-    assert runtime_diagnostic["count"].number == 3
-    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostics_response["entries"].number == 1
-    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
-    assert emit_mark["data_schema"].number == 7
-    assert emit_mark["severity"].number == 8
-    assert emit_mark["category"].number == 9
-    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
-    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
-    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
-    PY
 
 generate-test-plugin-lockfiles:
     #!/usr/bin/env bash
@@ -1397,7 +1455,7 @@ test-rust:
             prepare_llvm_cov_workspace
         fi
         prepare_test_plugin_fixtures
-        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             # LLVM deduplicates unmangled FFI symbols using the first object's
@@ -1423,7 +1481,7 @@ test-rust:
         fi
     else
         prepare_test_plugin_fixtures
-        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -1439,6 +1497,8 @@ test-python:
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"
+    mkdir -p "$test_config_home/system"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_home/system"
     export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     export_uv_python_runtime
     if is_true "{{ ci }}"; then
@@ -1530,6 +1590,10 @@ test-python-plugin-e2e:
         exit 0
     fi
     tmp="$(mktemp -d)"
+    # Keep the worker lifecycle independent of ambient user and system plugins.
+    export XDG_CONFIG_HOME="$tmp/user-config"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$tmp/system-config"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     gateway_pid=""
     cleanup() {
         if [[ -n "$gateway_pid" ]]; then
@@ -1541,14 +1605,16 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
-    cargo build -p nemo-relay-cli
+    worker_wheels=("$tmp"/wheels/nemo_relay_plugin-*.whl)
+    "$python_executable" -c 'from pathlib import Path; import sys; print("nemo-relay-plugin @ " + Path(sys.argv[1]).resolve().as_uri())' "${worker_wheels[0]}" > "$tmp/worker-constraints.txt"
+    cargo build -p nemo-relay-cli --features __skip-implicit-config
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
     # Explicit --config paths must exist; plugin policy and state are sibling files.
     : > "$config"
     printf '[plugins.policy.defaults]\nattestation = "integrity_only"\n' > "$tmp/plugins.toml"
     manifest="$NEMO_RELAY_REPO_ROOT/examples/python-grpc-worker-plugin/relay-plugin.toml"
-    PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
+    PIP_FIND_LINKS="$tmp/wheels" PIP_CONSTRAINT="$tmp/worker-constraints.txt" NEMO_RELAY_PYTHON="$python_executable" \
         "$cli" --config "$config" plugins add "$manifest"
     "$cli" --config "$config" plugins enable examples.python_grpc_worker
     environment_ref="$("$python_executable" -c \
@@ -1585,8 +1651,8 @@ test-python-plugin-e2e:
         exit 1
     fi
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo nextest run --locked -p nemo-relay --features worker-grpc \
-        --test worker_plugin_integration \
+        cargo nextest run --locked -p nemo-relay-plugin-host --features __skip-implicit-config \
+        --lib \
         -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs) + test(python_worker_message_limits_follow_plugin_defaults)' \
         --no-capture \
         --profile ci
@@ -1870,30 +1936,107 @@ package-rust:
             cargo_package_args+=(--allow-dirty)
         fi
         case "$package" in
-            nemo-relay)
+            nemo-relay-plugin-host)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                ;;
+            nemo-relay-logging)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                ;;
+            nemo-relay-diagnostics)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-adaptive)
+            nemo-relay-observability)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                ;;
+            nemo-relay|nemo-relay-runtime)
+                if [[ "$package" == nemo-relay ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-builtins.path="crates/builtins"')
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                if [[ "$package" != nemo-relay-runtime ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-adaptive)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-worker)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
-            nemo-relay-plugin)
+            nemo-relay-resource-metrics|nemo-relay-model-pricing)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-plugin|nemo-relay-codecs|nemo-relay-worker-proto)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 ;;
             nemo-relay-pii-redaction)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-ffi|nemo-relay-cli)
+            nemo-relay-builtins|nemo-relay-ffi|nemo-relay-cli)
+                if [[ "$package" != nemo-relay-builtins ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-builtins.path="crates/builtins"')
+                fi
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host.path="crates/plugin-host"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-runtime.path="crates/runtime"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-observability.path="crates/observability"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
@@ -1913,7 +2056,7 @@ package-rust:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev] [node_metapackage=true|false]
 package-node:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -1945,7 +2088,11 @@ package-node:
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
-    build_args=(build --)
+    case "{{ package_profile }}" in
+        release) build_args=(build --) ;;
+        dev) build_args=(build-debug --) ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
     if [[ -n "$node_target" ]]; then
         build_args+=(--target "$node_target")
     fi
@@ -1996,7 +2143,7 @@ package-node:
         --version "$package_version"
         --output-dir "$package_dir"
     )
-    if [[ "$node_platform" == "linux-amd64" ]]; then
+    if [[ "$node_platform" == "linux-amd64" ]] || is_true "{{ node_metapackage }}"; then
         package_args+=(--metapackage)
     fi
     "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
@@ -2047,7 +2194,7 @@ package-openclaw:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev]
 package-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -2061,6 +2208,9 @@ package-python:
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir wheels)"
     sync_args=(--no-install-project --no-install-package nemo-relay)
+    if [[ "{{ package_profile }}" == dev ]]; then
+        sync_args+=(--frozen --no-default-groups --group dev)
+    fi
     uv sync --inexact "${sync_args[@]}"
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then
@@ -2073,11 +2223,20 @@ package-python:
         set_cargo_workspace_version "{{ ref_name }}"
         set_python_package_version "{{ ref_name }}" true
     fi
-    build_args=()
-    while IFS= read -r -d '' arg; do
-        build_args+=("$arg")
-    done < <(python_wheel_build_args)
-    maturin build --release "${build_args[@]}" --out "$package_dir"
+    case "{{ package_profile }}" in
+        release)
+            build_args=(--release)
+            while IFS= read -r -d '' arg; do
+                build_args+=("$arg")
+            done < <(python_wheel_build_args)
+            ;;
+        dev)
+            # Host execution needs an installable wheel, without release cross-compilation.
+            build_args=(--locked --profile dev --interpreter "$(project_python_executable)")
+            ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
+    maturin build "${build_args[@]}" --out "$package_dir"
     shopt -s nullglob
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then

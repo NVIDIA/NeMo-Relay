@@ -11,3 +11,21 @@ pub mod optimization;
 pub mod request;
 /// Normalized LLM response data types.
 pub mod response;
+
+/// Runtime-supplied provider normalization.
+pub mod normalization;
+
+/// Tool-result wire schema inspection.
+pub mod tool;
+
+/// Bidirectional request and response codec contracts.
+pub mod traits;
+
+/// Checked provider token accounting and billing data.
+pub mod billing;
+
+/// Runtime-neutral cost estimation contract.
+pub mod pricing;
+
+/// Provider streaming codec contracts and normalized stream events.
+pub mod streaming;

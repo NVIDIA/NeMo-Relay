@@ -94,8 +94,8 @@ async fn run_with(
 
     crate::runtime_diagnostics::result(
         crate::runtime_diagnostics::Operation::Hook,
-        nemo_relay::diagnostics::CliFailureCode::HookForward,
-        Some(nemo_relay::diagnostics::SuccessCode::CliHookForwarded),
+        nemo_relay_diagnostics::CliFailureCode::HookForward,
+        Some(nemo_relay_diagnostics::SuccessCode::CliHookForwarded),
         &result,
     );
     match result {

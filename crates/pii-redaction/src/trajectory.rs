@@ -8,21 +8,21 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value as Json};
 
-use nemo_relay::api::event::{
+use nemo_relay_codecs::resolve::{
+    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
+};
+use nemo_relay_runtime::api::event::{
     CategoryProfile, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity, METRIC_DATA_SCHEMA_NAME,
     METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
 };
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::optimization::LlmOptimizationSummary;
-use nemo_relay::codec::request::{
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_types::codec::optimization::LlmOptimizationSummary;
+use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest, ApiSpecificRequest, ContentPart, FunctionCall, FunctionDefinition,
     GenerationParams, Message, MessageContent, OpenAiImageUrl, ProviderNativeComponent, ToolCall,
     ToolChoice, ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
-use nemo_relay::codec::resolve::{
-    ProviderSurface, detect_request_surface_with_hint, detect_response_surface,
-};
-use nemo_relay::codec::response::{
+use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, FinishReason, ResponseToolCall, Usage,
 };
 
@@ -161,12 +161,8 @@ impl TrajectorySanitizer {
             id: marked_option(id, &self.replacement),
             model,
             message: message.map(|content| sanitize_message_content(content, &self.replacement)),
-            tool_calls: tool_calls.map(|calls| {
-                calls
-                    .into_iter()
-                    .map(|call| sanitize_response_tool_call(call, &self.replacement))
-                    .collect()
-            }),
+            tool_calls: tool_calls
+                .map(|calls| calls.into_iter().map(sanitize_response_tool_call).collect()),
             finish_reason: match finish_reason {
                 Some(FinishReason::Unknown(_)) => None,
                 known => known,
@@ -183,8 +179,8 @@ impl TrajectorySanitizer {
     pub(super) fn sanitize_event_fields(
         &self,
         event: &Event,
-        mut fields: nemo_relay::api::event::EventSanitizeFields,
-    ) -> nemo_relay::api::event::EventSanitizeFields {
+        mut fields: nemo_relay_runtime::api::event::EventSanitizeFields,
+    ) -> nemo_relay_runtime::api::event::EventSanitizeFields {
         let log_severity = valid_mark_log_severity(event, fields.metadata.as_ref());
         let category = event.category().map(|category| category.as_str());
         let unknown_custom_mark = matches!(event, Event::Mark(_))
@@ -246,11 +242,11 @@ impl TrajectorySanitizer {
     fn project_llm_event(
         &self,
         event: &Event,
-        fields: &nemo_relay::api::event::EventSanitizeFields,
+        fields: &nemo_relay_runtime::api::event::EventSanitizeFields,
     ) -> Option<ProjectedLlmEvent> {
         let profile = fields.category_profile.as_ref()?;
         match event.scope_category() {
-            Some(nemo_relay::api::event::ScopeCategory::Start) => {
+            Some(nemo_relay_runtime::api::event::ScopeCategory::Start) => {
                 let annotated = profile.annotated_request.as_deref()?;
                 let annotated_surface = request_surface_from_annotation(annotated);
                 let sanitized = self.sanitize_annotated_request(annotated.clone())?;
@@ -275,7 +271,7 @@ impl TrajectorySanitizer {
                     annotated_response: None,
                 })
             }
-            Some(nemo_relay::api::event::ScopeCategory::End) => {
+            Some(nemo_relay_runtime::api::event::ScopeCategory::End) => {
                 let annotated = profile.annotated_response.as_deref()?;
                 let sanitized = self.sanitize_annotated_response(annotated.clone())?;
                 let data = fields
@@ -355,12 +351,6 @@ fn replace_optional_json(value: &mut Option<Json>) {
     }
 }
 
-fn replace_optional_string(value: &mut Option<String>, replacement: &str) {
-    if value.is_some() {
-        *value = Some(replacement.to_string());
-    }
-}
-
 fn sanitize_generation_params(params: GenerationParams, replacement: &str) -> GenerationParams {
     let GenerationParams {
         temperature,
@@ -411,10 +401,10 @@ fn sanitize_message(message: Message, replacement: &str) -> Message {
         },
         Message::Tool {
             content,
-            tool_call_id: _,
+            tool_call_id,
         } => Message::Tool {
             content: sanitize_message_content(content, replacement),
-            tool_call_id: replacement.to_string(),
+            tool_call_id,
         },
         Message::Function { content, name } => Message::Function {
             content: content.map(|_| replacement.to_string()),
@@ -422,25 +412,25 @@ fn sanitize_message(message: Message, replacement: &str) -> Message {
         },
         Message::ToolCallItem {
             id,
-            call_id: _,
+            call_id,
             name,
             arguments: _,
             extra: _,
         } => Message::ToolCallItem {
             id: id.map(|_| replacement.to_string()),
-            call_id: replacement.to_string(),
+            call_id,
             name,
             arguments: empty_object(),
             extra: Map::new(),
         },
         Message::ToolResultItem {
             id,
-            call_id: _,
+            call_id,
             output: _,
             extra: _,
         } => Message::ToolResultItem {
             id: id.map(|_| replacement.to_string()),
-            call_id: replacement.to_string(),
+            call_id,
             output: empty_object(),
             extra: Map::new(),
         },
@@ -501,23 +491,23 @@ fn sanitize_content_part(part: ContentPart, replacement: &str) -> ContentPart {
             extra: Map::new(),
         },
         ContentPart::ToolUse {
-            id: _,
+            id,
             name,
             input: _,
             extra: _,
         } => ContentPart::ToolUse {
-            id: replacement.to_string(),
+            id,
             name,
             input: empty_object(),
             extra: Map::new(),
         },
         ContentPart::ToolResult {
-            tool_use_id: _,
+            tool_use_id,
             content: _,
             is_error,
             extra: _,
         } => ContentPart::ToolResult {
-            tool_use_id: replacement.to_string(),
+            tool_use_id,
             content: empty_object(),
             is_error: is_error.map(|_| false),
             extra: Map::new(),
@@ -545,7 +535,7 @@ fn sanitize_image_url(image_url: OpenAiImageUrl, replacement: &str) -> OpenAiIma
 
 fn sanitize_tool_call(call: ToolCall, replacement: &str) -> ToolCall {
     ToolCall {
-        id: replacement.to_string(),
+        id: call.id,
         call_type: preserve_known_string(call.call_type, &["function"], replacement),
         function: sanitize_function_call(call.function, replacement),
     }
@@ -730,9 +720,9 @@ fn sanitize_api_specific_request(
     }
 }
 
-fn sanitize_response_tool_call(call: ResponseToolCall, replacement: &str) -> ResponseToolCall {
+fn sanitize_response_tool_call(call: ResponseToolCall) -> ResponseToolCall {
     ResponseToolCall {
-        id: replacement.to_string(),
+        id: call.id,
         name: call.name,
         arguments: empty_object(),
     }
@@ -745,6 +735,7 @@ fn sanitize_usage(usage: Usage, replacement: &str) -> Usage {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cache_write_1h_tokens,
         uncached_input_tokens,
         cost,
     } = usage;
@@ -754,6 +745,7 @@ fn sanitize_usage(usage: Usage, replacement: &str) -> Usage {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cache_write_1h_tokens,
         uncached_input_tokens,
         cost: cost.map(|cost| sanitize_cost(cost, replacement)),
     }
@@ -1064,9 +1056,9 @@ fn valid_mark_log_severity(event: &Event, metadata: Option<&Json>) -> Option<Log
 }
 
 fn restore_log_severity(
-    mut fields: nemo_relay::api::event::EventSanitizeFields,
+    mut fields: nemo_relay_runtime::api::event::EventSanitizeFields,
     severity: Option<LogSeverity>,
-) -> nemo_relay::api::event::EventSanitizeFields {
+) -> nemo_relay_runtime::api::event::EventSanitizeFields {
     if let Some(severity) = severity {
         let metadata = fields.metadata.get_or_insert_with(empty_object);
         if let Json::Object(metadata) = metadata {
@@ -1148,7 +1140,7 @@ fn sanitize_category_profile_base(
     mut profile: CategoryProfile,
     sanitizer: &TrajectorySanitizer,
 ) -> CategoryProfile {
-    replace_optional_string(&mut profile.tool_call_id, &sanitizer.replacement);
+    // Keep correlation identifiers aligned with tool calls in LLM annotations.
     profile.subtype = profile.subtype.map(|subtype| {
         if is_known_mark_subtype(&subtype) {
             subtype

@@ -12,14 +12,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
+use nemo_relay_codecs::resolve::{detect_request_surface_with_hint, streaming_codec};
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamInner,
 };
-use nemo_relay::codec::resolve::{detect_request_surface_with_hint, streaming_codec};
-use nemo_relay::codec::streaming::StreamingCodec;
-use nemo_relay::error::Result as FlowResult;
+use nemo_relay_runtime::error::Result as FlowResult;
+use nemo_relay_types::codec::streaming::StreamingCodec;
 use serde_json::Value as Json;
 use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
@@ -111,7 +111,7 @@ impl LlmStreamInner for ResponseCacheReceiver {
                     return result;
                 }
                 closed.changed().await.map_err(|_| {
-                    nemo_relay::error::FlowError::Internal(
+                    nemo_relay_runtime::error::FlowError::Internal(
                         "response-cache stream cleanup task ended early".into(),
                     )
                 })?;

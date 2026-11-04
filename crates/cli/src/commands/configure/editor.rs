@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use nemo_relay::logging::MAX_FILE_SINK_QUEUE_ENTRIES;
+use nemo_relay_logging::MAX_FILE_SINK_QUEUE_ENTRIES;
 use toml_edit::{
     Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value, value,
 };
@@ -358,6 +358,11 @@ impl ConfigDocument {
         let timeout = i64::try_from(helper.timeout_ms)
             .map_err(|_| CliError::Config("helper timeout_ms is too large".into()))?;
         table.insert("timeout_ms", Value::from(timeout));
+        if helper.cache_ttl_ms > 0 {
+            let ttl = i64::try_from(helper.cache_ttl_ms)
+                .map_err(|_| CliError::Config("helper cache_ttl_ms is too large".into()))?;
+            table.insert("cache_ttl_ms", Value::from(ttl));
+        }
         if let Some(scheme) = helper.auth_scheme {
             table.insert(
                 "auth_scheme",
@@ -624,7 +629,7 @@ impl ConfigDocument {
             .map_err(|_| CliError::Config("logging sink retained_files is too large".into()))?;
         let retained = usize::try_from(retained)
             .map_err(|_| CliError::Config("logging sink retained_files is too large".into()))?;
-        nemo_relay::logging::FileLogRotationConfig::new(max_size as u64, retained)
+        nemo_relay_logging::FileLogRotationConfig::new(max_size as u64, retained)
             .map_err(|error| CliError::Config(error.to_string()))?;
         let sink = self.sink_mut(index)?;
         sink.insert("max_file_size_bytes", value(max_size));

@@ -21,15 +21,13 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs, override
 
 from nemo_relay._tool_result import TOOL_RESULT_SCHEMA, projected_tool_result
+from nemo_relay.integrations._json_values import canonical, paired_items, same_json
 from nemo_relay.integrations.google_adk._serialization import (
     by_json_key,
-    canonical,
     holds_iterator,
     is_ordered,
     is_plain_dataclass,
-    paired_items,
     python_dump,
-    same_json,
     sorted_members,
     unserializable,
     wire_json,

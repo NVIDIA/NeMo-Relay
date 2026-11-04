@@ -64,7 +64,7 @@ The supported embedded reader operations are:
 
 | Operation | Python | Node.js | Rust embedded adapter |
 | --- | --- | --- | --- |
-| Obtain an existing service reader | `diagnostics.reader()` | `diagnostics.reader()` | `embedded::reader()` |
+| Obtain an existing service reader | `diagnostics.reader()` | `diagnostics.reader()` | `diagnostics::reader()` |
 | Capture with a native query | `reader.snapshot(query)` | `reader.snapshot(query)` | `reader.snapshot(&query)` |
 | Capture canonical JSON | `reader.snapshot_json(query)` | `reader.snapshotJson(query)` | `reader.snapshot_json(query_json)` |
 | Inspect budgets, occupancy, and logging coverage | `reader.info()` | `reader.info()` | `reader.info()` |
@@ -99,7 +99,7 @@ validation APIs accept component configuration only and reject a top-level
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/bindings/startup.rs" language="rust" title="startup.rs" lines="4-27" showLineNumbers={false} />
+<Code src="_code/bindings/startup.rs" language="rust" title="startup.rs" lines="4-29" showLineNumbers={false} />
 </Tab>
 </Tabs>
 
@@ -170,8 +170,9 @@ Complete runnable Python, Node.js, and Rust examples are maintained in the
 [embedded diagnostics examples](https://github.com/NVIDIA/NeMo-Relay/tree/c88f30af19a92b492122e1301c3acf38f690837b/examples/diagnostics).
 The Python and Node examples run through their binding test suites. Build and run
 the Rust example with `cargo run -p nemo-relay --example embedded_diagnostics`.
-Direct Rust owners can also compose explicit `Diagnostics` contexts and core
-readers as shown in [Runtime Diagnostics](/reference/diagnostics#rust-context-startup).
+Rust applications can also construct `nemo_relay::diagnostics::Diagnostics` and
+inject it through `plugin::initialize_with_diagnostics`, using an explicit reader
+as shown in [Runtime Diagnostics](/reference/diagnostics#rust-context-startup).
 
 ### Availability, Budgets, and Copy Ownership
 

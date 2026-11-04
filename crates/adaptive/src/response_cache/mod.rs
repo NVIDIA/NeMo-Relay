@@ -7,9 +7,9 @@
 //!
 //! The two surfaces share storage but use disjoint keys.
 //!
-//! [`intercept`] holds the execution intercepts and storage rules, [`key`] the
-//! cache-key derivation, [`store`] the backends, [`replay`] the streaming
-//! replay, and [`mark`] the observability surface.
+//! `intercept` holds the execution intercepts and storage rules, `key` the
+//! cache-key derivation, `store` the backends, `replay` the streaming
+//! replay, and `mark` the observability surface.
 
 pub(crate) mod anthropic;
 pub mod config;

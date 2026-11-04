@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -113,13 +113,17 @@ function unprintableError() {
 // ===========================================================================
 
 describe('LLM lifecycle', () => {
-  it('manual llm end preserves explicit errors and defaults to OK', async () => {
+  it('manual llm end preserves ERROR and UNSET and defaults to OK', async () => {
     const events = [];
     registerSubscriber('manual_llm_status', (event) => events.push(event));
     try {
-      for (const failed of [false, true]) {
-        const name = failed ? 'manual_llm_error' : 'manual_llm_ok';
+      for (const status of ['OK', 'ERROR', 'UNSET']) {
+        const failed = status === 'ERROR';
+        const name = `manual_llm_${status}`;
         const metadata = { request_id: 'request-123' };
+        if (status === 'UNSET') {
+          metadata['otel.status_code'] = 'UNSET';
+        }
         if (failed) {
           Object.assign(metadata, {
             'otel.status_code': 'ERROR',
@@ -127,12 +131,14 @@ describe('LLM lifecycle', () => {
             'error.type': 'TimeoutError',
           });
         }
-        const handle = llmCall(name, makeNative());
+        const handle = llmCall(name, makeNative(), null, null, null, {
+          'otel.status_description': 'stale at call start',
+        });
         llmCallEnd(handle, failed ? null : { text: 'hello' }, null, metadata);
         await flushSubscriberCallbacks();
         const end = events.find((event) => event.name === name && event.scope_category === 'end');
         assert.ok(end);
-        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': failed ? 'ERROR' : 'OK' });
+        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': status });
       }
     } finally {
       deregisterSubscriber('manual_llm_status');
@@ -4234,5 +4240,55 @@ describe('LLM event fields', () => {
       deregisterSubscriber('node_llm_field_sub');
       popScope(scope);
     }
+  });
+});
+
+describe('process exit with queued codec callbacks', () => {
+  it('refuses a response codec call queued during exit instead of aborting the process', () => {
+    const script = `
+      const {
+        LlmRequest,
+        llmCallExecute,
+        registerLlmSanitizeResponseGuardrail,
+        OpenAIChatCodec,
+      } = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      let release;
+      registerLlmSanitizeResponseGuardrail('exit_window', 10, (response) => new Promise((resolve) => {
+        release = () => resolve(response);
+      }));
+      const codec = new OpenAIChatCodec();
+      process.on('exit', () => {
+        release();
+        Promise.resolve().then(() => {}).then(() => {}).then(() => {}).then(() => {
+          const end = Date.now() + 300;
+          while (Date.now() < end) {}
+        });
+      });
+      (async () => {
+        await llmCallExecute(
+          'openai-chat',
+          new LlmRequest({}, { model: 'gpt-4o-mini', messages: [] }),
+          () => ({ choices: [] }),
+          null,
+          null,
+          null,
+          null,
+          'gpt-4o-mini',
+          (request) => codec.decode(request),
+          (args) => codec.encode(args.annotated, args.original),
+          (response) => codec.decodeResponse(response),
+        );
+        while (release === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+      })();
+    `;
+    const result = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(result.signal, null, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /JS response codec decode callback failed: could not queue the callback: Node environment is shutting down/,
+    );
   });
 });

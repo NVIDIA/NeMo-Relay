@@ -82,10 +82,11 @@ from __future__ import annotations
 import atexit
 import contextvars
 import typing
+import warnings
 from collections.abc import Callable as AbcCallable
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
+from typing import AsyncIterator, Awaitable, Callable, Final, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
 # Native LLM request and normalized codec view types.
@@ -101,6 +102,8 @@ from nemo_relay._native import (
     AtofExporterConfig,
     AtofExporterMode,
     AtofStreamSinkConfig,
+    ExporterRuntimeDiagnostic,
+    ExporterRuntimeDiagnostics,
     LLMAttributes,
     LlmCodecIdentity,
     LlmExecutionContext,
@@ -125,8 +128,6 @@ from nemo_relay._native import (
     OpenTelemetryLogSubscriber,
     OpenTelemetryMetricConfig,
     OpenTelemetryMetricSubscriber,
-    OpenTelemetryRuntimeDiagnostic,
-    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     OpenTelemetryTlsConfig,
     PendingMarkSpec,
@@ -846,12 +847,14 @@ __all__ = [
     "AtofExporterMode",
     "AtofExporterConfig",
     "AtofExporter",
+    "ExporterRuntimeDiagnostic",
+    "ExporterRuntimeDiagnostics",
+    "OpenTelemetryRuntimeDiagnostic",
+    "OpenTelemetryRuntimeDiagnostics",
     "OpenTelemetryConfig",
     "OpenTelemetryTlsConfig",
     "OpenTelemetryFileSinkConfig",
     "OpenTelemetrySubscriber",
-    "OpenTelemetryRuntimeDiagnostic",
-    "OpenTelemetryRuntimeDiagnostics",
     "OpenTelemetryLogConfig",
     "OpenTelemetryLogSubscriber",
     "OpenTelemetryMetricConfig",
@@ -886,3 +889,21 @@ __all__ = [
     "LlmExecutionIntercept",
     "LlmStreamExecutionIntercept",
 ]
+
+_FORMER_NAMES: Final[Mapping[str, type[ExporterRuntimeDiagnostic] | type[ExporterRuntimeDiagnostics]]] = {
+    "OpenTelemetryRuntimeDiagnostic": ExporterRuntimeDiagnostic,
+    "OpenTelemetryRuntimeDiagnostics": ExporterRuntimeDiagnostics,
+}
+
+
+def __getattr__(name: str) -> type[ExporterRuntimeDiagnostic] | type[ExporterRuntimeDiagnostics]:
+    """Return a renamed class under its former name with a `DeprecationWarning`."""
+    replacement = _FORMER_NAMES.get(name)
+    if replacement is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    warnings.warn(
+        f"nemo_relay.{name} is deprecated, use nemo_relay.{replacement.__name__}",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return replacement

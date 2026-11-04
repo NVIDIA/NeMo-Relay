@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NeMo Relay quickstart contract metadata",
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0. The schema field versions this metadata format, not the Relay release.",
+  "$ref": "#/$defs/scenario",
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "integer",
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "mode": {
+          "enum": [
+            "local",
+            "live"
+          ]
+        },
+        "shells": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "bash",
+              "powershell"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requires": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "setup": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "inputs": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/input"
+          }
+        },
+        "fresh": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "mode",
+        "shells",
+        "cwd",
+        "requires",
+        "setup",
+        "fresh",
+        "checks"
+      ],
+      "additionalProperties": false
+    },
+    "block": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "role": {
+          "enum": [
+            "file",
+            "run",
+            "expected",
+            "input",
+            "manual"
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shells": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "bash",
+              "powershell"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "background": {
+          "$ref": "#/$defs/background"
+        },
+        "env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "match": {
+          "const": "exact-lines"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "cwd"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "file"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "run"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "session",
+              "timeout_seconds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "expected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "from",
+              "match"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "input"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "env"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "manual"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "env",
+            "path",
+            "argument"
+          ]
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "path",
+                  "argument"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "token"
+            ]
+          }
+        }
+      ]
+    },
+    "background": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "object",
+          "properties": {
+            "tcp": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "tcp",
+            "timeout_seconds"
+          ],
+          "additionalProperties": false
+        },
+        "stop_before": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "stop": {
+          "const": "interrupt"
+        },
+        "shutdown_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "ready",
+        "stop_before",
+        "stop",
+        "shutdown_timeout_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "check": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "file-equals"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "trim": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "atof"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "const": "0.1"
+            },
+            "paired_scopes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": false,
+                "minProperties": 1
+              }
+            },
+            "marks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "version"
+          ],
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "paired_scopes"
+              ],
+              "properties": {
+                "paired_scopes": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "required": [
+                "marks"
+              ],
+              "properties": {
+                "marks": {
+                  "minItems": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "json-response"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "const": "assistant"
+            },
+            "contains": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "role",
+            "contains"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Public Rust SDK composition and lifecycle APIs for NeMo Relay."
+readme = "README.md"
+
+# These tests compile shared documentation source available only in the repository.
+exclude = ["tests/documentation_examples.rs"]
+
+[features]
+# Test-only isolation; requires NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1.
+__skip-implicit-config = ["nemo-relay-plugin-host/__skip-implicit-config"]
+
+[[test]]
+name = "plugin_cold_start"
+required-features = ["__skip-implicit-config"]
+
+[[test]]
+name = "plugin_contract"
+required-features = ["__skip-implicit-config"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-builtins.workspace = true
+nemo-relay-diagnostics.workspace = true
+nemo-relay-logging.workspace = true
+nemo-relay-observability.workspace = true
+nemo-relay-plugin.workspace = true
+nemo-relay-plugin-host.workspace = true
+nemo-relay-resource-metrics.workspace = true
+nemo-relay-runtime.workspace = true
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

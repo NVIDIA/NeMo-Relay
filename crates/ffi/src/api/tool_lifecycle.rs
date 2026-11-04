@@ -3,9 +3,8 @@
 
 use super::{
     Arc, FfiScopeHandle, FfiToolHandle, NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolExecCb,
-    TASK_SCOPE_STACK, ToolAttributes, ToolExecutionNextFn, c_char, c_str_to_json,
-    c_str_to_opt_json, c_str_to_string, clear_last_error, core_tool_api, current_scope_stack,
-    json_to_c_string, set_last_error, status_from_error, tokio_runtime,
+    ToolAttributes, ToolExecutionNextFn, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
+    clear_last_error, core_tool_api, json_to_c_string, set_last_error, status_from_error,
     unix_micros_to_opt_timestamp, wrap_tool_exec_fn,
 };
 
@@ -331,8 +330,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
-    let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(async {
         core_tool_api::tool_call_execute(
             core_tool_api::ToolCallExecuteParams::builder()
                 .name(name)
@@ -346,7 +344,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
                 .build(),
         )
         .await
-    }));
+    });
 
     match result {
         Ok(execution_result) => match serde_json::to_value(execution_result) {

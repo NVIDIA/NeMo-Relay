@@ -22,7 +22,7 @@ Exceptional flow:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
@@ -731,6 +731,110 @@ class AnnotatedLLMRequest:
         """Set or clear the normalized tool-choice directive."""
         ...
     @property
+    def store(self) -> Optional[bool]:
+        """Return the response storage setting, if present."""
+        ...
+    @store.setter
+    def store(self, value: Optional[bool]) -> None:
+        """Set or clear the response storage setting."""
+        ...
+    @property
+    def previous_response_id(self) -> Optional[str]:
+        """Return the previous response identifier, if present."""
+        ...
+    @previous_response_id.setter
+    def previous_response_id(self, value: Optional[str]) -> None:
+        """Set or clear the previous response identifier."""
+        ...
+    @property
+    def truncation(self) -> _JsonValue:
+        """Return the truncation setting, or None."""
+        ...
+    @truncation.setter
+    def truncation(self, value: _JsonValue) -> None:
+        """Set or clear the truncation setting."""
+        ...
+    @property
+    def reasoning(self) -> _JsonValue:
+        """Return reasoning settings, or None."""
+        ...
+    @reasoning.setter
+    def reasoning(self, value: _JsonValue) -> None:
+        """Set or clear reasoning settings."""
+        ...
+    @property
+    def include(self) -> _JsonValue:
+        """Return requested additional response fields, or None."""
+        ...
+    @include.setter
+    def include(self, value: _JsonValue) -> None:
+        """Set or clear requested additional response fields."""
+        ...
+    @property
+    def user(self) -> Optional[str]:
+        """Return the user identifier, if present."""
+        ...
+    @user.setter
+    def user(self, value: Optional[str]) -> None:
+        """Set or clear the user identifier."""
+        ...
+    @property
+    def metadata(self) -> _JsonValue:
+        """Return request metadata, or None."""
+        ...
+    @metadata.setter
+    def metadata(self, value: _JsonValue) -> None:
+        """Set or clear request metadata."""
+        ...
+    @property
+    def service_tier(self) -> Optional[str]:
+        """Return the service tier, if present."""
+        ...
+    @service_tier.setter
+    def service_tier(self, value: Optional[str]) -> None:
+        """Set or clear the service tier."""
+        ...
+    @property
+    def parallel_tool_calls(self) -> Optional[bool]:
+        """Return the parallel tool call setting, if present."""
+        ...
+    @parallel_tool_calls.setter
+    def parallel_tool_calls(self, value: Optional[bool]) -> None:
+        """Set or clear the parallel tool call setting."""
+        ...
+    @property
+    def max_output_tokens(self) -> Optional[int]:
+        """Return the maximum output token count, if present."""
+        ...
+    @max_output_tokens.setter
+    def max_output_tokens(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative maximum output token count."""
+        ...
+    @property
+    def max_tool_calls(self) -> Optional[int]:
+        """Return the maximum tool call count, if present."""
+        ...
+    @max_tool_calls.setter
+    def max_tool_calls(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative maximum tool call count."""
+        ...
+    @property
+    def top_logprobs(self) -> Optional[int]:
+        """Return the requested top log probability count, if present."""
+        ...
+    @top_logprobs.setter
+    def top_logprobs(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative top log probability count."""
+        ...
+    @property
+    def stream(self) -> Optional[bool]:
+        """Return the streaming setting, if present."""
+        ...
+    @stream.setter
+    def stream(self, value: Optional[bool]) -> None:
+        """Set or clear the streaming setting."""
+        ...
+    @property
     def api_specific(self) -> Optional[_JsonObject]:
         """Return tagged provider-specific request fields, if present."""
         ...
@@ -1127,6 +1231,9 @@ class AtofExporter:
         does not by itself return an error.
         """
         ...
+    def runtime_diagnostics(self) -> ExporterRuntimeDiagnostics:
+        """Return delivery diagnostics recorded by a stream sink."""
+        ...
 
 class ScopeStack:
     """An isolated scope stack for per-request or per-task isolation.
@@ -1151,13 +1258,11 @@ class LlmStream:
         Native stream returned by managed streaming LLM execution.
 
     Description:
-        The object can be awaited by compatibility wrappers and iterated with
-        ``async for`` to receive post-intercept JSON chunks.
+        Await managed streaming execution to obtain this object, then use
+        ``async for`` to receive post-intercept JSON chunks. Await ``aclose()``
+        when stopping iteration early to release native stream resources.
     """
 
-    def __await__(self) -> Generator[object, None, LlmStream]:
-        """Return an awaitable that resolves to this stream."""
-        ...
     def __aiter__(self) -> AsyncIterator[_Json]:
         """Return the async iterator for stream chunks."""
         ...
@@ -1165,7 +1270,11 @@ class LlmStream:
         """Return the next JSON chunk or raise ``StopAsyncIteration``."""
         ...
     async def aclose(self) -> None:
-        """Cancel the producer and release native stream resources."""
+        """Cancel the producer and release native stream resources.
+
+        When awaited, this method raises an exception if producer cleanup or
+        finalization fails.
+        """
         ...
 
 class OpenTelemetryTlsConfig:
@@ -1313,8 +1422,8 @@ class OpenTelemetrySubscriber:
         shut it down before process exit when deterministic export is required.
     """
 
-    def __init__(self, config: OpenTelemetryConfig) -> None:
-        """Create a subscriber from an OpenTelemetry config."""
+    def __init__(self, config: OpenTelemetryConfig | OpenTelemetryFileSinkConfig) -> None:
+        """Create a subscriber from an endpoint or file sink configuration."""
         ...
     def register(self, name: str) -> None:
         """Register the subscriber under ``name``."""
@@ -1328,12 +1437,12 @@ class OpenTelemetrySubscriber:
     def shutdown(self) -> None:
         """Shut down native OpenTelemetry resources."""
         ...
-    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics:
+    def runtime_diagnostics(self) -> ExporterRuntimeDiagnostics:
         """Return a bounded snapshot of exporter and event-processing diagnostics."""
         ...
 
-class OpenTelemetryRuntimeDiagnostic:
-    """One bounded runtime diagnostic from an OpenTelemetry subscriber."""
+class ExporterRuntimeDiagnostic:
+    """One runtime diagnostic recorded by an exporter or subscriber."""
 
     @property
     def code(self) -> str: ...
@@ -1342,12 +1451,12 @@ class OpenTelemetryRuntimeDiagnostic:
     @property
     def count(self) -> int: ...
 
-class OpenTelemetryRuntimeDiagnostics:
-    """Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber."""
+class ExporterRuntimeDiagnostics:
+    """Snapshot of runtime diagnostics from an exporter or subscriber."""
 
     @property
-    def entries(self) -> list[OpenTelemetryRuntimeDiagnostic]: ...
-    def get(self, code: str) -> OpenTelemetryRuntimeDiagnostic | None: ...
+    def entries(self) -> list[ExporterRuntimeDiagnostic]: ...
+    def get(self, code: str) -> ExporterRuntimeDiagnostic | None: ...
 
 class OpenTelemetryLogConfig:
     """Mutable configuration for ``OpenTelemetryLogSubscriber``."""
@@ -1392,7 +1501,7 @@ class OpenTelemetryLogSubscriber:
     def deregister(self, name: str) -> bool: ...
     def force_flush(self) -> None: ...
     def shutdown(self) -> None: ...
-    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
+    def runtime_diagnostics(self) -> ExporterRuntimeDiagnostics: ...
 
 class MetricTemporality:
     """Preferred aggregation temporality for OTLP metric export."""
@@ -1443,7 +1552,7 @@ class OpenTelemetryMetricSubscriber:
     def deregister(self, name: str) -> bool: ...
     def force_flush(self) -> None: ...
     def shutdown(self) -> None: ...
-    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
+    def runtime_diagnostics(self) -> ExporterRuntimeDiagnostics: ...
 
 class OpenAIChatCodec:
     """Built-in codec for OpenAI Chat Completions requests and responses.
