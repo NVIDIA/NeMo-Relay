@@ -42,6 +42,20 @@ pub(crate) enum OidcPreset {
 }
 
 impl OidcPreset {
+    /// The OpenAI-compatible base URL that `[upstream] preset` sets.
+    pub(crate) fn openai_base_url(self) -> &'static str {
+        match self {
+            Self::Openrouter => "https://openrouter.ai/api/v1",
+        }
+    }
+
+    /// The Anthropic-compatible base URL that `[upstream] preset` sets.
+    pub(crate) fn anthropic_base_url(self) -> &'static str {
+        match self {
+            Self::Openrouter => "https://openrouter.ai/api",
+        }
+    }
+
     pub(crate) fn source(self) -> OidcSource {
         match self {
             Self::Openrouter => OidcSource::new(

@@ -5904,3 +5904,94 @@ fn a_higher_layer_oidc_section_replaces_the_lower_one_as_a_whole() {
     assert!(section.get("issuer").is_none(), "{section:?}");
     assert!(section.get("scope").is_none(), "{section:?}");
 }
+
+fn load_layers(layers: &[&str]) -> Result<GatewayConfig, CliError> {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = layers
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let path = dir.path().join(format!("layer-{index}.toml"));
+            std::fs::write(&path, text).unwrap();
+            (path, true)
+        })
+        .collect();
+    load_config_from_paths(paths, Vec::new(), apply_env_config).map(|resolved| resolved.gateway)
+}
+
+fn without_base_url_environment() -> crate::test_support::EnvScope {
+    crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+    ])
+}
+
+#[test]
+fn the_upstream_openrouter_preset_sets_both_providers_and_one_sign_in() {
+    let _env = without_base_url_environment();
+
+    let gateway = load_layers(&["[upstream]\npreset = \"openrouter\"\n"]).unwrap();
+
+    let sign_in = crate::oidc::OidcPreset::Openrouter.source();
+    assert_eq!(gateway.openai_base_url, "https://openrouter.ai/api/v1");
+    assert_eq!(gateway.anthropic_base_url, "https://openrouter.ai/api");
+    assert_eq!(gateway.openai_oidc.as_ref(), Some(&sign_in));
+    assert_eq!(gateway.anthropic_oidc.as_ref(), Some(&sign_in));
+}
+
+#[test]
+fn an_explicit_base_url_in_the_same_layer_wins_and_drops_that_providers_sign_in() {
+    let _env = without_base_url_environment();
+
+    let gateway = load_layers(&[
+        "[upstream]\npreset = \"openrouter\"\nopenai_base_url = \"https://gateway.example/v1\"\n",
+    ])
+    .unwrap();
+
+    assert_eq!(gateway.openai_base_url, "https://gateway.example/v1");
+    assert!(gateway.openai_oidc.is_none());
+    assert!(gateway.anthropic_oidc.is_some());
+}
+
+#[test]
+fn a_higher_layer_that_changes_a_base_url_drops_the_preset_sign_in() {
+    let _env = without_base_url_environment();
+
+    let gateway = load_layers(&[
+        "[upstream]\npreset = \"openrouter\"\n",
+        "[upstream]\nanthropic_base_url = \"https://gateway.example\"\n",
+    ])
+    .unwrap();
+
+    assert_eq!(gateway.anthropic_base_url, "https://gateway.example");
+    assert!(gateway.anthropic_oidc.is_none());
+    assert!(gateway.openai_oidc.is_some());
+}
+
+#[test]
+fn an_environment_base_url_drops_the_preset_sign_in() {
+    let _env = crate::test_support::EnvScope::set(&[
+        (
+            "NEMO_RELAY_OPENAI_BASE_URL",
+            Some(std::ffi::OsStr::new("https://gateway.example/v1")),
+        ),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+    ]);
+
+    let gateway = load_layers(&["[upstream]\npreset = \"openrouter\"\n"]).unwrap();
+
+    assert_eq!(gateway.openai_base_url, "https://gateway.example/v1");
+    assert!(gateway.openai_oidc.is_none());
+    assert!(gateway.anthropic_oidc.is_some());
+}
+
+#[test]
+fn an_unknown_upstream_preset_is_rejected() {
+    let _env = without_base_url_environment();
+
+    let error = load_layers(&["[upstream]\npreset = \"elsewhere\"\n"])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("elsewhere"), "{error}");
+}

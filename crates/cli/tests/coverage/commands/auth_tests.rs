@@ -15,6 +15,14 @@ fn config(openai: Option<OidcSource>, anthropic: Option<OidcSource>) -> GatewayC
     }
 }
 
+fn configured_without_base_url_environment(server: &ServerArgs) -> Result<GatewayConfig, CliError> {
+    let _env = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+    ]);
+    configured(server)
+}
+
 fn args(provider: Option<ProviderArg>) -> ProviderArgs {
     ProviderArgs {
         provider,
@@ -97,7 +105,10 @@ fn login_reads_the_file_named_by_the_global_config_flag() {
         ..Default::default()
     };
 
-    let selected = select_source(args(None), || configured(&server)).unwrap();
+    let selected = select_source(args(None), || {
+        configured_without_base_url_environment(&server)
+    })
+    .unwrap();
 
     assert_eq!(selected.issuer, "https://team-issuer.example");
     assert_eq!(selected.client_id, "team");
@@ -129,7 +140,10 @@ fn a_config_section_with_only_a_preset_is_complete() {
         ..Default::default()
     };
 
-    let selected = select_source(args(None), || configured(&server)).unwrap();
+    let selected = select_source(args(None), || {
+        configured_without_base_url_environment(&server)
+    })
+    .unwrap();
 
     assert_eq!(selected, OidcPreset::Openrouter.source());
 }
@@ -147,4 +161,22 @@ fn explicit_fields_override_the_preset_and_missing_ones_fail_without_it() {
         error.contains("issuer is required unless preset is set"),
         "{error}"
     );
+}
+
+#[test]
+fn login_with_only_the_upstream_preset_needs_no_provider_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("team.toml");
+    std::fs::write(&path, "[upstream]\npreset = \"openrouter\"\n").unwrap();
+    let server = ServerArgs {
+        config: Some(path),
+        ..Default::default()
+    };
+
+    let selected = select_source(args(None), || {
+        configured_without_base_url_environment(&server)
+    })
+    .unwrap();
+
+    assert_eq!(selected, OidcPreset::Openrouter.source());
 }

@@ -782,8 +782,24 @@ Some providers authenticate users with OpenID Connect (OIDC) instead of static
 API keys. Relay can own that sign-in. Each user signs in once, and the gateway
 adds a current access token to every upstream request for that provider.
 
-An administrator names the provider once, for example in the system
-`config.toml`. The issuer, client ID, and scopes are not secrets:
+For OpenRouter, one line in the system `config.toml` sets up Codex and Claude
+Code:
+
+```toml
+[upstream]
+preset = "openrouter"
+```
+
+It sets `openai_base_url` to `https://openrouter.ai/api/v1`, `anthropic_base_url`
+to `https://openrouter.ai/api`, and an OpenRouter sign-in for both providers.
+Both use the same issuer and client, so one `nemo-relay auth login` covers both.
+Fields written next to the preset win. A provider whose base URL is set to
+another address, by the same layer, a higher layer, or an environment variable,
+does not get the preset's sign-in.
+
+For another provider, or a gateway in front of OpenRouter, an administrator
+names the sign-in in its own section. The issuer, client ID, and scopes are not
+secrets:
 
 ```toml
 [upstream]
