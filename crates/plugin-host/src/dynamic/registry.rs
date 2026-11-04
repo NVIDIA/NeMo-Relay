@@ -220,13 +220,18 @@ impl DynamicPluginRegistry {
     ///
     /// The replacement must describe the same plugin ID. Desired state, runtime state, and
     /// durable lifecycle metadata remain attached to the existing record.
+    /// Unsupported worker protocols remain inspectable with invalid compatibility.
     pub fn replace_declaration(
         &mut self,
         plugin_id: &str,
         mut replacement: DynamicPluginRecord,
     ) -> Result<()> {
         normalize_record_shape(&mut replacement);
-        validate_record_shape(&replacement)?;
+        validate_record_structure(&replacement)?;
+        if let Err(error) = validate_worker_protocol(&replacement) {
+            replacement.status.validation.compatibility = DynamicPluginCheckState::Invalid;
+            replacement.status.validation.message = Some(error.to_string());
+        }
         let record = self.lookup_mut(plugin_id)?;
         if replacement.metadata.id != record.metadata.id {
             return Err(PluginError::InvalidConfig(format!(

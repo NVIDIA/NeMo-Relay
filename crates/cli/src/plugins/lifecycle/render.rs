@@ -282,7 +282,21 @@ impl fmt::Display for PluginValidationSummaryView<'_> {
             .entry
             .map(|entry| entry.record.status.validation.environment)
             .unwrap_or(DynamicPluginCheckState::Unknown);
-        if self.policy.policy_satisfied
+        if let Err(error) = self.manifest.validate() {
+            writeln!(
+                f,
+                "Dynamic plugin '{}' has incompatible settings: {error}",
+                self.manifest.plugin.id
+            )?;
+        } else if self.entry.is_some_and(|entry| {
+            entry.record.status.validation.compatibility == DynamicPluginCheckState::Invalid
+        }) {
+            writeln!(
+                f,
+                "Dynamic plugin '{}' has an incompatible registered declaration.",
+                self.manifest.plugin.id
+            )?;
+        } else if self.policy.policy_satisfied
             && self.trust.is_satisfied()
             && environment != DynamicPluginCheckState::Invalid
         {

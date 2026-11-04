@@ -2298,3 +2298,24 @@ fn worker_forward_env_rejects_invalid_patterns_and_native_manifests() {
         assert!(DynamicPluginManifest::parse_toml(&authored).is_err());
     }
 }
+
+#[test]
+fn manifest_inspection_preserves_stale_protocols_without_accepting_bad_structure() {
+    for protocol in ["grpc-v1", "grpc-v2"] {
+        let text = valid_worker_manifest_toml().replace("nvidia.nemo.relay.worker.v1", protocol);
+        let manifest = DynamicPluginManifest::parse_toml_for_inspection(&text).unwrap();
+        assert!(manifest.validate().is_err());
+        assert!(manifest.clone().into_record(None).is_err());
+        let record = manifest.into_record_for_inspection(None).unwrap();
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert!(DynamicPluginRegistry::new().add(record).is_err());
+        let malformed = text.replace(
+            &format!("worker_protocol = \"{protocol}\""),
+            "worker_protocol = \"\"",
+        );
+        assert!(DynamicPluginManifest::parse_toml_for_inspection(&malformed).is_err());
+    }
+}

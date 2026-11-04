@@ -2515,10 +2515,18 @@ fn hydrate_scoped_registries(
                 &policy,
                 &trust,
             )?;
-            scopes[scope_index]
-                .registry
-                .add(record)
-                .map_err(|error| CliError::Config(error.to_string()))?;
+            if record.status.validation.compatibility == DynamicPluginCheckState::Invalid {
+                let mut records = scopes[scope_index].registry.cloned_records(true);
+                records.push(record);
+                scopes[scope_index].registry =
+                    nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::from_records(records)
+                        .map_err(|error| CliError::Config(error.to_string()))?;
+            } else {
+                scopes[scope_index]
+                    .registry
+                    .add(record)
+                    .map_err(|error| CliError::Config(error.to_string()))?;
+            }
         }
         touched.insert(scope_index);
     }
@@ -2534,19 +2542,27 @@ fn validated_record_from_manifest(
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
     let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
+    let compatibility_error = manifest.validate().err();
     let mut record = manifest
-        .into_record(Some(manifest_ref))
+        .into_record_for_inspection(Some(manifest_ref))
         .map_err(|error| CliError::Config(error.to_string()))?;
     record.source.environment_ref = environment_ref;
     record.status.validation = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
-        compatibility: DynamicPluginCheckState::Valid,
+        compatibility: if compatibility_error.is_some() {
+            DynamicPluginCheckState::Invalid
+        } else {
+            DynamicPluginCheckState::Valid
+        },
         integrity: trust.integrity,
         environment,
         authenticity: trust.authenticity,
         policy_satisfied: policy.check_state(),
         checked_at: None,
-        message: Some(VALIDATION_MESSAGE.into()),
+        message: Some(
+            compatibility_error
+                .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
+        ),
     };
     record.status.startup_class = Some(policy.startup_class);
     record.status.attestation_mode = Some(policy.attestation_mode);
@@ -2704,8 +2720,12 @@ fn load_manifest_for_action(
     path: impl Into<PathBuf>,
 ) -> Result<(DynamicPluginManifest, String), CliError> {
     let path = path.into();
-    crate::configuration::load_bounded_dynamic_plugin_manifest(&path)
-        .map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
+    let result = if matches!(action, "hydrate" | "inspect" | "validate") {
+        crate::configuration::load_bounded_dynamic_plugin_manifest_for_inspection(&path)
+    } else {
+        crate::configuration::load_bounded_dynamic_plugin_manifest(&path)
+    };
+    result.map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
 }
 
 fn load_config_schema_for_manifest(

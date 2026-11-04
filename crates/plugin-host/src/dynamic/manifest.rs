@@ -297,6 +297,18 @@ impl DynamicPluginManifest {
         Ok(manifest)
     }
 
+    /// Parses a structurally valid manifest for inspection, including stale worker protocols.
+    ///
+    /// This does not authorize registration or activation. Use [`Self::validate`]
+    /// to check compatibility before either operation.
+    pub fn parse_toml_for_inspection(toml_source: &str) -> Result<Self> {
+        let manifest = toml::from_str::<Self>(toml_source).map_err(|err| {
+            PluginError::InvalidConfig(format!("invalid relay-plugin.toml: {err}"))
+        })?;
+        manifest.validate_structure()?;
+        Ok(manifest)
+    }
+
     /// Loads and validates a `relay-plugin.toml` manifest from a file path or directory.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<(Self, String)> {
         let path = path.as_ref();
@@ -340,6 +352,18 @@ impl DynamicPluginManifest {
 
     /// Validates the authored manifest against the v1 contract.
     pub fn validate(&self) -> Result<()> {
+        self.validate_structure()?;
+        if self.plugin.kind == DynamicPluginKind::Worker
+            && self.compat.worker_protocol.as_deref().map(str::trim) != Some(WORKER_PROTOCOL)
+        {
+            return Err(PluginError::InvalidConfig(format!(
+                "worker plugins must declare compat.worker_protocol = \"{WORKER_PROTOCOL}\"; rebuild and reinstall workers built for an older protocol"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<()> {
         if self.manifest_version != 1 {
             return Err(PluginError::InvalidConfig(format!(
                 "unsupported relay-plugin.toml manifest_version {}; expected 1",
@@ -431,7 +455,23 @@ impl DynamicPluginManifest {
     /// Converts the authored manifest into a durable control-plane record.
     pub fn into_record(self, manifest_ref: Option<String>) -> Result<DynamicPluginRecord> {
         self.validate()?;
-        let validation = self.validation_status();
+        self.into_record_for_inspection(manifest_ref)
+    }
+
+    /// Converts a structurally valid manifest into an inspectable control-plane record.
+    ///
+    /// Unsupported worker protocols remain visible with invalid compatibility.
+    /// Registry registration and enablement still reject them.
+    pub fn into_record_for_inspection(
+        self,
+        manifest_ref: Option<String>,
+    ) -> Result<DynamicPluginRecord> {
+        self.validate_structure()?;
+        let mut validation = self.validation_status();
+        if let Err(error) = self.validate() {
+            validation.compatibility = DynamicPluginCheckState::Invalid;
+            validation.message = Some(error.to_string());
+        }
         let plugin = self.plugin;
         let compat = self.compat;
         let load = self.load;
@@ -777,15 +817,7 @@ fn validate_compat_shape(
             }
         }
         DynamicPluginKind::Worker => {
-            let worker_protocol = required_trimmed_string(
-                compat.worker_protocol.as_deref(),
-                "compat.worker_protocol",
-            )?;
-            if worker_protocol.trim() != WORKER_PROTOCOL {
-                return Err(PluginError::InvalidConfig(format!(
-                    "worker plugins must declare compat.worker_protocol = \"{WORKER_PROTOCOL}\"; rebuild and reinstall workers built for an older protocol"
-                )));
-            }
+            required_trimmed_string(compat.worker_protocol.as_deref(), "compat.worker_protocol")?;
             if compat.native_api.is_some() {
                 return Err(PluginError::InvalidConfig(
                     "worker plugins must not declare compat.native_api".into(),

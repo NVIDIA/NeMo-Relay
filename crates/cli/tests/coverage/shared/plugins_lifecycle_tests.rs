@@ -166,6 +166,87 @@ fn remove_and_reinstall_recover_a_persisted_legacy_worker() {
     )
     .unwrap();
 
+    let assert_inspectable = || {
+        let resolved = resolve_plugins_config(None).unwrap();
+        let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        assert_eq!(
+            entry.record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert!(
+            entry
+                .record
+                .status
+                .validation
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("worker protocol")
+        );
+        assert!(!entry.record.spec.enabled);
+        let (stale, stale_ref) = load_manifest_for_action("inspect", &manifest_path).unwrap();
+        let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &stale);
+        let trust = evaluate_dynamic_plugin_trust(&stale, &stale_ref, &policy);
+        let response = serde_json::to_value(validate_success(ValidateResponseInput {
+            command: "plugins validate",
+            target: Some(id),
+            target_kind: "plugin_id",
+            resolved_plugin_id: Some(id),
+            manifest: &stale,
+            manifest_ref: &stale_ref,
+            entry: Some(&entry),
+            host_config: None,
+            policy: &policy,
+            trust: &trust,
+        }))
+        .unwrap();
+        assert_eq!(response["data"]["valid"], false);
+        assert!(
+            response["data"]["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains("worker_protocol"))
+        );
+    };
+    assert_inspectable();
+    // A declaration in plugins.toml must also hydrate without a persisted record.
+    let state_path = entry.state_path.clone();
+    let saved = std::fs::read(&state_path).unwrap();
+    std::fs::remove_file(&state_path).unwrap();
+    assert_inspectable();
+    std::fs::write(&state_path, saved).unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: id.into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: id.into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    assert_inspectable();
+    assert!(enable(PluginsEnableRequest { id: id.into() }, &server).is_err());
+    let unrelated = temp.path().join("unrelated-plugin");
+    std::fs::create_dir_all(&unrelated).unwrap();
+    write_dynamic_manifest(&unrelated, "acme.unrelated-worker");
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: unrelated,
+        },
+        &server,
+    )
+    .unwrap();
+
     remove(PluginsRemoveRequest { id: id.into() }, &server).unwrap();
     let scopes = load_scoped_registries(None).unwrap();
     assert!(
