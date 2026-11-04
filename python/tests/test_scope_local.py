@@ -653,7 +653,9 @@ class TestScopeLocalLlmWrappers:
             _context: LlmExecutionContext,
             next_fn: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
         ) -> AsyncIterator[Json]:
-            if request_inner.content.get("emit_test_chunk"):
+            content = request_inner.content
+            assert isinstance(content, dict)
+            if content.get("emit_test_chunk"):
                 yield {}
 
         with scope.scope("llm_scope_local_wrappers", ScopeType.Agent) as handle:
@@ -741,6 +743,11 @@ class TestScopeLocalLlmBehavior:
     async def test_scope_local_llm_request_intercept_modifies_request(self) -> None:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
+        def read_intercepted_content(request: LLMRequest) -> JsonObject:
+            content = request.content
+            assert isinstance(content, dict)
+            return {"intercepted": content.get("intercepted", False)}
+
         def intercept(_name: str, req: LLMRequest, annotated: AnnotatedLLMRequest | None) -> LLMRequestInterceptOutcome:
             return LLMRequestInterceptOutcome(
                 LLMRequest(req.headers, {**req.content, "intercepted": True}),
@@ -752,7 +759,7 @@ class TestScopeLocalLlmBehavior:
             result = await llm.execute(
                 "sl_llm_request_call",
                 request,
-                lambda req: {"intercepted": req.content.get("intercepted", False)},
+                read_intercepted_content,
             )
 
         assert result == {"intercepted": True}

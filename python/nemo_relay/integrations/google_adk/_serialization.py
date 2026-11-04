@@ -1743,6 +1743,13 @@ class ApiVariant(Protocol):
     def __call__(self, response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject, /) -> Normalized: ...
 
 
+def request_content(request: LLMRequest) -> JsonObject:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("ADK request content must be an object")
+    return content
+
+
 class AdkCodec(LlmCodec, LlmResponseCodec):
     """Translate plain dumps of ADK's `LlmRequest` and `LlmResponse` for intercepts and events.
 
@@ -1754,11 +1761,11 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
 
     @override
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
-        return _decode(request.content)
+        return _decode(request_content(request))
 
     @override
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
-        payload = original.content
+        payload = request_content(original)
         baseline = _decode(payload)
         config = object_field(payload.get("config"), field="ADK config")
         messages, baseline_messages = annotated.messages, baseline.messages

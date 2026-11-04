@@ -608,43 +608,92 @@ fn loop_affine_callback(
         .map(Bound::unbind)
 }
 
-fn invoke_python_execution_callback<'python, Argument, Output>(
-    python: Python<'python>,
-    python_callback: &Py<PyAny>,
-    selected_task_locals: Option<TaskLocals>,
-    prepare_argument: impl FnOnce(Python<'python>) -> FlowResult<Argument>,
-    split_result: impl FnOnce(
-        Python<'python>,
-        Py<PyAny>,
-        Option<&TaskLocals>,
-        Option<&Bound<'python, PyAny>>,
-    ) -> FlowResult<Output>,
-) -> FlowResult<Output>
-where
-    Argument: IntoPyObject<'python>,
-{
-    let (invocation_context, task_locals) =
-        copy_middleware_invocation(python, selected_task_locals)
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let argument = prepare_argument(python)?;
-    let loop_callback = loop_affine_callback(
-        python,
-        python_callback.bind(python),
-        task_locals.as_ref(),
-        false,
-    )
-    .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let result = match invocation_context.as_ref() {
-        Some(context) => context.call_method1("run", (loop_callback.bind(python), argument)),
-        None => loop_callback.bind(python).call1((argument,)),
+struct PythonExecutionCallback {
+    python_callback: Arc<Py<PyAny>>,
+    registered_task_locals: Option<TaskLocals>,
+}
+
+impl PythonExecutionCallback {
+    fn new(python_callback: Py<PyAny>) -> Self {
+        Self {
+            python_callback: Arc::new(python_callback),
+            registered_task_locals: capture_python_task_locals(),
+        }
     }
-    .map_err(python_callback_error)?;
-    split_result(
-        python,
-        result.unbind(),
-        task_locals.as_ref(),
-        invocation_context.as_ref(),
-    )
+
+    fn invoke<
+        Argument,
+        ImmediateResult,
+        ResolvedResult,
+        PrepareArgument,
+        SplitResult,
+        ResolveResult,
+        ResolutionFuture,
+    >(
+        &self,
+        prepare_argument: PrepareArgument,
+        split_result: SplitResult,
+        resolve_result: ResolveResult,
+    ) -> impl Future<Output = FlowResult<ResolvedResult>>
+    + Send
+    + use<
+        Argument,
+        ImmediateResult,
+        ResolvedResult,
+        PrepareArgument,
+        SplitResult,
+        ResolveResult,
+        ResolutionFuture,
+    >
+    where
+        Argument: for<'python> IntoPyObject<'python>,
+        ImmediateResult: Send,
+        PrepareArgument: for<'python> FnOnce(Python<'python>) -> FlowResult<Argument> + Send,
+        SplitResult: for<'python> FnOnce(
+                Python<'python>,
+                Py<PyAny>,
+                Option<&TaskLocals>,
+                Option<&Bound<'python, PyAny>>,
+            ) -> FlowResult<Result<ImmediateResult, PyValueFuture>>
+            + Send,
+        ResolveResult:
+            FnOnce(FlowResult<Result<ImmediateResult, PyValueFuture>>) -> ResolutionFuture + Send,
+        ResolutionFuture: Future<Output = FlowResult<ResolvedResult>> + Send,
+    {
+        let python_callback = Arc::clone(&self.python_callback);
+        // Select the caller's loop before the future moves to Rust's executor.
+        let selected_task_locals =
+            task_locals_with_running_loop(self.registered_task_locals.as_ref());
+        async move {
+            let outcome = Python::attach(|python| {
+                let (invocation_context, task_locals) =
+                    copy_middleware_invocation(python, selected_task_locals)
+                        .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let argument = prepare_argument(python)?;
+                let loop_callback = loop_affine_callback(
+                    python,
+                    python_callback.bind(python),
+                    task_locals.as_ref(),
+                    false,
+                )
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let result = match invocation_context.as_ref() {
+                    Some(context) => {
+                        context.call_method1("run", (loop_callback.bind(python), argument))
+                    }
+                    None => loop_callback.bind(python).call1((argument,)),
+                }
+                .map_err(python_callback_error)?;
+                split_result(
+                    python,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
+            });
+            resolve_result(outcome).await
+        }
+    }
 }
 
 async fn resolve_py_object_or_future(
@@ -1147,33 +1196,25 @@ pub fn wrap_py_tool_exec_fn(
         + Send
         + Sync,
 > {
-    let py_fn = std::sync::Arc::new(py_fn);
-    let registered_task_locals = capture_python_task_locals();
-    Box::new(move |args: Json| {
-        let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
-        Box::pin(async move {
-            let result = resolve_py_object_or_future(Python::attach(|python| {
-                invoke_python_execution_callback(
-                    python,
-                    py_fn.as_ref(),
-                    task_locals,
-                    |python| {
-                        json_to_py(python, &args)
-                            .map_err(|error| FlowError::Internal(error.to_string()))
-                    },
-                    split_py_object_or_future_with_locals,
-                )
-            }))
-            .await?;
-            Python::attach(|py| {
-                result
-                    .extract::<PyToolExecutionResult>(py)
-                    .map_err(tool_execution_callback_result_error)?
-                    .to_inner(py)
+    let callback = PythonExecutionCallback::new(py_fn);
+    Box::new(move |arguments: Json| {
+        Box::pin(callback.invoke(
+            move |python| {
+                json_to_py(python, &arguments)
                     .map_err(|error| FlowError::Internal(error.to_string()))
-            })
-        })
+            },
+            split_py_object_or_future_with_locals,
+            |outcome| async move {
+                let result = resolve_py_object_or_future(outcome).await?;
+                Python::attach(|python| {
+                    result
+                        .extract::<PyToolExecutionResult>(python)
+                        .map_err(tool_execution_callback_result_error)?
+                        .to_inner(python)
+                        .map_err(|error| FlowError::Internal(error.to_string()))
+                })
+            },
+        ))
     })
 }
 
@@ -1742,25 +1783,15 @@ pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>
 {
-    let py_fn = std::sync::Arc::new(py_fn);
-    let registered_task_locals = capture_python_task_locals();
+    let callback = PythonExecutionCallback::new(py_fn);
     Box::new(move |request: LlmRequest| {
-        let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
-        Box::pin(async move {
-            resolve_json_or_future(Python::attach(|python| {
-                invoke_python_execution_callback(
-                    python,
-                    py_fn.as_ref(),
-                    task_locals,
-                    |_| Ok(PyLLMRequest { inner: request }),
-                    |python, result, task_locals, _invocation_context| {
-                        split_json_or_future_with_locals(python, result, task_locals)
-                    },
-                )
-            }))
-            .await
-        })
+        Box::pin(callback.invoke(
+            move |_| Ok(PyLLMRequest { inner: request }),
+            |python, result, task_locals, _invocation_context| {
+                split_json_or_future_with_locals(python, result, task_locals)
+            },
+            resolve_json_or_future,
+        ))
     })
 }
 

@@ -58,7 +58,10 @@ Example::
         return nemo_relay.ToolExecutionResult({"echo": args["query"]})
 
     async def llm_impl(request):
-        return {"messages": request.content["messages"], "ok": True}
+        content = request.content
+        if not isinstance(content, dict):
+            raise TypeError("Provider request content must be an object")
+        return {"messages": content["messages"], "ok": True}
 
     async def main():
         nemo_relay.guardrails.register_tool_sanitize_request("redact", 10, redact_args)

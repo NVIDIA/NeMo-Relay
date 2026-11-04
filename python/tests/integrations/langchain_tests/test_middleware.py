@@ -235,6 +235,41 @@ def test_awrap_model_call_routes_through_llm_execute(
     assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(["payload"], id="list"),
+        pytest.param("payload", id="string"),
+        pytest.param(42, id="integer"),
+        pytest.param(1.5, id="float"),
+        pytest.param(True, id="boolean"),
+        pytest.param(None, id="null"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["decode", "encode", "write-back"])
+def test_langchain_rejects_non_object_request_content(
+    model_request: ModelRequest[Any], content: nemo_relay.Json, operation: str
+) -> None:
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    codec = LangChainCodec()
+    control = nemo_relay.LLMRequest({}, model_request_to_payload("mock-model", model_request))
+    annotation = codec.decode(control)
+    malformed = nemo_relay.LLMRequest({}, content)
+
+    with pytest.raises(TypeError, match="LangChain request content must be an object"):
+        if operation == "decode":
+            codec.decode(malformed)
+        elif operation == "encode":
+            codec.encode(annotation, malformed)
+        else:
+            payload_to_model_request(model_request, malformed)
+
+
 def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]) -> None:
     from nemo_relay.integrations.langchain._serialization import (
         LangChainCodec,

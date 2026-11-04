@@ -36,6 +36,7 @@ class SimpleCodec(LlmCodec):
 
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         content = request.content
+        assert isinstance(content, dict)
         messages = content.get("messages", [])
         return AnnotatedLLMRequest(
             messages,
@@ -55,6 +56,7 @@ class AlternateCodec(LlmCodec):
 
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         content = request.content
+        assert isinstance(content, dict)
         messages = content.get("messages", [])
         return AnnotatedLLMRequest(
             messages,
@@ -290,7 +292,9 @@ class TestCodecPipeline:
         try:
 
             def func(request: LLMRequest) -> dict[str, object]:
-                return {"messages": request.content.get("messages", []), "model": request.content.get("model")}
+                content = request.content
+                assert isinstance(content, dict)
+                return {"messages": content.get("messages", []), "model": content.get("model")}
 
             request = make_request()
             result = await llm.execute("pipeline-llm", request, func, codec=codec)
