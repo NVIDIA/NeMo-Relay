@@ -64,6 +64,12 @@ Beta and release-candidate tags use `availability: beta`, replace the same base
 version snapshot, and do not update the default `Latest` version. Alpha tags and
 tags with a leading `v` are not published.
 
+Retention keeps the highest patch snapshot for each of the five newest minor
+versions. The newest stable snapshot is also preserved when a prerelease would
+otherwise displace it, so `Latest` continues to point to that stable release.
+This can temporarily retain six release snapshots until a newer stable release
+is published.
+
 ## Local Validation
 
 Run the normal docs check from the repository root:
