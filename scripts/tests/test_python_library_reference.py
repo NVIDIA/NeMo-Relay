@@ -132,6 +132,55 @@ class PythonReferenceTests(unittest.TestCase):
         self.assertNotIn("kind:", rendered)
         self.assertNotIn("version:", rendered)
 
+    def test_unpacked_dataclass_options_do_not_guess_constructor(self) -> None:
+        for decorator in (
+            "dataclass(**options)",
+            "dataclass(slots=True, **options)",
+            "dataclasses.dataclass(**options)",
+            "dataclasses.dataclass(slots=True, **options)",
+        ):
+            with self.subTest(decorator=decorator):
+                rendered = self.render_source(
+                    f"""
+                    import dataclasses
+                    from dataclasses import dataclass
+
+                    options = {{"kw_only": True}}
+
+                    @{decorator}
+                    class Options:
+                        amount: float
+                    """
+                )
+
+                self.assertIn("### `Options`", rendered)
+                self.assertNotIn("def Options(", rendered)
+
+    def test_unpacked_field_options_do_not_guess_constructor(self) -> None:
+        for field_call in (
+            "field(**options)",
+            "field(default=1.0, **options)",
+            "dataclasses.field(**options)",
+            "dataclasses.field(default=1.0, **options)",
+        ):
+            with self.subTest(field_call=field_call):
+                rendered = self.render_source(
+                    f"""
+                    import dataclasses
+                    from dataclasses import dataclass, field
+
+                    options = {{"init": False}}
+
+                    @dataclass
+                    class Options:
+                        name: str
+                        amount: float = {field_call}
+                    """
+                )
+
+                self.assertIn("### `Options`", rendered)
+                self.assertNotIn("def Options(", rendered)
+
     def test_explicit_constructor_takes_precedence_over_dataclass_fields(self) -> None:
         rendered = self.render_source(
             """

@@ -181,6 +181,8 @@ def _dataclass_init_signature(node: ast.ClassDef) -> str | None:
         # Inherited fields require resolving base classes; a partial signature would mislead callers.
         return None
     options = {keyword.arg: keyword.value for keyword in decorator.keywords} if isinstance(decorator, ast.Call) else {}
+    if None in options:
+        return None
     if not _boolean_option(options, "init", True):
         return None
     keyword_only = _boolean_option(options, "kw_only", False)
@@ -205,6 +207,8 @@ def _dataclass_init_signature(node: ast.ClassDef) -> str | None:
         )
         field_keyword_only = keyword_only
         if field_options is not None:
+            if None in field_options:
+                return None
             field_initialized = _boolean_option(field_options, "init", True)
             if field_initialized is None:
                 return None
