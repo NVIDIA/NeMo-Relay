@@ -491,9 +491,12 @@ from nemo_relay import LLMRequest
 from nemo_relay.codecs import OpenAIChatCodec
 
 async def invoke_provider(request: LLMRequest) -> dict[str, object]:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("Provider request content must be an object")
     return {
         "id": "chatcmpl-demo",
-        "model": request.content["model"],
+        "model": content["model"],
         "choices": [
             {
                 "finish_reason": "stop",

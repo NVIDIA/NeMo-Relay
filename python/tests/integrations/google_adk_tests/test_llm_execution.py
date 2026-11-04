@@ -12,12 +12,14 @@ import pytest
 from _helpers import (
     HANG_TIMEOUT,
     LlmNext,
+    LlmStreamNext,
     ScriptedLlmFactory,
     assert_balanced,
     data_of,
     ends,
     final_text,
     llm_execution_intercept,
+    llm_stream_execution_intercept,
     make_agent,
     marks,
     metadata_of,
@@ -37,7 +39,7 @@ from typing_extensions import override
 import nemo_relay
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from google.adk.agents.callback_context import CallbackContext
     from google.adk.models.llm_request import LlmRequest
@@ -85,6 +87,49 @@ async def test_llm_execution_intercept_that_answers_skips_the_model(
     (llm_end,) = ends(subscribed_events, "llm")
     assert llm_end.uuid == llm_start.uuid
     assert status_of(llm_end) == "OK"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(["payload"], id="list"),
+        pytest.param("payload", id="string"),
+        pytest.param(42, id="integer"),
+        pytest.param(1.5, id="float"),
+        pytest.param(True, id="boolean"),
+        pytest.param(None, id="null"),
+    ],
+)
+@pytest.mark.parametrize("streaming", [False, True], ids=["ordinary", "streaming"])
+async def test_execution_rejects_non_object_content_before_model_invocation(
+    scripted_llm: ScriptedLlmFactory,
+    subscribed_events: list[nemo_relay.Event],
+    content: nemo_relay.Json,
+    streaming: bool,
+) -> None:
+    from google.adk.agents.run_config import RunConfig, StreamingMode
+
+    async def replace_content(
+        name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmNext
+    ) -> nemo_relay.Json:
+        return await next_call(nemo_relay.LLMRequest(request.headers, content))
+
+    async def replace_stream_content(
+        name: str, request: nemo_relay.LLMRequest, context: nemo_relay.LlmExecutionContext, next_call: LlmStreamNext
+    ) -> AsyncIterator[nemo_relay.Json]:
+        return await next_call(nemo_relay.LLMRequest(request.headers, content))
+
+    registration = (
+        llm_stream_execution_intercept(replace_stream_content)
+        if streaming
+        else llm_execution_intercept(replace_content)
+    )
+    run_config = RunConfig(streaming_mode=StreamingMode.SSE) if streaming else None
+    with registration, pytest.raises(TypeError, match="ADK request content must be an object"):
+        await run_recorded(make_agent(scripted_llm, "weather_agent"), run_config=run_config)
+
+    assert scripted_llm.seen_requests == []
+    assert_balanced(subscribed_events)
 
 
 async def test_a_request_relay_cannot_project_fails_the_call_under_a_rejection_mark(

@@ -20,6 +20,7 @@ from nemo_relay import (
     AtofExporterMode,
     ExporterRuntimeDiagnostic,
     ExporterRuntimeDiagnostics,
+    Json,
     JsonObject,
     LLMAttributes,
     LLMRequest,
@@ -245,6 +246,24 @@ class TestLLMAttributes:
 
 
 class TestLLMRequest:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param({"nested": ["payload", None]}, id="object"),
+            pytest.param(["payload"], id="list"),
+            pytest.param("payload", id="string"),
+            pytest.param(42, id="integer"),
+            pytest.param(1.5, id="float"),
+            pytest.param(True, id="boolean"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_content_preserves_json_value_and_type(self, content: Json) -> None:
+        request = LLMRequest({}, content)
+        observed = request.content
+        assert observed == content
+        assert type(observed) is type(content)
+
     def test_constructor(self) -> None:
         req = LLMRequest({"Authorization": "Bearer token"}, {"messages": []})
         assert req.headers == {"Authorization": "Bearer token"}

@@ -17,13 +17,19 @@ Example::
 
     class DemoCodec(LlmCodec):
         def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+            content = request.content
+            if not isinstance(content, dict):
+                raise TypeError("Demo codec request content must be an object")
             return AnnotatedLLMRequest(
-                request.content.get("messages", []),
-                model=request.content.get("model"),
+                content.get("messages", []),
+                model=content.get("model"),
             )
 
         def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
-            content = {**original.content, "messages": annotated.messages}
+            content = original.content
+            if not isinstance(content, dict):
+                raise TypeError("Demo codec request content must be an object")
+            content = {**content, "messages": annotated.messages}
             if annotated.model is not None:
                 content["model"] = annotated.model
             return LLMRequest(original.headers, content)
@@ -80,9 +86,12 @@ class LlmCodec(Protocol):
 
         class DemoCodec(LlmCodec):
             def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+                content = request.content
+                if not isinstance(content, dict):
+                    raise TypeError("Demo codec request content must be an object")
                 return AnnotatedLLMRequest(
-                    request.content.get("messages", []),
-                    model=request.content.get("model"),
+                    content.get("messages", []),
+                    model=content.get("model"),
                 )
 
             def encode(
@@ -90,7 +99,10 @@ class LlmCodec(Protocol):
                 annotated: AnnotatedLLMRequest,
                 original: LLMRequest,
             ) -> LLMRequest:
-                content = {**original.content, "messages": annotated.messages}
+                content = original.content
+                if not isinstance(content, dict):
+                    raise TypeError("Demo codec request content must be an object")
+                content = {**content, "messages": annotated.messages}
                 if annotated.model is not None:
                     content["model"] = annotated.model
                 return LLMRequest(original.headers, content)
