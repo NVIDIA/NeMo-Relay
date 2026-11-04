@@ -104,6 +104,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopestacksnapshot): Owned root-to-top values from one coherent read of a visible scope stack.
 - [ThreadScopeStackGuard](/reference/api/rust-library-reference/nemo-relay-plugin/struct-threadscopestackguard): RAII guard that restores the previous thread-local scope stack on drop.
 - [ToolAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolattributes): Bitflags that modify tool-call behavior and observability.
+- [ToolExecutionContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioncontext): Transport-independent input supplied to a plugin tool execution interceptor.
 - [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
 - [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult): Canonical application-visible result of tool execution.
 - [ToolNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolnext): Cloneable asynchronous tool execution continuation.

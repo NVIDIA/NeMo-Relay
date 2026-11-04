@@ -1,7 +1,7 @@
 ---
 title: "Enum Diagnostic Observation Severity"
 sidebar-title: "DiagnosticObservationSeverity"
-description: "API documentation for the Rust `DiagnosticObservationSeverity` enum in crate `nemo_relay_worker`."
+description: "Evidence severity accepted by diagnostic delivery."
 position: 11
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -20,31 +20,45 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 }
 ```
 
+Evidence severity accepted by diagnostic delivery.
+
 ## Variants
 
 ### `Unspecified = 0`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unspecified = 0"}} /></pre>
 
+No value supplied; invalid where this contract requires an explicit value.
+
 ### `Trace = 1`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Trace = 1"}} /></pre>
+
+Detailed trace evidence.
 
 ### `Debug = 2`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Debug = 2"}} /></pre>
 
+Diagnostic evidence for debugging.
+
 ### `Info = 3`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Info = 3"}} /></pre>
+
+Informational evidence.
 
 ### `Warning = 4`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Warning = 4"}} /></pre>
 
+Warning evidence without an implied failure outcome.
+
 ### `Error = 5`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Error = 5"}} /></pre>
+
+Error evidence; severity alone does not determine outcome.
 
 ## Implementations
 

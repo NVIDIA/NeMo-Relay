@@ -1,7 +1,7 @@
 ---
 title: "Struct Diagnostic Observation"
 sidebar-title: "DiagnosticObservation"
-description: "API documentation for the Rust `DiagnosticObservation` struct in crate `nemo_relay_worker`."
+description: "Records a positive occurrence delta using admitted component and code handles."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -9,29 +9,51 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticObservation &#123;\n    pub component: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub failure_class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub severity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub observed_unix_micros: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>&gt;,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub session_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub request_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticObservation &#123;\n    pub component: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub failure_class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub severity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub observe_time: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/prost-types/0.14.3/prost_types/protobuf/struct.Timestamp.html\">Timestamp</a>&gt;,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub session_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub request_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
+
+Records a positive occurrence delta using admitted component and code handles.
 
 ## Fields
 
 ### `component: u32`
 
+One-based component handle admitted in this diagnostic session.
+
 ### `code: u32`
+
+One-based code handle admitted for this component.
 
 ### `failure_class: Option<String>`
 
+Optional admitted failure-class name for this observation.
+
 ### `outcome: i32`
+
+Explicit observed operation outcome.
 
 ### `severity: i32`
 
+Evidence severity, independent of its observed operation outcome.
+
 ### `count: u64`
 
-### `observed_unix_micros: Option<i64>`
+Positive occurrence delta, not an absolute counter.
+
+### `observe_time: Option<Timestamp>`
+
+Source observation time, preserved through projections.
 
 ### `detail: Option<String>`
 
+Optional restricted diagnostic detail, bounded by the host policy.
+
 ### `session_id: Option<String>`
 
+Optional trajectory session correlation, not the diagnostic transport session UUID.
+
 ### `request_id: Option<String>`
+
+Optional trajectory request correlation; it is not an authority token.
 
 ## Implementations
 
@@ -68,12 +90,6 @@ Returns the enum value of `severity`, or the default if the field is set to an i
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_severity(&amp;mut self, value: <a href=\"enum-diagnosticobservationseverity\">DiagnosticObservationSeverity</a>)"}} /></pre>
 
 Sets `severity` to the provided enum value.
-
-#### `observed_unix_micros`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observed_unix_micros(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>"}} /></pre>
-
-Returns the value of `observed_unix_micros`, or the default value if `observed_unix_micros` is unset.
 
 #### `detail`
 
@@ -178,6 +194,26 @@ Returns the value of `request_id`, or the default value if `request_id` is unset
 #### `merge_length_delimited`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge_length_delimited\">merge_length_delimited</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Name for DiagnosticObservation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html\">Name</a> for <a href=\"struct-diagnosticobservation\">DiagnosticObservation</a>"}} /></pre>
+
+#### `NAME`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.NAME\">NAME</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"DiagnosticObservation\""}} /></pre>
+
+#### `PACKAGE`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.PACKAGE\">PACKAGE</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"nvidia.nemo.relay.worker.v1\""}} /></pre>
+
+#### `full_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.full_name\">full_name</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `type_url`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.type_url\">type_url</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
 
 ### `impl PartialEq for DiagnosticObservation`
 

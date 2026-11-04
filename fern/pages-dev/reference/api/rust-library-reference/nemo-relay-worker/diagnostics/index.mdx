@@ -13,21 +13,21 @@ Negotiated, bounded plugin diagnostic submission and delivery controls. Bounded 
 
 ## Structs
 
-- [DiagnosticCodeDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticcodedefinition)
+- [DiagnosticCodeDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticcodedefinition): Selects an existing catalogue name or an activation-local extension definition.
 - [DiagnosticComponent](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticcomponent): Component-scoped authoring handle; code IDs are one-based registration positions.
 - [DiagnosticDeliveryStats](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticdeliverystats): SDK-local saturating delivery totals; never replayed as host observations.
-- [DiagnosticExtensionDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticextensiondefinition)
-- [DiagnosticObservation](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticobservation)
-- [DiagnosticReceipt](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticreceipt)
+- [DiagnosticExtensionDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticextensiondefinition): Declares one plugin-defined diagnostic classification and its allowed causes.
+- [DiagnosticObservation](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticobservation): Records a positive occurrence delta using admitted component and code handles.
+- [DiagnosticReceipt](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticreceipt): Reports sequence consumption, admission outcome, and retained evidence disposition.
 - [WorkerDiagnostics](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-workerdiagnostics): One negotiated facade per activation. Disabled/unsupported facades are inert.
 
 ## Enums
 
 - [DiagnosticDeliveryError](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticdeliveryerror): Delivery outcome, independent of plugin execution or health.
-- [DiagnosticEvidenceRetention](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticevidenceretention)
-- [DiagnosticObservationOutcome](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationoutcome)
-- [DiagnosticObservationSeverity](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationseverity)
-- [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticreceiptstatus)
+- [DiagnosticEvidenceRetention](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticevidenceretention): Evidence retention disposition, independent of occurrence accounting.
+- [DiagnosticObservationOutcome](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationoutcome): Observed operation outcome, independent of diagnostic severity.
+- [DiagnosticObservationSeverity](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationseverity): Evidence severity accepted by diagnostic delivery.
+- [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticreceiptstatus): Terminal admission outcome for an ordered diagnostic submission.
 
 ## Functions
 

@@ -1,7 +1,7 @@
 ---
 title: "Struct Diagnostic Extension Definition"
 sidebar-title: "DiagnosticExtensionDefinition"
-description: "API documentation for the Rust `DiagnosticExtensionDefinition` struct in crate `nemo_relay_worker`."
+description: "Declares one plugin-defined diagnostic classification and its allowed causes."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,15 +11,25 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticExtensionDefinition &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub description: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub allowed_failure_classes: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
 
+Declares one plugin-defined diagnostic classification and its allowed causes.
+
 ## Fields
 
 ### `name: String`
 
+Identity within the enclosing declaration; preserve its exact case and spelling.
+
 ### `description: String`
+
+Human-readable classification description, bounded by diagnostic admission policy.
 
 ### `outcome: i32`
 
+Observed operation outcome; severity does not determine success or failure.
+
 ### `allowed_failure_classes: Vec<String>`
+
+Admitted failure-class names for this diagnostic extension.
 
 ## Implementations
 
@@ -124,6 +134,26 @@ Sets `outcome` to the provided enum value.
 #### `merge_length_delimited`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge_length_delimited\">merge_length_delimited</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Name for DiagnosticExtensionDefinition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html\">Name</a> for <a href=\"struct-diagnosticextensiondefinition\">DiagnosticExtensionDefinition</a>"}} /></pre>
+
+#### `NAME`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.NAME\">NAME</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"DiagnosticExtensionDefinition\""}} /></pre>
+
+#### `PACKAGE`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.PACKAGE\">PACKAGE</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"nvidia.nemo.relay.worker.v1\""}} /></pre>
+
+#### `full_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.full_name\">full_name</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `type_url`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.type_url\">type_url</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
 
 ### `impl PartialEq for DiagnosticExtensionDefinition`
 

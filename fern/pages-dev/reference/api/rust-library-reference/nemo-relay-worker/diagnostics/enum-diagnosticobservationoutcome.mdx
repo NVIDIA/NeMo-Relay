@@ -1,7 +1,7 @@
 ---
 title: "Enum Diagnostic Observation Outcome"
 sidebar-title: "DiagnosticObservationOutcome"
-description: "API documentation for the Rust `DiagnosticObservationOutcome` enum in crate `nemo_relay_worker`."
+description: "Observed operation outcome, independent of diagnostic severity."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,25 +11,33 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 ```rust
 #[repr(i32)]pub enum DiagnosticObservationOutcome {
-    Unknown = 0,
+    Unspecified = 0,
     Success = 1,
     Failure = 2,
 }
 ```
 
+Observed operation outcome, independent of diagnostic severity.
+
 ## Variants
 
-### `Unknown = 0`
+### `Unspecified = 0`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown = 0"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unspecified = 0"}} /></pre>
+
+Unspecified maps to the runtime's unknown observation outcome.
 
 ### `Success = 1`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Success = 1"}} /></pre>
 
+The observed operation succeeded.
+
 ### `Failure = 2`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Failure = 2"}} /></pre>
+
+The observed operation failed.
 
 ## Implementations
 

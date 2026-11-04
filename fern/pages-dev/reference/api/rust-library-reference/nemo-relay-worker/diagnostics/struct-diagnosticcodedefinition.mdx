@@ -1,7 +1,7 @@
 ---
 title: "Struct Diagnostic Code Definition"
 sidebar-title: "DiagnosticCodeDefinition"
-description: "API documentation for the Rust `DiagnosticCodeDefinition` struct in crate `nemo_relay_worker`."
+description: "Selects an existing catalogue name or an activation-local extension definition."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,9 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticCodeDefinition &#123;\n    pub definition: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Definition&gt;,\n&#125;"}} /></pre>
 
+Selects an existing catalogue name or an activation-local extension definition.
+
 ## Fields
 
 ### `definition: Option<Definition>`
+
+Exactly one recognized alternative is required when this message is present.
 
 ## Trait Implementations
 
@@ -100,6 +104,26 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 #### `merge_length_delimited`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge_length_delimited\">merge_length_delimited</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Name for DiagnosticCodeDefinition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html\">Name</a> for <a href=\"struct-diagnosticcodedefinition\">DiagnosticCodeDefinition</a>"}} /></pre>
+
+#### `NAME`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.NAME\">NAME</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"DiagnosticCodeDefinition\""}} /></pre>
+
+#### `PACKAGE`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.PACKAGE\">PACKAGE</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"nvidia.nemo.relay.worker.v1\""}} /></pre>
+
+#### `full_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.full_name\">full_name</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `type_url`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.type_url\">type_url</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
 
 ### `impl PartialEq for DiagnosticCodeDefinition`
 

@@ -1,7 +1,7 @@
 ---
 title: "Enum Diagnostic Receipt Status"
 sidebar-title: "DiagnosticReceiptStatus"
-description: "API documentation for the Rust `DiagnosticReceiptStatus` enum in crate `nemo_relay_worker`."
+description: "Terminal admission outcome for an ordered diagnostic submission."
 position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -20,31 +20,45 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 }
 ```
 
+Terminal admission outcome for an ordered diagnostic submission.
+
 ## Variants
 
 ### `Unspecified = 0`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unspecified = 0"}} /></pre>
 
+No value supplied; invalid where this contract requires an explicit value.
+
 ### `Recorded = 1`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Recorded = 1"}} /></pre>
+
+Occurrence accounting was committed.
 
 ### `Disabled = 2`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Disabled = 2"}} /></pre>
 
+Collection is disabled; no evidence is recorded.
+
 ### `Rejected = 3`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Rejected = 3"}} /></pre>
+
+An admitted operation was rejected and its sequence consumed.
 
 ### `Registered = 4`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Registered = 4"}} /></pre>
 
+Component registration and code handles were admitted.
+
 ### `Closed = 5`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Closed = 5"}} /></pre>
+
+The selected component or session was closed.
 
 ## Implementations
 

@@ -1,0 +1,215 @@
+---
+title: "Struct LlmOptimization Tokens"
+sidebar-title: "LlmOptimizationTokens"
+slug: "/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokens"
+description: "Optional token evidence; missing categories remain unknown rather than zero."
+position: 153
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmOptimizationTokens &#123;\n    pub prompt_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub completion_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub total_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n&#125;"}} /></pre>
+
+Optional token evidence; missing categories remain unknown rather than zero.
+
+## Fields
+
+### `prompt_tokens: Option<u64>`
+
+Input/prompt tokens.
+
+### `completion_tokens: Option<u64>`
+
+Output/completion tokens.
+
+### `cache_read_tokens: Option<u64>`
+
+Tokens read from a provider prompt cache.
+
+### `cache_write_tokens: Option<u64>`
+
+Tokens written to a provider prompt cache.
+
+### `total_tokens: Option<u64>`
+
+Total tokens when supplied by the producer.
+
+## Implementations
+
+### `impl LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `prompt_tokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn prompt_tokens(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Returns the value of `prompt_tokens`, or the default value if `prompt_tokens` is unset.
+
+#### `completion_tokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn completion_tokens(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Returns the value of `completion_tokens`, or the default value if `completion_tokens` is unset.
+
+#### `cache_read_tokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cache_read_tokens(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Returns the value of `cache_read_tokens`, or the default value if `cache_read_tokens` is unset.
+
+#### `cache_write_tokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cache_write_tokens(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Returns the value of `cache_write_tokens`, or the default value if `cache_write_tokens` is unset.
+
+#### `total_tokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn total_tokens(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Returns the value of `total_tokens`, or the default value if `total_tokens` is unset.
+
+## Trait Implementations
+
+### `impl Clone for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl Hash for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Message for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html\">Message</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `encoded_len`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#tymethod.encoded_len\">encoded_len</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+#### `clear`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#tymethod.clear\">clear</a>(&amp;mut self)"}} /></pre>
+
+#### `encode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.encode\">encode</a>(&amp;self, buf: &amp;mut impl BufMut) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.EncodeError.html\">EncodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `encode_to_vec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.encode_to_vec\">encode_to_vec</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>&gt; where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `encode_length_delimited`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.encode_length_delimited\">encode_length_delimited</a>(\n    &amp;self,\n    buf: &amp;mut impl BufMut,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.EncodeError.html\">EncodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `encode_length_delimited_to_vec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.encode_length_delimited_to_vec\">encode_length_delimited_to_vec</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>&gt; where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `decode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.decode\">decode</a>(buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a>,"}} /></pre>
+
+#### `decode_length_delimited`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.decode_length_delimited\">decode_length_delimited</a>(buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a>,"}} /></pre>
+
+#### `merge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge\">merge</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `merge_length_delimited`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html#method.merge_length_delimited\">merge_length_delimited</a>(&amp;mut self, buf: impl Buf) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Name for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html\">Name</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `NAME`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.NAME\">NAME</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"LlmOptimizationTokens\""}} /></pre>
+
+#### `PACKAGE`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#associatedconstant.PACKAGE\">PACKAGE</a>: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"nvidia.nemo.relay.worker.v1\""}} /></pre>
+
+#### `full_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.full_name\">full_name</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `type_url`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html#method.type_url\">type_url</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+### `impl PartialEq for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl WireValue<LlmOptimizationTokens> for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt; for LlmOptimizationTokens"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"../conversions/type-result\">Result</a>&lt;<a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../conversions/trait-wirevalue\">from_wire</a>(value: <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>) -&gt; <a href=\"../conversions/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl Copy for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+### `impl Eq for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
+
+### `impl StructuralPartialEq for LlmOptimizationTokens`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>

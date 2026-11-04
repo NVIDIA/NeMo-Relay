@@ -33,6 +33,8 @@ Creates an empty dynamic plugin registry.
 
 Reconstructs a registry from previously persisted durable records.
 
+Unsupported worker protocols remain readable for inspection and removal, with invalid compatibility status. New registrations and enablement still require the current protocol.
+
 #### `get`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
@@ -119,7 +121,7 @@ Replaces the current host-policy outcome without mutating desired state.
 
 Replaces declaration-owned fields while preserving lifecycle-owned state.
 
-The replacement must describe the same plugin ID. Desired state, runtime state, and durable lifecycle metadata remain attached to the existing record.
+The replacement must describe the same plugin ID. Desired state, runtime state, and durable lifecycle metadata remain attached to the existing record. Unsupported worker protocols remain inspectable with invalid compatibility.
 
 ## Trait Implementations
 

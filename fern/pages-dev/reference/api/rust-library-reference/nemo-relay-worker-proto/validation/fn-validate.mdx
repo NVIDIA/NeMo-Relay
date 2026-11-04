@@ -1,0 +1,16 @@
+---
+title: "Function validate"
+sidebar-title: "validate"
+description: "Validate the complete message before dispatch or state mutation."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate&lt;M: <a href=\"https://docs.rs/prost/0.14.3/prost/message/trait.Message.html\">Message</a> + <a href=\"https://docs.rs/prost/0.14.3/prost/name/trait.Name.html\">Name</a>&gt;(message: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;M</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Validate the complete message before dispatch or state mutation.
+
+This does not authenticate credentials or establish capability ownership.

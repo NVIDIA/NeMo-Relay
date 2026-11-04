@@ -1,22 +1,22 @@
 ---
 title: "Rust Worker"
-description: "Build, digest, activate, verify, and stop the checked Rust grpc-v1 worker."
+description: "Build, digest, activate, verify, and stop the checked Rust gRPC worker."
 position: 32
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
-[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 1.0.0,
-implements `WorkerPlugin`, registers all
-16 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
-create the authenticated `grpc-v1` server from the
-activation environment Relay provides.
+The `examples/rust-grpc-worker-plugin` project is the Rust version of the
+[Python worker](/build-plugins/workers/python). It uses `nemo-relay-worker` 1.0.0
+and implements `WorkerPlugin`. It supports all 17
+[callback types](/build-plugins/workers/middleware-and-continuations). Its
+configuration selects which callbacks to register. The SDK starts the authenticated
+`nvidia.nemo.relay.worker.v1` server from Relay's activation environment.
 
 ## Internal Diagnostic Observations
 
 Use `runtime.diagnostics().await` to obtain diagnostics for the activation.
-The SDK negotiates delivery once and reuses the host's selected context. It does
+The SDK sets up delivery once and reuses the host's selected context. It does
 not create a worker-local store or enable diagnostic collection.
 
 This example matches the Rust native and Python worker example. Register its
@@ -57,11 +57,11 @@ defines host limits, retries, and session authority.
 
 ## Configure the Snapshot Location
 
-Relay copies the worker runtime closure into an isolated activation snapshot before
-starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
-Relay to use a directory of your choice; Relay creates it when it does not exist. Choose a
-location outside every directory copied into a snapshot, including active plugin packages and
-external library directories:
+Before starting a worker, Relay copies its package and runtime files into an
+activation snapshot. This is a separate directory for that activation. Set
+`NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to choose
+where snapshots are stored. Relay creates the directory if needed. Keep it
+outside plugin packages and all copied entrypoint and library directories:
 
 ```powershell
 $env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
@@ -73,9 +73,13 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 
 ## Build and Calculate Integrity
 
-Build the executable and materialize its platform-specific manifest as follows:
+Building a Rust worker requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
 
-1. Run the example from its own directory.
+Build the executable and create a manifest for your platform:
+
+1. Build and test the example from its own directory.
 
    ```bash
    cargo nextest run
@@ -86,7 +90,7 @@ Build the executable and materialize its platform-specific manifest as follows:
    `<platform-worker-file>` with `nemo-relay-rust-grpc-worker-plugin-example` on macOS or
    Linux, or the same name with `.exe` on Windows.
 
-3. Calculate the promised digest before registration. On macOS run:
+3. Calculate the SHA-256 digest before registration. On macOS run:
 
    ```bash
    shasum -a 256 target/debug/<platform-worker-file>
@@ -104,16 +108,15 @@ name and digest placeholders:
 
 <Code src="../_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-31" showLineNumbers={false} />
 
-The manifest targets Relay 1.0.0 and uses the context-aware tool execution
-contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext::call` returns
-`ToolExecutionResult`, preserving an application payload and optional opaque annotation
-separately from Relay-owned pending marks. Rebuild the worker when adopting this SDK
-release.
+The manifest requires Relay 1.0 and the typed `nvidia.nemo.relay.worker.v1`
+protocol. `ToolNext::call` returns `ToolExecutionResult`. It keeps the application
+payload and optional annotation separate from Relay-owned pending marks. Rebuild
+the worker when adopting this SDK release.
 
 The artifact and entrypoint paths must identify the same executable. Relay verifies the
 artifact digest before it starts the command, and the worker
 [handshake](/build-plugins/workers/grpc-v1-protocol) must return the
-same plugin identity and `grpc-v1` protocol.
+same plugin identity and `nvidia.nemo.relay.worker.v1` protocol.
 
 ## Register and Start the Worker
 
@@ -129,7 +132,7 @@ Use the following procedure to register the manifest and inspect worker activati
 
 2. Start Relay from the repository root. Inspect the activation report
    and confirm the handshake reports plugin identity, SDK and runtime metadata,
-   `grpc-v1`, multiple-component behavior, and all 16 surfaces.
+   `nvidia.nemo.relay.worker.v1`, multiple-component behavior, and all 17 surfaces.
 
    ```bash
    nemo-relay --bind 127.0.0.1:4040
@@ -143,7 +146,7 @@ tests and the executable named in the manifest.
 <Code src="../_code/rust-worker/Cargo.toml" language="toml" title="Cargo.toml" lines="4-22" showLineNumbers={false} />
 
 `WorkerPlugin::register` is a synchronous description step. It parses the validated JSON
-and fills the `PluginContext` with callbacks; the callbacks themselves return futures.
+and registers callbacks through `PluginContext`. Those callbacks return futures.
 
 ```rust
 pub struct DocumentationWorker;

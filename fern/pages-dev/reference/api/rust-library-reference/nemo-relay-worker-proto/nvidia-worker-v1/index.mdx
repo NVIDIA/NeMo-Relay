@@ -1,0 +1,290 @@
+---
+title: "Module nvidia_worker_v1"
+sidebar-title: "nvidia_worker_v1"
+slug: "/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1"
+description: "Typed worker contract introduced alongside the legacy API."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Typed worker contract introduced alongside the legacy API.
+
+## Modules
+
+- [content_part](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/content_part): Nested message and enum types in `ContentPart`.
+- [decode_llm_codec_request_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/decode_llm_codec_request_response): Nested message and enum types in `DecodeLlmCodecRequestResponse`.
+- [decode_llm_codec_response_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/decode_llm_codec_response_response): Nested message and enum types in `DecodeLlmCodecResponseResponse`.
+- [diagnostic_code_definition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/diagnostic_code_definition): Nested message and enum types in `DiagnosticCodeDefinition`.
+- [encode_llm_codec_request_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/encode_llm_codec_request_response): Nested message and enum types in `EncodeLlmCodecRequestResponse`.
+- [event](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/event): Nested message and enum types in `Event`.
+- [finish_reason](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/finish_reason): Nested message and enum types in `FinishReason`.
+- [get_current_scope_stack_snapshot_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/get_current_scope_stack_snapshot_response): Nested message and enum types in `GetCurrentScopeStackSnapshotResponse`.
+- [get_diagnostic_discovery_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/get_diagnostic_discovery_response): Nested message and enum types in `GetDiagnosticDiscoveryResponse`.
+- [guardrail_decision](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/guardrail_decision): Nested message and enum types in `GuardrailDecision`.
+- [inspect_diagnostic_memory_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/inspect_diagnostic_memory_response): Nested message and enum types in `InspectDiagnosticMemoryResponse`.
+- [invoke_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_request): Nested message and enum types in `InvokeRequest`.
+- [invoke_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_response): Nested message and enum types in `InvokeResponse`.
+- [invoke_stream_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_stream_response): Nested message and enum types in `InvokeStreamResponse`.
+- [llm_message](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_message): Nested message and enum types in `LlmMessage`.
+- [llm_next_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_next_response): Nested message and enum types in `LlmNextResponse`.
+- [llm_stream_next_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_stream_next_response): Nested message and enum types in `LlmStreamNextResponse`.
+- [memory_limit_event_slot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/memory_limit_event_slot): Nested message and enum types in `MemoryLimitEventSlot`.
+- [message_content](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/message_content): Nested message and enum types in `MessageContent`.
+- [plugin_worker_service_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/plugin_worker_service_client): Generated client implementations.
+- [plugin_worker_service_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/plugin_worker_service_server): Generated server implementations.
+- [read_diagnostic_page_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/read_diagnostic_page_response): Nested message and enum types in `ReadDiagnosticPageResponse`.
+- [register_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/register_response): Nested message and enum types in `RegisterResponse`.
+- [relay_diagnostics_service_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/relay_diagnostics_service_client): Generated client implementations.
+- [relay_diagnostics_service_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/relay_diagnostics_service_server): Generated server implementations.
+- [relay_host_runtime_service_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/relay_host_runtime_service_client): Generated client implementations.
+- [relay_host_runtime_service_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/relay_host_runtime_service_server): Generated server implementations.
+- [resource_memory_number](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/resource_memory_number): Nested message and enum types in `ResourceMemoryNumber`.
+- [resource_memory_unit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/resource_memory_unit): Nested message and enum types in `ResourceMemoryUnit`.
+- [runtime_registration_owner](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/runtime_registration_owner): Nested message and enum types in `RuntimeRegistrationOwner`.
+- [submit_diagnostic_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/submit_diagnostic_request): Nested message and enum types in `SubmitDiagnosticRequest`.
+- [tool_choice](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/tool_choice): Nested message and enum types in `ToolChoice`.
+- [tool_definition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/tool_definition): Nested message and enum types in `ToolDefinition`.
+- [tool_next_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/tool_next_response): Nested message and enum types in `ToolNextResponse`.
+- [validate_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/validate_response): Nested message and enum types in `ValidateResponse`.
+
+## Structs
+
+- [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-annotatedllmrequest): Normalized request structure with explicit provider-specific and extension fields.
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-annotatedllmresponse): Normalized completed response, usage, pricing, and optimization evidence.
+- [AssistantMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-assistantmessage): Assistant output with independently optional content and tool calls.
+- [BaseEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-baseevent): Common ATOF identity, propagation, timing, and application payload fields.
+- [CancelInvocationRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cancelinvocationrequest): Requests cancellation of one active invocation without replaying work.
+- [CancelInvocationResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cancelinvocationresponse): Idempotent: unknown/completed IDs return accepted=false, without resurrecting work.
+- [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-categoryprofile): Known category-specific fields and lossless extensions attached to an event.
+- [ComponentMemoryFootprint](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-componentmemoryfootprint): Typed component memory footprint preserving the shared runtime fields.
+- [ComponentMemoryUsage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-componentmemoryusage): Typed component memory usage preserving the shared runtime fields.
+- [ConditionalMiddlewareGuardrailRegistration](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-conditionalmiddlewareguardrailregistration): Declares a static or callback-based filter over runtime registrations.
+- [ConditionalMiddlewareInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-conditionalmiddlewareinvocation): Asks a conditional callback whether selected middleware registrations may execute.
+- [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-configdiagnostic): Structured configuration warning or error with optional component and field location.
+- [ConfigDiagnostics](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-configdiagnostics): Present validation result; an empty list is successful validation without diagnostics.
+- [ContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-contentpart): Selects a normalized content block or a lossless provider-native block.
+- [ContentPartList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-contentpartlist): Ordered multimodal content; a present empty list remains an explicit variant.
+- [CostEstimate](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-costestimate): Normalized monetary cost with provenance for estimates and provider-reported values.
+- [CreateScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-createscopestackrequest): Creates an isolated host-owned scope stack for this activation.
+- [CreateScopeStackResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-createscopestackresponse): Returns the new isolated stack's opaque binding identity.
+- [Credentials](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-credentials): Required on authenticated requests. Both strings must match the activation.
+- [DataSchema](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-dataschema): Application-owned schema identity; its version is not the worker version.
+- [DecodeLlmCodecRequestRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-decodellmcodecrequestrequest): Requests normalized decoding through an invocation-bound request codec.
+- [DecodeLlmCodecRequestResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-decodellmcodecrequestresponse): Selects the normalized request or the codec's domain failure.
+- [DecodeLlmCodecResponseRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-decodellmcodecresponserequest): Requests normalized decoding through an invocation-bound response codec.
+- [DecodeLlmCodecResponseResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-decodellmcodecresponseresponse): Selects the normalized completed response or the codec's domain failure.
+- [DeregisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-deregisterconditionalmiddlewareguardrailrequest): Removes a conditional guardrail using its activation-owned handle.
+- [DeregisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-deregisterconditionalmiddlewareguardrailresponse): Reports whether an owned conditional guardrail was removed.
+- [DiagnosticCapabilities](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcapabilities): Host-owned limits and contract identities required for diagnostic admission.
+- [DiagnosticCapability](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcapability): Availability and optional reason for one named diagnostic feature.
+- [DiagnosticClassification](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticclassification): Preserves catalogue and failure-class names, including unknown future names.
+- [DiagnosticCodeDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcodedefinition): Selects an existing catalogue name or an activation-local extension definition.
+- [DiagnosticComponentClose](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcomponentclose): Closes a component handle without deleting its retained accounting.
+- [DiagnosticComponentIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcomponentidentity): Identifies a logical component and one registration incarnation.
+- [DiagnosticComponentOwnership](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcomponentownership): Correlates component responsibility without creating additional counter dimensions.
+- [DiagnosticComponentRegistration](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcomponentregistration): Registers a bounded diagnostic component and an ordered list of code handles.
+- [DiagnosticComponentSnapshot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcomponentsnapshot): A retained component row with lifetime, refresh, counters, and windows.
+- [DiagnosticCorrelation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcorrelation): Optional trajectory correlation, excluded from aggregation keys.
+- [DiagnosticCount](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcount): Unsigned count that stops at its maximum. After that limit, it is a lower bound.
+- [DiagnosticCounter](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcounter): Lifetime occurrence count and latest observation time for one admitted code.
+- [DiagnosticCoverage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcoverage): Describes snapshot availability, aggregation scope, retention, and evidence loss.
+- [DiagnosticCursor](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticcursor): Canonical snapshot position; it does not grant transport read authority.
+- [DiagnosticDetail](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticdetail): Retained diagnostic text with explicit truncation state.
+- [DiagnosticDiscovery](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticdiscovery): Typed diagnostic discovery preserving the shared runtime fields.
+- [DiagnosticEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticevent): One retained observation, its attribution, occurrence delta, and optional evidence.
+- [DiagnosticExtensionDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticextensiondefinition): Declares one plugin-defined diagnostic classification and its allowed causes.
+- [DiagnosticLifetimeSummary](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticlifetimesummary): Lifetime totals and monotonic elapsed time for a source or component.
+- [DiagnosticLoss](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticloss): Explicit counters for bounded-storage, admission, and projection losses.
+- [DiagnosticMemoryPage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticmemorypage): Typed diagnostic memory page preserving the shared runtime fields.
+- [DiagnosticMemoryUsage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticmemoryusage): Typed diagnostic memory usage preserving the shared runtime fields.
+- [DiagnosticObservation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticobservation): Records a positive occurrence delta using admitted component and code handles.
+- [DiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticorigin): Captures the refresh generation and ownership at observation time.
+- [DiagnosticPluginContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticplugincontext): Carries independently optional plugin execution and lifecycle phase names.
+- [DiagnosticProducerSupport](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticproducersupport): Typed diagnostic producer support preserving the shared runtime fields.
+- [DiagnosticQuery](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticquery): Typed diagnostic query preserving the shared runtime fields.
+- [DiagnosticReceipt](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticreceipt): Reports sequence consumption, admission outcome, and retained evidence disposition.
+- [DiagnosticRefreshSummary](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticrefreshsummary): Accounting for the component's current refresh generation and ownership.
+- [DiagnosticRetention](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticretention): Reports retained bounds and whether the requested page was truncated.
+- [DiagnosticSnapshot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticsnapshot): JSON output represents every uint64 diagnostic counter as a decimal string.
+- [DiagnosticSourceIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticsourceidentity): Identifies the process incarnation that owns diagnostic accounting.
+- [DiagnosticTotals](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnostictotals): Outcome and recording totals for an explicitly identified accounting scope.
+- [DiagnosticWindow](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticwindow): Bounded outcome history at one configured time resolution.
+- [DiagnosticWindowBucket](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticwindowbucket): Outcome counts for one source-local elapsed-time interval.
+- [DiagnosticWindowCoverage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-diagnosticwindowcoverage): Reports the temporal extent and completeness of a diagnostic window.
+- [DropScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-dropscopestackrequest): Releases an activation-owned isolated scope stack.
+- [DropScopeStackResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-dropscopestackresponse): Confirms stack release; failures use gRPC status.
+- [EmitMarkRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-emitmarkrequest): Requests host materialization of a mark in the selected scope context.
+- [EmitMarkResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-emitmarkresponse): Confirms the mark operation completed; failures use gRPC status.
+- [EncodeLlmCodecRequestRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-encodellmcodecrequestrequest): Requests provider encoding from an annotation and original request baseline.
+- [EncodeLlmCodecRequestResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-encodellmcodecrequestresponse): Selects the encoded provider request or the codec's domain failure.
+- [EntryMemoryFootprint](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-entrymemoryfootprint): Typed entry memory footprint preserving the shared runtime fields.
+- [EntryMemoryUsage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-entrymemoryusage): Typed entry memory usage preserving the shared runtime fields.
+- [Event](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-event): Exactly one kind is required. UUID strings use canonical hyphenated UUIDs.
+- [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-eventsanitizefields): Sanitizer output replaces these fields; absence clears the corresponding field.
+- [FinishReason](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-finishreason): Normalized completion reason with an explicit lossless unknown-name alternative.
+- [FunctionCall](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-functioncall): Function name and original argument text, which need not be complete JSON.
+- [FunctionDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-functiondefinition): Function name, optional description and JSON Schema, strictness, and extensions.
+- [FunctionMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-functionmessage): Legacy function result; absent content represents explicit null in the runtime DTO.
+- [FunctionToolDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-functiontooldefinition): Function tool definition plus provider fields outside the normalized function.
+- [GenerationParams](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-generationparams): Portable generation controls with presence preserved for every optional value.
+- [GetCurrentScopeStackSnapshotRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getcurrentscopestacksnapshotrequest): Queries the scope stack bound to an invocation or selected scope context.
+- [GetCurrentScopeStackSnapshotResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getcurrentscopestacksnapshotresponse): Selects a present snapshot or an explicit absence of bound context.
+- [GetDiagnosticCapabilitiesRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getdiagnosticcapabilitiesrequest): Queries diagnostic policy using activation credentials, without opening a session.
+- [GetDiagnosticCapabilitiesResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getdiagnosticcapabilitiesresponse): Returns the host's bounded diagnostic delivery and read policy.
+- [GetDiagnosticDiscoveryRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getdiagnosticdiscoveryrequest): Requests discovery evidence only under the activation's separately granted read authority.
+- [GetDiagnosticDiscoveryResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getdiagnosticdiscoveryresponse): Returns discovery evidence or a portable domain read failure; transport failures use gRPC status.
+- [GetRuntimeDiagnosticsRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getruntimediagnosticsrequest): Queries bounded operational counters for the active host.
+- [GetRuntimeDiagnosticsResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-getruntimediagnosticsresponse): Returns bounded operational counters, independent of restricted evidence reads.
+- [GuardrailDecision](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-guardraildecision): Explicit allow or nonempty block reason; missing selection is malformed.
+- [HandshakeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-handshakerequest): Authenticates an activation and proposes the exact worker contract and plugin identity.
+- [HandshakeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-handshakeresponse): Confirms worker identity, component multiplicity, and supported registration surfaces.
+- [HealthRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-healthrequest): Queries readiness using activation credentials; it may precede handshake.
+- [HealthResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-healthresponse): Reports readiness and worker identity without implying registration success.
+- [ImageUrl](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-imageurl): Image URL and optional provider detail preference.
+- [ImageUrlContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-imageurlcontentpart): Image URL input with portable URL options and provider extensions.
+- [InspectDiagnosticMemoryRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectdiagnosticmemoryrequest): Requests memory evidence only under the activation's separately granted read authority.
+- [InspectDiagnosticMemoryResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectdiagnosticmemoryresponse): Returns memory evidence or a portable domain read failure; transport failures use gRPC status.
+- [InvokeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokerequest): Requires an invocation ID, a registration name, and one invocation alternative. The alternative must match the registered callback type. The request has no separate surface enum that could conflict with that alternative.
+- [InvokeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokeresponse): One surface-specific success alternative or one callback/domain failure.
+- [InvokeStreamRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokestreamrequest): Streaming is a distinct method with a request-only codec context.
+- [InvokeStreamResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokestreamresponse): Exactly one item required. Error is terminal; clean EOF is successful closure.
+- [JsonArray](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonarray): Presence-bearing lists preserve None versus Some([]) in runtime DTOs.
+- [JsonContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-jsoncontentpart): Provider-neutral image/audio/file payload with open provider fields.
+- [JsonObject](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonobject): Open object with structurally enforced string keys; each value is required.
+- [JsonValue](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonvalue): Exactly one UTF-8 RFC 8259 value, without NaN/Infinity or trailing content. Required payloads must contain bytes, including the bytes "null" for JSON null. Numbers are never converted through google.protobuf.Value/double.
+- [ListRuntimeRegistrationsRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-listruntimeregistrationsrequest): Lists runtime registrations, optionally restricted to selected surfaces.
+- [ListRuntimeRegistrationsResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-listruntimeregistrationsresponse): Returns the matching visible runtime registrations.
+- [LlmCodecContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcodeccontext): Codec reference and optional invocation-scoped host access capability.
+- [LlmCodecReference](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcodecreference): Uniform codec reference metadata, independent of implementation or provider. The host selects the actual codec through its invocation-scoped capability.
+- [LlmConditionalInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmconditionalinvocation): Provider request supplied to an LLM execution condition.
+- [LlmExecutionInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmexecutioninvocation): Unary LLM execution input with request and response codec access.
+- [LlmMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmmessage): The role is the alternative; contradictory roles cannot be represented.
+- [LlmNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmnextrequest): Invokes a live unary LLM continuation with a rewritten provider request.
+- [LlmNextResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmnextresponse): Selects the downstream provider response or its original domain failure.
+- [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationcontribution): Plugin-neutral optimization evidence with an open kind and optional custom payload.
+- [LlmOptimizationModel](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationmodel): Model and optional provider used in optimization accounting.
+- [LlmOptimizationModelTransition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationmodeltransition): Optional baseline and effective model identities for an optimization.
+- [LlmOptimizationSummary](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationsummary): Host-computed optimization accounting at completed LLM scope closure.
+- [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact): Baseline, effective, and saved token evidence with its quality and method.
+- [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokens): Optional token evidence; missing categories remain unknown rather than zero.
+- [LlmRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmrequest): Headers and content are required; content remains provider-owned JSON.
+- [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmrequestinterceptoutcome): Rewritten request, optional authoritative annotation, pending marks, and evidence.
+- [LlmRequestInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmrequestinvocation): Request-interceptor input with optional normalized annotation.
+- [LlmSanitizeRequestInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmsanitizerequestinvocation): Provider request and codec context supplied to an LLM request sanitizer.
+- [LlmSanitizeResponseInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmsanitizeresponseinvocation): Provider response and codec context supplied to an LLM response sanitizer.
+- [LlmStreamNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmstreamnextrequest): Opens a live streaming LLM continuation with a rewritten provider request.
+- [LlmStreamNextResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmstreamnextresponse): One provider chunk or one terminal downstream domain failure.
+- [LogRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-logrequest): Submits an authenticated process-log record to the host-owned sink and threshold.
+- [LogResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-logresponse): Confirms the host accepted the log operation; failures use gRPC status.
+- [MarkEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-markevent): An ATOF point-in-time event with optional semantic categorization.
+- [MemoryLimitEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-memorylimitevent): Typed memory limit event preserving the shared runtime fields.
+- [MemoryLimitEventSlot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-memorylimiteventslot): One fixed resource limit-event slot, preserving the runtime's null positions.
+- [MemorySelectionTotals](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-memoryselectiontotals): Typed memory selection totals preserving the shared runtime fields.
+- [MessageContent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-messagecontent): Selects plain text or a multimodal parts list, including explicit empty content.
+- [NamedMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-namedmessage): System, user, or developer message with required content and optional sender name.
+- [OpenDiagnosticSessionRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-opendiagnosticsessionrequest): Requests a session with exactly the diagnostic contracts advertised by the host.
+- [OpenDiagnosticSessionResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-opendiagnosticsessionresponse): Returns the activation's session identity and the confirmed host policy.
+- [PendingMarkSpec](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec): Requests a mark whose UUID, timestamp, and parent are assigned by the host.
+- [PluginRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-pluginregistrationowner): Identifies the plugin kind and optional component ordinal owning a registration.
+- [PopScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-popscoperequest): Closes a previously pushed scope with optional output, metadata, and time.
+- [PopScopeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-popscoperesponse): Confirms scope closure; failures use gRPC status.
+- [ProtocolIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-protocolidentity): Protocol name nvidia.nemo.relay.worker.v1, contract version 1.0.0. Package/SDK releases are independent.
+- [ProviderNativeComponent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-providernativecomponent): Preserves provider-owned content with its provider and native discriminator.
+- [PushScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-pushscoperequest): Creates and binds a scope under the selected parent context.
+- [PushScopeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-pushscoperesponse): Returns the host-owned handle needed to close the newly pushed scope.
+- [ReadDiagnosticPageRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-readdiagnosticpagerequest): Requests snapshot evidence only under the activation's separately granted read authority.
+- [ReadDiagnosticPageResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-readdiagnosticpageresponse): Returns snapshot evidence or a portable domain read failure; transport failures use gRPC status.
+- [RegisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registerconditionalmiddlewareguardrailrequest): Installs an activation-owned conditional middleware guardrail.
+- [RegisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registerconditionalmiddlewareguardrailresponse): Returns the opaque handle for the newly installed conditional guardrail.
+- [RegisterRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registerrequest): Registration is idempotent for the same semantic config within an activation. Concurrent repeats install once; changed config fails with FAILED_PRECONDITION.
+- [RegisterResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registerresponse): Selects the installed registration plan or a registration callback failure.
+- [Registration](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registration): One callback's local identity, surface, priority, and chain behavior.
+- [RegistrationPlan](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-registrationplan): Declarative callback and initial conditional-guardrail registrations for one component.
+- [RemoteDiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-remotediagnosticorigin): Preserves authenticated worker provenance and the host's receipt timing.
+- [ResourceMemoryMeasurement](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorymeasurement): Typed resource memory measurement preserving the shared runtime fields.
+- [ResourceMemoryMetrics](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorymetrics): Typed resource memory metrics preserving the shared runtime fields.
+- [ResourceMemoryNumber](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorynumber): Exact integer, finite decimal, or explicit non-finite collector result.
+- [ResourceMemorySample](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample): Typed resource memory sample preserving the shared runtime fields.
+- [ResourceMemoryUnit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememoryunit): Original measurement dimension and canonical unit, without conversion.
+- [ResourceMemoryView](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememoryview): Typed resource memory view preserving the shared runtime fields.
+- [ResourceProcessIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-resourceprocessidentity): Typed resource process identity preserving the shared runtime fields.
+- [ResponseToolCall](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall): Completed-response tool call with parsed JSON arguments.
+- [ResponseToolCallList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcalllist): Presence-bearing completed-response tool calls.
+- [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-runtimediagnostic): One operational diagnostic code, safe description, and occurrence count.
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-runtimeregistrationidentity): Describes local/effective callback identity, surface, and ownership.
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-runtimeregistrationowner): Selects core, global API, or plugin ownership of a runtime registration.
+- [ScopeContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-scopecontext): Opaque host-issued stack/parent bindings, not public scope UUIDs.
+- [ScopeEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-scopeevent): An ATOF scope lifecycle event with an open semantic category.
+- [ScopeStackEntry](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-scopestackentry): Owned public scope identity, distinct from an opaque host binding.
+- [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-scopestacksnapshot): Owned scope identities ordered from root to the current top.
+- [ShutdownRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-shutdownrequest): Requests bounded worker drain and resource cleanup for the activation.
+- [ShutdownResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-shutdownresponse): Confirms successful admission of the worker shutdown request.
+- [StringList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-stringlist): Presence-bearing string list; a present empty list differs from absence.
+- [SubmitDiagnosticRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-submitdiagnosticrequest): Sends one ordered operation per request. Identical retries keep the sequence and content. A rejection before admission does not consume the sequence. An admitted policy rejection returns REJECTED and consumes the sequence. This service never retries execution callbacks.
+- [SubmitDiagnosticResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-submitdiagnosticresponse): Acknowledges one ordered diagnostic submission with its admission receipt.
+- [TextContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-textcontentpart): Text or refusal content with provider-specific extension fields.
+- [ToolCall](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolcall): Normalized request-side tool call; argument text remains provider-issued text.
+- [ToolCallItem](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolcallitem): Portable top-level provider tool-call item with parsed arguments.
+- [ToolCallList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolcalllist): Presence-bearing tool-call list, preserving absent versus explicitly empty.
+- [ToolChoice](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolchoice): Explicit automatic, disabled, required, named, or provider-native tool selection.
+- [ToolChoiceFunction](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolchoicefunction): Provider function-choice discriminator and the selected function identity.
+- [ToolChoiceFunctionName](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolchoicefunctionname): Identifies the function selected by a specific tool-choice rule.
+- [ToolDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-tooldefinition): Selects a normalized function definition or a provider-native tool definition.
+- [ToolDefinitionList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-tooldefinitionlist): Presence-bearing tool-definition list, preserving absent versus explicitly empty.
+- [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolexecutioninterceptoutcome): Canonical tool result plus ordered marks for host lifecycle materialization.
+- [ToolExecutionInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolexecutioninvocation): Managed tool execution input and its invocation-scoped continuation.
+- [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolexecutionresult): Application-visible tool result and optional opaque annotation.
+- [ToolMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolmessage): Tool result content correlated to a provider-issued tool call.
+- [ToolNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolnextrequest): Invokes a live tool continuation using a rewritten application value.
+- [ToolNextResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolnextresponse): Selects the downstream tool result or its original domain failure.
+- [ToolResultContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolresultcontentpart): Tool result embedded in a provider content-block array.
+- [ToolResultItem](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolresultitem): Portable top-level provider tool-result item with an open result payload.
+- [ToolUseContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolusecontentpart): Tool invocation embedded in a provider content-block array.
+- [ToolValueInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-toolvalueinvocation): Tool request/response value supplied to a sanitizer, condition, or request interceptor.
+- [Usage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-usage): Optional provider token counts and cost; absent counts never imply zero.
+- [ValidateRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-validaterequest): Validates one plugin configuration without installing callbacks.
+- [ValidateResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-validateresponse): Selects completed validation diagnostics or a validation callback failure.
+- [WorkerError](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-workererror): Domain failure, never combined with a success value. RPC admission/auth/shape failures use gRPC status. Retryable never authorizes replay of execution.
+- [WorkerIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-workeridentity): Worker, SDK, runtime, and protocol identities reported during activation.
+
+## Enums
+
+- [CapacityUnit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-capacityunit): Canonical capacity unit values from the shared runtime types.
+- [ConfigDiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-configdiagnosticlevel): Configuration diagnostic severity; unspecified is invalid for a reported diagnostic.
+- [CostSource](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-costsource): Origin of a cost value, separating pricing estimates from provider reports.
+- [CountUnit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-countunit): Canonical count unit values from the shared runtime types.
+- [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticavailability): Availability of a diagnostic feature, window, or snapshot.
+- [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticdomain): Canonical diagnostic domain values from the shared runtime types.
+- [DiagnosticEvidenceRetention](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticevidenceretention): Evidence retention disposition, independent of occurrence accounting.
+- [DiagnosticObservationOutcome](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticobservationoutcome): Observed operation outcome, independent of diagnostic severity.
+- [DiagnosticObservationSeverity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticobservationseverity): Evidence severity accepted by diagnostic delivery.
+- [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticreadreason): Canonical diagnostic read reason values from the shared runtime types.
+- [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticreceiptstatus): Terminal admission outcome for an ordered diagnostic submission.
+- [DiagnosticSummaryScope](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticsummaryscope): Aggregation scope of the reported lifetime summaries.
+- [DurationUnit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-durationunit): Canonical duration unit values from the shared runtime types.
+- [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmoptimizationevidencequality): Whether token evidence was observed or estimated.
+- [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmoptimizationsummarystatus): Whether optimization accounting is complete or limited by missing evidence.
+- [LogSeverity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-logseverity): Log evidence severity; an unspecified submitted severity is invalid.
+- [MemoryFieldScope](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-memoryfieldscope): Canonical memory field scope values from the shared runtime types.
+- [PluginDiagnosticFamily](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-plugindiagnosticfamily): Canonical plugin diagnostic family values from the shared runtime types.
+- [RegistrationSurface](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-registrationsurface): Closed registration surfaces; unspecified and unknown values cannot be invoked.
+- [ResourceAssociation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourceassociation): Canonical resource association values from the shared runtime types.
+- [ResourceLimitEventKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourcelimiteventkind): Canonical resource limit event kind values from the shared runtime types.
+- [ResourceLimitResource](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourcelimitresource): Canonical resource limit resource values from the shared runtime types.
+- [ResourceMeasurementScope](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourcemeasurementscope): Canonical resource measurement scope values from the shared runtime types.
+- [ResourceMemoryAvailability](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourcememoryavailability): Canonical resource memory availability values from the shared runtime types.
+- [ResourceOperatingSystem](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourceoperatingsystem): Canonical resource operating system values from the shared runtime types.
+- [ResourceSampleStream](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-resourcesamplestream): Canonical resource sample stream values from the shared runtime types.
+- [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-scopecategory): Scope lifecycle phase; unspecified is invalid for emitted scope events.
+- [ScopeType](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-scopetype): Recognized runtime scope types, including the explicit unknown-category fallback.
+- [WorkerHealthStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-workerhealthstatus): Worker readiness state; unspecified is not a readiness assertion.
+
+## Constants
+
+- [CONTRACT_VERSION](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/constant-contract-version): Initial stable worker/schema contract baseline, independent of crate versions.
+- [DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/constant-diagnostic-provenance-contract-version): Diagnostic provenance contract negotiated independently of the worker protocol.
+- [DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/constant-diagnostic-snapshot-contract-version): Diagnostic snapshot contract negotiated independently of the worker protocol.
+- [WORKER_PROTOCOL](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/constant-worker-protocol): Negotiation identifier for this contract, incompatible with legacy grpc-v1.

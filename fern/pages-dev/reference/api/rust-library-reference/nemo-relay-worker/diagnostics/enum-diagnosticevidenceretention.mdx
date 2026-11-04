@@ -1,7 +1,7 @@
 ---
 title: "Enum Diagnostic Evidence Retention"
 sidebar-title: "DiagnosticEvidenceRetention"
-description: "API documentation for the Rust `DiagnosticEvidenceRetention` enum in crate `nemo_relay_worker`."
+description: "Evidence retention disposition, independent of occurrence accounting."
 position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -18,23 +18,33 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 }
 ```
 
+Evidence retention disposition, independent of occurrence accounting.
+
 ## Variants
 
 ### `Unspecified = 0`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unspecified = 0"}} /></pre>
 
+No value supplied; invalid where this contract requires an explicit value.
+
 ### `Retained = 1`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retained = 1"}} /></pre>
+
+Requested evidence was retained.
 
 ### `Truncated = 2`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Truncated = 2"}} /></pre>
 
+Evidence was retained with bounded truncation.
+
 ### `Dropped = 3`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Dropped = 3"}} /></pre>
+
+Evidence was omitted while accepted accounting remains available.
 
 ## Implementations
 

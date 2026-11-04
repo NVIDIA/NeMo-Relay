@@ -67,6 +67,14 @@ Optional human-oriented description.
 
 Parses a `relay-plugin.toml` manifest from TOML text.
 
+#### `parse_toml_for_inspection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn parse_toml_for_inspection(toml_source: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Parses a structurally valid manifest for inspection, including stale worker protocols.
+
+This does not authorize registration or activation. Use [`Self::validate`](/reference/api/rust-library-reference/nemo-relay-plugin-host/dynamic/struct-dynamicpluginmanifest) to check compatibility before either operation.
+
 #### `load_from_path`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn load_from_path(path: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.AsRef.html\">AsRef</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>&gt;) -&gt; <a href=\"../type-result\">Result</a>&lt;(Self, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)&gt;"}} /></pre>
@@ -92,6 +100,14 @@ Relative schema paths are resolved from the parent directory of the canonical `r
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_record(\n    self,\n    manifest_ref: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
 
 Converts the authored manifest into a durable control-plane record.
+
+#### `into_record_for_inspection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_record_for_inspection(\n    self,\n    manifest_ref: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Converts a structurally valid manifest into an inspectable control-plane record.
+
+Unsupported worker protocols remain visible with invalid compatibility. Registry registration and enablement still reject them.
 
 #### `validation_status`
 

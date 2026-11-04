@@ -11,11 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 
-The protobuf schema owns transport control flow and the tool-result wrapper structure. Open application payloads remain lossless JSON values, while other Relay data transfer objects are carried in JSON envelopes.
+The [`nvidia_worker_v1`](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1) contract models Relay-owned DTOs in protobuf and keeps application/provider fields as lossless JSON.
 
 ## Modules
 
-- [v1](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1): Generated protobuf and gRPC service definitions.
+- [conversions](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions): Typed domain conversions for the namespaced worker contract. Typed conversions between shared domain values and protobuf values.
+- [nvidia_worker_v1](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1): Typed worker contract introduced alongside the legacy API.
+- [validation](/reference/api/rust-library-reference/nemo-relay-worker-proto/validation): Runtime enforcement of the namespaced protobuf contract. Validate shapes, semantic annotations, and the syntax of open JSON values.
 
 ## Structs
 
@@ -28,19 +30,15 @@ The protobuf schema owns transport control flow and the tool-result wrapper stru
 - [DEFAULT_WORKER_MAX_MESSAGE_BYTES](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-default-worker-max-message-bytes): Preserve the gRPC libraries' default receive limit unless explicitly configured.
 - [DIAGNOSTIC_NOT_CONSUMED_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-diagnostic-not-consumed-metadata): Metadata set to `1` on a diagnostic admission rejection before execution. This certifies only that attempt; an earlier lost reply can still be uncertain.
 - [DOWNSTREAM_CONTINUATION_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-downstream-continuation-metadata): Continuation provenance for an error returned as gRPC status metadata. Used for stream-opening failures, where no `WorkerError` envelope is returned.
+- [FILE_DESCRIPTOR_SET](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-file-descriptor-set): Descriptors for the worker contract, including its imported messages.
 - [WORKER_CALLBACK_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-callback-metadata): Binary metadata preserves exact UTF-8 registration names before body decoding.
 - [WORKER_MAX_MESSAGE_BYTES_BY_NAME_ENV](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-max-message-bytes-by-name-env): Host overrides keyed by exact callback registration name, as a JSON byte-limit map.
 - [WORKER_MAX_MESSAGE_BYTES_ENV](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-max-message-bytes-env): Host-owned limit for a complete worker execution gRPC message, in bytes.
-- [WORKER_PROTOCOL_GRPC_V1](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-protocol-grpc-v1): Stable worker protocol identifier accepted by `compat.worker_protocol`.
 
 ## Functions
 
 - [callback_name](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-callback-name): Read callback identity independently of an RPC method name.
 - [callback_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-callback-request): Attach an invocation's registered callback name to a request.
-- [decode_json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-decode-json-envelope): Decodes a JSON envelope into the requested DTO type.
-- [decode_json_value](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-decode-json-value): Decodes a lossless protocol JSON value into the requested type.
-- [json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-json-envelope): Creates a JSON envelope from a serializable DTO.
-- [json_value](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-json-value): Creates a lossless protocol JSON value from a serializable value.
 - [parse_worker_max_message_bytes](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-parse-worker-max-message-bytes): Parses the positive decimal byte limit shared by Rust and Python workers.
 - [validate_callback_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-validate-callback-request): Reject mismatched callback metadata; named limits require the updated host.
 - [worker_max_message_bytes_from_env](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-worker-max-message-bytes-from-env): Reads the worker message limit once when creating a host activation or worker.

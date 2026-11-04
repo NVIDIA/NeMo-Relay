@@ -845,7 +845,7 @@ Call the remaining LLM stream chain with a replacement request.
 async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None
 ```
 
-Run a local `grpc-v1` worker until the Relay host shuts it down.
+Run a local `nvidia.nemo.relay.worker.v1` worker until the Relay host shuts it down.
 
 ### `http_error_message`
 
@@ -857,18 +857,12 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 
 ## Type Aliases And Constants
 
-- `ANNOTATED_LLM_REQUEST_SCHEMA`
 - `AnnotatedLlmRequest`
 - `ConditionalMiddlewareCallback`
-- `DATA_SCHEMA_SCHEMA`
-- `EVENT_SCHEMA`
 - `Event`
 - `EventMetadataInjectorCallback`
 - `EventSanitizeCallback`
-- `JSON_SCHEMA`
 - `Json`
-- `LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA`
-- `LLM_REQUEST_SCHEMA`
 - `LlmConditionalCallback`
 - `LlmExecutionCallback`
 - `LlmRequest`
@@ -880,7 +874,6 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 - `LlmStreamExecutionCallback`
 - `METRIC_DATA_SCHEMA_NAME`
 - `METRIC_DATA_SCHEMA_VERSION`
-- `PLUGIN_DIAGNOSTICS_SCHEMA`
 - `SubscriberCallback`
 - `ToolConditionalCallback`
 - `ToolExecutionCallback`
@@ -888,8 +881,6 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 - `ToolSanitizeCallback`
 - `WORKER_PROTOCOL`
 - `grpc`
-- `pb`
-- `pb_grpc`
 
 ## Re-exports
 
@@ -898,5 +889,14 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 - `MessageLimitInterceptor`
 - `RpcHostChannel`
 - `WorkerDiagnostics`
+- `common_pb`
+- `diagnostics_grpc`
+- `event_pb`
+- `host_grpc`
+- `host_pb`
+- `llm_pb`
 - `named_message_limits`
+- `runtime_pb`
+- `worker_grpc`
+- `worker_pb`
 
