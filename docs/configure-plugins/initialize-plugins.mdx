@@ -98,8 +98,8 @@ asyncio.run(main())
 </Tab>
 <Tab title="Node.js" language="node">
 ```js
-const relay = require('nemo-relay-node');
-const plugin = require('nemo-relay-node/plugin');
+import * as relay from 'nemo-relay-node';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const config = plugin.defaultConfig();
 const path = 'path/to/plugins.toml';

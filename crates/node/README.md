@@ -109,7 +109,7 @@ helpers apply result codecs only to the application-owned `result`, while Relay
 preserves the optional opaque `annotation` as adjacent metadata:
 
 ```js
-const { toolCallExecuteAsync } = require('nemo-relay-node');
+import { toolCallExecuteAsync } from 'nemo-relay-node';
 
 const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async (args) => ({
   result: { answer: args.query.toUpperCase() },

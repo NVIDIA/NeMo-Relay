@@ -75,7 +75,7 @@ async def framework_tool(tool_name: str, raw_args: SearchArgs) -> SearchResult:
 
 <Tab title="Node.js" language="node">
 ```ts
-import { getHandle, toolCallExecute, type ScopeHandle } from 'nemo-relay-node';
+import { getHandle, toolCallExecuteAsync, type ScopeHandle } from 'nemo-relay-node';
 
 type SearchArgs = { query: string };
 type SearchResult = { hits: number; echo: SearchArgs };
@@ -83,7 +83,7 @@ type SearchResult = { hits: number; echo: SearchArgs };
 export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Promise<SearchResult> {
   const parent: ScopeHandle = getHandle();
 
-  const executionResult = await toolCallExecute(
+  const executionResult = await toolCallExecuteAsync(
     toolName,
     rawArgs,
     async (args: SearchArgs) => ({ result: { hits: 2, echo: args } }),
@@ -151,7 +151,7 @@ result = await nemo_relay.tools.execute(
 
 <Tab title="Node.js" language="node">
 ```ts
-const result = await toolCallExecute(
+const result = await toolCallExecuteAsync(
   toolName,
   rawArgs,
   invoke,

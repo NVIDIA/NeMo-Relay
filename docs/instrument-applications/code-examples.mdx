@@ -107,11 +107,11 @@ response = await nemo_relay.llm.execute(
 
 <Tab title="Node.js" language="node">
 ```ts
-import { LlmRequest, llmCallExecute } from 'nemo-relay-node';
+import { LlmRequest, llmCallExecuteAsync } from 'nemo-relay-node';
 
 const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
 
-const response = await llmCallExecute(
+const response = await llmCallExecuteAsync(
   'demo-provider',
   request,
   async (req: LlmRequest) => ({ text: 'hi', request: req.content }),
@@ -229,7 +229,9 @@ const stream = await typedLlmStreamExecute(
   async function* () {
     yield { delta: 'hi' };
   },
-  (chunk) => collected.push(chunk),
+  (chunk) => {
+    collected.push(chunk);
+  },
   () => ({ text: collected.map((chunk) => chunk.delta).join('') }),
   chunkCodec,
   responseCodec,

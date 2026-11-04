@@ -76,13 +76,21 @@ def framework_llm_finished(handle: nemo_relay.LLMCallHandle, response: dict[str,
 
 <Tab title="Node.js" language="node">
 ```ts
-import { LlmRequest, llmCall, llmCallEnd, toolCall, toolCallEnd } from 'nemo-relay-node';
+import {
+  LlmRequest,
+  llmCall,
+  llmCallEnd,
+  toolCall,
+  toolCallEnd,
+  type LlmHandle,
+  type ToolHandle,
+} from 'nemo-relay-node';
 
 export function frameworkToolStarted(name: string, args: unknown) {
   return toolCall(name, args, null, null, null, null, null);
 }
 
-export function frameworkToolFinished(handle: unknown, result: unknown): void {
+export function frameworkToolFinished(handle: ToolHandle, result: unknown): void {
   toolCallEnd(handle, { result }, null, null);
 }
 
@@ -91,7 +99,7 @@ export function frameworkLlmStarted(provider: string, payload: { model?: string 
   return llmCall(provider, request, null, null, null, null, payload.model ?? null);
 }
 
-export function frameworkLlmFinished(handle: unknown, response: unknown): void {
+export function frameworkLlmFinished(handle: LlmHandle, response: unknown): void {
   llmCallEnd(handle, response, null, null);
 }
 ```
