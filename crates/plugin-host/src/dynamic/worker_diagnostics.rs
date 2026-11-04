@@ -105,9 +105,9 @@ impl WorkerDiagnostics {
                 name: wire::WORKER_PROTOCOL.into(),
                 version: wire::CONTRACT_VERSION.into(),
             }),
-            snapshot_contract_version: "1.0.0".into(),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
             catalogue_version: nemo_relay_diagnostics::DIAGNOSTIC_CATALOGUE_VERSION,
-            provenance_contract_version: "1.0.0".into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
             enabled: context.reader().availability()
                 == nemo_relay_diagnostics::DiagnosticAvailability::Available,
             can_read_context: false,
@@ -141,8 +141,8 @@ impl WorkerDiagnostics {
             .protocol
             .as_ref()
             .is_none_or(|p| p.name != wire::WORKER_PROTOCOL || p.version != wire::CONTRACT_VERSION)
-            || request.provenance_contract_version != "1.0.0"
-            || request.snapshot_contract_version != "1.0.0"
+            || request.provenance_contract_version != wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION
+            || request.snapshot_contract_version != wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION
         {
             return Err(Status::failed_precondition(
                 "unsupported diagnostic contract",

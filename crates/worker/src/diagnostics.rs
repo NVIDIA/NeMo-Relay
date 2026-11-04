@@ -195,8 +195,9 @@ impl WorkerDiagnostics {
             .protocol
             .as_ref()
             .is_none_or(|p| p.name != wire::WORKER_PROTOCOL || p.version != wire::CONTRACT_VERSION)
-            || capabilities.provenance_contract_version != "1.0.0"
-            || capabilities.snapshot_contract_version != "1.0.0"
+            || capabilities.provenance_contract_version
+                != wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION
+            || capabilities.snapshot_contract_version != wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION
         {
             facade.availability = DiagnosticAvailability::Unsupported;
             return facade;
@@ -213,8 +214,8 @@ impl WorkerDiagnostics {
                     name: wire::WORKER_PROTOCOL.into(),
                     version: wire::CONTRACT_VERSION.into(),
                 }),
-                snapshot_contract_version: "1.0.0".into(),
-                provenance_contract_version: "1.0.0".into(),
+                snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+                provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
             }),
         )
         .await

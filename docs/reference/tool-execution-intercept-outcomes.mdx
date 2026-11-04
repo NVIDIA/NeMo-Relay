@@ -283,22 +283,17 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
-baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
-excludes Relay versions before 0.8. For plugins rebuilt with the 1.0.0 SDK,
-use `compat.relay = ">=1.0.0,<2.0"`. The native ABI for that result-shape
-change is v4. Workers retain the `grpc-v1` identifier and
-`nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
-type and tool-execution outcome field type. Regenerate worker protobuf bindings
-as part of the required rebuild. Future incompatible contract changes must
-increment the corresponding native API or worker protocol version.
+Relay 0.8 established this canonical result as the native API 1 and `grpc-v1`
+baseline, using native ABI v4. Workers used the `nemo.relay.worker.v1` package;
+that release changed the `ToolNext` response and tool-execution outcome types.
+Relay 0.9 then replaced the tool execution callback shape, using native ABI v5,
+while retaining those worker result messages.
 
-Relay 0.9 replaces the tool execution callback shape without changing the
-`grpc-v1` package or result messages. Worker plugins that register this surface
-must declare a compatibility range that excludes Relay 0.8. For plugins
-rebuilt with the 1.0.0 SDK, use `compat.relay = ">=1.0.0,<2.0"`. Native plugins
-use ABI v5 for the context-carrying callback slot; Relay rejects the registration
-when the plugin admits an incompatible Relay version.
+Relay 1.0 requires the `nvidia.nemo.relay.worker.v1` worker protocol. Regenerate
+worker protobuf bindings or rebuild with the updated SDK, and declare
+`compat.relay = ">=1.0.0,<2.0"`. Native plugins use ABI v7 with the current SDK.
+Future incompatible contract changes must increment the corresponding native
+API or worker protocol version.
 
 ## Migration
 
