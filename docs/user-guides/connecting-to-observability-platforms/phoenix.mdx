@@ -89,11 +89,9 @@ confirm that those calls crossed the Relay capture boundary. The
 [Observability reference](/configure-plugins/observability/configuration)
 provides exporter delivery diagnostics.
 
-## Example trace to recognize
+## Recognize the example trace
 
-The default SDK workload exports `support-triage` (`AGENT`), one
-`openai.chat_completions` (`LLM`) span, and `read_file` and `write_file`
-(`TOOL`). Both metadata-only and synthetic-redaction checks delivered all four
-spans with their parents. The optional Hermes workload produces a larger tree.
-Compare your own run's identities and parentage rather than requiring one fixed
-span count for every integration.
+The parent guide's [expected trace](/user-guides/connecting-to-observability-platforms#expected-trace)
+shows the Python workload's agent, model, and tool activity. Use it when running
+that example; match your own deployment's captured scopes and parentage when
+using another integration.

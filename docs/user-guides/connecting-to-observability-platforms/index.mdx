@@ -120,16 +120,16 @@ changes. Credentials belong in the exporting process's environment;
 
 <CardGroup cols={2}>
 <Card title="Phoenix" href="/user-guides/connecting-to-observability-platforms/phoenix" icon="fa-solid fa-magnifying-glass">
-OpenInference projects. Backend delivery verified with the companion workload.
+OpenInference projects with agent, model, and tool spans.
 </Card>
 <Card title="LangSmith" href="/user-guides/connecting-to-observability-platforms/langsmith" icon="fa-solid fa-diagram-project">
-Project or agent/environment routing. Export request verified; hosted delivery needs your account.
+Send OpenInference traces to a project or agent environment.
 </Card>
 <Card title="W&B Weave" href="/user-guides/connecting-to-observability-platforms/weave" icon="fa-solid fa-chart-line">
-GenAI spans in Agents. Export request verified; verify hosted delivery and conversation grouping.
+Send GenAI spans to Agents and verify conversation grouping for multi-turn work.
 </Card>
 <Card title="Datadog" href="/user-guides/connecting-to-observability-platforms/datadog" icon="fa-solid fa-chart-simple">
-Send OTLP through your Agent or Collector. Export request verified; verify the resulting Datadog view.
+Export OTLP through your Agent or Collector to the appropriate Datadog site.
 </Card>
 </CardGroup>
 
@@ -154,33 +154,13 @@ Accept the integration when all these checks pass:
 Local ATOF records prove capture. Inspect the destination tree to prove delivery;
 an HTTP success or a closed model scope alone is insufficient.
 
-### Reference trace
-
-The instrumented Python workload delivered four correlated spans to Phoenix:
-
-```text
-support-triage                       AGENT
-├─ read_file                         TOOL
-├─ openai.chat_completions            LLM
-└─ write_file                        TOOL
-```
-
-The metadata-only and synthetic-redaction runs both passed local parentage and
-Phoenix delivery checks. The redaction run also confirmed that the synthetic
-contact was absent from emitted payloads.
-
-A Hermes run exported 12 spans, including a session, turn, logical-call parents,
-four model calls, and two tools. Counts depend on the workload and capture path.
-Hosted-platform export checks establish request contracts; confirm authenticated
-delivery in your destination.
-
 ## Next steps
 
 Apply the same exporter settings to your chosen capture path. Use
 [exporter diagnostics](/configure-plugins/observability/configuration) to distinguish
 capture gaps, authentication failures, and delivery problems.
 
-## Run the Brev example
+## <Icon icon="rocket" size={6} /> Run the Brev example
 
 Follow this section from start to finish. It supplies the instrumentation and
 exporter configuration used by the workload; the earlier manual configuration
@@ -274,6 +254,22 @@ The runner should report successful workload and trace verification. In the trac
 tree, confirm the agent, model, and tool spans have their expected parents.
 Inspect `logs/events.jsonl` and `delivery.json` under the chosen output directory
 if verification fails. Use a new output directory for every run.
+
+<span id="reference-trace" />
+
+#### Expected trace
+
+For the default Python workload, look for this correlated activity in Phoenix:
+
+```text
+support-triage                       AGENT
+├─ read_file                         TOOL
+├─ openai.chat_completions            LLM
+└─ write_file                        TOOL
+```
+
+Confirm each tool and model span is a child of `support-triage`. Other capture
+paths and workloads can produce different names and span counts.
 
 ### 3. Check synthetic redaction
 

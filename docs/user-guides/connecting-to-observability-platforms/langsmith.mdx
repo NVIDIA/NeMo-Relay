@@ -105,10 +105,8 @@ agent run and observed model and tool calls share the intended parentage.
 Inspect one span for model identity, token usage where the source provides it,
 and the approved redaction result.
 
-The measured companion's OpenInference export included `hermes.session`
-(`AGENT`), `hermes.turn` (`CHAIN`), `openai.chat_completions` (`LLM`), and
-`read_file`, `execute_code`, and `write_file` (`TOOL`). Use these as starting
-points when matching the local run to LangSmith; the number of calls can vary.
+Span names depend on your capture path. Match exported scope identities and
+parentage to the local run rather than requiring the example's operation names.
 
 <Note>
 An accepted OTLP request does not by itself prove that the complete tree is

@@ -66,12 +66,10 @@ actions. Check the model and token fields that your capture path provides and
 inspect payloads for approved redaction.
 
 <Note title="Check conversation grouping separately">
-The measured Hermes export contained `invoke_agent`, `chat`, and `execute_tool`,
-with `gen_ai.agent.name = "hermes.session"`, but no `gen_ai.conversation.id`.
-This verifies the operation fields for a turn; it does not establish grouping
-across multiple turns in the Agents view. For that workflow, use a capture path
-that supplies a stable conversation ID on its spans and verify grouping in
-Weave. A project resource attribute is not a replacement for that span field.
+For grouping across multiple turns, use a capture path that supplies a stable
+`gen_ai.conversation.id` and verify grouping in Weave. Operation fields alone
+do not establish conversation grouping. A project resource attribute is not a
+replacement for that span field.
 </Note>
 
 If traces arrive in Weave but do not appear as expected in Agents, inspect
