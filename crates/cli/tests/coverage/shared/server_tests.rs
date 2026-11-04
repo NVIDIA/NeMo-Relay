@@ -4313,6 +4313,24 @@ async fn gateway_rejects_responses_streams_without_final_events() {
                     .unwrap()
                     .contains("response.created")
             );
+            let error = response_body
+                .frame()
+                .await
+                .unwrap()
+                .expect("stream error must preserve HTTP framing")
+                .into_data()
+                .unwrap();
+            let text = std::str::from_utf8(&error).unwrap();
+            assert!(text.starts_with("event: error\n"));
+            let event: Value = serde_json::from_str(
+                text.lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["type"], "error");
+            assert_eq!(event["code"], "stream_error");
+            assert!(event["error"]["message"].is_string());
             assert!(response_body.frame().await.is_none());
         }
         handle.abort();

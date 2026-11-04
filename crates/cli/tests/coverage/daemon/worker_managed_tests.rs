@@ -3370,8 +3370,19 @@ async fn managed_runtime_stream_errors_preserve_status_and_incomplete_streams() 
                     .expect("application error keeps HTTP framing valid")
                     .to_bytes();
                 let text = String::from_utf8(bytes.to_vec()).unwrap();
-                assert_eq!(text.matches("data: ").count(), 1, "path={path}: {text}");
+                assert_eq!(text.matches("data: ").count(), 2, "path={path}: {text}");
                 assert!(text.contains("stream-denial-"), "path={path}: {text}");
+                let error: Value = serde_json::from_str(
+                    text.lines()
+                        .filter_map(|line| line.strip_prefix("data: "))
+                        .next_back()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(error["error"]["message"].is_string(), "path={path}: {text}");
+                if path != "/v1/chat/completions" {
+                    assert!(text.contains("event: error\n"), "path={path}: {text}");
+                }
                 assert!(
                     !text.contains("[DONE]"),
                     "failed stream must not report successful completion"
