@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -32,6 +33,8 @@ struct Issuer {
     refresh_status: Option<StatusCode>,
     refresh_error: Option<&'static str>,
     omit_expires_in: bool,
+    /// A refresh moves this clock forward by the given seconds, like a slow issuer.
+    refresh_takes: Option<(Arc<AtomicU64>, u64)>,
     grants: Vec<HashMap<String, String>>,
 }
 
@@ -115,16 +118,25 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
                 error => refused(error),
             }
         }
-        "refresh_token" => match (state.refresh_status, state.refresh_error) {
-            (Some(status), _) => (status, "upstream down").into_response(),
-            (None, Some(error)) => refused(error),
-            (None, None) if form["refresh_token"] == "refresh-1" && state.omit_expires_in => {
-                Json(json!({ "access_token": "access-2", "token_type": "Bearer" })).into_response()
+        "refresh_token" => {
+            if let Some((clock, seconds)) = &state.refresh_takes {
+                clock.fetch_add(*seconds, Ordering::SeqCst);
             }
-            (None, None) if form["refresh_token"] == "refresh-1" => issued("access-2", "refresh-2"),
-            (None, None) => refused("invalid_grant"),
-        },
+            refresh_reply(&state, &form)
+        }
         _ => refused("unsupported_grant_type"),
+    }
+}
+
+fn refresh_reply(state: &Issuer, form: &HashMap<String, String>) -> Response {
+    match (state.refresh_status, state.refresh_error) {
+        (Some(status), _) => (status, "upstream down").into_response(),
+        (None, Some(error)) => refused(error),
+        (None, None) if form["refresh_token"] == "refresh-1" && state.omit_expires_in => {
+            Json(json!({ "access_token": "access-2", "token_type": "Bearer" })).into_response()
+        }
+        (None, None) if form["refresh_token"] == "refresh-1" => issued("access-2", "refresh-2"),
+        (None, None) => refused("invalid_grant"),
     }
 }
 
@@ -272,7 +284,9 @@ async fn gateway_token_reuses_a_fresh_access_token_without_calling_the_issuer() 
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 10_000);
 
-    let token = upstream_token_in(dir.path(), &source, 1_000).await.unwrap();
+    let token = upstream_token_in(dir.path(), &source, &|| 1_000)
+        .await
+        .unwrap();
 
     assert_eq!(token, "access-1");
     assert!(issuer.lock().unwrap().grants.is_empty());
@@ -289,7 +303,9 @@ async fn gateway_token_follows_the_token_expiry_not_a_fixed_cache_interval() {
         1_000 + REFRESH_MARGIN_SECS - 1,
     );
 
-    let token = upstream_token_in(dir.path(), &source, 1_000).await.unwrap();
+    let token = upstream_token_in(dir.path(), &source, &|| 1_000)
+        .await
+        .unwrap();
 
     assert_eq!(token, "access-2");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
@@ -304,12 +320,14 @@ async fn logout_applies_to_the_next_gateway_request() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 10_000);
     assert_eq!(
-        upstream_token_in(dir.path(), &source, 1_000).await.unwrap(),
+        upstream_token_in(dir.path(), &source, &|| 1_000)
+            .await
+            .unwrap(),
         "access-1"
     );
 
     assert!(logout(dir.path(), &source).await.unwrap());
-    let error = error_text(upstream_token_in(dir.path(), &source, 1_000).await);
+    let error = error_text(upstream_token_in(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("run `nemo-relay auth login`"), "{error}");
     assert!(!logout(dir.path(), &source).await.unwrap());
@@ -320,7 +338,7 @@ async fn gateway_error_without_a_sign_in_names_the_login_command() {
     let dir = tempfile::tempdir().unwrap();
     let source = OidcSource::new("https://issuer.example", CLIENT_ID, None);
 
-    let error = error_text(upstream_token_in(dir.path(), &source, 1_000).await);
+    let error = error_text(upstream_token_in(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("run `nemo-relay auth login`"), "{error}");
 }
@@ -332,8 +350,8 @@ async fn concurrent_token_calls_refresh_once() {
     store(dir.path(), &source, Some("refresh-1"), 0);
 
     let (a, b) = tokio::join!(
-        current_token(dir.path(), &source, 1_000),
-        current_token(dir.path(), &source, 1_000),
+        current_token(dir.path(), &source, &|| 1_000),
+        current_token(dir.path(), &source, &|| 1_000),
     );
 
     assert_eq!(a.unwrap(), "access-2");
@@ -347,7 +365,7 @@ async fn token_asks_for_login_when_the_issuer_rejects_the_refresh_token() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("revoked"), 0);
 
-    let error = error_text(current_token(dir.path(), &source, 1_000).await);
+    let error = error_text(current_token(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("nemo-relay auth login"), "{error}");
     assert!(!error.contains("revoked"), "{error}");
@@ -360,7 +378,7 @@ async fn token_keeps_the_sign_in_when_the_issuer_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 0);
 
-    let error = error_text(current_token(dir.path(), &source, 1_000).await);
+    let error = error_text(current_token(dir.path(), &source, &|| 1_000).await);
 
     assert!(!error.contains("auth login"), "{error}");
     assert!(error.contains("try again"), "{error}");
@@ -377,7 +395,7 @@ async fn token_keeps_the_sign_in_when_the_issuer_refuses_for_another_reason() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 0);
 
-    let error = error_text(current_token(dir.path(), &source, 1_000).await);
+    let error = error_text(current_token(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("temporarily_unavailable"), "{error}");
     assert!(!error.contains("auth login"), "{error}");
@@ -389,7 +407,7 @@ async fn token_uses_an_unexpired_token_that_has_no_refresh_token() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, None, 1_000 + 60);
 
-    let token = current_token(dir.path(), &source, 1_000).await.unwrap();
+    let token = current_token(dir.path(), &source, &|| 1_000).await.unwrap();
 
     assert_eq!(token, "access-1");
     assert!(issuer.lock().unwrap().grants.is_empty());
@@ -402,7 +420,7 @@ async fn a_sign_in_for_one_client_is_never_used_for_another() {
     store(dir.path(), &source, Some("refresh-1"), 10_000);
     let other = OidcSource::new(&source.issuer, "another-client", None);
 
-    let error = error_text(current_token(dir.path(), &other, 1_000).await);
+    let error = error_text(current_token(dir.path(), &other, &|| 1_000).await);
 
     assert!(error.contains("nemo-relay auth login"), "{error}");
 }
@@ -488,7 +506,7 @@ async fn a_missing_sign_in_is_reported_as_sign_in_required() {
     let dir = tempfile::tempdir().unwrap();
     let source = OidcSource::new("https://issuer.example", CLIENT_ID, None);
 
-    let error = upstream_token_in(dir.path(), &source, 1_000)
+    let error = upstream_token_in(dir.path(), &source, &|| 1_000)
         .await
         .err()
         .unwrap();
@@ -503,7 +521,7 @@ async fn a_token_reply_without_expires_in_is_refused_and_keeps_the_old_sign_in()
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 0);
 
-    let error = error_text(current_token(dir.path(), &source, 1_000).await);
+    let error = error_text(current_token(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("expires_in"), "{error}");
     assert_eq!(saved(dir.path(), &source).access_token, "access-1");
@@ -516,8 +534,43 @@ async fn a_temporary_refresh_failure_keeps_using_an_unexpired_token() {
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 1_000 + 60);
 
-    let token = current_token(dir.path(), &source, 1_000).await.unwrap();
+    let token = current_token(dir.path(), &source, &|| 1_000).await.unwrap();
 
     assert_eq!(token, "access-1");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+fn slow_refresh(issuer: &Shared, seconds: u64) -> Arc<AtomicU64> {
+    let clock = Arc::new(AtomicU64::new(1_000));
+    issuer.lock().unwrap().refresh_takes = Some((clock.clone(), seconds));
+    clock
+}
+
+#[tokio::test]
+async fn a_token_that_expires_during_a_slow_failed_refresh_is_not_returned() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().refresh_status = Some(StatusCode::SERVICE_UNAVAILABLE);
+    let clock = slow_refresh(&issuer, 2);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 1_001);
+
+    let result = current_token(dir.path(), &source, &|| clock.load(Ordering::SeqCst)).await;
+
+    let error = error_text(result);
+    assert!(error.contains("try again"), "{error}");
+}
+
+#[tokio::test]
+async fn a_slow_refresh_reply_does_not_shorten_the_stored_lifetime() {
+    let (source, issuer) = start_issuer().await;
+    let clock = slow_refresh(&issuer, 2);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 0);
+
+    let token = current_token(dir.path(), &source, &|| clock.load(Ordering::SeqCst))
+        .await
+        .unwrap();
+
+    assert_eq!(token, "access-2");
+    assert_eq!(saved(dir.path(), &source).expires_at, 1_002 + 3600);
 }

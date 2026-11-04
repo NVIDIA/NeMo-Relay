@@ -10,7 +10,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 
 use super::session::Session;
-use super::{HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
+use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
 use crate::error::CliError;
 
 pub(crate) const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -187,7 +187,11 @@ impl OidcClient {
         }
     }
 
-    pub(super) async fn refresh(&self, refresh_token: &str, now: u64) -> Result<Session, CliError> {
+    pub(super) async fn refresh(
+        &self,
+        refresh_token: &str,
+        now: &Clock<'_>,
+    ) -> Result<Session, CliError> {
         let grant = self
             .token_request(&[
                 ("grant_type", "refresh_token"),
@@ -196,7 +200,8 @@ impl OidcClient {
             ])
             .await;
         match grant {
-            Grant::Issued(reply) => self.session(reply, Some(refresh_token), now),
+            // The lifetime starts when the reply arrives, not before the request.
+            Grant::Issued(reply) => self.session(reply, Some(refresh_token), now()),
             Grant::Refused { code, .. }
                 if matches!(code.as_str(), "invalid_grant" | "invalid_client") =>
             {
