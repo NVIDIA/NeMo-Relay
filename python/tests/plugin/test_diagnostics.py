@@ -459,7 +459,7 @@ def test_policy_safety_boundaries(field, minimum, maximum):
         ("provenance_version", "unsupported"),
         ("missing_capabilities", "unsupported"),
         ("disabled_session", "disabled"),
-        ("session_id", "unavailable"),
+        ("session_id", "unsupported"),
         ("bootstrap_failure", "unavailable"),
         ("open_failure", "unavailable"),
     ],
@@ -480,7 +480,7 @@ def test_incompatible_sessions_are_inert(scenario, availability):
             elif scenario == "disabled_session":
                 session.capabilities.enabled = False
             elif scenario == "session_id":
-                session.session_id = b"invalid"
+                session.session_id = b"s" * 15
             return session
 
     async def run():

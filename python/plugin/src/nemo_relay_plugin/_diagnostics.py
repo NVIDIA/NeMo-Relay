@@ -230,6 +230,11 @@ class WorkerDiagnostics:
             if error.code() == grpc.StatusCode.UNIMPLEMENTED:
                 facade.availability = "unsupported"
             return facade
+        try:
+            _protocol.validate(session)
+        except (ValueError, TypeError, _protocol.protovalidate.ValidationError):
+            facade.availability = "unsupported"
+            return facade
         if not session.HasField("capabilities"):
             facade.availability = "unsupported"
             return facade
@@ -241,13 +246,6 @@ class WorkerDiagnostics:
             return facade
         session_policy = _DeliveryPolicy.from_capabilities(session.capabilities)
         if session_policy is None:
-            facade.availability = "unsupported"
-            return facade
-        if len(session.session_id) != 16:
-            return facade
-        try:
-            _protocol.validate(session)
-        except (ValueError, TypeError, _protocol.protovalidate.ValidationError):
             facade.availability = "unsupported"
             return facade
         facade._session = session.session_id
