@@ -436,14 +436,24 @@ impl CapturedUpstreamFailures {
         let FlowError::Internal(message) = error else {
             return None;
         };
-        let token = message
-            .strip_prefix(CAPTURED_UPSTREAM_FAILURE_PREFIX)?
-            .parse()
-            .ok()?;
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .expect("captured upstream failures lock poisoned")
-            .remove(&token)
+            .expect("captured upstream failures lock poisoned");
+        // Workers add context and may quote the token inside a gRPC error dump.
+        // Resolve only complete UUIDs captured by this request, preserving the
+        // selected attempt rather than falling back to another upstream failure.
+        message
+            .split(CAPTURED_UPSTREAM_FAILURE_PREFIX)
+            .skip(1)
+            .filter_map(|suffix| {
+                suffix
+                    .split(|c: char| !c.is_ascii_hexdigit() && c != '-')
+                    .next()?
+                    .parse::<uuid::Uuid>()
+                    .ok()
+            })
+            .find_map(|token| entries.remove(&token))
     }
 }
 

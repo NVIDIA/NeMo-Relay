@@ -2757,6 +2757,78 @@ fn response_headers_preserve_duplicates() {
 }
 
 #[tokio::test]
+async fn captured_upstream_failures_survive_worker_error_wrapping() {
+    for status in [401, 429, 500, 529] {
+        for wrapper in ["direct", "buffered", "streaming"] {
+            let failures = CapturedUpstreamFailures::default();
+            let bytes = Bytes::from_static(b"{\"error\":\"upstream failure\"}\n");
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", HeaderValue::from_static("7"));
+            headers.append("set-cookie", HeaderValue::from_static("a=1"));
+            headers.append("set-cookie", HeaderValue::from_static("b=2"));
+            let error = failures.capture(CapturedUpstreamFailure::Response {
+                status: StatusCode::from_u16(status).unwrap(),
+                headers: headers.clone(),
+                bytes: bytes.clone(),
+            });
+            let error = match wrapper {
+                "buffered" => {
+                    FlowError::Internal(format!("worker.sdk_error: host.runtime_error: {error}"))
+                }
+                "streaming" => FlowError::Internal(format!(
+                    "worker.error: <AioRpcError of RPC that terminated with:\n\tstatus = StatusCode.INTERNAL\n\tdetails = \"{error}\"\n\tdebug_error_string = \"UNKNOWN:Error received from peer {{grpc_message:\"{error}\"}}\"\n>"
+                )),
+                _ => error,
+            };
+            let failure = failures.take(&error).unwrap_or_else(|| {
+                panic!("lost upstream {status} response through {wrapper}: {error}")
+            });
+            let response = selected_upstream_failure(failure).unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers(), &headers);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                bytes
+            );
+            assert!(failures.take(&error).is_none(), "failure consumed twice");
+        }
+    }
+}
+
+#[test]
+fn captured_upstream_failures_only_resolve_tokens_from_the_current_request() {
+    let failures = CapturedUpstreamFailures::default();
+    let other_request = CapturedUpstreamFailures::default();
+    let error = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("selected attempt".into()),
+    ));
+    assert!(other_request.take(&error).is_none());
+    assert!(
+        failures
+            .take(&FlowError::Internal("worker.sdk_error: unrelated".into()))
+            .is_none()
+    );
+    assert!(
+        failures
+            .take(&FlowError::Internal(format!(
+                "{CAPTURED_UPSTREAM_FAILURE_PREFIX}invalid"
+            )))
+            .is_none()
+    );
+    assert!(
+        failures
+            .take(&FlowError::Internal(format!("{error}0")))
+            .is_none()
+    );
+    assert!(
+        failures
+            .take(&FlowError::GuardrailRejected(error.to_string()))
+            .is_none()
+    );
+    assert!(failures.take(&error).is_some());
+}
+
+#[tokio::test]
 async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
     let manager = SessionManager::new(GatewayConfig::default());
     let prep = manager
