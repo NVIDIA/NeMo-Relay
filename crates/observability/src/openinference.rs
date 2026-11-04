@@ -196,7 +196,7 @@ pub(crate) fn push_llm_usage_attributes(
             v as i64,
         ));
     }
-    if let Some(v) = usage.cache_write_tokens {
+    if let Some(v) = usage.cache_write_total() {
         attributes.push(KeyValue::new(
             "llm.token_count.prompt_details.cache_write",
             v as i64,

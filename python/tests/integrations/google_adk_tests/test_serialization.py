@@ -1974,7 +1974,7 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
                 "completion_tokens": 25,
                 "total_tokens": 75,
                 "cache_read_tokens": 40,
-                "cache_write_tokens": 10,
+                "cache_write_tokens": [{"count": 10}],
             },
             {"api": "anthropic_messages"},
             {"thoughts_token_count": 5},
