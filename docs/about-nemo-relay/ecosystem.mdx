@@ -1,6 +1,6 @@
 ---
 title: "Ecosystem"
-description: "See how NeMo Relay connects your agent framework, runtime policies, and observability tools, and where it fits in NVIDIA NeMo."
+description: "See how NeMo Relay connects your agent framework, runtime policies, and observability tools, and where it fits in the NVIDIA Agent Toolkit ecosystem."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -110,17 +110,20 @@ when separate packaging is useful. Plugins can subscribe to events or apply
 middleware; their available controls depend on the host integration's execution
 boundary.
 
-## How NeMo Relay Fits in the NVIDIA NeMo Ecosystem
+## How NeMo Relay Fits in the NVIDIA Agent Toolkit Ecosystem
 
-[NVIDIA NeMo](https://docs.nvidia.com/nemo/) spans data preparation, model
-development, agent workflows, safety, and evaluation. Relay focuses on **agent
-execution**: observing and controlling instrumented work as it runs.
+[NVIDIA Agent Toolkit](https://blogs.nvidia.com/blog/enterprise-platforms-agent-toolkit/)
+brings together tools for building, running, securing, and improving agents.
+Relay contributes **execution visibility and runtime control**, connecting
+agent activity to observability, evaluation, and improvement workflows.
 
-| Purpose | NeMo components | Relationship to Relay |
+| Purpose | NVIDIA components | Relationship to Relay |
 |---|---|---|
+| **Sandbox agent execution** | [OpenShell](https://docs.nvidia.com/openshell/about/overview) | Enforces filesystem, network, and process restrictions. Relay adds visibility and middleware around instrumented model calls, tools, and subagent activity within the agent application. |
+| **Manage agent improvement** | [NeMo Helix](https://docs.nvidia.com/nemo-helix/latest/documentation/home/) | Provides a control plane for evaluating, optimizing, and hardening agents. Relay exports OTLP traces and ATIF trajectories to Helix's NeMo Intake service for storage, querying, and review. |
+| **Analyze execution evidence** | [NeMo Compass](https://github.com/NVIDIA-NeMo/nemo-compass) | Finds recurring problems in recorded traces, including tool failures and patterns in poor evaluation outcomes. Analyzes Relay evidence through ATIF files or Intake. Currently a research preview. |
 | **Prepare data** | [NeMo Data Designer](https://docs.nvidia.com/nemo/microservices/latest/generate-synthetic-data/index.html) and [Curator](https://docs.nvidia.com/nemo/curator/latest/) | Create and prepare datasets upstream of agent execution. Relay records the agent's instrumented work at runtime. |
 | **Train and customize models** | [NeMo Framework](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/index.html) and [NeMo Customizer](https://docs.nvidia.com/nemo/microservices/latest/fine-tune/index.html) | Produce models an agent can use. Relay instruments client calls to their deployed endpoints. |
-| **Build and optimize agents** | [NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) | Toolkit builds, profiles, evaluates, and optimizes workflows. Relay supplies runtime scopes, middleware, and events where integrated. |
 | **Retrieve knowledge** | [NeMo Retriever](https://docs.nvidia.com/nemo/retriever/latest/) | Supplies retrieval capabilities for RAG. Retrieval calls can be instrumented as tools in an agent run. |
 | **Apply safety and policy** | [NeMo Guardrails](https://docs.nvidia.com/nemo/guardrails/latest/) | Defines safety behavior. Applications can connect policy checks through Relay middleware; there is no built-in NeMo Guardrails plugin. |
 | **Evaluate effectiveness** | [NeMo Evaluator](https://docs.nvidia.com/nemo/evaluator/latest/) | Evaluates model and agent quality. Relay's execution data complements quality scores, with export and ingestion configured separately. |
