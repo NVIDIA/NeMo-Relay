@@ -3,9 +3,11 @@
 
 //! Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 //!
-//! The protobuf schema owns transport control flow and the tool-result wrapper
-//! structure. Open application payloads remain lossless JSON values, while
-//! other Relay data transfer objects are carried in JSON envelopes.
+//! The [`nvidia_worker_v1`] contract models Relay-owned DTOs in protobuf
+//! and keeps application/provider fields as lossless JSON.
+
+/// Legacy worker protocol identifier, retained until the consumer cutover.
+pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
 
 mod message_limits;
 pub use message_limits::{
@@ -13,9 +15,6 @@ pub use message_limits::{
     WorkerCallbackMessageLimits, WorkerCallbackMetadata, callback_name, callback_request,
     validate_callback_request,
 };
-
-/// Stable worker protocol identifier accepted by `compat.worker_protocol`.
-pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
 
 /// Host-owned limit for a complete worker execution gRPC message, in bytes.
 pub const WORKER_MAX_MESSAGE_BYTES_ENV: &str = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES";
@@ -75,6 +74,30 @@ pub const DIAGNOSTIC_NOT_CONSUMED_METADATA: &str = "nemo-relay-diagnostic-not-co
 /// Continuation provenance for an error returned as gRPC status metadata.
 /// Used for stream-opening failures, where no `WorkerError` envelope is returned.
 pub const DOWNSTREAM_CONTINUATION_METADATA: &str = "nemo-relay-downstream-continuation";
+
+/// Typed domain conversions for the namespaced worker contract.
+pub mod conversions;
+/// Runtime enforcement of the namespaced protobuf contract.
+pub mod validation;
+
+/// Typed worker contract introduced alongside the legacy API.
+#[allow(missing_docs)]
+pub mod nvidia_worker_v1 {
+    /// Negotiation identifier for this contract, incompatible with legacy grpc-v1.
+    pub const WORKER_PROTOCOL: &str = "nvidia.nemo.relay.worker.v1";
+    /// Initial stable worker/schema contract baseline, independent of crate versions.
+    pub const CONTRACT_VERSION: &str = "1.0.0";
+
+    /// Diagnostic snapshot contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION: &str = "1.0.0";
+    /// Diagnostic provenance contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION: &str = "1.0.0";
+
+    tonic::include_proto!("nvidia.nemo.relay.worker.v1");
+}
+
+/// Descriptors for the worker contract, including its imported messages.
+pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("worker_descriptor");
 
 /// Generated protobuf and gRPC service definitions.
 #[allow(missing_docs)]

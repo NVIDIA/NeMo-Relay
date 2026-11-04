@@ -42,6 +42,26 @@ repos:
         files: '^(\.github/workflows/.*\.ya?ml|\.github/actions/.*/action\.ya?ml|\.github/actionlint\.ya?ml)$'
         pass_filenames: false
 
+  # Protobuf — API documentation, style, and formatting
+  - repo: https://github.com/bufbuild/buf
+    rev: v1.75.0
+    hooks:
+      - id: buf-lint
+        entry: buf lint crates/worker-proto
+        types: [file]
+        files: '^((?:crates/worker-proto/buf\.yaml|crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py)|crates/worker-proto/proto/.*\.proto)$'
+      - id: buf-format
+        entry: buf format
+        args: ["crates/worker-proto", "--diff", "--exit-code", "--path", "crates/worker-proto/proto/nvidia/nemo/relay/worker/v1"]
+        types: [file]
+        files: '^((?:crates/worker-proto/buf\.yaml|crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py)|crates/worker-proto/proto/.*\.proto)$'
+      - id: buf-lint
+        name: worker proto dependency resolution
+        entry: just resolve-worker-proto-deps
+        types: [file]
+        pass_filenames: false
+        files: '^(crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py|python/plugin/build_backend\.py)$'
+
   # Python — ruff lint + format
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.0
@@ -125,10 +145,10 @@ repos:
         pass_filenames: false
 
       - id: python-worker-proto-check
-        name: Python worker protobuf bindings are compatible
-        entry: just check-python-worker-proto
+        name: Python worker protobuf contract tests
+        entry: just check-worker-proto
         language: system
-        files: '^(crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker\.proto|python/plugin/(build_backend\.py|pyproject\.toml)|justfile)$'
+        files: '^((?:crates/worker-proto/buf\.yaml|crates/worker-proto/buf\.lock|scripts/proto_dependencies\.py)|crates/worker-proto/proto/.*|python/tests/plugin/test_nvidia_worker_proto_v1\.py|python/plugin/(build_backend\.py|pyproject\.toml)|justfile)$'
         pass_filenames: false
 
       - id: node-lockfile-check

@@ -934,6 +934,37 @@ python_plugin_sync_args() {
     fi
 }
 
+run_python_worker_proto_tests() {
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
+    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
+        echo "Skipping Python worker proto tests on Windows ARM64"
+        return
+    fi
+    local requirements=""
+    requirements="$("$python_executable" - <<'PY'
+import tomllib
+from pathlib import Path
+
+locked = tomllib.loads(Path("uv.lock").read_text())["package"]
+for name in ("pytest", "pytest-asyncio"):
+    package = next(package for package in locked if package["name"] == name)
+    print(f"{name}=={package['version']}")
+dependencies = tomllib.loads(Path("python/plugin/pyproject.toml").read_text())["project"]["dependencies"]
+print(next(requirement for requirement in dependencies if requirement.startswith("protovalidate==")))
+PY
+)"
+    local test_dependencies=()
+    local requirement=""
+    while IFS= read -r requirement; do
+        test_dependencies+=(--with "$requirement")
+    done <<< "$requirements"
+    local grpcio_tools_version=""
+    grpcio_tools_version="$(python_plugin_grpcio_tools_version)"
+    uvx --from "grpcio-tools==$grpcio_tools_version" "${test_dependencies[@]}" python -m pytest \
+        python/tests/plugin/test_nvidia_worker_proto_v1.py -q -o asyncio_default_fixture_loop_scope=function
+}
+
 python_plugin_grpcio_tools_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -1170,6 +1201,25 @@ generate-python-worker-proto:
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     generate_python_worker_proto_files python/plugin/src/nemo_relay_plugin/_proto
+
+# Lint, format, and independently test the current worker contract.
+# Install Buf 1.75.0 or newer, or set BUF to its executable path.
+check-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    buf_executable="${BUF:-buf}"
+    "$buf_executable" lint crates/worker-proto
+    "$buf_executable" format crates/worker-proto --path crates/worker-proto/proto/nvidia/nemo/relay/worker/v1 --diff --exit-code
+    run_python_worker_proto_tests
+
+# Resolve the locked validation dependency into the ignored build cache.
+resolve-worker-proto-deps:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    python_executable="$(uv_python_executable)"
+    "$python_executable" scripts/proto_dependencies.py
 
 check-python-worker-proto:
     #!/usr/bin/env bash

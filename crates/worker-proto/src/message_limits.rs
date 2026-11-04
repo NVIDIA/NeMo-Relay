@@ -132,8 +132,10 @@ where
     fn call(&mut self, request: http::Request<B>) -> Self::Future {
         let method = request.uri().path().rsplit('/').next().unwrap_or_default();
         let metadata = tonic::metadata::MetadataMap::from_headers(request.headers().clone());
-        let callback = if S::NAME == "nemo.relay.worker.v1.PluginWorker"
-            && !matches!(method, "Invoke" | "InvokeStream")
+        let callback = if matches!(
+            S::NAME,
+            "nvidia.nemo.relay.worker.v1.PluginWorkerService" | "nemo.relay.worker.v1.PluginWorker"
+        ) && !matches!(method, "Invoke" | "InvokeStream")
         {
             None
         } else {
