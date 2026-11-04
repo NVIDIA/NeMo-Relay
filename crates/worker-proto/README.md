@@ -16,34 +16,33 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Worker Protocol
 
-`nemo-relay-worker-proto` provides the generated Rust bindings for the
-versioned gRPC protocol used by NeMo Relay out-of-process worker plugins. It is
-a protocol dependency for worker SDKs and hosts, not the usual entry point for
-authoring a plugin.
+`nemo-relay-worker-proto` provides Rust messages, clients, and servers for worker
+gRPC calls. Hosts and worker SDKs depend on this crate.
 
 Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
-The new package and negotiation identifier are `nvidia.nemo.relay.worker.v1`;
-its contract version is `1.0.0`. This layer adds its generated bindings,
-conversions, validation, and independent contract tests alongside the existing
-`grpc-v1` API. The `v1` module and legacy JSON helpers remain available so the
-host and both maintained worker SDKs continue to build. Their coordinated
-cutover and legacy API removal are separate adoption changes.
+The new package name and protocol identity are `nvidia.nemo.relay.worker.v1`.
+Its contract version is `1.0.0`. This change adds generated bindings, conversions,
+validation, and tests alongside `grpc-v1`. The old Rust `v1` module and JSON
+helpers remain available. The host and SDKs switch together in a later change.
+That change also removes the old API.
 
 ## Protocol Surface
+
+The crate provides these modules and checks:
 
 | Surface | Role |
 | --- | --- |
 | `nvidia_worker_v1` | Generated clients, servers, and messages for the worker, host-runtime, and diagnostic services. |
-| `conversions` | Lossless conversions between shared domain values and protobuf messages; codec-owned data preserves the native JSON representation. |
-| `validation` | Enforce annotations, JSON syntax, and well-known time validity before dispatch. |
-| Message limits | Select finite send/receive caps by callback name before decoding. |
-| Open payloads | `JsonValue` and `JsonObject` preserve application/provider data, including null and large integers. |
+| `conversions` | Convert shared domain values to and from protobuf messages. Codec data uses the native SDK's JSON representation. |
+| `validation` | Check schema rules, JSON syntax, timestamps, and durations before calling callbacks. |
+| Message limits | Limit sent and received bytes by callback name before decoding. |
+| Open payloads | `JsonValue` and `JsonObject` preserve application and provider data, including null and large integers. |
 | Closed contracts | Typed events, common LLM annotations, outcomes, pending marks, diagnostics, scopes, and codec capabilities. |
 
-See [the contract](CONTRACT.md) for field presence, lifecycle, authorization,
+Refer to [the contract](CONTRACT.md) for field presence, lifecycle, authorization,
 generation, and compatibility rules. Crate and wheel versions are independent
 of contract versions. The [Rust conversion guide](CONTRACT.md#rust-domain-conversions)
 explains mapping modes, representation differences, and how to update adapters.
@@ -51,15 +50,16 @@ explains mapping modes, representation differences, and how to update adapters.
 ## Installation
 
 Install the Protocol Buffers compiler (`protoc`) 31.1 or newer on PATH (or select
-it with `PROTOC`). The validation dependency needs this compiler independently
-of this crate's vendored generator. CI pins 31.1 to match the vendored compiler.
+it with `PROTOC`). The validation dependency builds its own bindings and needs
+this separate compiler. This crate uses a bundled compiler for its own schema.
+CI uses version 31.1 for both.
 
 Install [Buf](https://buf.build/docs/installation/) 1.75.0 or newer before building
 this crate from source. Set `BUF` to select an executable outside PATH. The build
-exports Protovalidate from the immutable commit in this crate's `buf.lock` into
-Cargo's build directory; the first resolution needs access to the Buf Schema Registry.
+downloads the exact Protovalidate version recorded in `buf.lock` into Cargo's
+build directory. The first build needs access to the Buf Schema Registry.
 
-Add the protocol crate when building protocol-level integrations:
+Add the protocol crate to your integration with this command:
 
 ```bash
 cargo add nemo-relay-worker-proto
@@ -67,7 +67,7 @@ cargo add nemo-relay-worker-proto
 
 ## Getting Started
 
-Use the active identifier and typed converters:
+Use the new protocol identity and typed converters as shown in this example:
 
 ```rust
 use nemo_relay_worker_proto::{conversions::{encode, decode}, nvidia_worker_v1::{JsonValue, WORKER_PROTOCOL, CONTRACT_VERSION}};

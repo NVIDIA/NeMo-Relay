@@ -63,9 +63,9 @@ message OpenDiagnosticSessionResponse {
   DiagnosticCapabilities capabilities = 2 [(buf.validate.field).required = true];
 }
 
-// One ordered operation per request; identical retries reuse sequence and content.
-// Rejections before admission do not consume sequence. Admitted policy rejections
-// return REJECTED and consume sequence. No execution callback is retried here.
+// Sends one ordered operation per request. Identical retries keep the sequence and content.
+// A rejection before admission does not consume the sequence. An admitted policy rejection
+// returns REJECTED and consumes the sequence. This service never retries execution callbacks.
 message SubmitDiagnosticRequest {
   // Required activation credentials; invalid authentication fails before the operation executes.
   Credentials credentials = 1 [(buf.validate.field).required = true];
@@ -106,7 +106,7 @@ message ReadDiagnosticPageResponse {
   // Exactly one result is required; a failed read must not look like empty evidence.
   oneof result {
     option (buf.validate.oneof).required = true;
-    // Independently owned canonical evidence with its original scope and coverage.
+    // Evidence owned by this result, with its original scope and coverage.
     DiagnosticSnapshot snapshot = 1;
     // Stable shared read reason, separate from authentication or transport status.
     DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {
@@ -127,7 +127,7 @@ message GetDiagnosticDiscoveryResponse {
   // Exactly one result is required; a failed read must not look like empty evidence.
   oneof result {
     option (buf.validate.oneof).required = true;
-    // Independently owned canonical evidence with its original scope and coverage.
+    // Evidence owned by this result, with its original scope and coverage.
     DiagnosticDiscovery discovery = 1;
     // Stable shared read reason, separate from authentication or transport status.
     DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {
@@ -150,7 +150,7 @@ message InspectDiagnosticMemoryResponse {
   // Exactly one result is required; a failed read must not look like empty evidence.
   oneof result {
     option (buf.validate.oneof).required = true;
-    // Independently owned canonical evidence with its original scope and coverage.
+    // Evidence owned by this result, with its original scope and coverage.
     DiagnosticMemoryPage memory = 1;
     // Stable shared read reason, separate from authentication or transport status.
     DiagnosticReadReason read_reason = 2 [(buf.validate.field).enum = {

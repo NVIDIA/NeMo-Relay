@@ -226,13 +226,13 @@ message GuardrailDecision {
 
 // Rewritten request, optional authoritative annotation, pending marks, and evidence.
 message LlmRequestInterceptOutcome {
-  // Rewritten provider request when no request codec is active.  With a request codec, callbacks
-  // may rewrite `headers`, but `content` is read-only and provider-body changes must be made
-  // through `Self::annotated_request`.
+  // Rewritten provider request when no request codec is active. With an active request codec,
+  // callbacks can change headers but must leave content unchanged. Change the provider body
+  // through annotated_request instead.
   LlmRequest request = 1 [(buf.validate.field).required = true];
-  // Optional normalized request annotation to carry forward.  This is required and authoritative
-  // for provider content when a request codec is active. It remains optional when no request codec
-  // is active.
+  // Normalized request annotation to carry forward. An active request codec requires this
+  // value and uses it as the source of provider content. Without a request codec, the
+  // annotation is optional.
   AnnotatedLlmRequest annotated_request = 2;
   // Ordered marks to emit after Relay creates and starts the LLM scope.
   repeated PendingMarkSpec pending_marks = 3;

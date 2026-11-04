@@ -441,9 +441,8 @@ message Usage {
   optional uint64 cache_write_tokens = 5;
   // The subset of prompt-cache write tokens retained for one hour.
   optional uint64 cache_write_1h_tokens = 6;
-  // Input tokens that were neither served from nor written to a provider prompt cache.  This is
-  // present only when the provider's usage contract makes the split authoritative; its absence
-  // must not be interpreted as zero.
+  // Input tokens neither read from nor written to the provider's prompt cache. Include this
+  // value only when the provider's usage rules define this split. Absence does not mean zero.
   optional uint64 uncached_input_tokens = 7;
   // Optional cost reported by provider data or estimated from Relay model pricing.
   CostEstimate cost = 8;

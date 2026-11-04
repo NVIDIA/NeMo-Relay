@@ -126,9 +126,9 @@ message RegisterResponse {
   }
 }
 
-// Invocation ID and registration name are nonempty. Exactly one invocation is
-// required, and its alternative must match the registered surface. No parallel
-// surface enum exists that could contradict the selected payload.
+// Requires an invocation ID, a registration name, and one invocation alternative. The
+// alternative must match the registered callback type. The request has no separate surface
+// enum that could conflict with that alternative.
 message InvokeRequest {
   option (buf.validate.message).cel = {
     id: "invocation.event_kind"

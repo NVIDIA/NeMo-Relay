@@ -240,11 +240,11 @@ message DiagnosticReceipt {
   string reason = 7;
 }
 
-// All uint64 diagnostic counters project to canonical decimal strings in JSON.
+// JSON output represents every uint64 diagnostic counter as a decimal string.
 message DiagnosticSnapshot {
   // Core snapshot/catalogue revisions, independent of the worker contract.
   uint32 schema_version = 1;
-  // Stable catalogue revision; unknown names stay opaque in this envelope.
+  // Catalogue revision. Preserve unknown names without assigning them meaning.
   uint32 catalogue_version = 2;
   // Source identity preserved through collection and projection.
   DiagnosticSourceIdentity source = 3 [(buf.validate.field).required = true];
@@ -307,7 +307,7 @@ message DiagnosticOrigin {
   DiagnosticComponentOwnership ownership = 2 [(buf.validate.field).required = true];
 }
 
-// Preserves catalogue and failure-class names, including future opaque names.
+// Preserves catalogue and failure-class names, including unknown future names.
 message DiagnosticClassification {
   // Catalogue names remain open for future readers; admission still validates.
   string canonical_code = 1 [(buf.validate.field).string = {min_len: 1}];
@@ -386,7 +386,7 @@ message DiagnosticEvent {
   DiagnosticCorrelation correlation = 12 [(buf.validate.field).required = true];
 }
 
-// Unsigned saturating count; saturation marks a lower bound, not an exact total.
+// Unsigned count that stops at its maximum. After that limit, it is a lower bound.
 message DiagnosticCount {
   // Exact count unless saturation has occurred.
   uint64 value = 1;

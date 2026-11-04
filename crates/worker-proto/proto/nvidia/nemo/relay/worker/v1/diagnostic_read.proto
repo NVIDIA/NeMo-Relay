@@ -50,7 +50,7 @@ enum DiagnosticReadReason {
   DIAGNOSTIC_READ_REASON_INVALID_CURSOR = 5;
   // Core or adapter concurrency permits are temporarily exhausted.
   DIAGNOSTIC_READ_REASON_BUSY = 6;
-  // The admitted page cannot fit a required envelope or atomic row.
+  // The page cannot fit its required metadata or a complete row.
   DIAGNOSTIC_READ_REASON_SNAPSHOT_CAPACITY = 7;
   // Invalid startup capacity profile, including arithmetic overflow.
   DIAGNOSTIC_READ_REASON_INVALID_LIMITS = 8;

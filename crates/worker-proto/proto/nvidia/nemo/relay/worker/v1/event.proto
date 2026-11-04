@@ -32,9 +32,8 @@ message BaseEvent {
   optional string parent_uuid = 2 [(buf.validate.field).string = {uuid: true}];
   // Stable causal root imported or resolved when the event was emitted.
   optional string propagation_root_uuid = 3 [(buf.validate.field).string = {uuid: true}];
-  // Synthetic parent imported with the propagation context.  This is runtime-only delivery state.
-  // It distinguishes an imported parent from ordinary Relay scope parentage without extending the
-  // ATOF wire format.
+  // Parent imported through propagation context. The runtime uses this field to distinguish
+  // imported parents from Relay-created parents. It does not change the ATOF wire format.
   optional string propagation_parent_uuid = 4 [(buf.validate.field).string = {uuid: true}];
   // W3C traceparent imported or derived from the local parent. Runtime-only.
   optional string propagation_traceparent = 5;
@@ -135,7 +134,7 @@ message PendingMarkSpec {
   DataSchema data_schema = 5;
   // Optional metadata attached to the mark.
   JsonValue metadata = 6;
-  // Optional typed log severity applied authoritatively to mark metadata.
+  // Optional log severity that overrides the severity in mark metadata.
   optional LogSeverity severity = 7 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]

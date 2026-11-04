@@ -3,20 +3,25 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Worker contract
+# Worker Contract
 
-The replacement is `nvidia.nemo.relay.worker.v1`, protobuf package `nvidia.nemo.relay.worker.v1`, contract
-version `1.0.0`. These identify a new contract, not a crate or wheel release.
-This layer introduces the schema, generated messages, converters, validation,
-and current-contract tests. The host and maintained SDKs still use `grpc-v1`;
-the legacy schema, `v1` Rust module, and JSON helpers remain available until their
-coordinated adoption. Runtime and SDK requirements below describe that adoption
-target; they do not claim that live traffic has switched in this layer.
-Diagnostic read grants remain disabled by default.
+The new protobuf package is `nvidia.nemo.relay.worker.v1`. Workers use the same
+name to identify the protocol during handshake. Its contract version is `1.0.0`.
+Crates and wheels have separate release versions.
+This change adds the schema, generated messages, converters, validation, and tests.
+The host and SDKs still use `grpc-v1`. The old schema, Rust `v1` module, and JSON
+helpers remain available until the host and SDKs switch together. The requirements
+below describe that planned change. They do not describe the live protocol yet.
+Diagnostic read access is disabled by default.
 
-## Source layout
+A domain type is an application data type from the shared runtime. A wire message
+is its protobuf form. A capability ID is an access handle issued by the host.
 
-| File under `proto/nvidia/nemo/relay/worker/v1/` | Ownership |
+## Source Layout
+
+The schema files have the following roles:
+
+| File Under `proto/nvidia/nemo/relay/worker/v1/` | Ownership |
 | --- | --- |
 | `common.proto` | Credentials, protocol identity, lossless JSON, schema identity, errors, registration surfaces, scope types, severity |
 | `llm.proto` | Request/response DTOs, multimodal variants, open codec-owned provider data, optimization contributions and summaries |
@@ -26,24 +31,26 @@ Diagnostic read grants remain disabled by default.
 | `diagnostic_read.proto` | Complete shared query, discovery, producer support, domain/family selectors, and read reasons |
 | `diagnostic_memory.proto` | Canonical memory page, backing footprints, row attribution, and selection totals |
 | `diagnostic_resource.proto` | Typed resource memory samples, units, numeric kinds, availability, and fixed nullable limit slots |
-| `plugin_worker_service.proto` | Worker service and its 8 dedicated request/response pairs |
-| `relay_host_runtime_service.proto` | Host runtime service and its 17 dedicated request/response pairs |
-| `relay_diagnostics_service.proto` | Diagnostic service and its 6 dedicated request/response pairs |
+| `plugin_worker_service.proto` | Worker service and its eight request and response pairs |
+| `relay_host_runtime_service.proto` | Host runtime service and its 17 request and response pairs |
+| `relay_diagnostics_service.proto` | Diagnostic service and its six request and response pairs |
 
-The runtime DTOs in `nemo-relay-types` remain the source of truth for application
-semantics. The protobuf messages define the transport representation. Runtime
-converters must explicitly preserve Relay-owned fields. Codec-owned `api_specific`
-data uses lossless JSON with the same Serde representation as the native SDK. The
-protocol does not enumerate providers or codec implementations.
+The shared data types in `nemo-relay-types` define application behavior. Protobuf
+messages define how those values cross the process boundary. Converters must
+preserve every Relay-owned field. Codec-owned `api_specific` data uses the native
+SDK's JSON representation. Its number limits are described under
+[Rust Domain Conversions](#rust-domain-conversions). The protocol does not list
+all providers or codecs.
 
-## Version and evolution rules
+## Version and Evolution Rules
 
-Historical compatibility applies once this contract is released. Initial unreleased
-development is checked against the current schema, without a previous-release baseline.
+After the first release, compare changes against that released schema. Until
+then, check the current schema without keeping earlier development snapshots.
+Apply these version and compatibility rules:
 
 - Both sides must check the activation credentials, plugin identity, protocol
-  name, and supported contract version before registration. Health may precede
-  handshake, as in the existing host lifecycle.
+  name, and supported contract version before registration. The host can check
+  health before handshake.
 - The worker protocol contract is `1.0.0` in the stable major-version namespace
   `nvidia.nemo.relay.worker.v1`. Backwards-compatible evolution stays in `v1`;
   breaking changes require a new major namespace and negotiated protocol identity.
@@ -71,21 +78,21 @@ development is checked against the current schema, without a previous-release ba
   flattened into the native object. Open event categories, optimization kinds,
   diagnostic names, and diagnostic execution/phase names remain strings.
 
-## Presence and validation
+## Presence and Validation
 
-Protobuf decoders establish field types and alternative exclusivity. They do not
-establish semantic validity. SDK and host validation must occur before callback
-dispatch or state mutation. The schemas carry executable Protovalidate rules for
-presence, enum membership, finite numbers, UUIDs, protocol identities, diagnostic
-bounds, and cross-field relationships. Python contract tests execute these rules
-with Protovalidate 2.1.0 and compile the entire message graph. Both SDKs and the host call validation at dispatch boundaries and check open JSON syntax
-and well-known timestamp/duration validity.
+Protobuf checks field types and allows only one value in each `oneof`. It does
+not check every rule that makes a message valid. The host and SDKs must validate
+messages before calling a callback or changing state.
 
-JSON syntax, authentication, capability ownership, configured frame sizes, and
-stateful sequencing still require SDK/host checks; annotations alone do not
-establish those properties.
+Protovalidate rules check required fields, enums, finite numbers, UUIDs, protocol
+identities, diagnostic limits, and relationships between fields. Python contract
+tests run these rules with Protovalidate 2.1.0 and compile every message type.
+The host and SDKs also check JSON syntax, timestamps, and durations.
 
-Required boundary values:
+Schema annotations do not replace runtime checks. The host and SDKs still check
+credentials, access rights, message sizes, and operation order.
+
+Apply these rules at each RPC boundary:
 
 - Every RPC request requires valid `credentials`.
 - Handshake requires `plugin_id`, `relay_version`, `protocol`, and `host_endpoint`.
@@ -115,16 +122,17 @@ Required boundary values:
   streaming execution carries only the request context. Capability IDs and scope
   bindings remain host-issued opaque identities and must not reach user callbacks.
 
-DTO presence follows the runtime's option types. In normalized requests, messages
+Field presence follows the runtime's option types. In normalized requests, messages
 and extra maps default to empty; all other top-level fields are optional. In
 normalized responses, all modeled top-level fields are optional. Required nested
 runtime fields remain required, including named/tool message content and function
 call definitions. Assistant content and tool-call lists are optional. Function
 message content absence maps to the runtime's explicit null content.
 
-Optional collections use presence-bearing list messages: absent is `None`, a
-present empty list is `Some([])`. Optional scalar fields preserve explicit false
-and zero. A present `MessageContent.text = ""` is different from no content variant.
+Optional lists use wrapper messages to preserve absence. An absent wrapper maps
+to `None`. A wrapper with an empty list maps to `Some([])`. Optional scalar fields
+preserve explicit false and zero. A present `MessageContent.text = ""` differs
+from a missing content variant.
 
 Optional JSON fields preserve explicit null where the runtime does. Tool result
 annotations and category-profile tool annotations normalize null to absence.
@@ -139,18 +147,18 @@ Modeled objects require dictionaries, arrays require lists or tuples, and string
 require string values. Iteration, `dict` construction, or protobuf setters must
 not silently reinterpret an incorrect native value as a different valid payload.
 
-All timestamps use `google.protobuf.Timestamp`, UTC seconds plus nanoseconds,
-within its documented year 1–9999 range, with nanos in `0..999999999`. Absent scope
-timestamps use host time; a present epoch-zero timestamp is explicit. Converters
-must reject out-of-range times rather than overflow, and preserve the runtime's
-available precision. Double fields must be finite.
+Use `google.protobuf.Timestamp` for UTC seconds and nanoseconds. Valid years run
+from 1 through 9999, and nanos must be in `0..999999999`. An absent scope timestamp
+uses host time. A present epoch-zero timestamp keeps that explicit value.
+Converters reject times outside these bounds and preserve the runtime's time
+precision. Double fields must be finite.
 
-## Invocation result matrix
+## Invocation Result Matrix
 
 `InvokeResponse.error` is available for every unary callback failure. Successful
 alternatives are restricted by the registered surface:
 
-| Invocation surface | Successful result |
+| Invocation Surface | Successful Result |
 | --- | --- |
 | Subscriber | `completed` |
 | Event metadata injector | `metadata_additions` |
@@ -163,14 +171,16 @@ alternatives are restricted by the registered surface:
 | LLM request interceptor | `llm_request_outcome` |
 | LLM execution interceptor | `llm_response` |
 
-Guardrail allow is explicit; block requires a nonempty reason. An absent response
-result must never be accepted as subscriber success. The oneof on the request
-eliminates a contradictory surface enum, but the worker must still compare that
-alternative with the actual registration and the host must validate its response.
+A guardrail must return an explicit allow result or a block result with a reason.
+A missing result is invalid, including for subscribers. The worker must check
+that the request alternative matches the registered callback type. The host must
+validate the response.
 
-## Errors and lifecycle
+## Errors and Lifecycle
 
-| Failure | Wire representation |
+Use these error forms for each failure:
+
+| Failure | Wire Representation |
 | --- | --- |
 | Missing/malformed values or invalid alternatives | gRPC `INVALID_ARGUMENT` |
 | Missing or invalid authentication credentials | gRPC `UNAUTHENTICATED` |
@@ -182,41 +192,44 @@ alternative with the actual registration and the host must validate its response
 | Failure after stream opening | One terminal `WorkerError` item, then close |
 | Transport cancellation/deadline/capacity failure | gRPC `CANCELLED`, `DEADLINE_EXCEEDED`, or `RESOURCE_EXHAUSTED` |
 
-Simple host operations return method-specific success responses and use gRPC
-status for failure. Continuation/codec operations retain a domain error alternative
-so downstream failure identity can be propagated. `http_status`, when supplied,
-is an upstream HTTP error in `400..=599`; it is not a gRPC status. Converters must
-preserve compatibility with the runtime's existing HTTP error helpers.
+Simple host operations return their own success messages and use gRPC status
+codes for failures. Continuation and codec responses also have an application
+error alternative. It preserves the identity of a downstream failure.
+
+When present, `http_status` is an upstream HTTP error in `400..=599`, not a gRPC
+status. Converters must work with the runtime's existing HTTP error helpers.
 
 Preserve `downstream_continuation_id` only on the original downstream failure,
 never a replacement callback error. Stream-opening provenance uses the existing
 `nemo-relay-downstream-continuation` metadata. `retryable` does not authorize
 replaying callbacks or continuations.
 
-Registration is serialized and idempotent for semantically equal configuration
-within one activation. Repeats return the original plan. Different config fails
-before running registration again. Cancellation is idempotent and waits for
-callback/continuation cleanup as required by the SDK lifecycle. Unknown/completed
-invocations return `accepted = false`. Shutdown drains within existing bounds.
-Dropping or terminalizing streams must release capabilities and scope ownership.
+Run registration calls one at a time. Repeating a call with equivalent config
+returns the original plan. Different config fails before registration runs again.
+Repeating cancellation is safe. Cancellation waits for callback and continuation
+cleanup under the SDK's lifecycle rules. Unknown or completed invocations return
+`accepted = false`. Shutdown uses the existing cleanup deadlines. Finishing or
+dropping a stream must release its access handles and owned scopes.
 
-Successful scope and conditional-guardrail creation returns a nonempty host-owned
-handle, which SDKs validate before exposing it to callers. Invalid registration
-replies roll back local callback state. Explicit parent scope selection resolves
-within the selected owned stack and rejects unknown or expired parent identities
-before executing. A failed scope pop preserves its handle for a corrected retry;
-ownership is consumed only after native closure succeeds.
-Stack revocation fences in-flight scope creation: a push cannot publish an owned
-handle after its stack has been dropped. Activation shutdown revokes new scope
-admission and drains owned scopes and isolated stacks before reporting successful
-cleanup.
+Successful scope and conditional-guardrail creation returns a nonempty handle.
+The host owns the handle, and the SDK validates it before returning it to callers.
+Invalid registration replies roll back local callback state.
 
-## Diagnostics and limits
+Resolve explicit parent scopes within the selected stack. Reject unknown or
+expired parents before executing. If a scope pop fails, keep its handle so the
+caller can correct the input and retry. Release ownership only after the native
+close succeeds.
 
-Diagnostic admission remains separate from execution and logs. Capabilities and
-session-open settings must agree. Queue capacity excludes one in-flight request.
-Request/response limits count the complete new protobuf messages, including the
-new response wrappers; migrate size calculations rather than copying v1 sizes.
+Dropping a stack also blocks pending scope creation. A push cannot return an owned
+handle after its stack has been dropped. Shutdown blocks new scopes and cleans up
+owned scopes and isolated stacks before reporting success.
+
+## Diagnostics and Limits
+
+Diagnostic admission is separate from callback execution and logging. The
+session must confirm the advertised settings. Queue capacity excludes the one
+request being sent. Size limits cover each complete protobuf request or response,
+including its wrapper. Recalculate sizes when moving from the old protocol.
 
 Diagnostic receipts specify evidence retention only for `recorded` observations.
 Registration, closure, rejection, and disabled receipts leave evidence unspecified
@@ -224,38 +237,39 @@ because no observation was recorded; a recorded receipt must select retained,
 truncated, or dropped evidence.
 
 Registered receipts require a positive component handle and code count. Both SDKs
-validate the complete receipt and check its status against the submitted operation, including
-the code count for successful registration, before advancing the submission
-sequence. Malformed receipts fence further delivery as uncertain; they never
-acknowledge successful recording or create an inert registered component.
+validate the whole receipt before advancing the sequence. Its status must match
+the submitted operation. Successful registration must return the right code count.
+An invalid receipt stops delivery and reports uncertain acceptance. It cannot
+confirm recording or create a component that silently drops observations.
 
 The sequence starts at one. Identical retries reuse the same operation, session,
 and sequence. An admitted rejection consumes its sequence. Admission rejection
-uses existing `nemo-relay-diagnostic-not-consumed: 1` metadata; missing replies may
-mean uncertain acceptance. Never replay uncertain submissions into a new session.
+uses `nemo-relay-diagnostic-not-consumed: 1` metadata. Without a reply, acceptance
+can be uncertain. Never replay an uncertain submission into a new session.
 
-Snapshot counters use uint64 on the protobuf wire and canonical decimal strings
-in existing JSON projections. Snapshot, discovery, and memory reads require their respective separate grants
-and remain denied to ordinary workers. Full DiagnosticQuery selectors and typed
-cursors preserve the canonical query semantics. Cursor validation is bound to
-the host/activation and operation kind; a cursor is not an authority grant.
+Snapshot counters use `uint64` on the wire and decimal strings in JSON output.
+Snapshot, discovery, and memory reads each need a separate access grant. Ordinary
+workers do not receive these grants. Preserve every `DiagnosticQuery` selector
+and cursor field. Check the host, activation, and operation type when validating
+a cursor. A cursor alone does not grant access.
 
 When activating namespaced v1, update the host/SDK service-name and RPC-path checks used by
 message-limit interceptors and diagnostic admission. Preserve per-callback limits,
 pre-decode admission, deadlines, retry bounds, and cleanup behavior.
 
-## Shared native and worker authoring contract
+## Shared Native and Worker Authoring Contract
 
-Rust domain types in `nemo-relay-types` are the authoring source of truth. SDK
-shared authoring signatures must not expose generated protobuf messages, gRPC
-statuses, activation credentials, or capability IDs. Backend-specific bootstrap
-configuration and raw ABI APIs remain separate. Native and worker adapters
-convert at their boundaries. In particular, migrate the legacy worker diagnostic API's
-protobuf re-exports to shared diagnostic declarations, queries, and results.
-`ToolExecutionContext` will become one nominal type re-exported by both Rust SDKs during adoption;
-its existing native fields and worker accessor methods remain available.
+Use the Rust types in `nemo-relay-types` for shared plugin APIs. Keep generated
+protobuf messages, gRPC statuses, credentials, and capability IDs out of callback
+signatures. Each backend keeps its own startup settings and raw ABI APIs. Native
+and worker adapters convert values at their boundaries.
 
-| Authoring capability | Shared domain contract | New worker wire representation | Migration acceptance |
+During adoption, replace the worker diagnostic API's protobuf re-exports with
+shared declarations, queries, and results. Both Rust SDKs will re-export the same
+`ToolExecutionContext` type. Keep its native fields and worker accessor methods.
+The following table lists the shared contracts and their adoption requirements:
+
+| Authoring Capability | Shared Domain Contract | New Worker Wire Format | Adoption Requirements |
 | --- | --- | --- | --- |
 | Plugin identity and registration | Component configuration, diagnostics, and explicit multiple-component policy | Handshake, Validate, Register, RegistrationPlan | Resolve `plugin_kind`/`plugin_id`, mutable registration, `Send`/`Sync`, and differing defaults in the shared facade; never silently change legacy defaults. |
 | Events and metadata | Event, EventSanitizeFields, PendingMarkSpec, typed metadata maps | Per-surface invocation and result alternatives | Same transformations, event parentage, and null/presence behavior through both adapters. |
@@ -269,17 +283,19 @@ its existing native fields and worker accessor methods remain available.
 | Diagnostic memory | DiagnosticMemoryPage, footprints, selection totals, ResourceMemoryView | InspectDiagnosticMemory and complete typed memory/resource graph | Explicit memory grant; fixed null slots and numeric kinds round-trip; never start or retarget a resource collector. |
 | Errors | Shared callback/downstream error semantics, HTTP helper compatibility, portable diagnostic read reasons | WorkerError, DiagnosticReadReason, and standard gRPC status | Domain adapters preserve original failures; transport errors remain distinguishable without leaking tonic types. |
 
-Capability parity does not mean automatic authority. `can_read_context`,
+Matching features do not grant matching access rights. `can_read_context`,
 `can_read_discovery`, and `can_inspect_memory` are independent host grants,
-false by default. Unsupported or denied features must be explicit; a generic
-"connected" state must not imply read access. Credentials authenticate an
-activation but do not authorize context-wide evidence. Read RPCs do not require
-an admitted delivery session, so authorized discovery still works when diagnostic
-collection or snapshot workspaces are disabled.
+false by default. Report unsupported or denied access explicitly. A connected
+worker does not automatically have read access. Credentials identify an
+activation; they do not grant access to all evidence in a context.
 
-Shared continuation and resource-lifetime requirements:
+Read RPCs do not need an admitted delivery session. An authorized caller can
+therefore read discovery data even when collection or snapshot workspaces are
+disabled.
 
-- Continuation calls may repeat or run concurrently while the interceptor owns
+Apply these rules to shared continuations and resource lifetimes:
+
+- Continuation calls can repeat or run concurrently while the interceptor owns
   them. Each receives an isolated snapshot of the current scope stack. Callback
   completion/cancellation revokes the associated handles and settles outstanding
   work before reporting cleanup completion.
@@ -298,7 +314,7 @@ Shared continuation and resource-lifetime requirements:
   replay execution after ambiguous transport failure.
 - Diagnostic query selectors intersect host authority. Cursor validation binds
   source, revision, selection, activation, and operation kind; memory cursors cannot
-  resume snapshots and vice versa. Typed cursors are opaque authoring handles,
+  resume snapshots. Snapshot cursors cannot resume memory reads. Typed cursors are opaque authoring handles,
   not transferable read grants. Authorization failures use gRPC status; portable
   read failures use DiagnosticReadReason, never an empty successful page.
 - Diagnostic `usize` memory quantities cross the wire as uint64; adapters must
@@ -306,20 +322,20 @@ Shared continuation and resource-lifetime requirements:
   Resource non-finite measurements use an explicit alternative. Eight nullable
   limit-event slots preserve positions instead of compacting away empty slots.
 
-The host/SDK integration suites exercise these requirements through the active
-namespaced services, including installed Python wheels. Schema-only tests remain
-separate from runtime lifecycle and ownership tests. Rust authoring APIs retain
-shared domain types; no Rust trait object crosses the native C ABI.
+Use host and SDK integration tests to check these rules. Include the namespaced
+services and installed Python wheels. Schema tests alone do not check lifecycle
+or ownership. Rust authoring APIs use shared domain types. Rust trait objects
+must not cross the native C ABI.
 
-## Rust domain conversions
+## Rust Domain Conversions
 
 `nemo_relay_types` owns the shared authoring types used by native plugins and Rust
 workers. Protobuf owns the transport structures. `conversions::WireValue` connects
 them, and both the host and Rust worker reuse its implementations. Generated
 messages therefore stay out of callback APIs. Closed DTOs are converted by field;
-only the contract's open application and codec-owned data uses JSON serialization.
+only open application data and codec-owned data use JSON serialization.
 
-The conversion implementation has three responsibilities:
+The conversion code is split across three files:
 
 | File | Responsibility |
 | --- | --- |
@@ -327,8 +343,8 @@ The conversion implementation has three responsibilities:
 | `src/conversions/dto.rs` | Declarative struct fields, enum mappings, and collection wrappers. |
 | `src/conversions/variants.rs` | Explicit mappings for Rust enum variants, protobuf oneofs, and structures with different layouts. |
 
-A DTO declaration uses `field: mode` when names match and
-`source => target: mode` when they differ. For example:
+A `dto!` declaration uses `field: mode` when names match and
+`source => target: mode` when they differ. This example shows the declaration syntax:
 
 ```text
 dto!(nemo_relay_types::api::event::BaseEvent => BaseEvent {
@@ -338,13 +354,13 @@ dto!(nemo_relay_types::api::event::BaseEvent => BaseEvent {
 });
 ```
 
-The macro emits complete struct initializers in both directions, without a
-`..Default::default()` fallback. Adding a field to either struct fails compilation
-until its mapping is updated. Enum variants remain explicit; unknown or unsupported
-values return conversion errors. `list_codec!` shares the implementation for list
-wrapper messages, including explicitly empty lists.
+The macro fills every struct field in both directions. It does not use a
+`..Default::default()` fallback. Adding a field to either struct fails to compile
+until its mapping is updated. Enum mappings list each variant. Unknown or
+unsupported values return conversion errors. `list_codec!` handles list wrappers, including
+explicitly empty lists. Use these modes for each field:
 
-| Field mode | Conversion rule |
+| Field Mode | Conversion Rule |
 | --- | --- |
 | `scalar` | Convert a value directly, including enums, UUID strings, and checked integer widths. |
 | `required` | Wrap a required domain value in protobuf message presence; reject absence when decoding. |
@@ -355,19 +371,20 @@ wrapper messages, including explicitly empty lists.
 | `annotation` | Normalize absent or JSON-null tool annotations to absence. |
 | `fixed_slots` | Preserve the eight positional diagnostic limit-event slots, including empty slots; reject the wrong length. |
 
-Explicit adapters remain necessary for domain enums versus protobuf oneofs,
-flattened event/outcome fields versus nested transport messages, timestamps,
-resource numeric variants, and native ownership/name wrappers. Timestamp conversion
-checks protobuf bounds and nanoseconds; diagnostic `usize` values use checked
-`uint64` conversions. Losslessness applies to supported domain values and declared
-open payloads; unknown protobuf fields are not retained through domain conversion.
+Some values need explicit adapters. These include enum variants, nested transport
+messages, timestamps, resource numbers, and native name or ownership wrappers.
+Timestamp conversion checks the protobuf bounds and nanoseconds. Diagnostic
+`usize` values use checked `uint64` conversions.
 
-JSON numbers follow the native SDK's numeric model: signed or unsigned 64-bit
-integers and finite binary64 floating-point values. Decimal spelling and precision
-beyond that model are not part of the round-trip guarantee. Codec-owned JSON uses
-the same numeric representation in native and worker callbacks.
+Conversions preserve supported domain values and the declared open payloads.
+They do not retain unknown protobuf fields.
 
-When changing a shared type or its transport representation:
+JSON numbers use the native SDK's number types: signed and unsigned 64-bit
+integers, plus finite 64-bit floating-point values. Conversion does not preserve
+decimal spelling or precision beyond those types. Native and worker callbacks
+use the same number types for codec-owned JSON.
+
+When you change a shared type or its wire format, follow these steps:
 
 1. Update the schema and mapping together. Use the existing DTO/list macros for
    direct mappings and explicit conversions for differences in structure or semantics.
@@ -380,19 +397,18 @@ When changing a shared type or its transport representation:
    protocol checks and repository validation. Schema changes also require
    `just check-worker-proto` and compatibility review.
 
-## NVIDIA API standards review
+## NVIDIA API Standards Review
 
-This contract follows NVIDIA gRPC API Standards and Guidance, including its
-channel-based versioning principles. The table below records the applicable
-requirements and their enforcement. AEP references in that standard are optional
-design references; this contract does not claim blanket AEP conformance.
+This contract uses NVIDIA gRPC API Standards and Guidance, including its
+channel-based version rules. The following table lists the rules and checks. API Enhancement Proposals (AEPs) cited by that standard are optional references.
+This contract does not claim to follow every AEP.
 
-| Guideline area | Contract decision and enforcement |
+| Guideline Area | Contract Decision and Checks |
 | --- | --- |
 | Package naming and versioning | `nvidia.nemo.relay.worker.v1`, matching directories, stable major suffix; all Buf STANDARD rules apply without an exception. |
 | Retired namespace | `nemo.relay.worker.v1` remains available until the separate consumer cutover. The Rust module is `nvidia_worker_v1`; its negotiation identity is the fully qualified current package name. |
 | Compatible evolution | Additive updates remain in the same major namespace. After the first release, compatibility checks should compare wire, source, JSON, and validation constraints against that released schema. New breaking changes require a new namespace. |
-| Source layout | Open-source SPDX license, file overview, proto3 syntax, package, alphabetized imports, then declarations; Buf formats files with two-space indentation. No public or weak imports. |
+| Source layout | Open-source SPDX license, file overview, `proto3` syntax, package, alphabetized imports, then declarations; Buf formats files with two-space indentation. No public or weak imports. |
 | Service organization | One service per matching `_service.proto`, service first, dedicated request/response pairs in RPC order in that file. Supporting DTOs are in separate files. |
 | Documentation and names | Complete-sentence declaration comments, PascalCase types/services/RPCs, lower_snake_case fields/oneofs, plural repeated fields. Buf checks standard names and comment presence; code review covers additional editorial requirements. |
 | Fields and nesting | No explicit `json_name`, no `descriptor` field names, and no user-defined nested messages or enums. Code review checks these conventions; compiler-generated map entries are permitted. |
@@ -403,22 +419,22 @@ design references; this contract does not claim blanket AEP conformance.
 | Duration conversion | Convert SDK `retry_timeout_millis` to `retry_timeout_duration` exactly; bounds remain one millisecond through ten seconds. Do not serialize the runtime struct directly. |
 | Field behavior annotations | This is a process-to-process gRPC API, not a resource API or HTTP-transcoded API. Requiredness is documented and enforced with Protovalidate. No HTTP gateway annotations are added. |
 | Streaming | Only progressive LLM output uses server streaming. Clients and proxies must support HTTP/2 streaming, propagate cancellation/deadlines, and avoid response buffering. Diagnostics use bounded unary pages. |
-| Errors | Authentication, admission, malformed input, and RPC failures use standard gRPC statuses. Callback result data remains typed, including the original downstream failure identity. Kaizen is optional under the standard. |
+| Errors | Authentication, admission, malformed input, and RPC failures use standard gRPC statuses. Callback result data remains typed, including the original downstream failure identity.  |
 
-Code review covers service-file ownership, complete sentences, overview comments,
-prohibited field names/options, plural repeated fields, top-level type declarations,
-and timestamp/duration suffixes. Generated
-stubs are compiled independently in Rust and Python.
+Code review checks file ownership, complete sentences, and file overviews. It
+also checks forbidden field names and options, plural repeated-field names,
+top-level declarations, and time suffixes. Rust and Python compile their generated
+bindings independently.
 
-Both SDKs register the
-standard `grpc.health.v1.Health` service (`Check` and `Watch`) alongside the
-worker's authenticated lifecycle `Health` RPC; propagate deadlines, cancellation,
-and W3C `traceparent`/`tracestate` metadata when participating in tracing; and
-apply the host's health/metrics policies. The custom lifecycle RPC is not a
-replacement for standard gRPC probes. Standard health bindings can come from
-`grpcio-health-checking` / `tonic-health`; they do not require a competing Relay
-health schema. HTTP metrics/probes belong to the owning runtime deployment,
-not to these worker DTO definitions.
+SDKs must register the standard `grpc.health.v1.Health` service with `Check` and
+`Watch`. Keep the worker's authenticated lifecycle `Health` RPC as well. That RPC
+does not replace standard gRPC probes.
+
+SDKs must propagate deadlines and cancellation. When tracing is enabled, they
+must also propagate W3C `traceparent` and `tracestate` metadata. Apply the host's
+health and metrics policies. Use `grpcio-health-checking` or `tonic-health` for
+standard health bindings. The runtime deployment owns HTTP metrics and probes;
+they do not belong in the worker message definitions.
 
 At runtime, map invalid credentials to `UNAUTHENTICATED`, denied diagnostic reads
 to `PERMISSION_DENIED`, malformed requests to `INVALID_ARGUMENT`, and incompatible
@@ -431,12 +447,14 @@ remove the legacy sources. Existing workers must then rebuild and update their
 manifests; no adapter is provided. Namespace collision review is limited to
 this repository; no external namespace registration or governance approval is claimed.
 
-## Current-contract checks
+## Current-Contract Checks
 
-This contract is unreleased. Tests validate the current schema and its Rust/Python
-implementations. They do not compare against development snapshots, committed
-descriptor fixtures, or historical wire bytes. After the first release, introduce
-compatibility checks against that released schema when evolving the contract.
+This contract is unreleased. Tests check the current schema and its Rust and
+Python implementations. They do not compare earlier development snapshots,
+committed descriptors, or old wire bytes. After the first release, check future
+changes against that released schema.
+
+Use the following checks:
 
 - `cargo test -p nemo-relay-worker-proto` builds descriptors from the current
   schema and tests service structure, message round trips, conversions, and validation.
