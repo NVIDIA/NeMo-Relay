@@ -20,21 +20,23 @@ use nemo_relay_runtime::api::runtime::{
 use nemo_relay_runtime::api::tool::ToolExecutionResult;
 use nemo_relay_types::codec::optimization::LlmOptimizationContribution;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
-use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
-use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
-use nemo_relay_worker_proto::v1::{
-    CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
-    HandshakeResponse, HealthRequest, HealthResponse, JsonEnvelope, JsonResult, JsonValue,
-    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest,
-    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
-    Registration, ScopeContext, ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
-    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
-    ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck,
+use nemo_relay_worker_proto::nvidia_worker_v1::invoke_response::Result as InvokeResult;
+use nemo_relay_worker_proto::nvidia_worker_v1::invoke_stream_response::Item as StreamItem;
+use nemo_relay_worker_proto::nvidia_worker_v1::plugin_worker_service_server::{
+    PluginWorkerService as PluginWorker, PluginWorkerServiceServer as PluginWorkerServer,
 };
-use nemo_relay_worker_proto::{decode_json_value, json_envelope};
+use pb::{
+    CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, HandshakeRequest, HandshakeResponse, HealthRequest,
+    HealthResponse, InvokeResponse, JsonValue, LlmNextRequest, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, RegisterRequest, RegisterResponse, Registration,
+    ScopeContext, ScopeType as ProtoScopeType, ShutdownRequest, ToolNextRequest, ValidateRequest,
+    ValidateResponse,
+};
+type LlmCodecDecodeRequest = pb::DecodeLlmCodecRequestRequest;
+type LlmCodecEncodeRequest = pb::EncodeLlmCodecRequestRequest;
+type LlmCodecDecodeResponse = pb::DecodeLlmCodecResponseRequest;
+use nemo_relay_worker_proto::nvidia_worker_v1 as pb;
 use serde_json::json;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -65,35 +67,48 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
         state: state.clone(),
     };
     let valid = RegisterConditionalMiddlewareGuardrailRequest {
-        activation_id: ACTIVATION_ID.into(),
-        auth_token: AUTH_TOKEN.into(),
-        name: "owned-gate".into(),
-        kinds: vec![RegistrationSurface::Subscriber as i32],
-        registration_name: "worker-fixture-subscriber".into(),
-        reason: "disabled".into(),
-        callback: false,
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
+        registration: Some(pb::ConditionalMiddlewareGuardrailRegistration {
+            name: "owned-gate".into(),
+            kinds: vec![RegistrationSurface::Subscriber as i32],
+            registration_name: "worker-fixture-subscriber".into(),
+            reason: "disabled".into(),
+            callback: false,
+        }),
     };
     for (request, expected) in [
         (
             RegisterConditionalMiddlewareGuardrailRequest {
-                auth_token: "wrong".into(),
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: "wrong".into(),
+                }),
                 ..valid.clone()
             },
-            tonic::Code::PermissionDenied,
+            tonic::Code::Unauthenticated,
         ),
         (
             RegisterConditionalMiddlewareGuardrailRequest {
-                kinds: vec![i32::MAX],
+                registration: Some(pb::ConditionalMiddlewareGuardrailRegistration {
+                    kinds: vec![i32::MAX],
+                    ..Default::default()
+                }),
                 ..valid.clone()
             },
             tonic::Code::InvalidArgument,
         ),
         (
             RegisterConditionalMiddlewareGuardrailRequest {
-                kinds: vec![],
+                registration: Some(pb::ConditionalMiddlewareGuardrailRegistration {
+                    kinds: vec![],
+                    ..Default::default()
+                }),
                 ..valid.clone()
             },
-            tonic::Code::Internal,
+            tonic::Code::InvalidArgument,
         ),
     ] {
         assert_eq!(
@@ -132,14 +147,19 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
         )),
     };
     let removal = DeregisterConditionalMiddlewareGuardrailRequest {
-        activation_id: ACTIVATION_ID.into(),
-        auth_token: AUTH_TOKEN.into(),
         handle: handle.clone(),
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     };
     let foreign = foreign_service
         .deregister_conditional_middleware_guardrail(Request::new(
             DeregisterConditionalMiddlewareGuardrailRequest {
-                activation_id: "other-activation".into(),
+                credentials: Some(pb::Credentials {
+                    activation_id: "other-activation".into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
                 ..removal.clone()
             },
         ))
@@ -151,14 +171,17 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
         service
             .deregister_conditional_middleware_guardrail(Request::new(
                 DeregisterConditionalMiddlewareGuardrailRequest {
-                    auth_token: "wrong".into(),
+                    credentials: Some(pb::Credentials {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: "wrong".into()
+                    }),
                     ..removal.clone()
                 }
             ))
             .await
             .unwrap_err()
             .code(),
-        tonic::Code::PermissionDenied
+        tonic::Code::Unauthenticated
     );
     assert!(
         service
@@ -251,27 +274,29 @@ fn worker_logging_authenticates_and_preserves_structured_records() {
             LogLevel::Warn,
             LogLevel::Error,
         ] {
-            let ack = service
+            let _ack = service
                 .log(Request::new(LogRequest {
-                    activation_id: ACTIVATION_ID.into(),
-                    auth_token: AUTH_TOKEN.into(),
                     level: level as i32,
                     target: "fixture.logging".into(),
                     message: "worker message".into(),
-                    fields: Some(json_value(&fields).unwrap()),
+                    fields: Some(conversions::encode(fields.clone()).unwrap()),
+                    credentials: Some(pb::Credentials {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: AUTH_TOKEN.into(),
+                    }),
                 }))
                 .await
                 .unwrap()
                 .into_inner();
-            assert!(ack.ok);
-            assert!(ack.error.is_none());
         }
         service
             .log(Request::new(LogRequest {
-                activation_id: ACTIVATION_ID.into(),
-                auth_token: AUTH_TOKEN.into(),
                 level: LogLevel::Info as i32,
                 message: "default target".into(),
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
                 ..LogRequest::default()
             }))
             .await
@@ -310,26 +335,34 @@ async fn worker_logging_rejects_unauthorized_and_malformed_requests() {
         )),
     };
     let valid = LogRequest {
-        activation_id: ACTIVATION_ID.into(),
-        auth_token: AUTH_TOKEN.into(),
         level: LogLevel::Info as i32,
         target: "fixture".into(),
         message: "message".into(),
         fields: None,
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     };
     for request in [
         LogRequest {
-            activation_id: "wrong".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: "wrong".into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
             ..valid.clone()
         },
         LogRequest {
-            auth_token: "wrong".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "wrong".into(),
+            }),
             ..valid.clone()
         },
     ] {
         assert_eq!(
             service.log(Request::new(request)).await.unwrap_err().code(),
-            tonic::Code::PermissionDenied
+            tonic::Code::Unauthenticated
         );
     }
     let mut invalid = vec![
@@ -342,8 +375,13 @@ async fn worker_logging_rejects_unauthorized_and_malformed_requests() {
             ..valid.clone()
         },
         LogRequest {
-            fields: Some(JsonValue {
-                json: b"not-json".to_vec(),
+            fields: Some(pb::JsonObject {
+                fields: std::collections::HashMap::from([(
+                    "invalid".into(),
+                    pb::JsonValue {
+                        json: b"not-json".to_vec(),
+                    },
+                )]),
             }),
             ..valid.clone()
         },
@@ -354,9 +392,16 @@ async fn worker_logging_rejects_unauthorized_and_malformed_requests() {
             ..valid.clone()
         });
     }
-    for fields in [json!([]), json!(true), Json::Null] {
+    for _fields in [json!([]), json!(true), Json::Null] {
         invalid.push(LogRequest {
-            fields: Some(json_value(&fields).unwrap()),
+            fields: Some(pb::JsonObject {
+                fields: std::collections::HashMap::from([(
+                    "invalid".into(),
+                    pb::JsonValue {
+                        json: b"{".to_vec(),
+                    },
+                )]),
+            }),
             ..valid.clone()
         });
     }
@@ -713,6 +758,7 @@ fn test_worker_error() -> WorkerError {
         message: "boom".into(),
         retryable: false,
         downstream_continuation_id: None,
+        http_status: None,
     }
 }
 
@@ -729,12 +775,8 @@ fn worker_protocol_error_and_json_helpers_preserve_failure_semantics() {
     ));
     assert_eq!(
         json_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Json(JsonResult {
-                value: Some(JsonEnvelope {
-                    schema: "test".into(),
-                    json: b"{\"ok\":true}".to_vec(),
-                }),
-                error: None,
+            result: Some(InvokeResult::ToolValue(pb::JsonValue {
+                json: b"{\"ok\":true}".to_vec()
             })),
         })
         .unwrap(),
@@ -754,10 +796,7 @@ fn response_helpers_cover_json_and_guardrail_error_shapes() {
     let worker_error = test_worker_error();
 
     let error = json_from_invoke_response(InvokeResponse {
-        result: Some(InvokeResult::Json(JsonResult {
-            value: None,
-            error: Some(worker_error.clone()),
-        })),
+        result: Some(InvokeResult::Error(worker_error.clone())),
     })
     .expect_err("json result worker error should surface");
     assert!(error.to_string().contains("worker.failed: boom"));
@@ -769,37 +808,29 @@ fn response_helpers_cover_json_and_guardrail_error_shapes() {
     assert!(error.to_string().contains("worker.failed: boom"));
 
     let error = json_from_invoke_response(InvokeResponse {
-        result: Some(InvokeResult::Empty(EmptyResult {})),
+        result: Some(InvokeResult::Completed(())),
     })
     .expect_err("unexpected JSON result shape should fail");
-    assert!(error.to_string().contains("unexpected invoke result"));
+    assert!(error.to_string().contains("unexpected callback result"));
 
     let error = json_from_invoke_response(InvokeResponse {
-        result: Some(InvokeResult::Json(JsonResult {
-            value: Some(JsonEnvelope {
-                schema: JSON_SCHEMA.into(),
-                json: b"{".to_vec(),
-            }),
-            error: None,
+        result: Some(InvokeResult::ToolValue(pb::JsonValue {
+            json: b"{".to_vec(),
         })),
     })
     .expect_err("invalid JSON envelope should fail");
-    assert!(error.to_string().contains("invalid JSON result"));
+    assert!(error.to_string().contains("invalid JSON"));
 
     assert_eq!(
         guardrail_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Guardrail(GuardrailResult {
-                block_reason: String::new(),
-            })),
+            result: Some(InvokeResult::Guardrail(test_guardrail(String::new()))),
         })
         .expect("empty block reason is allowed"),
         None
     );
     assert_eq!(
         guardrail_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Guardrail(GuardrailResult {
-                block_reason: "blocked".into(),
-            })),
+            result: Some(InvokeResult::Guardrail(test_guardrail("blocked".into()))),
         })
         .expect("block reason should parse"),
         Some("blocked".into())
@@ -814,11 +845,11 @@ fn response_helpers_cover_json_and_guardrail_error_shapes() {
     );
     assert!(
         guardrail_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Empty(EmptyResult {})),
+            result: Some(InvokeResult::Completed(())),
         })
         .expect_err("unexpected guardrail shape should fail")
         .to_string()
-        .contains("guardrail returned unexpected")
+        .contains("unexpected guardrail result")
     );
 }
 
@@ -837,28 +868,24 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
     );
     assert!(
         json_from_stream_chunk(StreamChunk {
-            item: Some(StreamItem::Value(JsonEnvelope {
-                schema: JSON_SCHEMA.into(),
-                json: b"{".to_vec(),
+            item: Some(StreamItem::Value(pb::JsonValue {
+                json: b"{".to_vec()
             })),
         })
         .expect_err("invalid stream JSON envelope should fail")
         .to_string()
-        .contains("invalid worker stream chunk")
+        .contains("invalid JSON")
     );
     assert!(
         json_from_stream_chunk(StreamChunk { item: None })
             .expect_err("empty stream chunk should fail")
             .to_string()
-            .contains("stream chunk was empty")
+            .contains("validation error")
     );
 
     assert!(
         optional_json_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Json(JsonResult {
-                value: None,
-                error: Some(worker_error.clone()),
-            })),
+            result: Some(InvokeResult::Error(worker_error.clone())),
         })
         .unwrap_err()
         .to_string()
@@ -866,44 +893,38 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
     );
     assert!(
         optional_json_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Json(JsonResult {
-                value: Some(JsonEnvelope {
-                    schema: JSON_SCHEMA.into(),
-                    json: b"{".to_vec(),
-                }),
-                error: None,
+            result: Some(InvokeResult::ToolValue(pb::JsonValue {
+                json: b"{".to_vec()
             })),
         })
         .unwrap_err()
         .to_string()
-        .contains("invalid JSON result")
+        .contains("invalid JSON")
     );
     assert_eq!(
         optional_json_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Empty(EmptyResult {})),
+            result: Some(InvokeResult::Unchanged(())),
         })
         .expect("empty result must map to no replacement JSON"),
         None
     );
     assert!(
         optional_json_from_invoke_response(InvokeResponse {
-            result: Some(InvokeResult::Guardrail(GuardrailResult {
-                block_reason: String::new(),
-            })),
+            result: Some(InvokeResult::Guardrail(test_guardrail(String::new()))),
         })
         .unwrap_err()
         .to_string()
-        .contains("unexpected LLM sanitizer result")
+        .contains("unexpected callback result")
     );
 
-    let typed_error = typed_json_result::<Json>(
+    let typed_error = typed_json_result::<Json, pb::LlmNextResponse>(
         JSON_SCHEMA,
         Err(FlowError::Internal("typed result failed".into())),
     );
-    assert!(typed_error.value.is_none());
+    assert!(typed_error.value().is_none());
     assert!(
         typed_error
-            .error
+            .error()
             .is_some_and(|error| error.message.contains("typed result failed"))
     );
     assert!(
@@ -912,6 +933,7 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
             message: "cancelled by caller".into(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None
         })
         .to_string()
         .contains("worker invocation cancelled")
@@ -927,28 +949,30 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
 fn envelope_and_error_helpers_cover_failure_paths() {
     enable_operational_logs();
     assert!(
-        required_envelope(None, "required test")
+        required_envelope::<pb::JsonValue>(None, "required test")
             .expect_err("missing envelope should fail")
             .to_string()
-            .contains("required test is missing")
+            .contains("missing required test")
     );
     assert!(
-        optional_envelope_to_json(Some(JsonEnvelope {
-            schema: JSON_SCHEMA.into(),
-            json: b"not-json".to_vec(),
+        optional_envelope_to_json(Some(pb::JsonValue {
+            json: b"not-json".to_vec()
         }))
         .expect_err("invalid optional envelope should fail")
         .to_string()
         .contains("invalid JSON envelope")
     );
 
-    let ack = host_ack(Err(FlowError::Internal("host failed".into())));
-    assert!(!ack.ok);
-    assert_eq!(ack.error.expect("host error").code, "host.runtime_error");
+    let error =
+        host_ack::<pb::LogResponse>(Err(FlowError::Internal("host failed".into()))).unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
 
-    let result = json_result(Err(FlowError::Internal("json failed".into())));
-    assert!(result.value.is_none());
-    assert_eq!(result.error.expect("json error").code, "host.runtime_error");
+    let result: pb::LlmNextResponse = json_result(Err(FlowError::Internal("json failed".into())));
+    assert!(result.value().is_none());
+    assert_eq!(
+        result.error().expect("json error").code,
+        "host.runtime_error"
+    );
 
     let fallback = worker_error_to_plugin(
         WorkerError {
@@ -956,6 +980,7 @@ fn envelope_and_error_helpers_cover_failure_paths() {
             message: String::new(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None,
         },
         "fallback message",
     );
@@ -971,14 +996,13 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
     enable_operational_logs();
     let empty_name = validate_registration_plan(
         "fixture_worker",
-        &RegisterResponse {
+        &pb::RegistrationPlan {
             registrations: vec![Registration {
                 local_name: " ".into(),
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
             }],
-            error: None,
             conditional_middleware_guardrails: Vec::new(),
         },
     )
@@ -987,14 +1011,13 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
 
     let unsupported = validate_registration_plan(
         "fixture_worker",
-        &RegisterResponse {
+        &pb::RegistrationPlan {
             registrations: vec![Registration {
                 local_name: "bad".into(),
                 surface: 999,
                 priority: 0,
                 break_chain: false,
             }],
-            error: None,
             conditional_middleware_guardrails: Vec::new(),
         },
     )
@@ -1007,14 +1030,13 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
 
     let unspecified = validate_registration_plan(
         "fixture_worker",
-        &RegisterResponse {
+        &pb::RegistrationPlan {
             registrations: vec![Registration {
                 local_name: "bad".into(),
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
             }],
-            error: None,
             conditional_middleware_guardrails: Vec::new(),
         },
     )
@@ -1106,26 +1128,34 @@ fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
 #[test]
 fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
     let mut handshake = HandshakeResponse {
-        plugin_id: "fixture_worker".into(),
-        plugin_kind: "fixture_worker".into(),
         allows_multiple_components: false,
-        worker_protocol: "grpc-v2".into(),
-        sdk_name: "unit".into(),
-        sdk_version: "0".into(),
-        runtime_name: "unit".into(),
-        runtime_version: "0".into(),
         supported_surfaces: Vec::new(),
+        identity: Some(pb::WorkerIdentity {
+            plugin_id: "fixture_worker".into(),
+            plugin_kind: "fixture_worker".into(),
+            sdk_name: "unit".into(),
+            sdk_version: "0".into(),
+            runtime_name: "unit".into(),
+            runtime_version: "0".into(),
+            protocol: Some(pb::ProtocolIdentity {
+                name: "grpc-v2".into(),
+                version: "1.0.0".into(),
+            }),
+        }),
     };
 
     let error = validate_worker_handshake("fixture_worker", &handshake)
         .expect_err("a grpc-v2 handshake response must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported worker_protocol 'grpc-v2'")
-    );
+    assert!(error.to_string().contains("incompatible worker identity"));
 
-    handshake.worker_protocol = WORKER_PROTOCOL_GRPC_V1.into();
+    handshake
+        .identity
+        .as_mut()
+        .unwrap()
+        .protocol
+        .as_mut()
+        .unwrap()
+        .name = WORKER_PROTOCOL.into();
     validate_worker_handshake("fixture_worker", &handshake)
         .expect("a grpc-v1 handshake response should be accepted");
 }
@@ -1169,6 +1199,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         message: "boom".into(),
         retryable: false,
         downstream_continuation_id: None,
+        http_status: None,
     };
     let (callback, _shutdown) = fake_callback_service({
         let worker_error = worker_error.clone();
@@ -1176,72 +1207,63 @@ async fn callback_helpers_cover_worker_response_edges() {
             "subscriber_error" => InvokeResponse {
                 result: Some(InvokeResult::Error(worker_error.clone())),
             },
-            "subscriber_unexpected" | "llm_intercept_unexpected" => InvokeResponse {
-                result: Some(InvokeResult::Json(JsonResult {
-                    value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
-                    error: None,
-                })),
+            "subscriber_unchanged" => InvokeResponse {
+                result: Some(InvokeResult::Unchanged(())),
             },
-            "llm_json_invalid" | "event_fields_invalid" => InvokeResponse {
-                result: Some(InvokeResult::Json(JsonResult {
-                    value: Some(json_envelope(JSON_SCHEMA, &json!(null)).expect("json envelope")),
-                    error: None,
-                })),
+            "subscriber_unexpected" | "llm_intercept_unexpected" => InvokeResponse {
+                result: Some(InvokeResult::ToolValue(
+                    json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope"),
+                )),
+            },
+            "llm_json_invalid" => InvokeResponse {
+                result: Some(InvokeResult::LlmRequest(pb::LlmRequest::default())),
+            },
+            "event_fields_invalid" => InvokeResponse {
+                result: Some(InvokeResult::EventSanitize(Box::new(
+                    pb::EventSanitizeFields {
+                        data: Some(pb::JsonValue {
+                            json: b"{".to_vec(),
+                        }),
+                        ..Default::default()
+                    },
+                ))),
             },
             "llm_intercept_invalid_request" => InvokeResponse {
-                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
-                        json: br#"{"request":null}"#.to_vec(),
-                    }),
-                })),
+                result: Some(InvokeResult::LlmRequestOutcome(Box::default())),
             },
             "llm_intercept_missing_annotated" => InvokeResponse {
-                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.LegacyLlmRequestInterceptResult@1".into(),
-                        json: br#"{}"#.to_vec(),
-                    }),
-                })),
+                result: Some(InvokeResult::LlmRequestOutcome(Box::default())),
             },
             "llm_intercept_invalid_annotated" => InvokeResponse {
-                result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
-                        json: serde_json::to_vec(&json!({
-                            "request": valid_llm_request(),
-                            "annotated_request": 3,
-                            "pending_marks": [],
-                        }))
-                        .unwrap(),
-                    }),
-                })),
+                result: Some(InvokeResult::LlmRequestOutcome(Box::default())),
             },
             "llm_intercept_error" => InvokeResponse {
                 result: Some(InvokeResult::Error(worker_error.clone())),
             },
             "tool_intercept_missing_result" => InvokeResponse {
-                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
-                    outcome: Some(ProtoToolExecutionInterceptOutcome {
-                        result: None,
-                        annotation: None,
-                        pending_marks: None,
-                    }),
-                })),
+                result: Some(InvokeResult::ToolExecutionOutcome(
+                    ProtoToolExecutionInterceptOutcome {
+                        value: Some(pb::ToolExecutionResult {
+                            result: None,
+                            annotation: None,
+                        }),
+                        pending_marks: Vec::new(),
+                    },
+                )),
             },
             "tool_intercept_invalid_result" => InvokeResponse {
-                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
-                    outcome: Some(ProtoToolExecutionInterceptOutcome {
-                        result: Some(JsonValue {
-                            json: b"{".to_vec(),
+                result: Some(InvokeResult::ToolExecutionOutcome(
+                    ProtoToolExecutionInterceptOutcome {
+                        value: Some(pb::ToolExecutionResult {
+                            result: Some(JsonValue { json: Vec::new() }),
+                            annotation: None,
                         }),
-                        annotation: None,
-                        pending_marks: None,
-                    }),
-                })),
+                        pending_marks: Vec::new(),
+                    },
+                )),
             },
             _ => InvokeResponse {
-                result: Some(InvokeResult::Empty(EmptyResult {})),
+                result: Some(InvokeResult::Completed(())),
             },
         }
     })
@@ -1252,6 +1274,14 @@ async fn callback_helpers_cover_worker_response_edges() {
         None,
     ));
 
+    callback
+        .invoke_subscriber("subscriber_completed", &event)
+        .expect("Completed is the subscriber success alternative");
+    let error = callback
+        .invoke_subscriber("subscriber_unchanged", &event)
+        .expect_err("Unchanged is reserved for LLM sanitizers");
+    assert!(error.to_string().contains("unexpected callback result"));
+
     let error = callback
         .invoke_subscriber("subscriber_error", &event)
         .expect_err("subscriber worker error should surface");
@@ -1260,7 +1290,7 @@ async fn callback_helpers_cover_worker_response_edges() {
     let error = callback
         .invoke_subscriber("subscriber_unexpected", &event)
         .expect_err("unexpected subscriber result should fail");
-    assert!(error.to_string().contains("subscriber returned unexpected"));
+    assert!(error.to_string().contains("unexpected callback result"));
 
     let error = callback
         .invoke_event_sanitize(
@@ -1270,11 +1300,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("invalid event sanitizer fields should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("worker returned invalid event sanitize fields")
-    );
+    assert!(error.to_string().contains("invalid JSON"));
 
     let error = callback
         .invoke_llm_sanitize_request(
@@ -1284,7 +1310,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("invalid LLM JSON result should fail");
-    assert!(error.to_string().contains("invalid type"));
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -1295,11 +1321,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("invalid LLM intercept request should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("invalid LLM request intercept outcome")
-    );
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -1310,11 +1332,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("legacy outcome schema should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported LLM request intercept outcome schema")
-    );
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -1325,11 +1343,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("invalid annotated request should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("invalid LLM request intercept outcome")
-    );
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
@@ -1347,11 +1361,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("tool outcome without its required result should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("tool execution intercept outcome result is missing")
-    );
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_tool_execution(
@@ -1363,11 +1373,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("tool outcome with invalid result JSON should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("invalid worker tool execution result JSON")
-    );
+    assert!(error.to_string().contains("validation error"));
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -1378,11 +1384,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         )
         .await
         .expect_err("unexpected LLM intercept result should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("LLM request intercept returned unexpected")
-    );
+    assert!(error.to_string().contains("unexpected callback result"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1392,9 +1394,7 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
     let (callback, _shutdown) = fake_callback_service({
         let seen = seen.clone();
         move |request| {
-            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-                request.payload
-            else {
+            let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
                 panic!("LLM sanitizer must receive an LLM invocation");
             };
             assert!(
@@ -1402,21 +1402,23 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
                 "sanitizers must not receive execution codec context"
             );
             let codec = match invocation.sanitize_context.as_ref() {
-                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
-                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
+                Some(llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => {
+                    context.codec.as_ref()
+                }
+                Some(llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => {
+                    context.codec.as_ref()
+                }
                 None => None,
             };
             seen.lock().unwrap().push((
                 request.registration_name,
-                codec
-                    .map(|codec| codec.kind)
-                    .unwrap_or(LlmCodecKind::Unspecified as i32),
-                codec.and_then(|codec| codec.id.clone()),
+                codec.map(test_codec_kind).unwrap_or("unspecified"),
+                codec.and_then(test_codec_id),
                 invocation.request.is_some(),
                 invocation.response.is_some(),
             ));
             InvokeResponse {
-                result: Some(InvokeResult::Empty(EmptyResult {})),
+                result: Some(InvokeResult::Unchanged(())),
             }
         }
     })
@@ -1457,62 +1459,38 @@ async fn llm_worker_sanitizers_forward_codec_context_and_omission() {
     assert_eq!(
         seen,
         [
+            ("request".into(), "unspecified", None, true, false,),
+            ("response".into(), "unspecified", None, false, true,),
             (
                 "request".into(),
-                LlmCodecKind::Unspecified as i32,
-                None,
-                true,
-                false,
-            ),
-            (
-                "response".into(),
-                LlmCodecKind::Unspecified as i32,
-                None,
-                false,
-                true,
-            ),
-            (
-                "request".into(),
-                LlmCodecKind::Builtin as i32,
+                "builtin",
                 Some("openai_responses".into()),
                 true,
                 false,
             ),
             (
                 "response".into(),
-                LlmCodecKind::Builtin as i32,
+                "builtin",
                 Some("openai_responses".into()),
                 false,
                 true,
             ),
             (
                 "request".into(),
-                LlmCodecKind::Runtime as i32,
+                "runtime",
                 Some("com.example.chat.v1".into()),
                 true,
                 false,
             ),
             (
                 "response".into(),
-                LlmCodecKind::Runtime as i32,
+                "runtime",
                 Some("com.example.chat.v1".into()),
                 false,
                 true,
             ),
-            (
-                "request".into(),
-                LlmCodecKind::Opaque as i32,
-                None,
-                true,
-                false,
-            ),
-            (
-                "response".into(),
-                LlmCodecKind::Opaque as i32,
-                None,
-                false,
-                true,
-            ),
+            ("request".into(), "opaque", None, true, false,),
+            ("response".into(), "opaque", None, false, true,),
         ]
     );
 }
@@ -1530,9 +1508,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
         move |request| {
             let invocation_id = request.invocation_id.clone();
             let registration_name = request.registration_name.clone();
-            let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-                request.payload
-            else {
+            let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
                 panic!("LLM sanitizer must receive an LLM invocation");
             };
             assert!(
@@ -1549,31 +1525,26 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
                 .as_ref()
                 .expect("codec context must be forwarded")
             {
-                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
-                    context,
-                ) => {
+                llm_invocation::SanitizeContext::RequestSanitizeContext(context) => {
                     let id = context
-                        .codec_capability_id
+                        .capability_id
                         .as_deref()
                         .expect("active request codec must receive a capability");
                     let codec = state
                         .request_codec(id, &invocation_id)
                         .expect("request capability must resolve during invocation");
-                    let request: LlmRequest = decode_json_envelope(
-                        invocation.request.as_ref().expect("request payload"),
-                    )
-                    .expect("request payload must decode");
+                    let request: LlmRequest =
+                        decode_json_envelope(invocation.request.as_ref().expect("request payload"))
+                            .expect("request payload must decode");
                     let annotated = codec
                         .decode(&request)
                         .expect("resolved request codec must be usable");
                     assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
                     id.to_owned()
                 }
-                nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
-                    context,
-                ) => {
+                llm_invocation::SanitizeContext::ResponseSanitizeContext(context) => {
                     let id = context
-                        .codec_capability_id
+                        .capability_id
                         .as_deref()
                         .expect("active response codec must receive a capability");
                     let codec = state
@@ -1590,25 +1561,24 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
                     id.to_owned()
                 }
             };
-            seen.lock().unwrap().push((
-                registration_name.clone(),
-                capability_id,
-                invocation_id,
-            ));
+            seen.lock()
+                .unwrap()
+                .push((registration_name.clone(), capability_id, invocation_id));
             if registration_name == "response-error" {
                 InvokeResponse {
                     result: Some(InvokeResult::Error(
-                        nemo_relay_worker_proto::v1::WorkerError {
+                        nemo_relay_worker_proto::nvidia_worker_v1::WorkerError {
                             code: "worker.failed".into(),
                             message: "boom".into(),
                             retryable: false,
                             downstream_continuation_id: None,
+                            http_status: None,
                         },
                     )),
                 }
             } else {
                 InvokeResponse {
-                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                    result: Some(InvokeResult::Unchanged(())),
                 }
             }
         }
@@ -1699,10 +1669,9 @@ async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
                 .expect("response capability resolves during callback");
             *seen.lock().unwrap() = Some((request_id, Some(response_id), invocation_id));
             InvokeResponse {
-                result: Some(InvokeResult::Json(JsonResult {
-                    value: Some(json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap()),
-                    error: None,
-                })),
+                result: Some(InvokeResult::LlmResponse(
+                    json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap(),
+                )),
             }
         }
     })
@@ -1734,7 +1703,7 @@ async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
 async fn worker_execution_rejects_mismatched_response_codec_context() {
     enable_operational_logs();
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
-        result: Some(InvokeResult::Empty(EmptyResult {})),
+        result: Some(InvokeResult::Completed(())),
     })
     .await;
     let result = callback
@@ -1842,7 +1811,7 @@ async fn llm_worker_stream_codec_context_is_request_only_and_expires_at_eof() {
     let chunk_rx = Arc::new(Mutex::new(Some(chunk_rx)));
     let (callback, _shutdown) = fake_callback_service_with_stream(
         |_| InvokeResponse {
-            result: Some(InvokeResult::Empty(EmptyResult {})),
+            result: Some(InvokeResult::Completed(())),
         },
         {
             let host_state = Arc::clone(&host_state);
@@ -1927,7 +1896,7 @@ async fn cancelling_worker_sanitizer_expires_codec_capability() {
                         panic!("request sanitizer context must be present");
                     };
                     let capability_id = context
-                        .codec_capability_id
+                        .capability_id
                         .expect("request codec capability must be present");
                     if let Some(started) = started_tx.lock().expect("started lock").take() {
                         let _ = started.send((capability_id, invocation_id));
@@ -1975,7 +1944,7 @@ async fn cancelling_worker_sanitizer_expires_codec_capability() {
 async fn callback_stream_transport_error_surfaces_to_host_stream() {
     enable_operational_logs();
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
-        result: Some(InvokeResult::Empty(EmptyResult {})),
+        result: Some(InvokeResult::Completed(())),
     })
     .await;
 
@@ -2007,7 +1976,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
     let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
     let (callback, _shutdown) = fake_callback_service_with_stream(
         |_| InvokeResponse {
-            result: Some(InvokeResult::Empty(EmptyResult {})),
+            result: Some(InvokeResult::Completed(())),
         },
         {
             let stream_dropped_tx = stream_dropped_tx.clone();
@@ -2087,7 +2056,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     .await;
     let diagnostics = enable_test_diagnostics(&mut callback.host_state);
     let request = callback
-        .base_request(
+        .test_base_request(
             "timeout",
             RegistrationSurface::ToolRequestIntercept,
             None,
@@ -2119,7 +2088,10 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
         .expect_err("worker invocation should time out")
         .to_string();
     assert!(error.contains("worker invocation timed out"), "{error}");
-    assert!(error.contains("surface=TOOL_REQUEST_INTERCEPT"), "{error}");
+    assert!(
+        error.contains("surface=REGISTRATION_SURFACE_TOOL_REQUEST_INTERCEPT"),
+        "{error}"
+    );
     assert!(error.contains("callback=timeout"), "{error}");
     assert!(error.contains("worker RPC timed out after 10ms"), "{error}");
     assert_eq!(cancellation.invocation_id, invocation_id);
@@ -2166,7 +2138,27 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
                             started.notify_one();
                             release.notified().await;
                             InvokeResponse {
-                                result: Some(InvokeResult::Empty(EmptyResult {})),
+                                result: Some(match surface {
+                                    RegistrationSurface::ToolExecutionIntercept => {
+                                        InvokeResult::ToolExecutionOutcome(
+                                            pb::ToolExecutionInterceptOutcome {
+                                                value: Some(pb::ToolExecutionResult {
+                                                    result: Some(pb::JsonValue {
+                                                        json: b"null".to_vec(),
+                                                    }),
+                                                    annotation: None,
+                                                }),
+                                                pending_marks: Vec::new(),
+                                            },
+                                        )
+                                    }
+                                    RegistrationSurface::LlmExecutionIntercept => {
+                                        InvokeResult::LlmResponse(pb::JsonValue {
+                                            json: b"null".to_vec(),
+                                        })
+                                    }
+                                    _ => unreachable!(),
+                                }),
                             }
                         })
                     }
@@ -2180,7 +2172,7 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
             }))
             .unwrap();
             let request = callback
-                .base_request("long_execution", surface, None, None)
+                .test_base_request("long_execution", surface, None, None)
                 .unwrap();
             let invocation_id = request.invocation_id.clone();
             let running_callback = callback.clone();
@@ -2251,7 +2243,7 @@ async fn short_callbacks_use_configured_deadlines_and_cancel_on_expiry() {
         callback.callback_timeouts = serde_json::from_value(settings).unwrap();
         let host_state = callback.host_state.clone();
         let request = callback
-            .base_request(
+            .test_base_request(
                 "short_callback",
                 RegistrationSurface::ToolRequestIntercept,
                 None,
@@ -2299,7 +2291,7 @@ async fn streaming_execution_can_wait_for_slow_response_headers() {
             |_| {
                 Box::pin(async {
                     InvokeResponse {
-                        result: Some(InvokeResult::Empty(EmptyResult {})),
+                        result: Some(InvokeResult::Completed(())),
                     }
                 })
             },
@@ -2378,7 +2370,7 @@ async fn worker_tool_lifecycle_subscriber_marks_keep_the_observed_tool_parent() 
             Box::pin(async move {
                 let event = match request.payload.unwrap() {
                     invoke_request_payload::Payload::Event(event) => {
-                        nemo_relay_worker_proto::decode_json_envelope::<Event>(&event).unwrap()
+                        decode_wire::<Event>(event.as_ref()).unwrap()
                     }
                     _ => panic!("expected lifecycle event"),
                 };
@@ -2386,20 +2378,24 @@ async fn worker_tool_lifecycle_subscriber_marks_keep_the_observed_tool_parent() 
                     ScopeCategory::Start => "nv.agent.tool.start",
                     ScopeCategory::End => "nv.agent.tool.end",
                 };
-                let ack = WorkerHostRuntimeService { state }
+                let _ack = WorkerHostRuntimeService { state }
                     .emit_mark(Request::new(EmitMarkRequest {
-                        activation_id: ACTIVATION_ID.into(),
-                        auth_token: AUTH_TOKEN.into(),
                         scope: request.scope,
-                        name: mark_name.into(),
-                        ..EmitMarkRequest::default()
+                        credentials: Some(pb::Credentials {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                        }),
+                        mark: Some(pb::PendingMarkSpec {
+                            name: mark_name.into(),
+                            ..Default::default()
+                        }),
                     }))
                     .await
                     .unwrap()
                     .into_inner();
-                assert!(ack.ok);
+
                 InvokeResponse {
-                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                    result: Some(InvokeResult::Completed(())),
                 }
             })
         },
@@ -2510,7 +2506,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
         })))
         .expect("continuation should insert");
     let request = callback
-        .base_request(
+        .test_base_request(
             "cancel",
             RegistrationSurface::ToolExecutionIntercept,
             Some(continuation_id),
@@ -2537,10 +2533,8 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
         state: callback.host_state.clone(),
     };
     for name in ["cancelled-outer", "cancelled-inner"] {
-        let pushed = host_runtime
+        let _pushed = host_runtime
             .push_scope(Request::new(PushScopeRequest {
-                activation_id: ACTIVATION_ID.into(),
-                auth_token: AUTH_TOKEN.into(),
                 scope: Some(ScopeContext {
                     scope_stack_id: scope_stack_id.clone(),
                     parent_scope_id: String::new(),
@@ -2550,12 +2544,18 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
                 data: None,
                 metadata: None,
                 input: None,
-                timestamp_unix_micros: None,
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
+                time: None.map(|micros: i64| prost_types::Timestamp {
+                    seconds: micros.div_euclid(1_000_000),
+                    nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+                }),
             }))
             .await
             .expect("worker scope should push")
             .into_inner();
-        assert!(pushed.error.is_none());
     }
     assert_eq!(
         invocation_stack
@@ -3034,6 +3034,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             message: "callback unavailable".into(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None,
         })),
     })
     .await;
@@ -3200,7 +3201,7 @@ async fn adapter_registration_requests_the_deferred_plan_once() {
         |_| {
             Box::pin(async {
                 InvokeResponse {
-                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                    result: Some(InvokeResult::Completed(())),
                 }
             })
         },
@@ -3242,16 +3243,20 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let diagnostics_auth_error = service
         .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
-            activation_id: "wrong".into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: "wrong".into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("bad activation id should fail diagnostics auth");
-    assert_eq!(diagnostics_auth_error.code(), tonic::Code::PermissionDenied);
+    assert_eq!(diagnostics_auth_error.code(), tonic::Code::Unauthenticated);
     let diagnostics = service
         .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("diagnostics request should succeed")
@@ -3260,149 +3265,156 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let auth_error = service
         .emit_mark(Request::new(EmitMarkRequest {
-            activation_id: "wrong".into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "auth-failure".into(),
             scope: None,
-            data: None,
-            metadata: None,
-            data_schema: None,
-            severity: String::new(),
-            category: String::new(),
+            credentials: Some(pb::Credentials {
+                activation_id: "wrong".into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "auth-failure".into(),
+                data: None,
+                metadata: None,
+                data_schema: None,
+                severity: None,
+                category: None,
+                ..Default::default()
+            }),
         }))
         .await
         .expect_err("bad activation id should fail auth");
-    assert_eq!(auth_error.code(), tonic::Code::PermissionDenied);
+    assert_eq!(auth_error.code(), tonic::Code::Unauthenticated);
 
     let ack = service
         .emit_mark(Request::new(EmitMarkRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "missing-stack".into(),
             scope: Some(ScopeContext {
                 scope_stack_id: "missing-stack".into(),
                 parent_scope_id: String::new(),
             }),
-            data: None,
-            metadata: None,
-            data_schema: None,
-            severity: String::new(),
-            category: String::new(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "missing-stack".into(),
+                data: None,
+                metadata: None,
+                data_schema: None,
+                severity: None,
+                category: None,
+                ..Default::default()
+            }),
         }))
         .await
-        .expect("missing stack should return host ack")
-        .into_inner();
-    assert!(!ack.ok);
-    assert!(
-        ack.error
-            .expect("missing stack error")
-            .message
-            .contains("not found")
-    );
+        .expect_err("missing stack should return host ack");
+    assert_eq!(ack.code(), tonic::Code::NotFound);
+    assert!(ack.message().contains("scope stack binding"));
 
-    let ack = service
+    let _ack = service
         .emit_mark(Request::new(EmitMarkRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "no-scope".into(),
             scope: None,
-            data: None,
-            metadata: None,
-            data_schema: None,
-            severity: String::new(),
-            category: String::new(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "no-scope".into(),
+                data: None,
+                metadata: None,
+                data_schema: None,
+                severity: None,
+                category: None,
+                ..Default::default()
+            }),
         }))
         .await
         .expect("no-scope mark should succeed")
         .into_inner();
-    assert!(ack.ok);
 
-    let ack = service
+    let _ack = service
         .emit_mark(Request::new(EmitMarkRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "telemetry-options".into(),
             scope: None,
-            data: Some(json_envelope("nemo.relay.Json@1", &json!({"measurements": []})).unwrap()),
-            metadata: None,
-            data_schema: Some(
-                json_envelope(
-                    "nemo.relay.DataSchema@1",
-                    &json!({
-                        "name": "nemo.relay.metric_measurements",
-                        "version": "1"
-                    }),
-                )
-                .unwrap(),
-            ),
-            severity: "warning".into(),
-            category: "custom".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "telemetry-options".into(),
+                data: Some(
+                    json_envelope("nemo.relay.Json@1", &json!({"measurements": []})).unwrap(),
+                ),
+                metadata: None,
+                data_schema: Some(pb::DataSchema {
+                    name: "nemo.relay.metric_measurements".into(),
+                    version: "1".into(),
+                }),
+                severity: None,
+                category: Some("custom".into()),
+                ..Default::default()
+            }),
         }))
         .await
         .expect("typed mark options should return host ack")
         .into_inner();
-    assert!(ack.ok, "{:?}", ack.error);
 
     for request in [
         EmitMarkRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "bad-schema".into(),
-            data_schema: Some(
-                json_envelope(
-                    "nemo.relay.DataSchema@1",
-                    &json!({"name": 7, "version": "1"}),
-                )
-                .unwrap(),
-            ),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "bad-schema".into(),
+                data_schema: Some(pb::DataSchema {
+                    name: String::new(),
+                    version: "1".into(),
+                }),
+                ..Default::default()
+            }),
             ..EmitMarkRequest::default()
         },
         EmitMarkRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            name: "bad-severity".into(),
-            severity: "fatal".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            mark: Some(pb::PendingMarkSpec {
+                name: "bad-severity".into(),
+                severity: Some(999),
+                ..Default::default()
+            }),
             ..EmitMarkRequest::default()
         },
     ] {
         let ack = service
             .emit_mark(Request::new(request))
             .await
-            .expect("invalid mark options should return host ack")
-            .into_inner();
-        assert!(!ack.ok);
-        assert!(
-            ack.error
-                .expect("invalid mark error")
-                .message
-                .contains("invalid argument")
-        );
+            .expect_err("invalid mark options should return host ack");
+        assert_eq!(ack.code(), tonic::Code::InvalidArgument);
+        assert!(ack.message().contains("validation error"));
     }
 
     let push = service
         .push_scope(Request::new(PushScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope: None,
             name: "invalid-json-scope".into(),
             scope_type: ProtoScopeType::Custom as i32,
-            data: Some(JsonEnvelope {
-                schema: JSON_SCHEMA.into(),
+            data: Some(pb::JsonValue {
                 json: b"not-json".to_vec(),
             }),
             metadata: None,
             input: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
-        .expect("invalid JSON should be structured")
-        .into_inner();
-    assert!(
-        push.error
-            .expect("push error")
-            .message
-            .contains("invalid JSON")
-    );
+        .expect_err("invalid JSON should be structured");
+    assert!(push.message().contains("invalid JSON"));
 
     let historical_events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured_historical_events = Arc::clone(&historical_events);
@@ -3421,20 +3433,25 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let historical_push = service
         .push_scope(Request::new(PushScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope: None,
             name: "historical-scope".into(),
             scope_type: ProtoScopeType::Custom as i32,
             data: None,
             metadata: None,
             input: None,
-            timestamp_unix_micros: Some(-2),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: Some(-2).map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect("historical scope should push")
         .into_inner();
-    assert!(historical_push.error.is_none());
+
     let historical_handle_id = historical_push.scope_handle_id;
     assert_eq!(
         state
@@ -3451,23 +3468,25 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let invalid_pop = service
         .pop_scope(Request::new(PopScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_handle_id: historical_handle_id.clone(),
             output: None,
             metadata: None,
-            timestamp_unix_micros: Some(i64::MAX),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: Some(i64::MAX).map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
-        .expect("invalid timestamp should return a host ack")
-        .into_inner();
-    assert!(!invalid_pop.ok);
+        .expect_err("invalid timestamp should return a host ack");
+    assert_eq!(invalid_pop.code(), tonic::Code::InvalidArgument);
     assert!(
         invalid_pop
-            .error
-            .expect("invalid timestamp error")
-            .message
-            .contains("outside supported range")
+            .message()
+            .contains("invalid google.protobuf.Timestamp")
     );
     assert!(
         state
@@ -3478,19 +3497,24 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
         "an invalid timestamp must not consume the pop handle"
     );
 
-    let historical_pop = service
+    let _historical_pop = service
         .pop_scope(Request::new(PopScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_handle_id: historical_handle_id.clone(),
             output: None,
             metadata: None,
-            timestamp_unix_micros: Some(0),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: Some(0).map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect("epoch timestamp should pop")
         .into_inner();
-    assert!(historical_pop.ok, "{:?}", historical_pop.error);
+
     assert!(
         !state
             .scope_handles
@@ -3522,12 +3546,17 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let pop_error = service
         .pop_scope(Request::new(PopScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_handle_id: "missing-scope".into(),
             output: None,
             metadata: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect_err("missing scope handle should fail");
@@ -3535,8 +3564,10 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
     let created = service
         .create_scope_stack(Request::new(CreateScopeStackRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("scope stack should be created")
@@ -3548,16 +3579,18 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             .expect("empty stack id should be valid")
             .is_none()
     );
-    let dropped = service
+    let _dropped = service
         .drop_scope_stack(Request::new(DropScopeStackRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_stack_id: scope_stack_id.clone(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("scope stack should be dropped")
         .into_inner();
-    assert!(dropped.ok);
+
     assert_eq!(
         state
             .stack(&scope_stack_id)
@@ -3566,18 +3599,22 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
         tonic::Code::NotFound
     );
 
-    assert_eq!(
-        service
-            .with_stack(
-                Some(&ScopeContext {
-                    scope_stack_id: String::new(),
-                    parent_scope_id: String::new(),
-                }),
-                || Ok(7),
-            )
-            .expect("empty explicit stack id should run without binding"),
-        7
-    );
+    assert_eq!(service.with_stack(None, || Ok(7)).unwrap(), 7);
+    let called = AtomicBool::new(false);
+    let error = service
+        .with_stack(
+            Some(&ScopeContext {
+                scope_stack_id: String::new(),
+                parent_scope_id: String::new(),
+            }),
+            || {
+                called.store(true, Ordering::SeqCst);
+                Ok(7)
+            },
+        )
+        .expect_err("an explicit empty binding must not select an ambient stack");
+    assert_eq!(error.code(), tonic::Code::NotFound);
+    assert!(!called.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -3612,23 +3649,27 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
 
     let unauthorized = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: "wrong".into(),
             codec_capability_id: request_capability.clone(),
             invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "wrong".into(),
+            }),
         }))
         .await
         .expect_err("wrong activation credentials must be rejected");
-    assert_eq!(unauthorized.code(), tonic::Code::PermissionDenied);
+    assert_eq!(unauthorized.code(), tonic::Code::Unauthenticated);
 
     let forged = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: "codec-forged".into(),
             invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("forged capability must be rejected");
@@ -3636,11 +3677,13 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
 
     let wrong_direction = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: response_capability.clone(),
             invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("response capability cannot decode requests");
@@ -3648,11 +3691,13 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
 
     let wrong_invocation = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability.clone(),
             invocation_id: "another-invocation".into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("a capability cannot be reused by another invocation");
@@ -3672,38 +3717,42 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
 
     let decoded = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability.clone(),
             invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("active request capability decodes")
         .into_inner();
-    assert!(decoded.error.is_none());
-    let decoded = decoded.value.expect("decoded request value");
-    assert_eq!(decoded.schema, "nemo.relay.AnnotatedLlmRequest@2");
+    assert!(decoded.error().is_none());
+    let decoded = decoded.value().expect("decoded request value");
+
     let annotated: AnnotatedLlmRequest = decode_json_envelope(&decoded).unwrap();
     assert_eq!(annotated.model.as_deref(), Some("gpt-test"));
 
     let encoded = service
         .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability.clone(),
             invocation_id: invocation_id.into(),
             annotated_request: Some(
                 json_envelope("nemo.relay.AnnotatedLlmRequest@2", &annotated).unwrap(),
             ),
             original_request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("active request capability encodes")
         .into_inner();
-    assert!(encoded.error.is_none());
-    let encoded = encoded.value.expect("encoded request value");
-    assert_eq!(encoded.schema, "nemo.relay.LlmRequest@1");
+    assert!(encoded.error().is_none());
+    let encoded = encoded.value().expect("encoded request value");
+
     let encoded: LlmRequest = decode_json_envelope(&encoded).unwrap();
     assert_eq!(encoded.content["preserve"], json!(true));
 
@@ -3718,8 +3767,10 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
     });
     let decoded = service
         .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
             codec_capability_id: response_capability.clone(),
             invocation_id: invocation_id.into(),
             response: Some(json_envelope(JSON_SCHEMA, &response).unwrap()),
@@ -3727,17 +3778,19 @@ async fn host_runtime_codec_capabilities_are_directional_authorized_and_ephemera
         .await
         .expect("active response capability decodes")
         .into_inner();
-    assert!(decoded.error.is_none());
+    assert!(decoded.error().is_none());
 
     drop(request_capability_guard);
     drop(response_capability_guard);
     let expired = service
         .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             codec_capability_id: request_capability,
             invocation_id: invocation_id.into(),
             request: Some(json_envelope("nemo.relay.LlmRequest@1", &request).unwrap()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("removed capability must expire");
@@ -3763,15 +3816,20 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
     };
     let push_error = service
         .push_scope(Request::new(PushScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope: None,
             name: "poisoned".into(),
             scope_type: ProtoScopeType::Custom as i32,
             data: None,
             metadata: None,
             input: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect_err("poisoned scope handle lock should fail");
@@ -3779,12 +3837,17 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
 
     let pop_error = service
         .pop_scope(Request::new(PopScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_handle_id: "missing".into(),
             output: None,
             metadata: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect_err("poisoned scope handle lock should fail");
@@ -3804,8 +3867,10 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
     let service = WorkerHostRuntimeService { state };
     let create_error = service
         .create_scope_stack(Request::new(CreateScopeStackRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("poisoned scope stack lock should fail");
@@ -3813,9 +3878,11 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
 
     let drop_error = service
         .drop_scope_stack(Request::new(DropScopeStackRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_stack_id: "stack".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("poisoned scope stack lock should fail");
@@ -3842,7 +3909,7 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
     ));
 
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
-        result: Some(InvokeResult::Empty(EmptyResult {})),
+        result: Some(InvokeResult::Completed(())),
     })
     .await;
     poison_mutex({
@@ -3915,11 +3982,13 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("llm continuation should insert");
     let wrong_type = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: llm_continuation,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("wrong continuation type should fail");
@@ -3932,14 +4001,15 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("tool continuation should insert");
     let invalid_tool_json = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: tool_continuation,
-            value: Some(JsonEnvelope {
-                schema: JSON_SCHEMA.into(),
+            value: Some(pb::JsonValue {
                 json: b"not-json".to_vec(),
             }),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("invalid tool next JSON should fail");
@@ -3954,18 +4024,20 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("panicking tool continuation should insert");
     let result = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: tool_continuation,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("tool panic should become a structured result")
         .into_inner();
     assert!(
         result
-            .error
+            .error()
             .is_some_and(|error| error.message.contains("worker tool next panic"))
     );
 
@@ -3976,14 +4048,18 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("llm continuation should insert");
     let invalid_llm_json = service
         .llm_next(Request::new(LlmNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: llm_continuation,
-            request: Some(JsonEnvelope {
-                schema: LLM_REQUEST_SCHEMA.into(),
-                json: b"not-json".to_vec(),
+            request: Some(pb::LlmRequest {
+                headers: Some(pb::JsonObject::default()),
+                content: Some(pb::JsonValue {
+                    json: b"not-json".to_vec(),
+                }),
             }),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("invalid LLM next request should fail");
@@ -3998,21 +4074,23 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("panicking LLM continuation should insert");
     let result = service
         .llm_next(Request::new(LlmNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: llm_continuation,
             request: Some(
                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
                     .expect("llm request envelope"),
             ),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("LLM panic should become a structured result")
         .into_inner();
     assert!(
         result
-            .error
+            .error()
             .is_some_and(|error| error.message.contains("worker LLM next panic"))
     );
 
@@ -4027,8 +4105,6 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("stream continuation should insert");
     let stream_response = service
         .llm_stream_next(Request::new(LlmStreamNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: stream_continuation,
             request: Some(
                 json_envelope(
@@ -4041,6 +4117,10 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
                 .expect("llm request envelope"),
             ),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("stream next should return stream");
@@ -4051,7 +4131,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("stream should yield one item")
         .expect("transport should be ok");
     match chunk.item {
-        Some(StreamItem::Error(error)) => {
+        Some(pb::llm_stream_next_response::Item::Error(error)) => {
             assert!(error.message.contains("stream item failed"));
         }
         other => panic!("expected worker stream error, got {other:?}"),
@@ -4070,14 +4150,16 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("panicking stream continuation should insert");
     let stream_response = service
         .llm_stream_next(Request::new(LlmStreamNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: stream_continuation,
             request: Some(
                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request())
                     .expect("llm request envelope"),
             ),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("stream next should return a stream before polling");
@@ -4088,7 +4170,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("panicking stream should yield one error")
         .expect("panic should be translated into a stream item");
     match chunk.item {
-        Some(StreamItem::Error(error)) => {
+        Some(pb::llm_stream_next_response::Item::Error(error)) => {
             assert!(error.message.contains("worker stream next panic"));
         }
         other => panic!("expected worker panic error, got {other:?}"),
@@ -4101,14 +4183,18 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
         .expect("stream continuation should insert");
     let invalid_stream_request = match service
         .llm_stream_next(Request::new(LlmStreamNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: stream_continuation,
-            request: Some(JsonEnvelope {
-                schema: LLM_REQUEST_SCHEMA.into(),
-                json: b"not-json".to_vec(),
+            request: Some(pb::LlmRequest {
+                headers: Some(pb::JsonObject::default()),
+                content: Some(pb::JsonValue {
+                    json: b"not-json".to_vec(),
+                }),
             }),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
     {
@@ -4151,17 +4237,19 @@ async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
     drop(guard);
     let result = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: continuation_id.clone(),
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("late worker next should return a structured callback error")
         .into_inner();
     assert!(
-        result.error.is_some_and(|error| {
+        result.error().is_some_and(|error| {
             error
                 .message
                 .contains("execution continuation is no longer active")
@@ -4173,11 +4261,13 @@ async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
     state.remove_continuation(&continuation_id);
     let error = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id,
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("cleaned-up worker continuation should no longer be addressable");
@@ -4210,6 +4300,7 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
         state.scope_stacks.lock().unwrap().insert(
             stack_id.into(),
             StoredScopeStack {
+                lifetime: Arc::default(),
                 handle: stack,
                 publication_buffer: None,
                 continuation_context: None,
@@ -4230,13 +4321,15 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
         .expect("tool continuation should insert");
     let request = |stack_id: &str| {
         Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: continuation_id.clone(),
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
             scope: Some(ScopeContext {
                 scope_stack_id: stack_id.into(),
                 parent_scope_id: String::new(),
+            }),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
             }),
         })
     };
@@ -4245,12 +4338,12 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
         service.tool_next(request("worker-next-first")),
         service.tool_next(request("worker-next-second"))
     );
-    let decode = |response: tonic::Response<ToolExecutionResultResponse>| {
+    let decode = |response: tonic::Response<pb::ToolNextResponse>| {
         let value = response
             .into_inner()
-            .value
+            .value()
             .expect("tool next should return a value");
-        decode_json_value::<Json>(value.result.as_ref().expect("tool next result")).unwrap()
+        decode_json_value(value.result.as_ref().expect("tool next result")).unwrap()
     };
 
     assert_eq!(decode(first.unwrap()), json!(expected[0]));
@@ -4305,8 +4398,6 @@ async fn overlapping_worker_invocations_isolate_scope_stack_mutations() {
         tokio::spawn(async move {
             let response = service
                 .push_scope(Request::new(PushScopeRequest {
-                    activation_id: ACTIVATION_ID.into(),
-                    auth_token: AUTH_TOKEN.into(),
                     scope: Some(ScopeContext {
                         scope_stack_id: scope_stack_id.clone(),
                         parent_scope_id: String::new(),
@@ -4316,12 +4407,19 @@ async fn overlapping_worker_invocations_isolate_scope_stack_mutations() {
                     data: None,
                     metadata: None,
                     input: None,
-                    timestamp_unix_micros: None,
+                    credentials: Some(pb::Credentials {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: AUTH_TOKEN.into(),
+                    }),
+                    time: None.map(|micros: i64| prost_types::Timestamp {
+                        seconds: micros.div_euclid(1_000_000),
+                        nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+                    }),
                 }))
                 .await
                 .expect("worker scope should push")
                 .into_inner();
-            assert!(response.error.is_none(), "{:?}", response.error);
+
             let expected = response
                 .scope_handle_id
                 .strip_prefix("scope-")
@@ -4329,22 +4427,23 @@ async fn overlapping_worker_invocations_isolate_scope_stack_mutations() {
                 .to_owned();
             let response = service
                 .tool_next(Request::new(ToolNextRequest {
-                    activation_id: ACTIVATION_ID.into(),
-                    auth_token: AUTH_TOKEN.into(),
                     continuation_id,
                     value: Some(json_envelope(JSON_SCHEMA, &json!({})).expect("json envelope")),
                     scope: Some(ScopeContext {
                         scope_stack_id,
                         parent_scope_id: String::new(),
                     }),
+                    credentials: Some(pb::Credentials {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: AUTH_TOKEN.into(),
+                    }),
                 }))
                 .await
                 .expect("worker continuation should run")
                 .into_inner();
-            let value = response.value.expect("tool next should return a value");
-            let observed =
-                decode_json_value::<Json>(value.result.as_ref().expect("tool next result"))
-                    .expect("tool next result should decode");
+            let value = response.value().expect("tool next should return a value");
+            let observed = decode_json_value(value.result.as_ref().expect("tool next result"))
+                .expect("tool next result should decode");
             (expected, observed)
         })
     };
@@ -4407,8 +4506,6 @@ async fn worker_runtime_scope_calls_restore_managed_parent_and_trace_context() {
 
     let parent_response = service
         .push_scope(Request::new(PushScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope: Some(ScopeContext {
                 scope_stack_id: scope_stack_id.clone(),
                 parent_scope_id: String::new(),
@@ -4418,16 +4515,19 @@ async fn worker_runtime_scope_calls_restore_managed_parent_and_trace_context() {
             data: None,
             metadata: None,
             input: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .expect("managed-parent scope should push")
         .into_inner();
-    assert!(
-        parent_response.error.is_none(),
-        "{:?}",
-        parent_response.error
-    );
+    assert!(!parent_response.scope_handle_id.is_empty());
     let parent_handle = state
         .scope_handles
         .lock()
@@ -4470,7 +4570,7 @@ fn openai_stream_execution_codec_context() -> LlmExecutionContext {
     )
 }
 
-fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabilities {
+fn execution_codec_capabilities(request: PreparedInvocation) -> ExecutionCodecCapabilities {
     let surface = RegistrationSurface::try_from(request.surface).expect("registration surface");
     let invocation_id = request.invocation_id;
     let Some(invoke_request_payload::Payload::Llm(invocation)) = request.payload else {
@@ -4482,15 +4582,21 @@ fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabil
         .expect("execution must receive codec context");
     let request_context = context.request.expect("request codec context");
     let request_identity = request_context.codec.expect("request codec identity");
-    assert_eq!(request_identity.kind, LlmCodecKind::Builtin as i32);
-    assert_eq!(request_identity.id.as_deref(), Some("openai_chat"));
+    assert_eq!(test_codec_kind(&request_identity), "builtin");
+    assert_eq!(
+        test_codec_id(&request_identity).as_deref(),
+        Some("openai_chat")
+    );
     let response_capability_id = match surface {
         RegistrationSurface::LlmExecutionIntercept => {
             let response_context = context.response.expect("unary response codec context");
             let response_identity = response_context.codec.expect("response codec identity");
-            assert_eq!(response_identity.kind, LlmCodecKind::Builtin as i32);
-            assert_eq!(response_identity.id.as_deref(), Some("openai_chat"));
-            response_context.codec_capability_id
+            assert_eq!(test_codec_kind(&response_identity), "builtin");
+            assert_eq!(
+                test_codec_id(&response_identity).as_deref(),
+                Some("openai_chat")
+            );
+            response_context.capability_id
         }
         RegistrationSurface::LlmStreamExecutionIntercept => {
             assert!(
@@ -4503,7 +4609,7 @@ fn execution_codec_capabilities(request: InvokeRequest) -> ExecutionCodecCapabil
     };
     (
         request_context
-            .codec_capability_id
+            .capability_id
             .expect("request capability must be present"),
         response_capability_id,
         invocation_id,
@@ -4541,23 +4647,23 @@ fn assert_response_codec_expired(
 }
 
 async fn fake_callback_service(
-    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> InvokeResponse + Send + Sync + 'static,
 ) -> (WorkerPluginCallback, oneshot::Sender<()>) {
     let (client, shutdown_tx) = fake_worker_client(invoke).await;
     callback_for_client(client, shutdown_tx)
 }
 
 async fn fake_callback_service_with_stream(
-    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> InvokeResponse + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (WorkerPluginCallback, oneshot::Sender<()>) {
     let (client, shutdown_tx) = fake_worker_client_with_stream(invoke, invoke_stream).await;
     callback_for_client(client, shutdown_tx)
 }
 
 async fn fake_callback_service_with_handlers(
-    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (
     WorkerPluginCallback,
     oneshot::Sender<()>,
@@ -4597,7 +4703,7 @@ async fn fake_worker_instance(
 ) -> (WorkerPluginInstance, oneshot::Sender<()>) {
     enable_operational_logs();
     let (client, shutdown_tx) = fake_worker_client(|_| InvokeResponse {
-        result: Some(InvokeResult::Empty(EmptyResult {})),
+        result: Some(InvokeResult::Completed(())),
     })
     .await;
     let activation_dir = std::env::temp_dir().join(format!("nmrw-unit-{}", Uuid::now_v7()));
@@ -4609,7 +4715,7 @@ async fn fake_worker_instance(
             allows_multiple_components: false,
             config: serde_json::Map::new(),
             validation_diagnostics: Vec::new(),
-            relay_compat: ">=0.9,<1.0".into(),
+            relay_compat: ">=1.0.0,<2.0".into(),
             registrations: tokio::sync::OnceCell::new_with(Some(registrations)),
             runtime: OwnedWorkerRuntime::new(
                 RuntimeBuilder::new_multi_thread()
@@ -4632,7 +4738,7 @@ async fn fake_worker_instance(
 }
 
 async fn fake_worker_client(
-    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> InvokeResponse + Send + Sync + 'static,
 ) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
     fake_worker_client_with_stream(invoke, |_| {
         Box::pin(tokio_stream::iter(vec![Err(Status::unavailable(
@@ -4643,8 +4749,8 @@ async fn fake_worker_client(
 }
 
 async fn fake_worker_client_with_stream(
-    invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> InvokeResponse + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
     let invoke = Arc::new(invoke);
     let (client, shutdown_tx, _cancel_rx, _register_calls) = fake_worker_client_with_handlers(
@@ -4659,8 +4765,8 @@ async fn fake_worker_client_with_stream(
 }
 
 async fn fake_worker_client_with_handlers(
-    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (
     PluginWorkerClient<Channel>,
     oneshot::Sender<()>,
@@ -4676,8 +4782,8 @@ async fn fake_worker_client_with_handlers(
 }
 
 async fn fake_worker_client_with_async_handlers(
-    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStreamFuture + Send + Sync + 'static,
 ) -> (
     PluginWorkerClient<Channel>,
     oneshot::Sender<()>,
@@ -4688,8 +4794,8 @@ async fn fake_worker_client_with_async_handlers(
 }
 
 async fn fake_worker_client_with_cancel_error(
-    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
-    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+    invoke: impl Fn(PreparedInvocation) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(PreparedInvocation) -> FakeInvokeStreamFuture + Send + Sync + 'static,
     cancel_error: Option<Status>,
 ) -> (
     PluginWorkerClient<Channel>,
@@ -4741,13 +4847,13 @@ fn worker_loader_empty_input_returns_an_empty_activation() {
     activation.clear();
 }
 
-fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {
-    let _ = std::panic::catch_unwind(f);
+fn poison_mutex(f: impl FnOnce()) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
 }
 
 struct FakePluginWorker {
-    invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
-    invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync>,
+    invoke: Arc<dyn Fn(PreparedInvocation) -> FakeInvokeFuture + Send + Sync>,
+    invoke_stream: Arc<dyn Fn(PreparedInvocation) -> FakeInvokeStreamFuture + Send + Sync>,
     cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
     cancel_error: Option<Status>,
     register_calls: Arc<AtomicUsize>,
@@ -4797,7 +4903,7 @@ async fn pending_worker_stream_with_first_chunk(
         |_| {
             Box::pin(async {
                 InvokeResponse {
-                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                    result: Some(InvokeResult::Completed(())),
                 }
             })
         },
@@ -4960,15 +5066,20 @@ impl PluginWorker for FakePluginWorker {
         _request: Request<HandshakeRequest>,
     ) -> std::result::Result<tonic::Response<HandshakeResponse>, tonic::Status> {
         Ok(tonic::Response::new(HandshakeResponse {
-            plugin_id: "fixture_worker".into(),
-            plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            sdk_name: "unit".into(),
-            sdk_version: "0".into(),
-            runtime_name: "unit".into(),
-            runtime_version: "0".into(),
             supported_surfaces: Vec::new(),
+            identity: Some(pb::WorkerIdentity {
+                plugin_id: "fixture_worker".into(),
+                plugin_kind: "fixture_worker".into(),
+                sdk_name: "unit".into(),
+                sdk_version: "0".into(),
+                runtime_name: "unit".into(),
+                runtime_version: "0".into(),
+                protocol: Some(pb::ProtocolIdentity {
+                    name: WORKER_PROTOCOL.into(),
+                    version: "1.0.0".into(),
+                }),
+            }),
         }))
     }
 
@@ -4977,14 +5088,24 @@ impl PluginWorker for FakePluginWorker {
         _request: Request<HealthRequest>,
     ) -> std::result::Result<tonic::Response<HealthResponse>, tonic::Status> {
         Ok(tonic::Response::new(HealthResponse {
-            ok: true,
             message: String::new(),
-            plugin_id: "fixture_worker".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            sdk_name: "unit".into(),
-            sdk_version: "0".into(),
-            runtime_name: "unit".into(),
-            runtime_version: "0".into(),
+            identity: Some(pb::WorkerIdentity {
+                plugin_id: "fixture_worker".into(),
+                sdk_name: "unit".into(),
+                sdk_version: "0".into(),
+                runtime_name: "unit".into(),
+                runtime_version: "0".into(),
+                protocol: Some(pb::ProtocolIdentity {
+                    name: WORKER_PROTOCOL.into(),
+                    version: "1.0.0".into(),
+                }),
+                plugin_kind: "test".into(),
+            }),
+            status: if true {
+                pb::WorkerHealthStatus::Ready as i32
+            } else {
+                pb::WorkerHealthStatus::Unhealthy as i32
+            },
         }))
     }
 
@@ -4993,8 +5114,9 @@ impl PluginWorker for FakePluginWorker {
         _request: Request<ValidateRequest>,
     ) -> std::result::Result<tonic::Response<ValidateResponse>, tonic::Status> {
         Ok(tonic::Response::new(ValidateResponse {
-            diagnostics: None,
-            error: None,
+            result: Some(pb::validate_response::Result::Diagnostics(
+                pb::ConfigDiagnostics { entries: vec![] },
+            )),
         }))
     }
 
@@ -5004,18 +5126,19 @@ impl PluginWorker for FakePluginWorker {
     ) -> std::result::Result<tonic::Response<RegisterResponse>, tonic::Status> {
         self.register_calls.fetch_add(1, Ordering::Relaxed);
         Ok(tonic::Response::new(RegisterResponse {
-            registrations: Vec::new(),
-            error: None,
-            conditional_middleware_guardrails: Vec::new(),
+            result: Some(pb::register_response::Result::Plan(pb::RegistrationPlan {
+                registrations: Vec::new(),
+                conditional_middleware_guardrails: Vec::new(),
+            })),
         }))
     }
 
     async fn invoke(
         &self,
-        request: Request<InvokeRequest>,
+        request: Request<pb::InvokeRequest>,
     ) -> std::result::Result<tonic::Response<InvokeResponse>, tonic::Status> {
         Ok(tonic::Response::new(
-            (self.invoke)(request.into_inner()).await,
+            (self.invoke)(received_invocation(request.into_inner())).await,
         ))
     }
 
@@ -5024,9 +5147,9 @@ impl PluginWorker for FakePluginWorker {
 
     async fn invoke_stream(
         &self,
-        request: Request<InvokeRequest>,
+        request: Request<pb::InvokeStreamRequest>,
     ) -> std::result::Result<tonic::Response<Self::InvokeStreamStream>, tonic::Status> {
-        (self.invoke_stream)(request.into_inner())
+        (self.invoke_stream)(received_stream_invocation(request.into_inner()))
             .await
             .map(tonic::Response::new)
     }
@@ -5034,12 +5157,12 @@ impl PluginWorker for FakePluginWorker {
     async fn cancel_invocation(
         &self,
         request: Request<CancelInvocationRequest>,
-    ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
+    ) -> std::result::Result<tonic::Response<pb::CancelInvocationResponse>, tonic::Status> {
         let _ = self.cancel_tx.send(request.into_inner());
         if let Some(error) = &self.cancel_error {
             return Err(error.clone());
         }
-        Ok(tonic::Response::new(WorkerAck {
+        Ok(tonic::Response::new(pb::CancelInvocationResponse {
             accepted: true,
             message: "cancelled".into(),
         }))
@@ -5048,11 +5171,8 @@ impl PluginWorker for FakePluginWorker {
     async fn shutdown(
         &self,
         _request: Request<ShutdownRequest>,
-    ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
-        Ok(tonic::Response::new(WorkerAck {
-            accepted: false,
-            message: "not implemented".into(),
-        }))
+    ) -> std::result::Result<tonic::Response<pb::ShutdownResponse>, tonic::Status> {
+        Ok(tonic::Response::new(pb::ShutdownResponse {}))
     }
 }
 
@@ -5180,6 +5300,7 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
                 message: message.into(),
                 retryable: true,
                 downstream_continuation_id: None,
+                http_status: None
             }),
             FlowError::Internal(_)
         ));
@@ -5190,6 +5311,7 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
             message: "HTTP 403: denied".into(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None
         }),
         FlowError::Internal(_)
     ));
@@ -5203,6 +5325,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             message: "HTTP 403: denied".into(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None,
         })),
     };
     let response = report_worker_response(response, "verified.worker");
@@ -5217,6 +5340,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             message: "HTTP 403: denied".into(),
             retryable: false,
             downstream_continuation_id: None,
+            http_status: None,
         })),
     };
     assert!(matches!(
@@ -5227,12 +5351,14 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
 
 fn snapshot_request(
     scope: Option<ScopeContext>,
-) -> Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest> {
+) -> Request<nemo_relay_worker_proto::nvidia_worker_v1::GetCurrentScopeStackSnapshotRequest> {
     Request::new(
-        nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+        nemo_relay_worker_proto::nvidia_worker_v1::GetCurrentScopeStackSnapshotRequest {
             scope,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         },
     )
 }
@@ -5261,8 +5387,8 @@ async fn scope_stack_snapshot_requires_explicit_context_and_authenticated_owners
                     .await
                     .unwrap()
                     .into_inner();
-                assert!(response.snapshot.is_none());
-                assert!(response.error.is_none());
+                assert!(response.snapshot().is_none());
+
                 for identifier in ["", "   ", "expired-or-foreign"] {
                     let error = service
                         .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
@@ -5284,15 +5410,15 @@ async fn scope_stack_snapshot_requires_explicit_context_and_authenticated_owners
                     (ACTIVATION_ID, "foreign-token"),
                 ] {
                     let mut request = snapshot_request(None).into_inner();
-                    request.activation_id = activation_id.into();
-                    request.auth_token = auth_token.into();
+                    request.credentials.as_mut().unwrap().activation_id = activation_id.into();
+                    request.credentials.as_mut().unwrap().auth_token = auth_token.into();
                     assert_eq!(
                         service
                             .get_current_scope_stack_snapshot(Request::new(request))
                             .await
                             .unwrap_err()
                             .code(),
-                        tonic::Code::PermissionDenied
+                        tonic::Code::Unauthenticated
                     );
                 }
             },
@@ -5344,7 +5470,7 @@ async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
         .await
         .unwrap()
         .into_inner()
-        .snapshot
+        .snapshot()
         .unwrap();
     assert_eq!(first.scopes.len(), expected.scopes.len());
     for (actual, expected) in first.scopes.iter().zip(&expected.scopes) {
@@ -5363,20 +5489,25 @@ async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
         .unwrap();
     let pushed = service
         .push_scope(Request::new(PushScopeRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope: Some(snapshot_context(&second_identifier)),
             name: "foreign-parent".into(),
             scope_type: ProtoScopeType::Function as i32,
             data: None,
             metadata: None,
             input: None,
-            timestamp_unix_micros: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            time: None.map(|micros: i64| prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            }),
         }))
         .await
         .unwrap()
         .into_inner();
-    assert!(pushed.error.is_none());
+
     let mut foreign_parent = context.clone();
     foreign_parent.parent_scope_id = pushed.scope_handle_id.clone();
     assert_eq!(
@@ -5396,7 +5527,7 @@ async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
         .await
         .unwrap()
         .into_inner()
-        .snapshot
+        .snapshot()
         .unwrap();
     assert_eq!(
         owned.scopes.last().unwrap().scope_type,
@@ -5407,7 +5538,7 @@ async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
         .await
         .unwrap()
         .into_inner()
-        .snapshot
+        .snapshot()
         .unwrap();
     assert_eq!(repeated, first);
     state.cleanup_invocation_scope_stack(&scope_stack_id);
@@ -5423,7 +5554,7 @@ async fn scope_stack_snapshot_revokes_before_cancellation_rpc_and_expires_after_
     )
     .await;
     let request = callback
-        .base_request(
+        .test_base_request(
             "snapshot-cancel",
             RegistrationSurface::ToolRequestIntercept,
             None,
@@ -5441,7 +5572,7 @@ async fn scope_stack_snapshot_revokes_before_cancellation_rpc_and_expires_after_
             .await
             .unwrap()
             .into_inner()
-            .snapshot
+            .snapshot()
             .is_some()
     );
     assert!(guard.cancellation("snapshot cancellation test").is_some());
@@ -5453,17 +5584,18 @@ async fn scope_stack_snapshot_revokes_before_cancellation_rpc_and_expires_after_
             .code(),
         tonic::Code::Cancelled
     );
-    let dropped = service
+    let _dropped = service
         .drop_scope_stack(Request::new(DropScopeStackRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             scope_stack_id: context.scope_stack_id.clone(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .unwrap()
         .into_inner();
-    assert!(dropped.ok);
-    assert!(dropped.error.is_none());
+
     guard.cleanup();
     assert_eq!(
         service
@@ -5513,7 +5645,7 @@ async fn scope_stack_snapshot_cleanup_races_return_complete_values_or_explicit_e
         state.cleanup_invocation_scope_stack(&scope_stack_id);
         match read.await.unwrap() {
             Ok(response) => {
-                let snapshot = response.into_inner().snapshot.unwrap();
+                let snapshot = response.into_inner().snapshot().unwrap();
                 assert_eq!(snapshot.scopes.len(), expected.scopes.len());
                 for (actual, expected) in snapshot.scopes.iter().zip(&expected.scopes) {
                     assert_eq!(actual.scope_id, expected.scope_id.to_string());
@@ -5570,7 +5702,7 @@ async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
                 .insert_continuation(continuation)
                 .unwrap();
             let request = callback
-                .base_request(
+                .test_base_request(
                     "pending",
                     RegistrationSurface::LlmExecutionIntercept,
                     Some(id.clone()),
@@ -5584,35 +5716,41 @@ async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
                 match surface {
                     "tool" => service
                         .tool_next(Request::new(ToolNextRequest {
-                            activation_id: ACTIVATION_ID.into(),
-                            auth_token: AUTH_TOKEN.into(),
                             continuation_id: id,
                             scope: None,
                             value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+                            credentials: Some(pb::Credentials {
+                                activation_id: ACTIVATION_ID.into(),
+                                auth_token: AUTH_TOKEN.into(),
+                            }),
                         }))
                         .await
                         .map(|_| ()),
                     "llm" => service
                         .llm_next(Request::new(LlmNextRequest {
-                            activation_id: ACTIVATION_ID.into(),
-                            auth_token: AUTH_TOKEN.into(),
                             continuation_id: id,
                             scope: None,
                             request: Some(
                                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
                             ),
+                            credentials: Some(pb::Credentials {
+                                activation_id: ACTIVATION_ID.into(),
+                                auth_token: AUTH_TOKEN.into(),
+                            }),
                         }))
                         .await
                         .map(|_| ()),
                     _ => service
                         .llm_stream_next(Request::new(LlmStreamNextRequest {
-                            activation_id: ACTIVATION_ID.into(),
-                            auth_token: AUTH_TOKEN.into(),
                             continuation_id: id,
                             scope: None,
                             request: Some(
                                 json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
                             ),
+                            credentials: Some(pb::Credentials {
+                                activation_id: ACTIVATION_ID.into(),
+                                auth_token: AUTH_TOKEN.into(),
+                            }),
                         }))
                         .await
                         .map(|_| ()),
@@ -5690,11 +5828,13 @@ async fn worker_invocation_cleanup_drops_provider_stream_even_with_a_live_consum
         };
         let mut stream = service
             .llm_stream_next(Request::new(LlmStreamNextRequest {
-                activation_id: ACTIVATION_ID.into(),
-                auth_token: AUTH_TOKEN.into(),
                 continuation_id: id.clone(),
                 scope: None,
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
             }))
             .await
             .unwrap()
@@ -5731,7 +5871,7 @@ async fn short_callbacks_keep_their_rpc_deadline() {
     )
     .await;
     let request = callback
-        .base_request(
+        .test_base_request(
             "short_callback",
             RegistrationSurface::ToolRequestIntercept,
             None,
@@ -5812,14 +5952,7 @@ async fn worker_callback_counts_follow_error_provenance() {
             "cancelled" => error.code = "worker.cancelled".into(),
             _ => {}
         }
-        let result = if request.invocation_id.ends_with('0') {
-            InvokeResult::Json(JsonResult {
-                value: None,
-                error: Some(error),
-            })
-        } else {
-            InvokeResult::Error(error)
-        };
+        let result = InvokeResult::Error(error);
         InvokeResponse {
             result: Some(result),
         }
@@ -5834,14 +5967,13 @@ async fn worker_callback_counts_follow_error_provenance() {
         ("forwarded", "next-3", 0),
         ("local", "next-4", 1),
         ("foreign", "next-5", 2),
-        ("forwarded", "", 3),
-        ("cancelled", "next-6", 3),
+        ("cancelled", "next-6", 2),
     ]
     .into_iter()
     .enumerate()
     {
         let mut request = callback
-            .base_request(
+            .test_base_request(
                 name,
                 RegistrationSurface::LlmExecutionIntercept,
                 Some(continuation.into()),
@@ -5984,18 +6116,20 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
         })))
         .unwrap();
     let request = LlmNextRequest {
-        activation_id: ACTIVATION_ID.into(),
-        auth_token: AUTH_TOKEN.into(),
         continuation_id: llm_id.clone(),
         request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
         scope: None,
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     };
     let (a, b) = tokio::join!(
         service.llm_next(Request::new(request.clone())),
         service.llm_next(Request::new(request.clone()))
     );
     for response in [a, b] {
-        let error = response.unwrap().into_inner().error.unwrap();
+        let error = response.unwrap().into_inner().error().unwrap();
         assert_eq!(
             error.downstream_continuation_id.as_deref(),
             Some(llm_id.as_str())
@@ -6018,16 +6152,18 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
         .unwrap();
     let error = service
         .tool_next(Request::new(ToolNextRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             continuation_id: tool_id.clone(),
             value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
             scope: None,
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .unwrap()
         .into_inner()
-        .error
+        .error()
         .unwrap();
     assert_eq!(
         error.downstream_continuation_id.as_deref(),
@@ -6050,11 +6186,13 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
             .unwrap();
         let response = service
             .llm_stream_next(Request::new(LlmStreamNextRequest {
-                activation_id: ACTIVATION_ID.into(),
-                auth_token: AUTH_TOKEN.into(),
                 continuation_id: id.clone(),
                 request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
                 scope: None,
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
             }))
             .await;
         if opening {
@@ -6069,7 +6207,7 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
                 .await
                 .unwrap()
                 .unwrap();
-            let Some(StreamItem::Error(error)) = chunk.item else {
+            let Some(pb::llm_stream_next_response::Item::Error(error)) = chunk.item else {
                 panic!("expected stream error")
             };
             assert_eq!(
@@ -6093,11 +6231,15 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
         .await;
         let (mut callback, _shutdown) = callback_for_client(client, shutdown);
         let diagnostics = enable_test_diagnostics(&mut callback.host_state);
-        let request = InvokeRequest {
+        let request = PreparedInvocation {
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
             invocation_id: Uuid::now_v7().to_string(),
-            ..Default::default()
+            registration_name: "test".into(),
+            surface: RegistrationSurface::LlmConditionalExecutionGuardrail as i32,
+            continuation_id: String::new(),
+            scope: None,
+            payload: None,
         };
         let mut guard = WorkerInvocationGuard::new(&callback, &request);
         if wait {
@@ -6263,3 +6405,881 @@ fn worker_environment_forwarding_is_opt_in() {
         cfg!(windows)
     );
 }
+
+fn test_guardrail(reason: String) -> pb::GuardrailDecision {
+    pb::GuardrailDecision {
+        decision: Some(match reason.is_empty() {
+            true => pb::guardrail_decision::Decision::Allow(()),
+            false => pb::guardrail_decision::Decision::BlockReason(reason),
+        }),
+    }
+}
+fn json_envelope<D: Clone + WireValue<W>, W>(
+    _schema: &str,
+    value: &D,
+) -> std::result::Result<W, conversions::ConversionError> {
+    conversions::encode(value.clone())
+}
+fn decode_json_envelope<D: WireValue<W>, W>(
+    value: &W,
+) -> std::result::Result<D, conversions::ConversionError>
+where
+    W: Clone,
+{
+    conversions::decode(value.clone())
+}
+fn decode_json_value(
+    value: &pb::JsonValue,
+) -> std::result::Result<Json, conversions::ConversionError> {
+    conversions::decode(value.clone())
+}
+
+// Read the surface-specific request received by the synthetic peer as domain
+// fixture data. No old service or old protobuf value participates in these RPCs.
+fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
+    use RegistrationSurface as S;
+    use pb::invoke_request::Invocation as I;
+    let mut continuation_id = String::new();
+    let llm = |request, response, request_codec, response_codec, annotated_request, model_name| {
+        transport::LlmInvocation {
+            model_name,
+            request,
+            response,
+            annotated_request,
+            sanitize_context: None,
+            execution_codec_context: Some(Box::new(ProtoLlmExecutionCodecContext {
+                request: request_codec,
+                response: response_codec,
+            })),
+        }
+    };
+    let (surface, payload) = match v.invocation.unwrap() {
+        I::Subscriber(v) => (
+            S::Subscriber,
+            invoke_request_payload::Payload::Event(Box::new(v)),
+        ),
+        I::EventMetadataInjector(v) => (
+            S::EventMetadataInjector,
+            invoke_request_payload::Payload::Event(Box::new(v)),
+        ),
+        I::MarkSanitizeGuardrail(v) => (
+            S::MarkSanitizeGuardrail,
+            invoke_request_payload::Payload::Event(Box::new(v)),
+        ),
+        I::ScopeSanitizeStartGuardrail(v) => (
+            S::ScopeSanitizeStartGuardrail,
+            invoke_request_payload::Payload::Event(Box::new(v)),
+        ),
+        I::ScopeSanitizeEndGuardrail(v) => (
+            S::ScopeSanitizeEndGuardrail,
+            invoke_request_payload::Payload::Event(Box::new(v)),
+        ),
+        I::ToolSanitizeRequestGuardrail(v) => (S::ToolSanitizeRequestGuardrail, received_tool(v)),
+        I::ToolSanitizeResponseGuardrail(v) => (S::ToolSanitizeResponseGuardrail, received_tool(v)),
+        I::ToolConditionalExecutionGuardrail(v) => {
+            (S::ToolConditionalExecutionGuardrail, received_tool(v))
+        }
+        I::ToolRequestIntercept(v) => (S::ToolRequestIntercept, received_tool(v)),
+        I::ToolExecutionIntercept(v) => {
+            continuation_id = v.continuation_id;
+            (
+                S::ToolExecutionIntercept,
+                invoke_request_payload::Payload::Tool(transport::ToolInvocation {
+                    tool_name: v.tool_name,
+                    value: v.args,
+                    tool_call_id: v.tool_call_id,
+                }),
+            )
+        }
+        I::LlmSanitizeRequestGuardrail(v) => (
+            S::LlmSanitizeRequestGuardrail,
+            invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                model_name: String::new(),
+                request: v.request,
+                response: None,
+                annotated_request: None,
+                execution_codec_context: None,
+                sanitize_context: v
+                    .context
+                    .map(llm_invocation::SanitizeContext::RequestSanitizeContext),
+            })),
+        ),
+        I::LlmSanitizeResponseGuardrail(v) => (
+            S::LlmSanitizeResponseGuardrail,
+            invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                model_name: String::new(),
+                request: None,
+                response: v.response,
+                annotated_request: None,
+                execution_codec_context: None,
+                sanitize_context: v
+                    .context
+                    .map(llm_invocation::SanitizeContext::ResponseSanitizeContext),
+            })),
+        ),
+        I::LlmConditionalExecutionGuardrail(v) => (
+            S::LlmConditionalExecutionGuardrail,
+            invoke_request_payload::Payload::Llm(Box::new(llm(
+                v.request,
+                None,
+                None,
+                None,
+                None,
+                String::new(),
+            ))),
+        ),
+        I::LlmRequestIntercept(v) => (
+            S::LlmRequestIntercept,
+            invoke_request_payload::Payload::Llm(Box::new(llm(
+                v.request,
+                None,
+                None,
+                None,
+                v.annotated_request.map(|v| *v),
+                v.model_name,
+            ))),
+        ),
+        I::LlmExecutionIntercept(v) => {
+            continuation_id = v.continuation_id;
+            (
+                S::LlmExecutionIntercept,
+                invoke_request_payload::Payload::Llm(Box::new(llm(
+                    v.request,
+                    None,
+                    v.request_codec,
+                    v.response_codec,
+                    None,
+                    v.model_name,
+                ))),
+            )
+        }
+        I::ConditionalMiddlewareGuardrail(v) => (
+            S::ConditionalMiddlewareGuardrail,
+            invoke_request_payload::Payload::ConditionalMiddleware(v),
+        ),
+    };
+    let credentials = v.credentials.unwrap();
+    PreparedInvocation {
+        activation_id: credentials.activation_id,
+        auth_token: credentials.auth_token,
+        invocation_id: v.invocation_id,
+        registration_name: v.registration_name,
+        scope: v.scope,
+        surface: surface as i32,
+        continuation_id,
+        payload: Some(payload),
+    }
+}
+fn received_tool(v: pb::ToolValueInvocation) -> invoke_request_payload::Payload {
+    invoke_request_payload::Payload::Tool(transport::ToolInvocation {
+        tool_name: v.tool_name,
+        value: v.value,
+        tool_call_id: None,
+    })
+}
+fn received_stream_invocation(v: pb::InvokeStreamRequest) -> PreparedInvocation {
+    let credentials = v.credentials.unwrap();
+    PreparedInvocation {
+        activation_id: credentials.activation_id,
+        auth_token: credentials.auth_token,
+        invocation_id: v.invocation_id,
+        registration_name: v.registration_name,
+        scope: v.scope,
+        surface: RegistrationSurface::LlmStreamExecutionIntercept as i32,
+        continuation_id: v.continuation_id,
+        payload: Some(invoke_request_payload::Payload::Llm(Box::new(
+            transport::LlmInvocation {
+                model_name: v.model_name,
+                request: v.request,
+                response: None,
+                annotated_request: None,
+                sanitize_context: None,
+                execution_codec_context: Some(Box::new(ProtoLlmExecutionCodecContext {
+                    request: v.request_codec,
+                    response: None,
+                })),
+            },
+        ))),
+    }
+}
+
+fn test_codec_kind(value: &pb::LlmCodecReference) -> &'static str {
+    match value.kind.as_str() {
+        "none" => "unspecified",
+        "builtin" => "builtin",
+        "runtime" => "runtime",
+        "opaque" => "opaque",
+        _ => "other",
+    }
+}
+fn test_codec_id(value: &pb::LlmCodecReference) -> Option<String> {
+    value.id.clone()
+}
+trait TestResult {
+    type Value: Clone;
+    fn value(&self) -> Option<Self::Value>;
+    fn error(&self) -> Option<WorkerError>;
+}
+macro_rules! test_result {
+    ($ty:ty,$module:ident,$value:ty) => {
+        impl TestResult for $ty {
+            type Value = $value;
+            fn value(&self) -> Option<Self::Value> {
+                match &self.result {
+                    Some(pb::$module::Result::Value(v)) => Some(v.clone()),
+                    _ => None,
+                }
+            }
+            fn error(&self) -> Option<WorkerError> {
+                match &self.result {
+                    Some(pb::$module::Result::Error(v)) => Some(v.clone()),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+test_result!(
+    pb::ToolNextResponse,
+    tool_next_response,
+    pb::ToolExecutionResult
+);
+test_result!(pb::LlmNextResponse, llm_next_response, pb::JsonValue);
+test_result!(
+    pb::DecodeLlmCodecRequestResponse,
+    decode_llm_codec_request_response,
+    Box<pb::AnnotatedLlmRequest>
+);
+test_result!(
+    pb::EncodeLlmCodecRequestResponse,
+    encode_llm_codec_request_response,
+    pb::LlmRequest
+);
+test_result!(
+    pb::DecodeLlmCodecResponseResponse,
+    decode_llm_codec_response_response,
+    Box<pb::AnnotatedLlmResponse>
+);
+trait TestSnapshot {
+    fn snapshot(&self) -> Option<pb::ScopeStackSnapshot>;
+}
+impl TestSnapshot for pb::GetCurrentScopeStackSnapshotResponse {
+    fn snapshot(&self) -> Option<pb::ScopeStackSnapshot> {
+        match &self.result {
+            Some(pb::get_current_scope_stack_snapshot_response::Result::Snapshot(v)) => {
+                Some(v.clone())
+            }
+            _ => None,
+        }
+    }
+}
+
+impl WorkerPluginCallback {
+    // Supply fully typed input when a test exercises transport/lifetime rather
+    // than callback arguments. Production callers provide their own payloads.
+    fn test_base_request(
+        &self,
+        name: &str,
+        surface: RegistrationSurface,
+        continuation: Option<String>,
+        payload: Option<invoke_request_payload::Payload>,
+    ) -> FlowResult<PreparedInvocation> {
+        let payload = payload.unwrap_or_else(|| match surface {
+            RegistrationSurface::Subscriber | RegistrationSurface::EventMetadataInjector => {
+                invoke_request_payload_event(&Event::Mark(MarkEvent::new(
+                    BaseEvent::builder().name("test").build(),
+                    None,
+                    None,
+                )))
+                .expect("valid test event")
+            }
+            RegistrationSurface::LlmExecutionIntercept
+            | RegistrationSurface::LlmStreamExecutionIntercept => {
+                let codec = || pb::LlmCodecContext {
+                    codec: Some(pb::LlmCodecReference {
+                        kind: "none".into(),
+                        id: None,
+                    }),
+                    capability_id: None,
+                };
+                invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                    model_name: "model".into(),
+                    request: Some(encode_wire(&valid_llm_request()).expect("valid test request")),
+                    response: None,
+                    annotated_request: None,
+                    sanitize_context: None,
+                    execution_codec_context: Some(Box::new(ProtoLlmExecutionCodecContext {
+                        request: Some(codec()),
+                        response: (surface == RegistrationSurface::LlmExecutionIntercept)
+                            .then(codec),
+                    })),
+                }))
+            }
+            _ => invoke_request_payload_tool("tool", json!({}), None),
+        });
+        self.base_request(
+            name,
+            surface,
+            Some(
+                continuation
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| "test-continuation".into()),
+            ),
+            Some(payload),
+        )
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_native_callback_payloads_return_errors_before_worker_dispatch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (callback, _shutdown) = fake_callback_service({
+        let calls = calls.clone();
+        move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            InvokeResponse {
+                result: Some(InvokeResult::Completed(())),
+            }
+        }
+    })
+    .await;
+    let annotated = AnnotatedLlmRequest {
+        params: Some(nemo_relay_types::codec::request::GenerationParams {
+            temperature: Some(f64::NAN),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let error = callback
+        .invoke_llm_request_intercept("non-finite", "model", valid_llm_request(), Some(annotated))
+        .await
+        .expect_err("non-finite domain values must return an error rather than panic");
+    assert!(error.to_string().contains("non-finite"), "{error}");
+
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("out-of-range")
+            .timestamp(DateTime::<Utc>::from_timestamp(253402300800, 0).unwrap())
+            .build(),
+        None,
+        None,
+    ));
+    let error = callback
+        .invoke_subscriber("out-of-range", &event)
+        .expect_err("unsupported timestamps must return an error rather than panic");
+    assert!(
+        error
+            .to_string()
+            .contains("timestamp outside protobuf range"),
+        "{error}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_transport_rejects_success_results_for_other_surfaces() {
+    use RegistrationSurface as S;
+    let (callback, _shutdown) = fake_callback_service(|request| {
+        let result = match request.registration_name.as_str() {
+            "metadata" => InvokeResult::MetadataAdditions(pb::JsonObject::default()),
+            "tool" => InvokeResult::ToolValue(pb::JsonValue {
+                json: b"{}".to_vec(),
+            }),
+            "request" => InvokeResult::LlmRequest(encode_wire(&valid_llm_request()).unwrap()),
+            "response" => InvokeResult::LlmResponse(pb::JsonValue {
+                json: b"{}".to_vec(),
+            }),
+            "unchanged" => InvokeResult::Unchanged(()),
+            "error" => InvokeResult::Error(test_worker_error()),
+            _ => unreachable!(),
+        };
+        InvokeResponse {
+            result: Some(result),
+        }
+    })
+    .await;
+    for (surface, expected) in [
+        (S::EventMetadataInjector, "metadata"),
+        (S::ToolSanitizeRequestGuardrail, "tool"),
+        (S::ToolSanitizeResponseGuardrail, "tool"),
+        (S::ToolRequestIntercept, "tool"),
+        (S::LlmSanitizeRequestGuardrail, "request"),
+        (S::LlmSanitizeResponseGuardrail, "response"),
+        (S::LlmExecutionIntercept, "response"),
+    ] {
+        for result in [
+            "metadata",
+            "tool",
+            "request",
+            "response",
+            "unchanged",
+            "error",
+        ] {
+            let payload = match surface {
+                S::LlmSanitizeRequestGuardrail | S::LlmSanitizeResponseGuardrail => {
+                    let context = pb::LlmCodecContext {
+                        codec: Some(pb::LlmCodecReference {
+                            kind: "none".into(),
+                            id: None,
+                        }),
+                        capability_id: None,
+                    };
+                    Some(
+                        invoke_request_payload_llm_context(
+                            "model",
+                            (surface == S::LlmSanitizeRequestGuardrail).then(valid_llm_request),
+                            None,
+                            (surface == S::LlmSanitizeResponseGuardrail).then(|| json!({})),
+                            if surface == S::LlmSanitizeRequestGuardrail {
+                                llm_invocation::SanitizeContext::RequestSanitizeContext(context)
+                            } else {
+                                llm_invocation::SanitizeContext::ResponseSanitizeContext(context)
+                            },
+                        )
+                        .unwrap(),
+                    )
+                }
+                _ => None,
+            };
+            let request = callback
+                .test_base_request(result, surface, None, payload)
+                .unwrap();
+            let response = callback.invoke_async(request).await;
+            let allowed = result == expected
+                || result == "error"
+                || (result == "unchanged"
+                    && matches!(
+                        surface,
+                        S::LlmSanitizeRequestGuardrail | S::LlmSanitizeResponseGuardrail
+                    ));
+            if allowed {
+                response.unwrap_or_else(|error| panic!("{surface:?}/{result}: {error}"));
+            } else {
+                assert!(
+                    response
+                        .unwrap_err()
+                        .to_string()
+                        .contains("unexpected callback result"),
+                    "{surface:?}/{result}"
+                );
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HostContinuationStreamEnding {
+    Eof,
+    ErrorThenValue,
+    Panic,
+    Pending,
+}
+
+#[derive(Clone, Copy)]
+enum HostContinuationStreamClose {
+    Success,
+    Error,
+    Panic,
+    Pending,
+}
+
+struct CloseableHostContinuationStream {
+    ending: HostContinuationStreamEnding,
+    cleanup: HostContinuationStreamClose,
+    polls: Arc<AtomicUsize>,
+    close_calls: Arc<AtomicUsize>,
+    closed: Arc<tokio::sync::Notify>,
+}
+
+impl Stream for CloseableHostContinuationStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let prior_polls = this.polls.fetch_add(1, Ordering::SeqCst);
+        match this.ending {
+            HostContinuationStreamEnding::Eof => std::task::Poll::Ready(None),
+            HostContinuationStreamEnding::ErrorThenValue => {
+                std::task::Poll::Ready(Some(if prior_polls == 0 {
+                    Err(FlowError::Internal("provider terminal error".into()))
+                } else {
+                    Ok(json!({"after_error": true}))
+                }))
+            }
+            HostContinuationStreamEnding::Panic => panic!("provider poll panic"),
+            HostContinuationStreamEnding::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl LlmStreamInner for CloseableHostContinuationStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        Box::pin(async move {
+            let this = self.get_mut();
+            this.close_calls.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            match this.cleanup {
+                HostContinuationStreamClose::Success => {
+                    this.closed.notify_one();
+                    Ok(())
+                }
+                HostContinuationStreamClose::Error => {
+                    Err(FlowError::Internal("provider close failed".into()))
+                }
+                HostContinuationStreamClose::Panic => panic!("provider close panic"),
+                HostContinuationStreamClose::Pending => std::future::pending().await,
+            }
+        })
+    }
+}
+
+async fn open_closeable_host_continuation_stream(
+    stream: CloseableHostContinuationStream,
+) -> (
+    Arc<WorkerHostRuntimeState>,
+    String,
+    <WorkerHostRuntimeService as RelayHostRuntime>::LlmStreamNextStream,
+) {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let native = Arc::new(Mutex::new(Some(LlmJsonStream::from_closeable(stream))));
+    let id = state
+        .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+            let stream = native.lock().unwrap().take().expect("single stream open");
+            Box::pin(async move { Ok(stream) })
+        })))
+        .unwrap();
+    let stream = service
+        .llm_stream_next(Request::new(LlmStreamNextRequest {
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            continuation_id: id.clone(),
+            request: Some(encode_wire(&valid_llm_request()).unwrap()),
+            scope: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    (state, id, stream)
+}
+
+#[tokio::test]
+async fn host_continuation_stream_closes_once_on_eof_drop_and_cancellation() {
+    for ending in ["eof", "drop", "cancel"] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let closed = Arc::new(tokio::sync::Notify::new());
+        let (state, id, mut stream) =
+            open_closeable_host_continuation_stream(CloseableHostContinuationStream {
+                ending: if ending == "eof" {
+                    HostContinuationStreamEnding::Eof
+                } else {
+                    HostContinuationStreamEnding::Pending
+                },
+                cleanup: HostContinuationStreamClose::Success,
+                polls: Arc::new(AtomicUsize::new(0)),
+                close_calls: close_calls.clone(),
+                closed: closed.clone(),
+            })
+            .await;
+        match ending {
+            "eof" => assert!(stream.next().await.is_none()),
+            "drop" => drop(stream),
+            "cancel" => {
+                state.remove_continuation(&id);
+                assert!(stream.next().await.is_none());
+            }
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(Duration::from_secs(1), closed.notified())
+            .await
+            .unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1, "{ending}");
+    }
+}
+
+#[tokio::test]
+async fn host_continuation_stream_errors_are_terminal_and_wait_for_cleanup() {
+    for ending in [
+        HostContinuationStreamEnding::ErrorThenValue,
+        HostContinuationStreamEnding::Panic,
+    ] {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let closed = Arc::new(tokio::sync::Notify::new());
+        let (_state, id, mut stream) =
+            open_closeable_host_continuation_stream(CloseableHostContinuationStream {
+                ending,
+                cleanup: HostContinuationStreamClose::Success,
+                polls: polls.clone(),
+                close_calls: close_calls.clone(),
+                closed: closed.clone(),
+            })
+            .await;
+        let Some(pb::llm_stream_next_response::Item::Error(error)) =
+            stream.next().await.unwrap().unwrap().item
+        else {
+            panic!("expected terminal error");
+        };
+        assert_eq!(
+            error.downstream_continuation_id.as_deref(),
+            Some(id.as_str())
+        );
+        assert!(error.message.contains(match ending {
+            HostContinuationStreamEnding::Panic => "provider poll panic",
+            _ => "provider terminal error",
+        }));
+        assert!(
+            closed.notified().now_or_never().is_some(),
+            "error delivery must wait for asynchronous close"
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn host_continuation_stream_reports_close_errors_panics_and_timeouts() {
+    for cleanup in [
+        HostContinuationStreamClose::Error,
+        HostContinuationStreamClose::Panic,
+        HostContinuationStreamClose::Pending,
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let (_state, id, mut stream) =
+            open_closeable_host_continuation_stream(CloseableHostContinuationStream {
+                ending: HostContinuationStreamEnding::Eof,
+                cleanup,
+                polls: Arc::new(AtomicUsize::new(0)),
+                close_calls: close_calls.clone(),
+                closed: Arc::new(tokio::sync::Notify::new()),
+            })
+            .await;
+        let Some(pb::llm_stream_next_response::Item::Error(error)) =
+            stream.next().await.unwrap().unwrap().item
+        else {
+            panic!("expected close error");
+        };
+        assert!(error.message.contains(match cleanup {
+            HostContinuationStreamClose::Error => "provider close failed",
+            HostContinuationStreamClose::Panic => "provider close panic",
+            HostContinuationStreamClose::Pending => "cleanup timed out",
+            _ => unreachable!(),
+        }));
+        assert_eq!(
+            error.downstream_continuation_id.as_deref(),
+            Some(id.as_str())
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn host_continuation_stream_preserves_provider_error_when_close_fails() {
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let (_state, id, mut stream) =
+        open_closeable_host_continuation_stream(CloseableHostContinuationStream {
+            ending: HostContinuationStreamEnding::ErrorThenValue,
+            cleanup: HostContinuationStreamClose::Error,
+            polls: Arc::new(AtomicUsize::new(0)),
+            close_calls: close_calls.clone(),
+            closed: Arc::new(tokio::sync::Notify::new()),
+        })
+        .await;
+    let Some(pb::llm_stream_next_response::Item::Error(error)) =
+        stream.next().await.unwrap().unwrap().item
+    else {
+        panic!("expected provider error");
+    };
+    assert!(error.message.contains("provider terminal error"));
+    assert_eq!(
+        error.downstream_continuation_id.as_deref(),
+        Some(id.as_str())
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+}
+
+#[path = "worker_scope_parent_tests.rs"]
+mod scope_parent_tests;
+
+struct HeldHostContinuationCleanup {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    completed: Arc<AtomicBool>,
+    fail: bool,
+}
+
+impl Stream for HeldHostContinuationCleanup {
+    type Item = FlowResult<Json>;
+    fn poll_next(self: Pin<&mut Self>, _: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Pending
+    }
+}
+
+impl LlmStreamInner for HeldHostContinuationCleanup {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        Box::pin(async move {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.completed.store(true, Ordering::SeqCst);
+            if self.fail {
+                Err(FlowError::Internal("held provider cleanup failed".into()))
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+async fn worker_stream_with_held_host_cleanup(
+    cleanup: HeldHostContinuationCleanup,
+) -> (LlmJsonStream, oneshot::Sender<()>) {
+    let shared = shared_worker_host_state();
+    let opened = Arc::new(tokio::sync::Notify::new());
+    let (callback, shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse {
+            result: Some(InvokeResult::Completed(())),
+        },
+        {
+            let shared = shared.clone();
+            let opened = opened.clone();
+            move |request| {
+                let state = shared.lock().unwrap().clone().unwrap();
+                let opened = opened.clone();
+                Box::pin(futures_util::stream::once(async move {
+                    let mut stream = WorkerHostRuntimeService { state }
+                        .llm_stream_next(Request::new(LlmStreamNextRequest {
+                            credentials: Some(pb::Credentials {
+                                activation_id: ACTIVATION_ID.into(),
+                                auth_token: AUTH_TOKEN.into(),
+                            }),
+                            continuation_id: request.continuation_id,
+                            scope: request.scope,
+                            request: Some(encode_wire(&valid_llm_request()).unwrap()),
+                        }))
+                        .await?
+                        .into_inner();
+                    opened.notify_one();
+                    let _ = stream.next().await;
+                    Ok(StreamChunk::default())
+                }))
+            }
+        },
+    )
+    .await;
+    *shared.lock().unwrap() = Some(callback.host_state.clone());
+    let cleanup = Arc::new(Mutex::new(Some(cleanup)));
+    let next: LlmStreamExecutionNextFn = Arc::new(move |_| {
+        let stream = cleanup.lock().unwrap().take().unwrap();
+        Box::pin(async move { Ok(LlmJsonStream::from_closeable(stream)) })
+    });
+    let stream = callback
+        .invoke_llm_stream_execution(
+            "held-host-cleanup",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            next,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), opened.notified())
+        .await
+        .unwrap();
+    (stream, shutdown)
+}
+
+#[tokio::test]
+async fn public_worker_stream_close_waits_for_host_cleanup_and_survives_cancelled_waiter() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(AtomicBool::new(false));
+    let (mut stream, _shutdown) =
+        worker_stream_with_held_host_cleanup(HeldHostContinuationCleanup {
+            started: started.clone(),
+            release: release.clone(),
+            completed: completed.clone(),
+            fail: false,
+        })
+        .await;
+    let mut close = Box::pin(stream.close());
+    tokio::select! {
+        biased;
+        result = &mut close => panic!("close acknowledged before native cleanup: {result:?}"),
+        _ = started.notified() => {}
+    }
+    assert!(futures_util::poll!(&mut close).is_pending());
+    drop(close);
+    let mut retry = Box::pin(stream.close());
+    assert!(futures_util::poll!(&mut retry).is_pending());
+    release.notify_one();
+    retry.await.unwrap();
+    assert!(completed.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn public_worker_stream_close_preserves_host_cleanup_failure() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (mut stream, _shutdown) =
+        worker_stream_with_held_host_cleanup(HeldHostContinuationCleanup {
+            started: started.clone(),
+            release: release.clone(),
+            completed: Arc::new(AtomicBool::new(false)),
+            fail: true,
+        })
+        .await;
+    let mut close = Box::pin(stream.close());
+    tokio::select! {
+        biased;
+        result = &mut close => panic!("close acknowledged before native cleanup: {result:?}"),
+        _ = started.notified() => {}
+    }
+    release.notify_one();
+    assert!(
+        close
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("held provider cleanup failed")
+    );
+}
+
+#[tokio::test]
+async fn public_worker_stream_close_bounds_host_cleanup() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (mut stream, _shutdown) =
+        worker_stream_with_held_host_cleanup(HeldHostContinuationCleanup {
+            started: started.clone(),
+            release: Arc::new(tokio::sync::Notify::new()),
+            completed: Arc::new(AtomicBool::new(false)),
+            fail: false,
+        })
+        .await;
+    let mut close = Box::pin(stream.close());
+    tokio::select! {
+        biased;
+        result = &mut close => panic!("close acknowledged before native cleanup: {result:?}"),
+        _ = started.notified() => {}
+    }
+    tokio::time::pause();
+    tokio::time::advance(WORKER_RPC_TIMEOUT + Duration::from_millis(1)).await;
+    let error = close.await.unwrap_err().to_string();
+    tokio::time::resume();
+    assert!(error.contains("cleanup timed out"), "{error}");
+}
+
+#[path = "worker_scope_lifetime_tests.rs"]
+mod scope_lifetime_tests;

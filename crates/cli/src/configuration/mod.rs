@@ -662,7 +662,21 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest(
 pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
     path: impl AsRef<Path>,
 ) -> Result<(DynamicPluginManifest, String, Vec<u8>), CliError> {
-    let path = path.as_ref();
+    load_bounded_dynamic_plugin_manifest_bytes_impl(path.as_ref(), false)
+}
+
+pub(crate) fn load_bounded_dynamic_plugin_manifest_for_inspection(
+    path: impl AsRef<Path>,
+) -> Result<(DynamicPluginManifest, String), CliError> {
+    let (manifest, normalized, _) =
+        load_bounded_dynamic_plugin_manifest_bytes_impl(path.as_ref(), true)?;
+    Ok((manifest, normalized))
+}
+
+fn load_bounded_dynamic_plugin_manifest_bytes_impl(
+    path: &Path,
+    inspect: bool,
+) -> Result<(DynamicPluginManifest, String, Vec<u8>), CliError> {
     let manifest_path = if path.is_dir() {
         path.join(DYNAMIC_PLUGIN_MANIFEST_FILENAME)
     } else {
@@ -685,8 +699,12 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
             normalized.display()
         ))
     })?;
-    let manifest = DynamicPluginManifest::parse_toml(contents)
-        .map_err(|error| CliError::Config(error.to_string()))?;
+    let manifest = if inspect {
+        DynamicPluginManifest::parse_toml_for_inspection(contents)
+    } else {
+        DynamicPluginManifest::parse_toml(contents)
+    }
+    .map_err(|error| CliError::Config(error.to_string()))?;
     Ok((manifest, normalized.to_string_lossy().into_owned(), bytes))
 }
 
@@ -2268,13 +2286,15 @@ fn resolve_dynamic_plugin_refs(
     let mut seen_plugin_ids = HashSet::new();
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
-        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path)
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "invalid dynamic plugin manifest referenced by {}: {error}",
-                    source.display()
-                ))
-            })?;
+        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest_for_inspection(
+            &manifest_path,
+        )
+        .map_err(|error| {
+            CliError::Config(format!(
+                "invalid dynamic plugin manifest referenced by {}: {error}",
+                source.display()
+            ))
+        })?;
         let plugin_id = manifest.plugin.id.trim().to_owned();
         if !seen_plugin_ids.insert(plugin_id.clone()) {
             return Err(CliError::Config(format!(

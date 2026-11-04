@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Atomic transport coverage for the documented Rust grpc-v1 worker.
+//! Atomic transport coverage for the documented Rust nvidia.nemo.relay.worker.v1 worker.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,7 +94,7 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
             .build(),
     )
     .await
-    .expect("worker middleware should execute through grpc-v1");
+    .expect("worker middleware should execute through nvidia.nemo.relay.worker.v1");
     assert_eq!(result.result["plugin_tag"], "documentation");
     assert_eq!(result.result["plugin_tool"], "safe_tool");
     assert_eq!(result.annotation, Some(json!({"source": "application"})));
@@ -253,7 +253,7 @@ kind = "worker"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false

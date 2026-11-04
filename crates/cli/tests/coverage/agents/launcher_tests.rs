@@ -2083,8 +2083,7 @@ async fn dry_run_does_not_hydrate_dynamic_plugin_lifecycle_state() {
     let manifest_path = plugin_dir.join("relay-plugin.toml");
     std::fs::write(
         &manifest_path,
-        format!(
-            r#"
+        r#"
 manifest_version = 1
 
 [plugin]
@@ -2092,8 +2091,8 @@ id = "acme.worker"
 kind = "worker"
 
 [compat]
-relay = "={version}"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [capabilities]
 items = ["plugin_worker"]
@@ -2104,8 +2103,6 @@ items = ["plugin_worker"]
 runtime = "python"
 entrypoint = "acme.worker:create_plugin"
 "#,
-            version = env!("CARGO_PKG_VERSION"),
-        ),
     )
     .unwrap();
     let config_path = temp.path().join("config.toml");

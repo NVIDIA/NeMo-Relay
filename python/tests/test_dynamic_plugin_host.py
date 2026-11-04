@@ -39,11 +39,6 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _relay_version() -> str:
-    with (_repo_root() / "Cargo.toml").open("rb") as file:
-        return str(tomllib.load(file)["workspace"]["package"]["version"])
-
-
 def _native_library_name() -> str:
     if sys.platform == "win32":
         return "nemo_relay_plugin_fixture.dll"
@@ -84,7 +79,7 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
             kind = "rust_dynamic"
 
             [compat]
-            relay = "={_relay_version()}"
+            relay = ">=1.0.0,<2.0"
             native_api = "1"
 
             [defaults]
@@ -124,8 +119,8 @@ def worker_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
             kind = "worker"
 
             [compat]
-            relay = "={_relay_version()}"
-            worker_protocol = "grpc-v1"
+            relay = ">=1.0.0,<2.0"
+            worker_protocol = "nvidia.nemo.relay.worker.v1"
 
             [defaults]
             enabled = false
@@ -224,8 +219,8 @@ async def test_trust_failures_refuse_required_and_skip_optional_dynamic_plugins(
             kind = "worker"
 
             [compat]
-            relay = ">=0.8.0,<1.0"
-            worker_protocol = "grpc-v1"
+            relay = ">=1.0.0,<2.0"
+            worker_protocol = "nvidia.nemo.relay.worker.v1"
 
             [defaults]
             enabled = false

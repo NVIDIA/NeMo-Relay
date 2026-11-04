@@ -676,7 +676,7 @@ id = "tests.github_install"
 kind = "worker"
 [compat]
 relay = ">=1.0.0,<2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 [defaults]
 enabled = false
 [capabilities]

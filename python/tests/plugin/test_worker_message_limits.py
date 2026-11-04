@@ -19,6 +19,39 @@ grpc = pytest.importorskip("grpc")
 
 from nemo_relay_plugin import PluginContext, WorkerPlugin, WorkerSdkError, serve_plugin  # noqa: E402
 from nemo_relay_plugin import _api as api  # noqa: E402
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    common_pb2 as common_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    diagnostic_read_pb2 as diagnostic_read_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    diagnostics_pb2 as diagnostics_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    llm_pb2 as llm_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2 as worker_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2_grpc as worker_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_diagnostics_service_pb2 as diagnostics_service_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_diagnostics_service_pb2_grpc as diagnostics_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_host_runtime_service_pb2 as host_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_host_runtime_service_pb2_grpc as host_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    runtime_pb2 as runtime_pb,
+)
 
 LIMIT_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
 
@@ -82,24 +115,24 @@ async def test_worker_request_response_boundary(
         channel = grpc.aio.insecure_channel(
             api._grpc_target(endpoint_file.read_text()), options=api._worker_grpc_options(16 * 1024 * 1024)
         )
-        stub = api.pb_grpc.PluginWorkerStub(channel)
+        stub = worker_grpc.PluginWorkerServiceStub(channel)
         await stub.Register(
-            api.pb.RegisterRequest(
-                activation_id="test", auth_token="synthetic-test-token", config=api._json_envelope(api.JSON_SCHEMA, {})
+            worker_pb.RegisterRequest(
+                config=api._encode_payload(common_pb.JsonValue, {}),
+                credentials=common_pb.Credentials(activation_id="test", auth_token="synthetic-test-token"),
+                plugin_id="test.large-message",
             ),
             timeout=5,
         )
         payload = {"text": "x" * (5 * 1024 * 1024)}
-        request = api.pb.InvokeRequest(
-            activation_id="test",
-            auth_token="synthetic-test-token",
+        request = worker_pb.InvokeRequest(
             invocation_id="large",
             registration_name="response" if direction == "response" else "echo",
-            surface=api.pb.TOOL_REQUEST_INTERCEPT,
-            tool=api.pb.ToolInvocation(
+            credentials=common_pb.Credentials(activation_id="test", auth_token="synthetic-test-token"),
+            tool_request_intercept=runtime_pb.ToolValueInvocation(
                 tool_name="echo",
-                value=api._json_envelope(
-                    api.JSON_SCHEMA, {"response_bytes": 5 * 1024 * 1024} if direction == "response" else payload
+                value=api._encode_payload(
+                    common_pb.JsonValue, {"response_bytes": 5 * 1024 * 1024} if direction == "response" else payload
                 ),
             ),
         )
@@ -111,19 +144,24 @@ async def test_worker_request_response_boundary(
             assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
         else:
             response = await stub.Invoke(request, timeout=10)
-            assert api._decode_required_envelope(response.json.value, "result") == payload
+            assert api._decode_payload(response.tool_value, "result") == payload
             oversized = (
                 {"response_bytes": 9 * 1024 * 1024} if direction == "response" else {"text": "x" * (9 * 1024 * 1024)}
             )
-            request.tool.value.CopyFrom(api._json_envelope(api.JSON_SCHEMA, oversized))
+            request.tool_request_intercept.value.CopyFrom(api._encode_payload(common_pb.JsonValue, oversized))
             if direction == "response":
                 assert request.ByteSize() < 1024
             with pytest.raises(grpc.aio.AioRpcError) as error:
                 await stub.Invoke(request, timeout=10)
             assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
         assert (
-            await stub.Health(api.pb.HealthRequest(activation_id="test", auth_token="synthetic-test-token"), timeout=5)
-        ).ok
+            await stub.Health(
+                worker_pb.HealthRequest(
+                    credentials=common_pb.Credentials(activation_id="test", auth_token="synthetic-test-token")
+                ),
+                timeout=5,
+            )
+        ).status == runtime_pb.WORKER_HEALTH_STATUS_READY
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -143,32 +181,33 @@ async def test_worker_host_channel_request_response_boundary(
     else:
         monkeypatch.setenv(LIMIT_ENV, str(limit))
 
-    class Host(api.pb_grpc.RelayHostRuntimeServicer):
+    class Host(host_grpc.RelayHostRuntimeServiceServicer):
         async def LlmNext(self, request: Any, context: Any) -> Any:
             """Echo large requests or generate a large response from a small request."""
-            args = api._decode_required_envelope(request.request, "request", expected_schema=api.LLM_REQUEST_SCHEMA)
+            args = api._decode_payload(request.request, "request")["content"]
             if "response_bytes" in args:
-                return api.pb.JsonResult(
-                    value=api._json_envelope(api.JSON_SCHEMA, {"text": "x" * args["response_bytes"]})
+                return host_pb.LlmNextResponse(
+                    value=api._encode_payload(common_pb.JsonValue, {"text": "x" * args["response_bytes"]})
                 )
-            return api.pb.JsonResult(value=api.pb.JsonEnvelope(schema=api.JSON_SCHEMA, json=request.request.json))
+            return host_pb.LlmNextResponse(value=api._json_value(args))
 
     # Both host caps exceed every test payload, so only the SDK channel can reject.
     server = grpc.aio.server(options=api._worker_grpc_options(16 * 1024 * 1024))
-    api.pb_grpc.add_RelayHostRuntimeServicer_to_server(Host(), server)
+    host_grpc.add_RelayHostRuntimeServiceServicer_to_server(Host(), server)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
     channel = api._open_host_channel(f"http://127.0.0.1:{port}")
     try:
-        stub = api.pb_grpc.RelayHostRuntimeStub(channel)
+        stub = host_grpc.RelayHostRuntimeServiceStub(channel)
         payload = (
             {"text": "x" * (5 * 1024 * 1024)}
             if direction == "response"
             else {"messages": [{"role": "user", "content": "x" * (5 * 1024 * 1024)}]}
         )
-        request = api.pb.LlmNextRequest(
-            request=api._json_envelope(
-                api.LLM_REQUEST_SCHEMA, {"response_bytes": 5 * 1024 * 1024} if direction == "response" else payload
+        request = host_pb.LlmNextRequest(
+            request=api._encode_payload(
+                llm_pb.LlmRequest,
+                {"headers": {}, "content": {"response_bytes": 5 * 1024 * 1024} if direction == "response" else payload},
             )
         )
         if direction == "response":
@@ -179,13 +218,13 @@ async def test_worker_host_channel_request_response_boundary(
             assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
         else:
             response = await stub.LlmNext(request, timeout=10)
-            assert api._decode_required_envelope(response.value, "result") == payload
+            assert api._decode_payload(response.value, "result") == payload
             oversized = (
                 {"response_bytes": 9 * 1024 * 1024}
                 if direction == "response"
                 else {"messages": [{"role": "user", "content": "x" * (9 * 1024 * 1024)}]}
             )
-            request.request.CopyFrom(api._json_envelope(api.LLM_REQUEST_SCHEMA, oversized))
+            request.request.CopyFrom(api._encode_payload(llm_pb.LlmRequest, {"headers": {}, "content": oversized}))
             if direction == "response":
                 assert request.ByteSize() < 1024
             with pytest.raises(grpc.aio.AioRpcError) as error:
@@ -193,9 +232,10 @@ async def test_worker_host_channel_request_response_boundary(
             assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
         control = {"messages": []}
         response = await stub.LlmNext(
-            api.pb.LlmNextRequest(request=api._json_envelope(api.LLM_REQUEST_SCHEMA, control)), timeout=5
+            host_pb.LlmNextRequest(request=api._encode_payload(llm_pb.LlmRequest, {"headers": {}, "content": control})),
+            timeout=5,
         )
-        assert api._decode_required_envelope(response.value, "result") == control
+        assert api._decode_payload(response.value, "result") == control
     finally:
         await channel.close()
         await server.stop(grace=0)
@@ -216,13 +256,17 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
         json.dumps({} if policy == "scalar-small" else {"inspect": limit}),
     )
 
-    class Host(api.pb_grpc.RelayDiagnosticsServicer, api.pb_grpc.RelayHostRuntimeServicer):
+    class Host(diagnostics_grpc.RelayDiagnosticsServiceServicer, host_grpc.RelayHostRuntimeServiceServicer):
         async def ReadDiagnosticPage(self, request: Any, context: Any) -> Any:
             # A permissive peer isolates the SDK's send and receive limits.
-            return api.pb.DiagnosticReadResponse(snapshot_json=b"x" * request.max_events)
+            return diagnostics_service_pb.ReadDiagnosticPageResponse(
+                snapshot=diagnostics_pb.DiagnosticSnapshot(
+                    source=diagnostics_pb.DiagnosticSourceIdentity(process_role="x" * request.query.max_events)
+                )
+            )
 
         async def LlmNext(self, request: Any, context: Any) -> Any:
-            return api.pb.JsonResult(value=api._json_envelope(api.JSON_SCHEMA, {"text": "x" * 8192}))
+            return host_pb.LlmNextResponse(value=api._encode_payload(common_pb.JsonValue, {"text": "x" * 8192}))
 
     class DiagnosticPlugin(WorkerPlugin):
         plugin_id = "test.diagnostic-limits"
@@ -230,24 +274,25 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
         def register(self, ctx: PluginContext, config: object) -> None:
             async def inspect(name: str, args: Any) -> Any:
                 if args.get("execution"):
-                    response = await ctx.runtime._host_stub.LlmNext(api.pb.LlmNextRequest(), timeout=3)
-                    return {"bytes": len(api._decode_required_envelope(response.value, "response")["text"])}
+                    response = await ctx.runtime._host_stub.LlmNext(host_pb.LlmNextRequest(), timeout=3)
+                    return {"bytes": len(api._decode_payload(response.value, "response")["text"])}
                 response = await ctx.runtime._diagnostic_stub.ReadDiagnosticPage(
-                    api.pb.DiagnosticReadRequest(
-                        credentials=api.pb.DiagnosticCredentials(activation_id="test", auth_token="test-token"),
-                        continuation=b"x" * args.get("request_bytes", 0),
-                        max_events=args.get("response_bytes", 8192),
+                    diagnostics_service_pb.ReadDiagnosticPageRequest(
+                        credentials=common_pb.Credentials(activation_id="test", auth_token="test-token"),
+                        query=diagnostic_read_pb.DiagnosticQuery(
+                            code="x" * args.get("request_bytes", 0), max_events=args.get("response_bytes", 8192)
+                        ),
                     ),
                     timeout=3,
                 )
-                return {"bytes": len(response.snapshot_json)}
+                return {"bytes": len(response.snapshot.source.process_role)}
 
             ctx.register_tool_request_intercept("inspect", inspect)
 
     server = grpc.aio.server(options=api._worker_grpc_options(1024 * 1024))
     host = Host()
-    api.pb_grpc.add_RelayDiagnosticsServicer_to_server(host, server)
-    api.pb_grpc.add_RelayHostRuntimeServicer_to_server(host, server)
+    diagnostics_grpc.add_RelayDiagnosticsServiceServicer_to_server(host, server)
+    host_grpc.add_RelayHostRuntimeServiceServicer_to_server(host, server)
     if transport == "unix":
         # macOS pytest roots can exceed the Unix socket path-length limit.
         directory = tempfile.TemporaryDirectory(prefix="nr-", dir="/tmp")
@@ -277,21 +322,26 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
             await asyncio.sleep(0.01)
         assert endpoint_file.exists(), "worker failed to start"
         channel = grpc.aio.insecure_channel(api._grpc_target(endpoint_file.read_text()))
-        stub = api.pb_grpc.PluginWorkerStub(channel)
+        stub = worker_grpc.PluginWorkerServiceStub(channel)
         registered = await stub.Register(
-            api.pb.RegisterRequest(activation_id="test", auth_token="test-token"), timeout=3
+            worker_pb.RegisterRequest(
+                credentials=common_pb.Credentials(activation_id="test", auth_token="test-token"),
+                plugin_id="test.diagnostic-limits",
+                config=api._json_value(None),
+            ),
+            timeout=3,
         )
         assert not registered.HasField("error")
 
         async def invoke(**args: Any) -> Any:
             return await stub.Invoke(
-                api.pb.InvokeRequest(
-                    activation_id="test",
-                    auth_token="test-token",
+                worker_pb.InvokeRequest(
                     invocation_id="diagnostic",
                     registration_name="inspect",
-                    surface=api.pb.TOOL_REQUEST_INTERCEPT,
-                    tool=api.pb.ToolInvocation(tool_name="inspect", value=api._json_envelope(api.JSON_SCHEMA, args)),
+                    credentials=common_pb.Credentials(activation_id="test", auth_token="test-token"),
+                    tool_request_intercept=runtime_pb.ToolValueInvocation(
+                        tool_name="inspect", value=api._encode_payload(common_pb.JsonValue, args)
+                    ),
                 ),
                 metadata=(("nemo-relay-worker-callback-bin", b"inspect"),),
                 timeout=3,
@@ -301,7 +351,7 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
             for request_bytes in (0, 8192):
                 response = await invoke(request_bytes=request_bytes)
                 assert not response.HasField("error"), response.error.message
-                assert api._decode_required_envelope(response.json.value, "result") == {"bytes": 8192}
+                assert api._decode_payload(response.tool_value, "result") == {"bytes": 8192}
 
         await healthy_diagnostic()
         for oversized in ({"request_bytes": 16 * 1024}, {"response_bytes": 128 * 1024}):
@@ -315,10 +365,15 @@ async def test_diagnostics_keep_separate_budgets_inside_callbacks(
             assert "RESOURCE_EXHAUSTED" in response.error.message
         else:
             assert not response.HasField("error")
-            assert api._decode_required_envelope(response.json.value, "result") == {"bytes": 8192}
+            assert api._decode_payload(response.tool_value, "result") == {"bytes": 8192}
         assert (
-            await stub.Shutdown(api.pb.ShutdownRequest(activation_id="test", auth_token="test-token"), timeout=3)
-        ).accepted
+            await stub.Shutdown(
+                worker_pb.ShutdownRequest(
+                    credentials=common_pb.Credentials(activation_id="test", auth_token="test-token")
+                ),
+                timeout=3,
+            )
+        ) == worker_pb.ShutdownResponse()
         await asyncio.wait_for(task, timeout=3)
     finally:
         task.cancel()

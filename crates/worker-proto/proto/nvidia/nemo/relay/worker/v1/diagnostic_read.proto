@@ -1,0 +1,149 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines full shared diagnostic query, discovery, and portable read failures.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "nvidia/nemo/relay/worker/v1/diagnostics.proto";
+
+// Canonical diagnostic domain values from the shared runtime types.
+enum DiagnosticDomain {
+  // No value supplied; invalid where an explicit value is required.
+  DIAGNOSTIC_DOMAIN_UNSPECIFIED = 0;
+  // Daemon control, runtime, forwarding, and collection operations.
+  DIAGNOSTIC_DOMAIN_DAEMON = 1;
+  // CLI-owned execution and transport operations.
+  DIAGNOSTIC_DOMAIN_CLI = 2;
+  // Plugin configuration and activation.
+  DIAGNOSTIC_DOMAIN_PLUGIN = 3;
+  // Operational logging and its sinks.
+  DIAGNOSTIC_DOMAIN_LOGGING = 4;
+}
+
+// Canonical plugin diagnostic family values from the shared runtime types.
+enum PluginDiagnosticFamily {
+  // No value supplied; invalid where an explicit value is required.
+  PLUGIN_DIAGNOSTIC_FAMILY_UNSPECIFIED = 0;
+  // Shared plugin-operation codes applicable across execution mechanisms.
+  PLUGIN_DIAGNOSTIC_FAMILY_COMMON = 1;
+  // Host-observed loading, validation, execution, and cleanup operations.
+  PLUGIN_DIAGNOSTIC_FAMILY_OPERATIONS = 2;
+}
+
+// Canonical diagnostic read reason values from the shared runtime types.
+enum DiagnosticReadReason {
+  // No value supplied; invalid where an explicit value is required.
+  DIAGNOSTIC_READ_REASON_UNSPECIFIED = 0;
+  // Collection was disabled at startup.
+  DIAGNOSTIC_READ_REASON_DISABLED = 1;
+  // Collection is enabled but snapshot workspaces were disabled.
+  DIAGNOSTIC_READ_REASON_QUERY_DISABLED = 2;
+  // Requested snapshot version is unsupported.
+  DIAGNOSTIC_READ_REASON_UNSUPPORTED_SCHEMA = 3;
+  // Malformed, oversized, unknown, or inadmissible query input.
+  DIAGNOSTIC_READ_REASON_INVALID_QUERY = 4;
+  // Continuation source, selection, or revision no longer matches.
+  DIAGNOSTIC_READ_REASON_INVALID_CURSOR = 5;
+  // Core or adapter concurrency permits are temporarily exhausted.
+  DIAGNOSTIC_READ_REASON_BUSY = 6;
+  // The page cannot fit its required metadata or a complete row.
+  DIAGNOSTIC_READ_REASON_SNAPSHOT_CAPACITY = 7;
+  // Invalid startup capacity profile, including arithmetic overflow.
+  DIAGNOSTIC_READ_REASON_INVALID_LIMITS = 8;
+  // An admitted allocation could not be reserved.
+  DIAGNOSTIC_READ_REASON_ALLOCATION_FAILED = 9;
+  // An unexpected internal read failure; no original error text is exposed.
+  DIAGNOSTIC_READ_REASON_INTERNAL = 10;
+}
+
+// Typed diagnostic query preserving the shared runtime fields.
+message DiagnosticQuery {
+  // Optional required snapshot version; omission selects this runtime's version.
+  optional uint32 schema_version = 1;
+  // Select one logical component key across retained registrations.
+  optional string component_key = 2;
+  // Select one registration incarnation.
+  optional string component_instance_id = 3 [(buf.validate.field).string.uuid = true];
+  // Select recent events by original refresh generation only. Lifetime and current-refresh summaries keep their declared scope.
+  optional uint64 origin_generation = 4;
+  // Select exact canonical code counters and events.
+  optional string code = 5;
+  // Select the authoritative catalogue parent domain.
+  optional DiagnosticDomain domain = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Select the plugin catalogue family derived from code ownership.
+  optional PluginDiagnosticFamily plugin_family = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Select event causes only; code counters do not retain cause breakdowns.
+  optional string failure_class = 8;
+  // Select component rows by current-refresh ownership and events by original ownership. Selected lifetime counters still span the entire component instance.
+  DiagnosticComponentOwnership ownership = 9;
+  // Select later recent events; summary and code counters remain cumulative.
+  optional uint64 after_sequence = 10;
+  // Requested component-instance row cap, rejected above core limits.
+  optional uint32 max_components = 11;
+  // Requested recent-event cap, rejected above core limits.
+  optional uint32 max_events = 12;
+  // Requested encoded response cap, rejected above core limits.
+  optional uint32 max_response_bytes = 13;
+  // Resume a compatible bounded selection without granting additional scope.
+  DiagnosticCursor continuation = 14;
+}
+
+// Typed diagnostic producer support preserving the shared runtime fields.
+message DiagnosticProducerSupport {
+  // Stable integration name; unfamiliar names may be preserved by consumers.
+  string name = 1;
+  // This binary contains the producer integration.
+  bool supported = 2;
+}
+
+// Typed diagnostic discovery preserving the shared runtime fields.
+message DiagnosticDiscovery {
+  // Version of this discovery contract.
+  uint32 discovery_version = 1;
+  // Supported canonical snapshot version.
+  uint32 snapshot_version = 2;
+  // Catalogue revision independent of snapshot shape.
+  uint32 catalogue_version = 3;
+  // Running owner identity.
+  DiagnosticSourceIdentity source = 4 [(buf.validate.field).required = true];
+  // Whether this owner selected collection at startup.
+  bool collection_enabled = 5;
+  // Whether snapshot workspace was configured; not a transient busy signal.
+  bool queries_enabled = 6;
+  // Configured component capacity.
+  uint64 max_components = 7;
+  // Configured shared recent-event capacity.
+  uint64 max_events = 8;
+  // Configured retained detail-pool bytes.
+  uint64 detail_pool_bytes = 9;
+  // Configured snapshot concurrency.
+  uint64 max_queries = 10;
+  // Configured maximum encoded snapshot bytes.
+  uint64 max_snapshot_bytes = 11;
+  // Backing allocation ceiling, excluding transport and whole-process RSS.
+  uint64 max_owned_bytes = 12;
+  // Aggregate backing-memory inspection is implemented.
+  bool memory_inspection = 13;
+  // Detailed retained evidence requires explicit inspection authority.
+  bool restricted_detail = 14;
+  // Compiled producer integrations, not proof of registration or observations. Owners supply a finite inventory; names describe operations, not instances.
+  repeated DiagnosticProducerSupport producer_support_entries = 15;
+  // Maximum component rows accepted by one read request.
+  uint64 max_query_components = 16;
+  // Maximum event rows accepted by one read request.
+  uint64 max_query_events = 17;
+  // Per-entry/per-component memory inspection is implemented.
+  bool detailed_memory_inspection = 18;
+  // Resource-sample identity correlation is implemented.
+  bool resource_correlation = 19;
+}

@@ -2087,7 +2087,10 @@ async fn worker_invalid_registration_plan_fails_activation() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("empty local_name"), "{error}");
+    assert!(
+        error.contains("local_name: value length must be at least 1 characters"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -2115,7 +2118,7 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
 }
 
 #[tokio::test]
-async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
+async fn worker_handshake_request_identity_mismatch_is_attributed_and_cleaned() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_worker_manifest(
@@ -2140,8 +2143,15 @@ async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
         }
         Err(error) => error.to_string(),
     };
+    // The worker SDK rejects the host's requested ID before returning a handshake
+    // response, so these details originate in the SDK's gRPC status.
+    assert!(error.contains("incompatible worker identity"), "{error}");
     assert!(
-        error.contains("worker plugin returned id 'fixture_worker' kind 'fixture_worker' but manifest id is 'other_worker'"),
+        error.contains("expected plugin_id 'fixture_worker'"),
+        "{error}"
+    );
+    assert!(
+        error.contains("received plugin_id 'other_worker'"),
         "{error}"
     );
     assert_worker_stage_failure(
@@ -3017,7 +3027,7 @@ kind = "worker"
 
 [compat]
 relay = {relay}
-worker_protocol = "grpc-v1"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -3114,7 +3124,7 @@ fn toml_string(value: &str) -> String {
 }
 
 fn supported_relay_requirement() -> String {
-    format!("={}", env!("CARGO_PKG_VERSION"))
+    ">=1.0.0,<2.0".into()
 }
 
 fn assert_error_mentions_manifest_relative_entrypoint(

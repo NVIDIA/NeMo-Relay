@@ -52,8 +52,9 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native API 1 plugins, and `grpc-v1` workers require canonical tool callback and
-intercept returns. Relay 0.8 does not provide a legacy raw-result adapter.
+native API 1 plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
+tool callback and intercept returns. Relay does not provide a legacy raw-result
+adapter.
 
 ## Event and Exporter Projection
 
@@ -217,7 +218,7 @@ plugin-context registrations follow the same naming.
 | Go | `RegisterToolExecutionIntercept` |
 | Node.js | `registerToolExecutionIntercept` |
 | Public C | `nemo_relay_register_tool_execution_intercept` |
-| `grpc-v1` worker SDKs | `register_tool_execution_intercept` |
+| Worker v1 SDKs | `register_tool_execution_intercept` |
 
 The callback takes two parameters because the tool name and arguments move
 onto the context:
@@ -253,15 +254,15 @@ callbacks from their argument-only shape to the context shape. In Node.js the
 context object uses `toolName`, `args`, and `toolCallId`, where
 `toolCallId` is `string | null`. The public C callback receives a single
 `context_json` string carrying `tool_name`, `args`, and `tool_call_id`;
-callbacks must ignore unknown fields. The `grpc-v1` `ToolInvocation` message
-and its optional `tool_call_id` field are unchanged.
+callbacks must ignore unknown fields. The typed worker protocol carries the
+optional `tool_call_id` in `ToolExecutionInvocation`.
 
 ## Binding Contract
 
 Managed callbacks, continuations, and execute helpers use the same logical
 result in their native type or object shape:
 
-| Surface | Managed callback or continuation result |
+| Surface | Managed Callback or Continuation Result |
 | --- | --- |
 | Python | `ToolExecutionResult(result, annotation=None)` |
 | Rust | `ToolExecutionResult { result, annotation }` and its constructors |
@@ -271,39 +272,35 @@ result in their native type or object shape:
 
 Execution intercepts add lifecycle-owned pending marks to that shape:
 
-| Surface | Execution-intercept outcome |
+| Surface | Execution-intercept Outcome |
 | --- | --- |
 | Python | `ToolExecutionInterceptOutcome` |
 | Rust and native API 1 | `ToolExecutionInterceptOutcome` |
 | Go | `ToolExecutionInterceptOutcome` |
 | Node.js | `{ result, annotation?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile` |
 | Public C | Canonical JSON with `result`, optional `annotation`, and optional `pending_marks` |
-| `grpc-v1` worker SDKs | Protobuf `ToolExecutionResult` and `ToolExecutionInterceptOutcome`; arbitrary JSON fields use lossless `JsonValue` wrappers |
+| Worker v1 SDKs | Protobuf `ToolExecutionResult` and `ToolExecutionInterceptOutcome`; arbitrary JSON fields use lossless `JsonValue` wrappers |
 
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
-baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
-excludes Relay versions before 0.8. For plugins rebuilt with the 1.0.0 SDK,
-use `compat.relay = ">=1.0.0,<2.0"`. The native ABI for that result-shape
-change is v4. Workers retain the `grpc-v1` identifier and
-`nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
-type and tool-execution outcome field type. Regenerate worker protobuf bindings
-as part of the required rebuild. Future incompatible contract changes must
-increment the corresponding native API or worker protocol version.
+Relay 0.8 established this canonical result as the native API 1 and `grpc-v1`
+baseline, using native ABI v4. Workers used the `nemo.relay.worker.v1` package;
+that release changed the `ToolNext` response and tool-execution outcome types.
+Relay 0.9 then replaced the tool execution callback shape, using native ABI v5,
+while retaining those worker result messages.
 
-Relay 0.9 replaces the tool execution callback shape without changing the
-`grpc-v1` package or result messages. Worker plugins that register this surface
-must declare a compatibility range that excludes Relay 0.8. For plugins
-rebuilt with the 1.0.0 SDK, use `compat.relay = ">=1.0.0,<2.0"`. Native plugins
-use ABI v5 for the context-carrying callback slot; Relay rejects the registration
-when the plugin admits an incompatible Relay version.
+Relay 1.0 requires the `nvidia.nemo.relay.worker.v1` worker protocol. Regenerate
+worker protobuf bindings or rebuild with the updated SDK, and declare
+`compat.relay = ">=1.0.0,<2.0"`. The current native host supplies ABI v8 and retains
+v7 callback compatibility. Scope-stack inspection requires v8.
+Future incompatible contract changes must increment the corresponding native
+API or worker protocol version.
 
 ## Migration
 
-This release deliberately replaces raw tool execution results. Make these
-changes together:
+When upgrading from a release before Relay 0.8, make these tool-result changes
+together:
 
 1. Wrap every managed tool callback return in `ToolExecutionResult`.
 2. Treat every execution intercept's `next(args)` return as
@@ -347,5 +344,4 @@ hosts them. For release-specific upgrade actions, refer to the
 LLM request intercepts use a different outcome because they must preserve an
 annotated request and codec authority. That contract is described in [LLM
 Request Intercept Outcomes](/reference/llm-request-intercept-outcomes). Worker
-authors can trace both outcome envelopes through the [grpc-v1 protocol
-reference](/build-plugins/workers/grpc-v1-protocol).
+authors can refer to both outcome types in the [gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol).

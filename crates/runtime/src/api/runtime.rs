@@ -28,6 +28,8 @@ pub use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
 pub use llm_execution_context::LlmExecutionContext;
 pub(crate) use scope_stack::capture_trace_context;
+#[doc(hidden)]
+pub use scope_stack::snapshot_scope_stack_through_scope;
 pub use scope_stack::sync_thread_active_event_for_stack;
 pub use scope_stack::{
     PropagationContext, ScopeStack, ScopeStackEntry, ScopeStackHandle, ScopeStackSnapshot,

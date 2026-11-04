@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Complete Python grpc-v1 worker used by the plugin authoring documentation."""
+"""Complete Python nvidia.nemo.relay.worker.v1 worker used by the plugin authoring documentation."""
 
 from __future__ import annotations
 

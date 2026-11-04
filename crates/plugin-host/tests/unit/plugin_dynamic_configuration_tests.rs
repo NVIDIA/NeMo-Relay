@@ -30,8 +30,8 @@ id = {plugin_id:?}
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -124,8 +124,8 @@ id = "fixture.trust"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -312,8 +312,8 @@ id = "fixture.opaque-config"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -380,8 +380,8 @@ id = "fixture.layered"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -405,8 +405,8 @@ id = "fixture.layered"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -827,7 +827,7 @@ fn write_trust_failure_manifest(manifest_path: &Path, digest: &str, kind: &str, 
     let compatibility = if kind == "rust_dynamic" {
         "native_api = \"1\""
     } else {
-        "worker_protocol = \"grpc-v1\""
+        "worker_protocol = \"nvidia.nemo.relay.worker.v1\""
     };
     let load = if kind == "rust_dynamic" {
         "library = \"artifact.bin\"\nsymbol = \"never_load\""
@@ -859,7 +859,7 @@ manifest_version = 1
 id = "fixture.trust"
 kind = {kind:?}
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 {compatibility}
 [defaults]
 enabled = false

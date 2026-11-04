@@ -622,7 +622,7 @@ id = {plugin_id}
 kind = "rust_dynamic"
 
 [compat]
-relay = "={version}"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -634,8 +634,7 @@ items = ["plugin_native"]
 [load]
 library = {library}
 symbol = "nemo_relay_missing_native_plugin"
-"#,
-            version = env!("CARGO_PKG_VERSION"),
+"#
         ),
     )
     .unwrap();
