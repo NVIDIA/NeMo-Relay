@@ -2111,6 +2111,12 @@ impl PluginWorker for WorkerService {
         self.authorize(&credentials.activation_id, &credentials.auth_token)?;
         nemo_relay_worker_proto::validation::validate(&request)
             .map_err(Status::invalid_argument)?;
+        if request.plugin_id != self.plugin.plugin_id() {
+            return Err(Status::failed_precondition("plugin identity mismatch"));
+        }
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
+        }
         let config = request
             .config
             .as_ref()

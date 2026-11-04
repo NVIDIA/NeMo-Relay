@@ -16,6 +16,8 @@ from ._proto.buf.validate import validate_pb2
 
 PACKAGE = "nvidia.nemo.relay.worker.v1"
 VERSION = "1.0.0"
+DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION = "1.0.0"
+DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION = "1.0.0"
 _RENAMES = {
     "time": "timestamp",
     "observe_time": "observed_at",

@@ -448,3 +448,68 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
     }
     assert!(task.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test]
+async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback() {
+    struct TestPlugin(Arc<AtomicU64>);
+    impl WorkerPlugin for TestPlugin {
+        fn plugin_id(&self) -> &str {
+            "test.validation_lifecycle"
+        }
+        fn validate(&self, _config: &Json) -> Vec<ConfigDiagnostic> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        }
+        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+            Ok(())
+        }
+    }
+    let calls = Arc::new(AtomicU64::new(0));
+    let service = WorkerService {
+        health_reporter: tonic_health::server::HealthReporter::new(),
+        shutdown: Arc::new(tokio::sync::Notify::new()),
+        draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        registration: Arc::new(tokio::sync::Mutex::new(None)),
+        plugin: Arc::new(TestPlugin(calls.clone())),
+        runtime: disconnected_runtime(),
+        handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
+        active_invocations: Arc::new(Mutex::new(HashMap::new())),
+        next_invocation_generation: Arc::new(AtomicU64::new(1)),
+    };
+    let request = |id: &str| {
+        Request::new(ValidateRequest {
+            credentials: Some(wire::Credentials {
+                activation_id: service.runtime.activation_id.clone(),
+                auth_token: service.runtime.auth_token.clone(),
+            }),
+            plugin_id: id.into(),
+            config: Some(encode_wire(&Json::Null).unwrap()),
+        })
+    };
+    let error = service
+        .validate(request("another.plugin"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    service
+        .validate(request("test.validation_lifecycle"))
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    service
+        .shutdown(Request::new(ShutdownRequest {
+            credentials: request("test.validation_lifecycle")
+                .into_inner()
+                .credentials,
+            reason: "test validation after shutdown".into(),
+        }))
+        .await
+        .unwrap();
+    let error = service
+        .validate(request("test.validation_lifecycle"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}

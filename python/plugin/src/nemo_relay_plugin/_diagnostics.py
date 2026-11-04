@@ -24,7 +24,12 @@ from ._proto.nvidia.nemo.relay.worker.v1 import (
 from ._proto.nvidia.nemo.relay.worker.v1 import (
     relay_diagnostics_service_pb2 as diagnostics_service_pb,
 )
-from ._protocol import PACKAGE, VERSION
+from ._protocol import (
+    DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION,
+    DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION,
+    PACKAGE,
+    VERSION,
+)
 
 grpc: Any = importlib.import_module("grpc")
 
@@ -208,8 +213,8 @@ class WorkerDiagnostics:
             if (
                 capability.protocol.name != PACKAGE
                 or capability.protocol.version != VERSION
-                or capability.provenance_contract_version != VERSION
-                or capability.snapshot_contract_version != VERSION
+                or capability.provenance_contract_version != DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION
+                or capability.snapshot_contract_version != DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION
             ):
                 facade.availability = "unsupported"
                 return facade
@@ -221,8 +226,8 @@ class WorkerDiagnostics:
                 diagnostics_service_pb.OpenDiagnosticSessionRequest(
                     credentials=facade._credentials,
                     protocol=common_pb.ProtocolIdentity(name=PACKAGE, version=VERSION),
-                    snapshot_contract_version=VERSION,
-                    provenance_contract_version=VERSION,
+                    snapshot_contract_version=DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION,
+                    provenance_contract_version=DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION,
                 ),
                 timeout=_BOOTSTRAP_TIMEOUT,
             )
