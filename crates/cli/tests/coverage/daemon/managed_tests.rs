@@ -100,6 +100,19 @@ fn v1_render_is_deterministic_and_contains_only_deployment_constants() {
     assert_pi_bundle_artifacts(&first);
 }
 
+#[test]
+fn managed_claude_stop_failure_uses_the_turn_end_hook_policy() {
+    let bundle = render_bundle(&spec([ManagedAgent::ClaudeCode])).unwrap();
+    let artifact = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path == "claude-code/plugin-v1/hooks/hooks.json")
+        .unwrap();
+    let hooks: Value = serde_json::from_slice(&artifact.bytes).unwrap();
+    assert!(hooks["hooks"]["StopFailure"].is_array());
+    assert_eq!(hooks["hooks"]["StopFailure"], hooks["hooks"]["Stop"]);
+}
+
 fn assert_pi_bundle_artifacts(bundle: &RenderedBundle) {
     let pi_config = bundle
         .artifacts
@@ -276,7 +289,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "81ec228651fec1b93a9f2a7c28a871acd312c35c2d9ed9067be42ee96687a2a5";
+    const GOLDEN_SHA256: &str = "be757f9080af8a9f9ccd371f8226b2e974ffb40261d3fe65d21613a7b58bdf2a";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,

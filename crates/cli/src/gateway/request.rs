@@ -10,7 +10,7 @@ use std::io::Read;
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Method, Request, header};
 use http_body_util::LengthLimitError;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use serde_json::{Value, json};
 
 use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;

@@ -16,14 +16,14 @@ const component: string | undefined = page.components[0]?.identity.instanceId;
 const portable: string = reader().snapshotJson(query);
 // @ts-expect-error Diagnostic u64 query values require bigint, including small values.
 const lossy: DiagnosticQuery = { afterSequence: 1 };
-void [failures, source, component, portable, lossy];
+export const checkedValues0 = [failures, source, component, portable, lossy];
 
 const rowCap: bigint = reader().info().discovery.maxQueryEvents;
 const coverage: boolean = reader().info().discovery.producerSupport[0].supported;
-void [rowCap, coverage];
+export const checkedValues1 = [rowCap, coverage];
 
 const memory = reader().inspectMemory(query);
 const reservation: bigint = memory.aggregate.reservedBytes;
 const memoryJson: string = reader().inspectMemoryJson(query);
 const sampleOrdinal: bigint | undefined = memory.resource.sample?.ordinal;
-void [reservation, memoryJson, sampleOrdinal];
+export const checkedValues2 = [reservation, memoryJson, sampleOrdinal];

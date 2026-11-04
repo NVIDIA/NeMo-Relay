@@ -9,8 +9,7 @@ use std::borrow::Cow;
 
 /// A plugin execution mechanism name, preserving values unknown to this reader.
 /// Typed conversion accepts only the corresponding catalogue enum.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct PluginExecutionName(Cow<'static, str>);
 impl PluginExecutionName {
@@ -41,8 +40,7 @@ impl From<PluginExecution> for PluginExecutionName {
 
 /// A plugin lifecycle phase name, preserving values unknown to this reader.
 /// Typed conversion accepts only the corresponding catalogue enum.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct PluginPhaseName(Cow<'static, str>);
 impl PluginPhaseName {
@@ -90,8 +88,9 @@ impl From<PluginPhase> for PluginPhaseName {
 ///
 /// Phase-one activation recording supplies only `phase = "activation"` and leaves
 /// execution unset. Other producer integrations remain deferred.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct PluginObservationContext {
     /// Observed execution name, when known; never inferred from a code.
     pub execution: Option<PluginExecutionName>,

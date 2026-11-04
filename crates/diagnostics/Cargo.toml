@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded diagnostics collection, evidence, and inspection for NeMo Relay."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+# First-party crates.
+nemo-relay-plugin.workspace = true
+nemo-relay-types.workspace = true
+
+# Third-party dependencies.
+arrayvec.workspace = true
+enumset.workspace = true
+chrono = { workspace = true, default-features = true, features = ["serde"] }
+circular-buffer.workspace = true
+log = { workspace = true, features = ["kv", "kv_serde"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["v7", "serde"] }
+
+[dev-dependencies]
+schemars.workspace = true

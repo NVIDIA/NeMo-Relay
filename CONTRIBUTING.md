@@ -28,6 +28,8 @@ Go and the raw FFI surface are currently experimental and remain source-first.
 Install these tools before you start:
 
 - **Rust** (stable toolchain) -- install with [rustup](https://rustup.rs/)
+- **Protocol Buffers compiler** (`protoc`) 31.1 or later -- needed to build worker validation code
+- **Buf** 1.75.0 or later -- downloads the worker validation schema version recorded in `buf.lock`
 - **Python** >= 3.11 -- use [uv](https://docs.astral.sh/uv/) for environment management
 - **just** -- `cargo install just --locked`
 - **Go** >= 1.21
@@ -151,7 +153,7 @@ uv run pre-commit install
 The hooks enforce:
 
 - **General**: trailing whitespace removal, end-of-file fixup, YAML/TOML/JSON validity, merge conflict marker detection, large file check (500 KB max)
-- **Docs**: Fern validation for `docs/` and `fern/`, plus external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`
+- **Docs**: external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`. Fern validation runs separately through `just docs`.
 - **Python**: Ruff linting and formatting, ty type checking
 - **Rust**: FFI header sync for `crates/ffi/nemo_relay.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis
@@ -243,11 +245,33 @@ Use `git commit -s` when you create commits, or add a `Signed-off-by:` trailer m
 
 This section describes how to prepare and submit changes for review.
 
+### PR Etiquette
+
+- **New features**: Open or identify an issue and have repository maintainers
+  review it and approve the design before creating a PR. You may provide the
+  specification in any form; GitHub feature-request issues are preferred for
+  external contributors, and Linear tickets are preferred for NVIDIA internal
+  contributions. NVIDIA contributors may also use GitHub issues.
+- **Bug fixes**: Avoid opening a PR directly. Report or identify the bug in an
+  issue first and discuss the proposed fix with repository maintainers before
+  creating a PR.
+- **Related changes**: Group related PRs as a stack and explain their
+  dependencies and review order in each PR description.
+- **Well-defined scope**: Give each PR a clear purpose and scope so reviewers
+  can understand the change. Keep unrelated changes in separate PRs.
+- **Readiness**: Do not open a draft PR prematurely. Use the issue for early
+  discussion, and open a PR when the change is ready for review.
+- **Open PR limit**: Contributors who are not on the development team may have
+  no more than three open PRs at a time, including draft PRs.
+
 ### Before Submitting
 
 Complete these checks before opening or updating a pull request.
 
-1. Open or identify an issue describing the proposed enhancement or bug fix before submitting a pull request. External contributors should use a GitHub issue; NVIDIA contributors may use a GitHub or Linear issue.
+1. Open or identify an issue describing the proposed enhancement or bug fix and
+   follow the [PR etiquette](#pr-etiquette) requirements before creating a pull
+   request. External contributors should use a GitHub issue; NVIDIA contributors
+   may use a GitHub or Linear issue.
 2. Run `uv run pre-commit run` against the staged changes.
 3. Run focused tests and the canonical suites for directly affected surfaces.
 4. Run a build-only recipe when packaging, generated artifacts, or a surface

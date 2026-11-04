@@ -210,8 +210,8 @@ the launched process.
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
 `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `SubagentStart`, `SubagentStop`,
-`Notification`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
-emit canonical `compaction` marks. Relay normalizes the other hooks as scope,
+`Notification`, `Stop`, `StopFailure`, `PreCompact`, and `PostCompact`. Both
+compaction hooks emit canonical `compaction` marks. Relay normalizes the other hooks as scope,
 prompt, tool, notification, subagent, or private LLM correlation events
 according to the hook payload. `UserPromptExpansion` records nonempty
 slash-command expansions as `skill.load.inferred`; Claude Code does not
@@ -335,5 +335,8 @@ policies.
 
 `UserPromptSubmit` contributes prompt and LLM correlation data. `Stop` is a
 private correlation and turn-boundary hint rather than a standalone
-user-visible mark. The other generated hooks normalize to their corresponding
-scope, tool, mark, notification, compaction, or subagent semantics.
+user-visible mark. `StopFailure` closes the current turn with an error status,
+preserving the hook's `error` type and optional `error_details`. The session
+stays open, and the next prompt starts a new turn. The other generated hooks
+normalize to their corresponding scope, tool, mark, notification, compaction,
+or subagent semantics.

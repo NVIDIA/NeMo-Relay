@@ -5,7 +5,7 @@
 
 Use :class:`WorkerPlugin` and :class:`PluginContext` to define plugin behavior,
 then pass the implementation to :func:`serve_plugin`. The SDK owns the
-``grpc-v1`` transport, host authentication, JSON envelopes, continuation calls,
+``nvidia.nemo.relay.worker.v1`` transport, host authentication, typed protobuf messages, continuation calls,
 and task-local scope-stack propagation.
 
 The worker can keep multiple RPCs in flight, but callback execution is
@@ -101,7 +101,7 @@ Public authoring types:
 
 Public functions:
     http_error_message: Format an upstream HTTP error status for forwarding.
-    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
+    serve_plugin: Run a local ``nvidia.nemo.relay.worker.v1`` worker until host shutdown.
 """
 
 from ._api import (

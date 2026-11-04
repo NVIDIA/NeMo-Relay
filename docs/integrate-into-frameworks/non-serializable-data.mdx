@@ -74,7 +74,7 @@ search_result: SearchResult = result.result
 
 <Tab title="Node.js" language="node">
 ```ts
-import { toolCallExecute } from 'nemo-relay-node';
+import { toolCallExecuteAsync } from 'nemo-relay-node';
 
 type SearchArgs = { clientId: string; query: string };
 type SearchResult = { hits: number };
@@ -82,7 +82,7 @@ type SearchResult = { hits: number };
 const frameworkClients = new Map<string, object>();
 frameworkClients.set('client-1', {});
 
-const result = await toolCallExecute(
+const result = await toolCallExecuteAsync(
   'search',
   { clientId: 'client-1', query: 'weather' },
   async (args: SearchArgs) => {
@@ -99,7 +99,7 @@ const searchResult = result.result as SearchResult;
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
+use nemo_relay::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

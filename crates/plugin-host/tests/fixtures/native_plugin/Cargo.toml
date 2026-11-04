@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-plugin-fixture"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# First-party crates.
+nemo-relay-plugin.workspace = true
+
+# Third-party dependencies.
+futures.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, default-features = true, features = ["io-util", "time"] }

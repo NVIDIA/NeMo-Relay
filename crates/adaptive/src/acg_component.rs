@@ -23,14 +23,14 @@ use crate::acg::{
     PassthroughPlugin, SharingScope, StabilityAnalysisResult, debug as acg_debug,
 };
 use chrono::Utc;
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
+use nemo_relay_codecs::resolve::request_codec;
+use nemo_relay_runtime::api::llm::LlmRequest;
+use nemo_relay_runtime::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn,
 };
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::resolve::request_codec;
-use nemo_relay::json::Json;
+use nemo_relay_runtime::json::Json;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use uuid::Uuid;
 
 use crate::acg_profile::{derive_acg_learning_key, derive_acg_profile_key};
@@ -642,19 +642,25 @@ pub(crate) fn create_acg_llm_request_intercept(
                     .unwrap_or(request);
             if annotated.is_some() && translated.content != input_content {
                 let translated_annotated = build_semantic_request_view(&translated)
-                    .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))?
+                    .map_err(|error| {
+                        nemo_relay_runtime::error::FlowError::Internal(error.to_string())
+                    })?
                     .annotated_request;
-                return Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    LlmRequest {
-                        headers: translated.headers,
-                        content: input_content,
-                    },
-                    Some(translated_annotated),
-                ));
+                return Ok(
+                    nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                        LlmRequest {
+                            headers: translated.headers,
+                            content: input_content,
+                        },
+                        Some(translated_annotated),
+                    ),
+                );
             }
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                translated, annotated,
-            ))
+            Ok(
+                nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome::new(
+                    translated, annotated,
+                ),
+            )
         })
     })
 }
@@ -677,7 +683,8 @@ pub(crate) fn create_acg_llm_execution_intercept(
                     translate_request(&request, &agent_id, &provider, plugin.as_ref(), &cache)
                         .unwrap_or(request);
                 next(translated).await
-            }) as Pin<Box<dyn Future<Output = nemo_relay::error::Result<Json>> + Send>>
+            })
+                as Pin<Box<dyn Future<Output = nemo_relay_runtime::error::Result<Json>> + Send>>
         },
     )
 }

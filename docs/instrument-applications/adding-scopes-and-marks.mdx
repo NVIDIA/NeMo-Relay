@@ -115,10 +115,10 @@ main().catch((error) => {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::scope::{
+use nemo_relay::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 

@@ -127,18 +127,6 @@ func testScopeShorthandsForwardTimestamps(t *testing.T) {
 	assertCapturedScopeEvents(t, events, expected)
 }
 
-func runWithTestScopeStack(t *testing.T, fn func(*testing.T)) {
-	t.Helper()
-
-	stack, err := nemo_relay.NewScopeStack()
-	if err != nil {
-		t.Fatalf("NewScopeStack failed: %v", err)
-	}
-	defer stack.Close()
-
-	stack.Run(func() { fn(t) })
-}
-
 func assertCapturedScopeEvents(t *testing.T, events, expected []capturedScopeEvent) {
 	t.Helper()
 

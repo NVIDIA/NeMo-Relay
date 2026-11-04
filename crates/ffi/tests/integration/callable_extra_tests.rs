@@ -6,7 +6,7 @@
 use super::*;
 use std::ptr;
 
-use nemo_relay::api::runtime::ToolExecutionContext;
+use nemo_relay_runtime::api::runtime::ToolExecutionContext;
 use tokio_stream::StreamExt;
 
 use super::test_support::resolve;
@@ -158,8 +158,12 @@ unsafe extern "C" fn codec_encode_invalid_json_cb(
     CString::new("not-json").unwrap().into_raw()
 }
 
-unsafe extern "C" fn finalizer_null_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_null_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     ptr::null_mut()
+}
+
+unsafe extern "C" fn finalizer_invalid_json_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
+    CString::new("not-json").unwrap().into_raw()
 }
 
 fn make_request() -> LlmRequest {
@@ -212,7 +216,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         .block_on(llm_intercept(
             "llm",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
             llm_next,
         ))
         .unwrap_err();
@@ -223,7 +227,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     let empty_next: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
             assert_eq!(request.content, Json::Null);
-            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+            Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
                 tokio_stream::empty(),
             ))
         })
@@ -232,7 +236,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         .block_on(llm_stream_intercept(
             "llm",
             make_request(),
-            nemo_relay::api::runtime::LlmExecutionContext::default(),
+            nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
             empty_next,
         ))
         .unwrap();
@@ -248,7 +252,7 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     let stream_err = match runtime.block_on(llm_stream_intercept(
         "llm",
         make_request(),
-        nemo_relay::api::runtime::LlmExecutionContext::default(),
+        nemo_relay_runtime::api::runtime::LlmExecutionContext::default(),
         err_next,
     )) {
         Ok(_) => panic!("expected llm stream intercept error"),
@@ -256,8 +260,28 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     };
     assert!(stream_err.to_string().contains("stream next failed"));
 
-    let finalizer = wrap_finalizer_fn(finalizer_null_cb);
-    assert_eq!(finalizer(), Json::Null);
+    let (_, finalizer, error) =
+        wrap_stream_callbacks(None, Some(finalizer_null_cb), std::ptr::null_mut(), None);
+    let failure = finalizer().unwrap_err().to_string();
+    assert_eq!(failure, "internal error: stream finalizer callback failed");
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+
+    let (_, finalizer, error) = wrap_stream_callbacks(
+        None,
+        Some(finalizer_invalid_json_cb),
+        std::ptr::null_mut(),
+        None,
+    );
+    let failure = finalizer().unwrap_err().to_string();
+    assert_eq!(
+        failure,
+        "internal error: stream finalizer callback failed: invalid JSON: expected ident at line 1 column 2"
+    );
+    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+
+    let (_, finalizer, error) = wrap_stream_callbacks(None, None, std::ptr::null_mut(), None);
+    assert_eq!(finalizer().unwrap(), Json::Null);
+    assert!(error.take_failure().is_none());
 }
 
 #[test]
@@ -299,7 +323,7 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
     let sanitize = wrap_llm_sanitize_request_fn(llm_request_passthrough_cb, ptr::null_mut(), None);
     let sanitized = resolve(sanitize(
         request.clone(),
-        nemo_relay::api::runtime::LlmSanitizeRequestContext::default(),
+        nemo_relay_runtime::api::runtime::LlmSanitizeRequestContext::default(),
     ))
     .unwrap()
     .expect("non-null sanitizer result");
@@ -376,8 +400,8 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
 
 #[test]
 fn test_sanitizer_context_resolves_directional_ffi_codecs() {
-    use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
-    use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_runtime::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
 
     let codec = Arc::new(OpenAIChatCodec);
     let request = LlmRequest {

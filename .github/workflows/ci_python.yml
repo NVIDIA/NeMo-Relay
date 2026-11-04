@@ -89,6 +89,19 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
+
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
@@ -200,6 +213,19 @@ jobs:
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         if: ${{ !contains(matrix.platform, 'musl') }}
@@ -348,6 +374,10 @@ jobs:
           python3 scripts/package_python_musllinux.py \
             --version "$NEMO_RELAY_PACKAGE_VERSION" \
             --source-out "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-source"
+          cp "$(command -v buf)" "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/buf"
+          cp "$(command -v protoc)" "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/protoc"
+          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/protoc-include"
+          cp -R "${{ steps.protoc.outputs.path }}/include/google" "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/protoc-include/"
 
       - name: Build musllinux wheel
         if: ${{ contains(matrix.platform, 'musl') }}
@@ -359,6 +389,10 @@ jobs:
           maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
           manylinux: musllinux_1_2
           container: ${{ matrix.container_image }}
+          docker-options: >-
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/buf:/usr/local/bin/buf:ro"
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/protoc:/usr/local/bin/protoc:ro"
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/protoc-include/google:/usr/local/include/google:ro"
           target: ${{ matrix.rust_target }}
           rust-toolchain: ${{ steps.ci-config.outputs.rust_version }}
           working-directory: tmp/musllinux-source
@@ -426,6 +460,21 @@ jobs:
         if: ${{ !contains(matrix.platform, 'musl') }}
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Protoc
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         if: ${{ matrix.platform == 'source-and-plugin' }}
@@ -547,4 +596,4 @@ jobs:
           uv pip install --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" --no-deps --no-index "$wheel"
           # SONAR_IGNORE_END
           "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
-            "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"
+            "import nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1.plugin_worker_service_pb2_grpc"

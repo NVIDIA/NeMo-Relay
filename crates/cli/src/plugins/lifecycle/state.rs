@@ -6,9 +6,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
+use {
+    nemo_relay_plugin_host::dynamic::DynamicPluginRecord,
+    nemo_relay_plugin_host::dynamic::DynamicPluginRegistry,
+};
 
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::error::CliError;

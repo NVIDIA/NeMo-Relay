@@ -20,15 +20,16 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, 
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
-use nemo_relay::api::llm::{
+use nemo_relay_codecs::resolve::{ProviderSurface, request_codec, streaming_codec};
+use nemo_relay_codecs::streaming::SseEventDecoder;
+use nemo_relay_runtime::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
     llm_request_intercepts_with_source,
 };
-use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay::api::runtime::TASK_SCOPE_STACK;
-use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
-use nemo_relay::codec::streaming::SseEventDecoder;
-use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
+use nemo_relay_runtime::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
+use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::codec::response_codec;
+use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -167,7 +168,8 @@ impl ManagedRuntime {
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
         let sessions = self.sessions.close_all("daemon_worker_shutdown").await;
-        let subscribers = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
+        let subscribers =
+            nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
         let activation = lock(&self.activation)
             .take()
             .map(ServerPluginActivation::clear);
@@ -473,12 +475,6 @@ impl ManagedRuntime {
                 "daemon_worker_request_capture",
                 json!("head_only"),
             );
-            if observed.failure.is_none() {
-                insert_metadata(&mut end_metadata, "otel.status_code", json!("OK"));
-            } else if let Some(failure) = observed.failure.as_ref() {
-                insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
-                insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
-            }
             // Finish correlation while borrowing the payload, then move it into LLM publication.
             if let Some(value) = observed.value.as_ref() {
                 sessions
@@ -618,13 +614,7 @@ impl ManagedRuntime {
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
             let mut observed = observation.finish(surface, streaming).await;
-            let mut end_metadata = merge_object(metadata, observed.metadata());
-            if observed.failure.is_none() {
-                insert_metadata(&mut end_metadata, "otel.status_code", json!("OK"));
-            } else if let Some(failure) = observed.failure.as_ref() {
-                insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
-                insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
-            }
+            let end_metadata = merge_object(metadata, observed.metadata());
             // Finish correlation while borrowing the payload, then move it into LLM publication.
             if let Some(value) = observed.value.as_ref() {
                 sessions
@@ -1244,7 +1234,7 @@ fn request_body_decode_required() -> Result<bool, CliError> {
 }
 
 fn finish_llm_after_dispatch_failure(
-    handle: &nemo_relay::api::llm::LlmHandle,
+    handle: &nemo_relay_runtime::api::llm::LlmHandle,
     metadata: Value,
     error: &CliError,
 ) {
@@ -1368,6 +1358,11 @@ where
                         self.signal.truncate();
                     }
                 }
+                // HTTP consumers can drop a completed body without polling for None.
+                if self.body.is_end_stream() {
+                    self.sender.take();
+                    self.signal.finish(OBSERVATION_COMPLETE);
+                }
                 Poll::Ready(Some(Ok(frame)))
             }
             Poll::Ready(Some(Err(error))) => {
@@ -1417,7 +1412,14 @@ struct ObservedResponse {
 
 impl ObservedResponse {
     fn metadata(&self) -> Value {
-        json!({
+        let mut metadata = json!({
+            "otel.status_code": if self.failure.is_some() {
+                "ERROR"
+            } else if self.terminal == OBSERVATION_CANCELLED {
+                "UNSET"
+            } else {
+                "OK"
+            },
             "daemon_worker_observation": {
                 "truncated": self.truncated,
                 "http_status": self.status.as_u16(),
@@ -1428,7 +1430,11 @@ impl ObservedResponse {
                     _ => "unknown",
                 },
             },
-        })
+        });
+        if let Some(failure) = self.failure.as_ref() {
+            insert_metadata(&mut metadata, "otel.status_description", json!(failure));
+        }
+        metadata
     }
 }
 
@@ -1479,7 +1485,8 @@ impl ObservationReceiver {
         let mut failure = match terminal {
             OBSERVATION_COMPLETE => None,
             OBSERVATION_BODY_ERROR => Some("provider response body failed".to_owned()),
-            OBSERVATION_CANCELLED => Some("downstream cancelled provider response".to_owned()),
+            // Dropping delivery is a downstream decision, not a provider failure.
+            OBSERVATION_CANCELLED => None,
             _ => Some("provider response observation ended unexpectedly".to_owned()),
         };
         if truncated {

@@ -4,7 +4,7 @@
 //! Unit tests for plugin in the NeMo Relay FFI crate.
 
 use super::*;
-use nemo_relay::plugin::rollback_registrations;
+use nemo_relay_plugin_host::rollback_registrations;
 
 #[test]
 fn test_plugin_initialize_rejects_aliased_outputs_without_activating() {
@@ -195,7 +195,7 @@ fn test_ffi_plugin_context_event_metadata_injector_is_rolled_back() {
 
     let subscriber_name = cstring(&unique_name("ffi_plugin_metadata_subscriber"));
     let injector_name = cstring("metadata");
-    let mut registrations = PluginRegistrationContext::with_namespace("ffi_plugin::");
+    let mut registrations = HostPluginRegistrationContext::with_namespace("ffi_plugin::");
     let mut ctx = FfiPluginContext(&mut registrations as *mut _);
 
     unsafe {
@@ -265,7 +265,7 @@ fn test_ffi_plugin_context_event_metadata_injector_rejects_null_callback() {
     reset_globals();
 
     let injector_name = cstring("metadata");
-    let mut registrations = PluginRegistrationContext::with_namespace("ffi_plugin_null::");
+    let mut registrations = HostPluginRegistrationContext::with_namespace("ffi_plugin_null::");
     let mut ctx = FfiPluginContext(&mut registrations as *mut _);
 
     unsafe {
@@ -632,7 +632,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
         );
     }
 
-    let mut inner = PluginRegistrationContext::with_namespace("ffi::");
+    let mut inner = HostPluginRegistrationContext::with_namespace("ffi::");
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     unsafe {
@@ -793,7 +793,7 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
             "ffi::tool",
         ]
     );
-    nemo_relay::plugin::rollback_registrations(&mut registrations);
+    nemo_relay_plugin_host::rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
 
@@ -806,7 +806,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names() {
     let llm_name = cstring("duplicate-llm");
     let tool_name = cstring("duplicate-tool");
 
-    let mut inner = PluginRegistrationContext::with_namespace("ffi::");
+    let mut inner = HostPluginRegistrationContext::with_namespace("ffi::");
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     unsafe {
@@ -932,7 +932,7 @@ fn test_ffi_plugin_context_helpers_reject_invalid_utf8_names_in_bulk() {
     let invalid_utf8 = [0xffu8, 0];
     let invalid_name = invalid_utf8.as_ptr() as *const c_char;
 
-    let mut inner = PluginRegistrationContext::with_namespace("ffi::");
+    let mut inner = HostPluginRegistrationContext::with_namespace("ffi::");
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     macro_rules! assert_invalid_name_status {
@@ -1065,7 +1065,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
 
-    let mut inner = PluginRegistrationContext::with_namespace("ffi::");
+    let mut inner = HostPluginRegistrationContext::with_namespace("ffi::");
     let mut ctx = FfiPluginContext(&mut inner as *mut _);
 
     macro_rules! assert_duplicate {
@@ -1350,7 +1350,7 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
     }
 
     let mut registrations = inner.into_registrations();
-    nemo_relay::plugin::rollback_registrations(&mut registrations);
+    nemo_relay_plugin_host::rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
 

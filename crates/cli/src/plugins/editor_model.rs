@@ -5,33 +5,19 @@
 
 use std::path::Path;
 
-use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
-use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
-use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
-use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
-use nemo_relay::plugins::resource_metrics::RESOURCE_METRICS_PLUGIN_KIND;
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay_observability::plugin::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use nemo_relay_plugin_host::resource_metrics::ResourceMetricsConfig;
+use nemo_relay_resource_metrics::plugin::RESOURCE_METRICS_PLUGIN_KIND;
+use nemo_relay_runtime::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
+use {nemo_relay_plugin_host::PluginComponentSpec, nemo_relay_plugin_host::PluginConfig};
 
 use crate::error::CliError;
-
-#[allow(
-    deprecated,
-    reason = "the CLI must edit existing Guardrails configuration until the built-in plugin is removed"
-)]
-mod guardrails_compat {
-    pub(super) type Config = nemo_relay::plugins::nemo_guardrails::component::NeMoGuardrailsConfig;
-    pub(super) const PLUGIN_KIND: &str =
-        nemo_relay::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND;
-}
-
-use guardrails_compat::{
-    Config as NeMoGuardrailsConfig, PLUGIN_KIND as NEMO_GUARDRAILS_PLUGIN_KIND,
-};
 
 pub(super) const POLICY_SECTION: &str = "policy";
 
@@ -50,7 +36,6 @@ pub(super) enum EditableComponent {
     Observability(Box<ComponentEditorState<ObservabilityConfig>>),
     ResourceMetrics(Box<ComponentEditorState<ResourceMetricsConfig>>),
     Adaptive(Box<ComponentEditorState<AdaptiveConfig>>),
-    NemoGuardrails(Box<ComponentEditorState<NeMoGuardrailsConfig>>),
     PiiRedaction(Box<ComponentEditorState<PiiRedactionConfig>>),
 }
 
@@ -60,7 +45,6 @@ impl EditableComponent {
             Self::Observability(_) => "Observability",
             Self::ResourceMetrics(_) => "Resource Metrics",
             Self::Adaptive(_) => "Adaptive",
-            Self::NemoGuardrails(_) => "NeMo Guardrails (Deprecated)",
             Self::PiiRedaction(_) => "PII Redaction",
         }
     }
@@ -70,7 +54,6 @@ impl EditableComponent {
             Self::Observability(_) => ObservabilityConfig::editor_schema().fields,
             Self::ResourceMetrics(_) => ResourceMetricsConfig::editor_schema().fields,
             Self::Adaptive(_) => AdaptiveConfig::editor_schema().fields,
-            Self::NemoGuardrails(_) => NeMoGuardrailsConfig::editor_schema().fields,
             Self::PiiRedaction(_) => PiiRedactionConfig::editor_schema().fields,
         }
     }
@@ -80,7 +63,6 @@ impl EditableComponent {
             Self::Observability(state) => state.enabled,
             Self::ResourceMetrics(state) => state.enabled,
             Self::Adaptive(state) => state.enabled,
-            Self::NemoGuardrails(state) => state.enabled,
             Self::PiiRedaction(state) => state.enabled,
         }
     }
@@ -90,7 +72,6 @@ impl EditableComponent {
             Self::Observability(state) => state.toggle_enabled(),
             Self::ResourceMetrics(state) => state.toggle_enabled(),
             Self::Adaptive(state) => state.toggle_enabled(),
-            Self::NemoGuardrails(state) => state.toggle_enabled(),
             Self::PiiRedaction(state) => state.toggle_enabled(),
         }
     }
@@ -100,7 +81,6 @@ impl EditableComponent {
             Self::Observability(state) => state.set_enabled(enabled),
             Self::ResourceMetrics(state) => state.set_enabled(enabled),
             Self::Adaptive(state) => state.set_enabled(enabled),
-            Self::NemoGuardrails(state) => state.set_enabled(enabled),
             Self::PiiRedaction(state) => state.set_enabled(enabled),
         }
     }
@@ -110,7 +90,6 @@ impl EditableComponent {
             Self::Observability(state) => state.reset_enabled(),
             Self::ResourceMetrics(state) => state.reset_enabled(),
             Self::Adaptive(state) => state.reset_enabled(),
-            Self::NemoGuardrails(state) => state.reset_enabled(),
             Self::PiiRedaction(state) => state.reset_enabled(),
         }
     }
@@ -120,7 +99,6 @@ impl EditableComponent {
             Self::Observability(state) => observability_summary(state),
             Self::ResourceMetrics(state) => resource_metrics_summary(state),
             Self::Adaptive(state) => adaptive_summary(state),
-            Self::NemoGuardrails(state) => nemo_guardrails_summary(state),
             Self::PiiRedaction(state) => pii_redaction_summary(state),
         }
     }
@@ -132,9 +110,6 @@ impl EditableComponent {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
             Self::Adaptive(state) => config_field_configured(&state.config, field).unwrap_or(false),
-            Self::NemoGuardrails(state) => {
-                config_field_configured(&state.config, field).unwrap_or(false)
-            }
             Self::PiiRedaction(state) => {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
@@ -152,10 +127,6 @@ impl EditableComponent {
                 state.mark_config_touched();
             }
             Self::Adaptive(state) => {
-                reset_config_field(&mut state.config, field)?;
-                state.mark_config_touched();
-            }
-            Self::NemoGuardrails(state) => {
                 reset_config_field(&mut state.config, field)?;
                 state.mark_config_touched();
             }
@@ -184,10 +155,6 @@ impl EditableComponent {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
             }
-            Self::NemoGuardrails(state) => {
-                remove_struct_field(&mut state.config, field.name)?;
-                state.mark_config_touched();
-            }
             Self::PiiRedaction(state) => {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
@@ -201,7 +168,6 @@ impl EditableComponent {
             Self::Observability(state) => store_observability_state(config, state),
             Self::ResourceMetrics(state) => store_resource_metrics_state(config, state),
             Self::Adaptive(state) => store_adaptive_state(config, state),
-            Self::NemoGuardrails(state) => store_nemo_guardrails_state(config, state),
             Self::PiiRedaction(state) => store_pii_redaction_state(config, state),
         }
     }
@@ -230,7 +196,6 @@ pub(super) fn editable_components(
         EditableComponent::Observability(Box::new(component_observability_state(config)?)),
         EditableComponent::ResourceMetrics(Box::new(component_resource_metrics_state(config)?)),
         EditableComponent::Adaptive(Box::new(component_adaptive_state(config)?)),
-        EditableComponent::NemoGuardrails(Box::new(component_nemo_guardrails_state(config)?)),
         EditableComponent::PiiRedaction(Box::new(component_pii_redaction_state(config)?)),
     ];
     Ok(components)
@@ -432,12 +397,6 @@ pub(super) fn component_adaptive_state(
     component_editor_state(config, ADAPTIVE_PLUGIN_KIND, false)
 }
 
-pub(super) fn component_nemo_guardrails_state(
-    config: &PluginConfig,
-) -> Result<ComponentEditorState<NeMoGuardrailsConfig>, CliError> {
-    component_editor_state(config, NEMO_GUARDRAILS_PLUGIN_KIND, false)
-}
-
 pub(super) fn component_pii_redaction_state(
     config: &PluginConfig,
 ) -> Result<ComponentEditorState<PiiRedactionConfig>, CliError> {
@@ -487,22 +446,6 @@ pub(super) fn store_adaptive_state(
             state.enabled,
             adaptive_config_map(&state.config)?,
             merge_adaptive_editor_config,
-        );
-    }
-    Ok(())
-}
-
-pub(super) fn store_nemo_guardrails_state(
-    config: &mut PluginConfig,
-    state: &ComponentEditorState<NeMoGuardrailsConfig>,
-) -> Result<(), CliError> {
-    if state.should_store(state.config_touched || nemo_guardrails_configured(&state.config)) {
-        store_component_editor_config(
-            config,
-            NEMO_GUARDRAILS_PLUGIN_KIND,
-            state.enabled,
-            nemo_guardrails_config_map(&state.config)?,
-            merge_nemo_guardrails_editor_config,
         );
     }
     Ok(())
@@ -850,23 +793,6 @@ pub(super) fn adaptive_config_map(config: &AdaptiveConfig) -> Result<Map<String,
     }
 }
 
-pub(super) fn nemo_guardrails_config_map(
-    config: &NeMoGuardrailsConfig,
-) -> Result<Map<String, Value>, CliError> {
-    let value = serde_json::to_value(config).map_err(serde_error)?;
-    match value {
-        Value::Object(mut map) => {
-            if is_version_one(map.get("version")) {
-                map.remove("version");
-            }
-            Ok(map)
-        }
-        _ => Err(CliError::Config(
-            "nemo_guardrails config must serialize to an object".into(),
-        )),
-    }
-}
-
 pub(super) fn pii_redaction_config_map(
     config: &PiiRedactionConfig,
 ) -> Result<Map<String, Value>, CliError> {
@@ -919,21 +845,6 @@ pub(super) fn merge_adaptive_editor_config(
     );
 }
 
-pub(super) fn merge_nemo_guardrails_editor_config(
-    existing: &mut Map<String, Value>,
-    edited: Map<String, Value>,
-) {
-    if is_version_one(existing.get("version")) {
-        existing.remove("version");
-    }
-    merge_known_editor_object(
-        existing,
-        edited,
-        &nested_editor_keys(NeMoGuardrailsConfig::editor_schema()),
-        NeMoGuardrailsConfig::editor_schema(),
-    );
-}
-
 pub(super) fn merge_pii_redaction_editor_config(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
@@ -957,7 +868,7 @@ pub(super) fn merge_known_editor_object(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
     known_keys: &[&str],
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
 ) {
     for key in known_keys {
         let Some(edited_value) = edited.get(*key) else {
@@ -1053,7 +964,7 @@ pub(super) fn observability_editor_fields_with_version() -> Vec<&'static str> {
 }
 
 pub(super) fn nested_editor_keys(
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
 ) -> Vec<&'static str> {
     schema.fields.iter().map(|field| field.name).collect()
 }
@@ -1154,35 +1065,6 @@ pub(super) fn resource_metrics_summary(
 
 pub(super) fn adaptive_summary(state: &ComponentEditorState<AdaptiveConfig>) -> String {
     let configured_fields = AdaptiveConfig::editor_schema()
-        .fields
-        .iter()
-        .filter(|field| field.name != POLICY_SECTION)
-        .filter(|field| config_field_configured(&state.config, **field).unwrap_or(false))
-        .map(|field| field.label)
-        .collect::<Vec<_>>();
-    format!(
-        "component {}, fields {}",
-        if state.enabled { "enabled" } else { "disabled" },
-        if configured_fields.is_empty() {
-            "none".into()
-        } else {
-            configured_fields.join(", ")
-        }
-    )
-}
-
-pub(super) fn nemo_guardrails_configured(config: &NeMoGuardrailsConfig) -> bool {
-    NeMoGuardrailsConfig::editor_schema()
-        .fields
-        .iter()
-        .filter(|field| field.name != POLICY_SECTION)
-        .any(|field| config_field_configured(config, *field).unwrap_or(false))
-}
-
-pub(super) fn nemo_guardrails_summary(
-    state: &ComponentEditorState<NeMoGuardrailsConfig>,
-) -> String {
-    let configured_fields = NeMoGuardrailsConfig::editor_schema()
         .fields
         .iter()
         .filter(|field| field.name != POLICY_SECTION)

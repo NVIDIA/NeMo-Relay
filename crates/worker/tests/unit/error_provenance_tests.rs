@@ -21,20 +21,16 @@ fn downstream_provenance_roundtrips_without_changing_legacy_errors() {
         // Verify the additive field survives the actual protobuf encoding.
         let wire = WorkerError::decode(wire.encode_to_vec().as_slice()).unwrap();
         for error in [
-            json_result_to_sdk(JsonResult {
-                error: Some(wire.clone()),
-                ..Default::default()
+            json_result_to_sdk(wire::LlmNextResponse {
+                result: Some(wire::llm_next_response::Result::Error(wire.clone())),
             })
             .unwrap_err(),
-            tool_execution_result_to_sdk(ToolExecutionResultResponse {
-                error: Some(wire.clone()),
-                ..Default::default()
+            tool_execution_result_to_sdk(wire::ToolNextResponse {
+                result: Some(wire::tool_next_response::Result::Error(wire.clone())),
             })
             .unwrap_err(),
-            stream_chunk_to_json(StreamChunk {
-                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                    wire.clone(),
-                )),
+            stream_chunk_to_json(wire::LlmStreamNextResponse {
+                item: Some(wire::llm_stream_next_response::Item::Error(wire.clone())),
             })
             .unwrap_err(),
         ] {
@@ -54,9 +50,10 @@ fn provenance_stays_on_each_error_and_does_not_mark_new_failures() {
     let second = worker_error_to_sdk(downstream_error("second", Some("next-second")));
     // Another completed/retried call cannot replace either error's origin.
     assert!(
-        json_result_to_sdk(JsonResult {
-            value: Some(infallible_json_envelope(JSON_SCHEMA, &Json::Null)),
-            error: None
+        json_result_to_sdk(wire::LlmNextResponse {
+            result: Some(wire::llm_next_response::Result::Value(infallible_wire(
+                &Json::Null
+            )))
         })
         .is_ok()
     );

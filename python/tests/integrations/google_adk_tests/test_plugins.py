@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Final
 
 import pytest
@@ -18,7 +17,6 @@ from _helpers import (
     final_text,
     make_agent,
     marks,
-    metadata_of,
     model_answer,
     present,
     request_of,
@@ -32,8 +30,7 @@ from _helpers import (
 from nemo_relay.model_pricing import InlineSource, ModelPricing, PricingCatalog, PricingConfig, TokenPricingRates
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
-    from pathlib import Path
+    from collections.abc import AsyncIterator
 
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_request import LlmRequest
@@ -273,96 +270,4 @@ async def test_response_cache_bypasses_adk_requests_as_nondeterministic(
     cache_marks = marks(subscribed_events, "response_cache")
     statuses = [data_of(mark)["status"] for mark in cache_marks if isinstance(mark.data, dict)]
     assert statuses == ["bypass", "bypass"]
-    assert_balanced(subscribed_events)
-
-
-_FAKE_GUARDRAILS: Final[Mapping[str, str]] = {
-    "__init__.py": """
-import types
-from .rails.llm.options import RailStatus
-
-__version__ = "0.22.0"
-
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
-
-class RailsConfig:
-    @staticmethod
-    def from_content(*, colang_content=None, yaml_content=None):
-        return types.SimpleNamespace(rails=types.SimpleNamespace(output=types.SimpleNamespace(flows=[])))
-
-
-class LLMRails:
-    def __init__(self, config):
-        self.config = config
-
-    async def check_async(self, messages, rail_types=None):
-        content = " ".join(str(message.get("content", "")) for message in messages)
-        if "block" in content:
-            return Result(RailStatus.BLOCKED, "", "policy")
-        if "modify" in content:
-            return Result(RailStatus.MODIFIED, "rewritten by the rail")
-        return Result(RailStatus.PASSED, "")
-""",
-    "rails/__init__.py": "",
-    "rails/llm/__init__.py": "",
-    "rails/llm/options.py": """
-class RailType:
-    INPUT = "input"
-    OUTPUT = "output"
-
-
-class RailStatus:
-    BLOCKED = "blocked"
-    MODIFIED = "modified"
-    PASSED = "passed"
-""",
-}
-
-
-async def test_nemo_guardrails_local_rails_guard_adk_calls(
-    scripted_llm: ScriptedLlmFactory, subscribed_events: list[nemo_relay.Event], tmp_path: Path
-) -> None:
-    from nemo_relay import plugin
-
-    package = tmp_path / "fake_guardrails"
-    for relative, source in _FAKE_GUARDRAILS.items():
-        path = package / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source, encoding="utf-8")
-    guardrails = plugin.ComponentSpec(
-        kind="nemo_guardrails",
-        config={
-            "version": 1,
-            "mode": "local",
-            "codec": "gemini_generate_content",
-            "input": True,
-            "output": True,
-            "tool_input": False,
-            "tool_output": False,
-            "config_yaml": "models: []",
-            "colang_content": "define flow noop\n  pass",
-            "local": {
-                "python_module": "fake_guardrails",
-                "python_executable": sys.executable,
-                "python_path": str(tmp_path),
-            },
-        },
-    )
-    async with plugin.activate(plugin.PluginConfig(components=[guardrails])):
-        modified = await run_recorded(make_agent(scripted_llm, "weather_agent"), message="please modify this")
-        with pytest.raises(RuntimeError, match="input rail blocked the LLM call by rail 'policy'"):
-            await run_recorded(make_agent(scripted_llm, "weather_agent"), message="please block this")
-
-    assert present(scripted_llm.seen_requests[0].contents[-1].parts)[0].text == "rewritten by the rail"
-    assert final_text(modified) == "Answer from weather_agent to 'rewritten by the rail'."
-    assert len(scripted_llm.seen_requests) == 1
-    llm_ends = ends(subscribed_events, "llm")
-    assert [status_of(end) for end in llm_ends] == ["OK", "ERROR"]
-    assert "input rail blocked" in metadata_of(llm_ends[1])["otel.status_description"]
     assert_balanced(subscribed_events)

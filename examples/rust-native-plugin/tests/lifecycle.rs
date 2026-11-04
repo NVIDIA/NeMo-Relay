@@ -10,15 +10,19 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use nemo_relay::api::event::Event;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
-use nemo_relay::plugin::dynamic::initialize;
-use nemo_relay::plugin::{PluginConfig, list_plugin_kinds};
+use nemo_relay_plugin_host::dynamic::initialize;
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute,
+};
 use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::Mutex as AsyncMutex;
+use {nemo_relay_plugin_host::PluginConfig, nemo_relay_plugin_host::list_plugin_kinds};
 
 static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 const PLUGIN_ID: &str = "examples.rust_native_policy";
@@ -215,7 +219,7 @@ id = "{PLUGIN_ID}"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.10.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]

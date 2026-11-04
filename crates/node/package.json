@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-node",
-  "version": "0.11.0",
+  "version": "1.0.0",
   "description": "Node.js bindings for the NeMo Relay agent runtime.",
   "keywords": [
     "agents",
@@ -82,7 +82,6 @@
     "@napi-rs/cli": "^2",
     "c8": "^11.0.0",
     "prettier": "^3.8.2",
-    "typedoc": "^0.28.0",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {

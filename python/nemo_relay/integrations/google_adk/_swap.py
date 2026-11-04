@@ -9,19 +9,18 @@ Each class and method set gets one subclass, and method sets layer in the order 
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Concatenate, Final, Never, TypeAlias, TypeVar, cast
 
 _T = TypeVar("_T")
-_Methods: TypeAlias = "Callable[..., Mapping[str, object]]"
+Methods: TypeAlias = Mapping[str, Callable[Concatenate[_T, ...], object]]
+_Builder: TypeAlias = Callable[[type[_T]], Methods[_T]]
 _SWAPPED: Final = "__nemo_relay_swapped__"
-_SUBCLASSES: Final[dict[tuple[type[object], _Methods], type[object]]] = {}
+_SUBCLASSES: Final[dict[tuple[type[object], _Builder[Never]], type[object]]] = {}
 _LOCK: Final = threading.Lock()
 
 
-def swap_class(instance: _T, methods: Callable[[type[_T]], Mapping[str, object]]) -> None:
+def swap_class(instance: _T, methods: _Builder[_T]) -> None:
     """Swap the instance's class for a subclass that adds the methods.
 
     Leave the instance unchanged when its class already carries the methods. A class that carries other methods gains
@@ -36,11 +35,11 @@ def is_swapped(instance: object) -> bool:
     return _SWAPPED in type(instance).__dict__
 
 
-def _applied(cls: type[object]) -> frozenset[_Methods]:
-    return cast("frozenset[_Methods]", cls.__dict__.get(_SWAPPED, frozenset()))
+def _applied(cls: type[object]) -> frozenset[_Builder[Never]]:
+    return cast("frozenset[_Builder[Never]]", cls.__dict__.get(_SWAPPED, frozenset()))
 
 
-def _subclass(cls: type[_T], methods: Callable[[type[_T]], Mapping[str, object]]) -> type[_T]:
+def _subclass(cls: type[_T], methods: _Builder[_T]) -> type[_T]:
     """Return the one subclass of the class that adds the methods.
 
     Create the subclass under a lock on the first request from any thread.

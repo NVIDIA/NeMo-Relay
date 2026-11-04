@@ -9,8 +9,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::scope::ScopeType;
+use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+use nemo_relay_runtime::api::scope::ScopeType;
 use uuid::Uuid;
 
 use crate::learner::traits::Learner;

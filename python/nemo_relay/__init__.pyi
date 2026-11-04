@@ -64,6 +64,12 @@ from nemo_relay._native import (
     AtofStreamSinkConfig as AtofStreamSinkConfig,
 )
 from nemo_relay._native import (
+    ExporterRuntimeDiagnostic as ExporterRuntimeDiagnostic,
+)
+from nemo_relay._native import (
+    ExporterRuntimeDiagnostics as ExporterRuntimeDiagnostics,
+)
+from nemo_relay._native import (
     LLMAttributes as LLMAttributes,
 )
 from nemo_relay._native import (
@@ -136,12 +142,6 @@ from nemo_relay._native import (
     OpenTelemetryMetricSubscriber as OpenTelemetryMetricSubscriber,
 )
 from nemo_relay._native import (
-    OpenTelemetryRuntimeDiagnostic as OpenTelemetryRuntimeDiagnostic,
-)
-from nemo_relay._native import (
-    OpenTelemetryRuntimeDiagnostics as OpenTelemetryRuntimeDiagnostics,
-)
-from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
 )
 from nemo_relay._native import (
@@ -210,6 +210,30 @@ Json: TypeAlias = JsonValue
 """Shorthand for any JSON-compatible payload accepted by the Python binding."""
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 """Policy used by config helpers when unknown fields or values are encountered."""
+
+def log(level: str, message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a structured operational record through Relay."""
+    ...
+
+def trace(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a trace record through Relay."""
+    ...
+
+def debug(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a debug record through Relay."""
+    ...
+
+def info(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit an info record through Relay."""
+    ...
+
+def warn(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit a warning record through Relay."""
+    ...
+
+def error(message: str, *, target: str = "", fields: JsonObject | None = None) -> None:
+    """Emit an error record through Relay."""
+    ...
 
 class DataSchema(TypedDict):
     """Schema identifier attached to an event's opaque data payload."""
@@ -509,6 +533,9 @@ def _native_scope_stack_active() -> bool: ...
 def _sync_thread_scope_stack(stack: ScopeStack) -> None: ...
 
 __all__: list[str]
+
+OpenTelemetryRuntimeDiagnostic = ExporterRuntimeDiagnostic
+OpenTelemetryRuntimeDiagnostics = ExporterRuntimeDiagnostics
 
 class ScopeStackEntry:
     """Immutable UUID and canonical type of one visible scope."""

@@ -1,13 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 //!
-//! The protobuf schema owns transport control flow and the tool-result wrapper
-//! structure. Open application payloads remain lossless JSON values, while
-//! other Relay data transfer objects are carried in JSON envelopes.
+//! The [`nvidia_worker_v1`] contract models Relay-owned DTOs in protobuf
+//! and keeps application/provider fields as lossless JSON.
 
 mod message_limits;
 pub use message_limits::{
@@ -15,9 +12,6 @@ pub use message_limits::{
     WorkerCallbackMessageLimits, WorkerCallbackMetadata, callback_name, callback_request,
     validate_callback_request,
 };
-
-/// Stable worker protocol identifier accepted by `compat.worker_protocol`.
-pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
 
 /// Host-owned limit for a complete worker execution gRPC message, in bytes.
 pub const WORKER_MAX_MESSAGE_BYTES_ENV: &str = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES";
@@ -78,52 +72,26 @@ pub const DIAGNOSTIC_NOT_CONSUMED_METADATA: &str = "nemo-relay-diagnostic-not-co
 /// Used for stream-opening failures, where no `WorkerError` envelope is returned.
 pub const DOWNSTREAM_CONTINUATION_METADATA: &str = "nemo-relay-downstream-continuation";
 
-/// Generated protobuf and gRPC service definitions.
+/// Typed domain conversions for the namespaced worker contract.
+pub mod conversions;
+/// Runtime enforcement of the namespaced protobuf contract.
+pub mod validation;
+
+/// Typed worker contract introduced alongside the legacy API.
 #[allow(missing_docs)]
-pub mod v1 {
-    tonic::include_proto!("nemo.relay.worker.v1");
+pub mod nvidia_worker_v1 {
+    /// Negotiation identifier for this contract, incompatible with legacy grpc-v1.
+    pub const WORKER_PROTOCOL: &str = "nvidia.nemo.relay.worker.v1";
+    /// Initial stable worker/schema contract baseline, independent of crate versions.
+    pub const CONTRACT_VERSION: &str = "1.0.0";
+
+    /// Diagnostic snapshot contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION: &str = "1.0.0";
+    /// Diagnostic provenance contract negotiated independently of the worker protocol.
+    pub const DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION: &str = "1.0.0";
+
+    tonic::include_proto!("nvidia.nemo.relay.worker.v1");
 }
 
-/// Creates a JSON envelope from a serializable DTO.
-///
-/// # Errors
-/// Returns a serde error when the supplied value cannot be serialized as JSON.
-pub fn json_envelope<T: serde::Serialize>(
-    schema: impl Into<String>,
-    value: &T,
-) -> Result<v1::JsonEnvelope, serde_json::Error> {
-    Ok(v1::JsonEnvelope {
-        schema: schema.into(),
-        json: serde_json::to_vec(value)?,
-    })
-}
-
-/// Decodes a JSON envelope into the requested DTO type.
-///
-/// # Errors
-/// Returns a serde error when the envelope bytes are not valid JSON for `T`.
-pub fn decode_json_envelope<T: serde::de::DeserializeOwned>(
-    envelope: &v1::JsonEnvelope,
-) -> Result<T, serde_json::Error> {
-    serde_json::from_slice(&envelope.json)
-}
-
-/// Creates a lossless protocol JSON value from a serializable value.
-///
-/// # Errors
-/// Returns a serde error when the supplied value cannot be serialized as JSON.
-pub fn json_value<T: serde::Serialize>(value: &T) -> Result<v1::JsonValue, serde_json::Error> {
-    Ok(v1::JsonValue {
-        json: serde_json::to_vec(value)?,
-    })
-}
-
-/// Decodes a lossless protocol JSON value into the requested type.
-///
-/// # Errors
-/// Returns a serde error when the bytes are not valid JSON for `T`.
-pub fn decode_json_value<T: serde::de::DeserializeOwned>(
-    value: &v1::JsonValue,
-) -> Result<T, serde_json::Error> {
-    serde_json::from_slice(&value.json)
-}
+/// Descriptors for the worker contract, including its imported messages.
+pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("worker_descriptor");

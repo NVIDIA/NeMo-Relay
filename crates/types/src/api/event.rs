@@ -1656,3 +1656,13 @@ mod timestamp {
         }
     }
 }
+
+#[doc(hidden)]
+pub fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
+    key.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    })
+}

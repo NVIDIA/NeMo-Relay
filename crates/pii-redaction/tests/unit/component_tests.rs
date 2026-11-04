@@ -29,24 +29,23 @@ use crate::api::tool::{
     ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolExecutionResult, tool_call,
     tool_call_end, tool_call_execute,
 };
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::plugin::{
-    ConfigPolicy, DiagnosticLevel, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, UnsupportedBehavior, ensure_builtin_plugins_registered,
+    ConfigPolicy, DiagnosticLevel, HostPluginRegistrationContext, PluginComponentSpec,
+    PluginConfig, PluginError, UnsupportedBehavior, ensure_builtin_plugins_registered,
     list_plugin_kinds, rollback_registrations, test_close_plugin_host,
     test_initialize_plugin_host_exact, test_validate_static_plugin_config,
 };
 use futures::StreamExt;
-use nemo_relay::observability::OpenTelemetryType;
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
-use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
-use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
-use nemo_relay::observability::otel_metrics::{
-    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
-};
+use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
+use nemo_relay_diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+use nemo_relay_observability::OpenTelemetryType;
+use nemo_relay_observability::atif::AtifAgentInfo;
+use nemo_relay_observability::atof::AtofExporterConfig;
+use nemo_relay_observability::otel::OpenTelemetryConfig;
+use nemo_relay_observability::otel_metrics::OpenTelemetryMetricConfig;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
@@ -60,15 +59,24 @@ use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+#[path = "recursive_export_tests.rs"]
+mod recursive_export_tests;
+
+#[path = "recursive_glob_tests.rs"]
+mod recursive_glob_tests;
+
 static TEST_LOGGING: Once = Once::new();
 
 #[path = "trajectory_status_tests.rs"]
 mod trajectory_status_tests;
 
+#[path = "trajectory_tool_correlation_tests.rs"]
+mod trajectory_tool_correlation_tests;
+
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
                 .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
@@ -90,6 +98,151 @@ fn plugin_config(config: Json) -> PluginConfig {
         version: 1,
         components: vec![component(config)],
         policy: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn selector_diagnostics_use_plugin_registration_context() {
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
+    let backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                target_paths: vec!["/text".into()],
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+        None,
+    );
+    let sanitized = tool_sanitize_callback(backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized["text"], "[REDACTED]");
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector"
+            && event.detail.as_ref().is_some_and(|detail| {
+                detail.message == "matched_paths=1 eligible_string_leaves=1 affected_values=1"
+            })
+    }));
+
+    let profile_backend = with_selector_diagnostics(
+        CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "redact".into(),
+                detector: Some("email".into()),
+                ..BuiltinBackendConfig::default()
+            },
+            None,
+        )
+        .unwrap(),
+        &ctx,
+        Some("profile_1"),
+    );
+    let sanitized = tool_sanitize_callback(profile_backend)(
+        "example.tool".into(),
+        json!({"text": "alice@example.com"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sanitized["text"], "[REDACTED]");
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(snapshot.events.iter().any(|event| {
+        event.code() == "pii_redaction.selector_evaluated"
+            && event.component.key == "pii_redaction.selector.profile_1"
+    }));
+}
+
+#[tokio::test]
+async fn selector_diagnostic_admission_failures_do_not_disable_redaction() {
+    let source = Diagnostics::default().source().clone();
+    for (case, enabled, limits) in [
+        ("disabled", false, DiagnosticLimits::default()),
+        (
+            "component_rejected",
+            true,
+            DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        ),
+        (
+            "extension_rejected",
+            true,
+            DiagnosticLimits {
+                max_extensions: 0,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let diagnostics =
+            Diagnostics::from_settings(source.clone(), DiagnosticsSettings { enabled, limits })
+                .unwrap();
+        let ctx = HostPluginRegistrationContext::with_diagnostics(&diagnostics);
+        let backend = with_selector_diagnostics(
+            CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "redact".into(),
+                    detector: Some("email".into()),
+                    target_paths: vec!["/text".into()],
+                    ..BuiltinBackendConfig::default()
+                },
+                None,
+            )
+            .unwrap(),
+            &ctx,
+            None,
+        );
+        let sanitized = tool_sanitize_callback(backend)(
+            "example.tool".into(),
+            json!({"text": "alice@example.com"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sanitized["text"], "[REDACTED]", "{case}");
+
+        if enabled {
+            let snapshot = diagnostics
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            assert!(snapshot.events.is_empty(), "{case}");
+            assert_eq!(
+                snapshot
+                    .components
+                    .iter()
+                    .any(|component| component.identity.key == "pii_redaction.selector"),
+                case == "extension_rejected",
+                "{case}"
+            );
+        } else {
+            assert!(diagnostics.snapshot(&DiagnosticQuery::default()).is_err());
+        }
     }
 }
 
@@ -222,10 +375,10 @@ fn top_level_policy_controls_component_diagnostics() {
 }
 
 fn reset_runtime() {
+    nemo_relay_plugin_host::initialize_runtime();
     enable_operational_logs();
     let _ = test_close_plugin_host();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
-    crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
     register_pii_redaction_component().unwrap();
@@ -288,7 +441,6 @@ fn builtin_backend_config_default_matches_documented_action_default() {
     assert!(config.detector.is_none());
 }
 
-#[cfg(feature = "schema")]
 #[test]
 fn builtin_backend_schema_exposes_the_hardened_custom_mark_default() {
     let schema = pii_redaction_config_schema();
@@ -301,11 +453,15 @@ fn builtin_backend_schema_exposes_the_hardened_custom_mark_default() {
 
 #[test]
 fn builtin_backend_editor_exposes_metric_string_allowlist_as_json() {
-    let schema = <BuiltinBackendConfig as nemo_relay::config_editor::EditorConfig>::editor_schema();
+    let schema =
+        <BuiltinBackendConfig as nemo_relay_runtime::config_editor::EditorConfig>::editor_schema();
     let field = schema
         .field("metric_string_attribute_allowlist")
         .expect("metric string allowlist should be editable");
-    assert_eq!(field.kind, nemo_relay::config_editor::EditorFieldKind::Json);
+    assert_eq!(
+        field.kind,
+        nemo_relay_runtime::config_editor::EditorFieldKind::Json
+    );
 }
 
 #[test]
@@ -547,19 +703,19 @@ fn trajectory_typed_request_matrix_preserves_only_approved_structure() {
                 {"type": "audio", "audio": {"data": "SECRET"}},
                 {"type": "file", "file": {"data": "SECRET"}},
                 {"type": "refusal", "refusal": "SECRET"},
-                {"type": "tool_use", "id": "SECRET", "name": "search", "input": {"q": "SECRET"}},
-                {"type": "tool_result", "tool_use_id": "SECRET", "content": {"text": "SECRET"}, "is_error": true},
+                {"type": "tool_use", "id": "call-parts", "name": "search", "input": {"q": "SECRET"}},
+                {"type": "tool_result", "tool_use_id": "call-parts", "content": {"text": "SECRET"}, "is_error": true},
                 {"type": "provider_native", "provider": "openai", "kind": "output_text", "value": {"text": "SECRET"}}
             ]},
             {"role": "developer", "content": "SECRET"},
             {"role": "assistant", "content": "SECRET", "tool_calls": [{
-                "id": "SECRET", "type": "function",
+                "id": "call-chat", "type": "function",
                 "function": {"name": "terminal", "arguments": "SECRET"}
             }]},
-            {"role": "tool", "tool_call_id": "SECRET", "content": "SECRET"},
+            {"role": "tool", "tool_call_id": "call-chat", "content": "SECRET"},
             {"role": "function", "name": "legacy_tool", "content": "SECRET"},
-            {"role": "tool_call", "id": "SECRET", "call_id": "SECRET", "name": "browser", "arguments": {"q": "SECRET"}, "future": "SECRET"},
-            {"role": "tool_result", "id": "SECRET", "call_id": "SECRET", "output": {"text": "SECRET"}, "future": "SECRET"},
+            {"role": "tool_call", "id": "SECRET", "call_id": "call-responses", "name": "browser", "arguments": {"q": "SECRET"}, "future": "SECRET"},
+            {"role": "tool_result", "id": "SECRET", "call_id": "call-responses", "output": {"text": "SECRET"}, "future": "SECRET"},
             {"role": "provider_native", "provider": "anthropic", "kind": "tool_result", "value": {"text": "SECRET"}}
         ],
         "instructions": "SECRET",
@@ -619,7 +775,23 @@ fn trajectory_typed_request_matrix_preserves_only_approved_structure() {
     );
     assert_eq!(value["messages"][1]["content"][6]["name"], "search");
     assert_eq!(value["messages"][1]["content"][6]["input"], json!({}));
-    assert_eq!(value["messages"][4]["tool_call_id"], "[REDACTED]");
+    assert_eq!(value["messages"][1]["content"][6]["id"], "call-parts");
+    assert_eq!(
+        value["messages"][1]["content"][7]["tool_use_id"],
+        "call-parts"
+    );
+    assert_eq!(value["messages"][3]["tool_calls"][0]["id"], "call-chat");
+    assert_eq!(value["messages"][4]["tool_call_id"], "call-chat");
+    assert_eq!(value["messages"][6]["call_id"], "call-responses");
+    assert_eq!(value["messages"][7]["call_id"], "call-responses");
+    assert_eq!(value["messages"][6]["id"], "[REDACTED]");
+    assert_eq!(value["messages"][7]["id"], "[REDACTED]");
+    assert_eq!(
+        trajectory_sanitizer()
+            .sanitize_annotated_request(sanitized)
+            .unwrap(),
+        serde_json::from_value(value.clone()).unwrap()
+    );
     assert_eq!(value["messages"][6]["name"], "browser");
     assert_eq!(value["messages"][6]["arguments"], json!({}));
     assert_eq!(value["messages"][8]["value"], json!({}));
@@ -689,7 +861,7 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
         json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
     ];
     for api_specific in response_cases {
-        let response: crate::codec::response::AnnotatedLlmResponse =
+        let response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
             serde_json::from_value(json!({
                 "finish_reason": {"unknown": "SECRET"},
                 "api_specific": api_specific
@@ -740,7 +912,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
         Some(
             CategoryProfile::builder()
                 .model_name("gpt-5.6-sol")
-                .tool_call_id("SECRET")
+                .tool_call_id("call-profile")
                 .subtype("SECRET")
                 .tool_result_annotation(json!({"secret": "SECRET"}))
                 .extra(BTreeMap::from([
@@ -767,7 +939,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
     assert_eq!(sanitized.metadata, Some(json!({})));
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.model_name.as_deref(), Some("gpt-5.6-sol"));
-    assert_eq!(profile.tool_call_id.as_deref(), Some("[REDACTED]"));
+    assert_eq!(profile.tool_call_id.as_deref(), Some("call-profile"));
     assert_eq!(profile.subtype.as_deref(), Some("[REDACTED]"));
     assert_eq!(profile.tool_result_annotation, Some(json!({})));
     assert_eq!(
@@ -875,7 +1047,7 @@ impl LlmCodec for IdentifiedRequestCodec {
         self.identity.clone()
     }
 
-    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         self.inner.decode(request)
     }
 
@@ -883,7 +1055,7 @@ impl LlmCodec for IdentifiedRequestCodec {
         &self,
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
-    ) -> nemo_relay::error::Result<LlmRequest> {
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
         self.inner.encode(annotated, original)
     }
 }
@@ -896,7 +1068,8 @@ impl LlmResponseCodec for IdentifiedRequestCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<crate::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
         self.inner.decode_response(response)
     }
 }
@@ -908,7 +1081,7 @@ impl LlmCodec for WrappedResponsesCodec {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
 
-    fn decode(&self, request: &LlmRequest) -> nemo_relay::error::Result<AnnotatedLlmRequest> {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
         let Some(payload) = request.content.get("payload") else {
             return OpenAIResponsesCodec.decode(request);
         };
@@ -922,7 +1095,7 @@ impl LlmCodec for WrappedResponsesCodec {
         &self,
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
-    ) -> nemo_relay::error::Result<LlmRequest> {
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
         let Some(payload) = original.content.get("payload") else {
             return OpenAIResponsesCodec.encode(annotated, original);
         };
@@ -948,7 +1121,8 @@ impl LlmResponseCodec for WrappedResponsesCodec {
     fn decode_response(
         &self,
         response: &Json,
-    ) -> nemo_relay::error::Result<crate::codec::response::AnnotatedLlmResponse> {
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
         OpenAIResponsesCodec.decode_response(response.get("payload").unwrap_or(response))
     }
 }
@@ -1063,8 +1237,8 @@ async fn trajectory_managed_llm_events_trust_the_active_builtin_codec_over_raw_s
             }]
         }
     });
-    assert!(crate::codec::resolve::detect_request_surface(&request.content).is_none());
-    assert!(crate::codec::resolve::detect_response_surface(&response).is_none());
+    assert!(nemo_relay_codecs::resolve::detect_request_surface(&request.content).is_none());
+    assert!(nemo_relay_codecs::resolve::detect_response_surface(&response).is_none());
 
     let result = llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -1486,7 +1660,7 @@ async fn normalized_anthropic_overlapping_paths_redact_multiple_text_blocks() {
             }),
         },
         LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(
-            crate::codec::anthropic::AnthropicMessagesCodec,
+            nemo_relay_codecs::anthropic::AnthropicMessagesCodec,
         ))),
     )
     .await
@@ -2361,10 +2535,9 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("trace capture listener should bind");
     let trace_endpoint = format!("http://{}", trace_listener.local_addr().unwrap());
     let trace_request = capture_one_otlp_request(trace_listener);
-    let trace_subscriber = OpenTelemetrySubscriber::new(OpenTelemetryConfig::new(
-        OpenTelemetryType::Full,
-        trace_endpoint,
-    ))
+    let trace_subscriber = nemo_relay_plugin_host::exporter::opentelemetry(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, trace_endpoint),
+    )
     .unwrap();
     trace_subscriber
         .register("pii-target-glob-e2e-traces")
@@ -2374,9 +2547,10 @@ async fn configured_target_path_globs_redact_otlp_content_and_preserve_typed_met
         std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
     let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
     let metric_request = capture_otlp_requests(metric_listener, 2);
-    let metric_subscriber =
-        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(metric_endpoint))
-            .unwrap();
+    let metric_subscriber = nemo_relay_plugin_host::exporter::opentelemetry_metrics(
+        OpenTelemetryMetricConfig::new(metric_endpoint),
+    )
+    .unwrap();
     metric_subscriber
         .register("pii-target-glob-e2e-metrics")
         .unwrap();
@@ -2634,7 +2808,7 @@ async fn builtin_metric_marks_drop_invalid_envelopes() {
 #[tokio::test]
 async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
-    let annotated_response: nemo_relay::codec::response::AnnotatedLlmResponse =
+    let annotated_response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
         serde_json::from_value(json!({
             "model": "claude-sonnet-4-6",
             "message": "private answer",
@@ -2716,7 +2890,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     assert_eq!(response.response_text(), Some("[REDACTED]"));
     assert!(matches!(
         response.finish_reason,
-        Some(crate::codec::response::FinishReason::Complete)
+        Some(nemo_relay_types::codec::response::FinishReason::Complete)
     ));
     assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(120));
     assert_eq!(
@@ -2736,7 +2910,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     assert_eq!(cost.output, Some(0.12));
     assert_eq!(
         cost.source,
-        crate::codec::response::CostSource::ProviderReported
+        nemo_relay_types::codec::response::CostSource::ProviderReported
     );
     assert!(cost.pricing_provider.is_none());
     assert!(cost.pricing_model.is_none());
@@ -2791,19 +2965,20 @@ fn trajectory_component_preserves_normalized_cost_source_and_optimization_summar
         "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
     });
     let mut annotated_response = OpenAIChatCodec.decode_response(&response).unwrap();
-    annotated_response.usage.as_mut().unwrap().cost = Some(crate::codec::response::CostEstimate {
-        total: Some(0.125),
-        currency: "USD".into(),
-        input: Some(0.1),
-        output: Some(0.025),
-        cache_read: None,
-        cache_write: None,
-        source: crate::codec::response::CostSource::ModelPricing,
-        pricing_provider: Some("SECRET-provider".into()),
-        pricing_model: Some("SECRET-model".into()),
-        pricing_as_of: Some("SECRET-date".into()),
-        pricing_source: Some("SECRET-source".into()),
-    });
+    annotated_response.usage.as_mut().unwrap().cost =
+        Some(nemo_relay_types::codec::response::CostEstimate {
+            total: Some(0.125),
+            currency: "USD".into(),
+            input: Some(0.1),
+            output: Some(0.025),
+            cache_read: None,
+            cache_write: None,
+            source: nemo_relay_types::codec::response::CostSource::ModelPricing,
+            pricing_provider: Some("SECRET-provider".into()),
+            pricing_model: Some("SECRET-model".into()),
+            pricing_as_of: Some("SECRET-date".into()),
+            pricing_source: Some("SECRET-source".into()),
+        });
     annotated_response.optimization_summary = Some(
         serde_json::from_value(json!({
             "schema_version": "1",
@@ -2849,7 +3024,7 @@ fn trajectory_component_preserves_normalized_cost_source_and_optimization_summar
     let cost = annotated.usage.as_ref().unwrap().cost.as_ref().unwrap();
     assert_eq!(
         cost.source,
-        crate::codec::response::CostSource::ModelPricing
+        nemo_relay_types::codec::response::CostSource::ModelPricing
     );
     assert_eq!(cost.total, Some(0.125));
     assert!(cost.pricing_provider.is_none());
@@ -2908,10 +3083,14 @@ fn pii_redaction_defaults_enable_mark_sanitization() {
 
 #[test]
 fn generated_registration_names_sort_in_profile_array_order() {
-    assert!(
-        registration_name(Some("profile_2"), "mark")
-            < registration_name(Some("profile_10"), "mark")
-    );
+    assert_eq!(profile_registration_prefix("profile_0"), "profile_a_0");
+    assert_eq!(profile_registration_prefix("profile_10"), "profile_b_10");
+    for (earlier, later) in [(2, 3), (9, 10), (99, 100), (999, 1000)] {
+        assert!(
+            registration_name(Some(&format!("profile_{earlier}")), "mark")
+                < registration_name(Some(&format!("profile_{later}")), "mark")
+        );
+    }
 }
 
 #[test]
@@ -3138,12 +3317,12 @@ fn local_profile_registrations_receive_generated_namespaces() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("profiles::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("profiles::");
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
     let mut registrations = ctx.into_registrations();
     let registrations_debug = format!("{registrations:?}");
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000000/shared"));
-    assert!(registrations_debug.contains("profiles::profile_00000000000000000001/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_0/shared"));
+    assert!(registrations_debug.contains("profiles::profile_a_1/shared"));
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
 }
@@ -3625,7 +3804,9 @@ fn validate_builtin_target_path_globs_as_json_pointers() {
             "target_path_globs": [
                 "/messages/*/content",
                 "/output/*/content/*/text",
-                "/metadata/a~1b"
+                "/metadata/a~1b",
+                "/messages/**/text",
+                "/**"
             ]
         }
     })));
@@ -3788,7 +3969,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     let called = Arc::new(AtomicBool::new(false));
     let called_inner = Arc::clone(&called);
     register_local_backend_provider(Arc::new(
-        move |config, _ctx: &mut PluginRegistrationContext| {
+        move |config, _ctx: &mut dyn nemo_relay_plugin_host::PluginRegistrationContext| {
             called_inner.store(true, Ordering::SeqCst);
             assert_eq!(config.mode, "local_model");
             Ok(())
@@ -3797,7 +3978,7 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     .unwrap();
 
     let plugin = PiiRedactionPlugin;
-    let mut ctx = PluginRegistrationContext::with_namespace("test::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("test::");
     let config = json!({
         "mode": "local_model",
         "tool_input": true,
@@ -3821,7 +4002,7 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
     let Json::Object(config) = config else {
         panic!("component config must be object");
     };
-    let mut ctx = PluginRegistrationContext::with_namespace("missing::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("missing::");
     let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
         .expect_err("missing local provider should fail registration");
     assert!(missing.to_string().contains("unavailable"));
@@ -3832,7 +4013,7 @@ fn local_backend_reports_missing_and_failed_provider_initialization() {
         ))
     }))
     .unwrap();
-    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let mut ctx = HostPluginRegistrationContext::with_namespace("failed::");
     let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
         .expect_err("failed local provider should fail registration");
     assert!(
@@ -3984,14 +4165,14 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
 
     let captured = capture_events("pii-regression-subscriber");
     let output = tempfile::tempdir().unwrap();
-    let atof = AtofExporter::new(
+    let atof = nemo_relay_plugin_host::exporter::atof(
         AtofExporterConfig::new()
             .with_output_directory(output.path())
             .with_filename("events.jsonl"),
     )
     .unwrap();
     atof.register("pii-regression-atof").unwrap();
-    let atif = AtifExporter::new(
+    let atif = nemo_relay_plugin_host::exporter::atif(
         "pii-regression".into(),
         AtifAgentInfo {
             name: "test-agent".into(),
@@ -4007,14 +4188,17 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let otel_provider = SdkTracerProvider::builder()
         .with_simple_exporter(otel_exporter.clone())
         .build();
-    let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression");
+    let otel = nemo_relay_plugin_host::exporter::opentelemetry_from_provider(
+        otel_provider,
+        "pii-regression",
+    );
     otel.register("pii-regression-otel").unwrap();
 
     let genai_exporter = InMemorySpanExporterBuilder::new().build();
     let genai_provider = SdkTracerProvider::builder()
         .with_simple_exporter(genai_exporter.clone())
         .build();
-    let genai = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let genai = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         genai_provider,
         "pii-regression",
         OpenTelemetryType::GenAi,
@@ -4025,7 +4209,7 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
     let openinference_provider = SdkTracerProvider::builder()
         .with_simple_exporter(openinference_exporter.clone())
         .build();
-    let openinference = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+    let openinference = nemo_relay_plugin_host::exporter::opentelemetry_from_provider_with_type(
         openinference_provider,
         "pii-regression",
         OpenTelemetryType::OpenInference,
@@ -6699,7 +6883,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
 
 #[tokio::test]
 async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_codec() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
@@ -7331,7 +7515,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
 
     let events = capture_events("pii-redaction-anthropic-normalized-response");
     let response_codec: Arc<dyn LlmResponseCodec> =
-        Arc::new(crate::codec::anthropic::AnthropicMessagesCodec);
+        Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec);
 
     let _ = llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -7413,7 +7597,9 @@ async fn builtin_backend_omits_unprojectable_anthropic_normalized_usage_response
                 }),
             })
             .func(noop_openai_chat_exec_fn(response.clone()))
-            .response_codec(Arc::new(crate::codec::anthropic::AnthropicMessagesCodec))
+            .response_codec(Arc::new(
+                nemo_relay_codecs::anthropic::AnthropicMessagesCodec,
+            ))
             .build(),
     )
     .await
@@ -7604,7 +7790,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
 
 #[tokio::test]
 async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
@@ -7678,7 +7864,7 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
 
 #[tokio::test]
 async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
-    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    use nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();

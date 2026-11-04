@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
-
 //! Rust SDK for NeMo Relay out-of-process gRPC worker plugins.
 //!
 //! # Invocation cancellation
 //!
-//! The `grpc-v1` service tracks active unary and streaming callbacks by the
+//! The `nvidia.nemo.relay.worker.v1` service tracks active unary and streaming callbacks by the
 //! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
 //! caller is cancelled, an invocation times out, or a host stream is abandoned.
 //! The SDK aborts the matching async callback task, waits for callback-owned
@@ -20,6 +18,8 @@
 
 /// Negotiated, bounded plugin diagnostic submission and delivery controls.
 pub mod diagnostics;
+mod invocation;
+use invocation::{CallbackInvocation, CallbackPayload};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -49,7 +49,9 @@ pub use nemo_relay_types::api::registry::{
     RuntimeRegistrationOwnerKind,
 };
 pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
-pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+pub use nemo_relay_types::api::tool::{
+    ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult,
+};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -61,29 +63,21 @@ pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, Annotat
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::http_error_message;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
-use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
-use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
-use nemo_relay_worker_proto::v1::{
-    CancelInvocationRequest, ConditionalMiddlewareGuardrailRegistration, CreateScopeStackRequest,
-    DeregisterConditionalMiddlewareGuardrailRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
-    HandshakeResponse, HealthRequest, HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope,
-    JsonResult, ListRuntimeRegistrationsRequest, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
-    LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, LogLevel, LogRequest, PopScopeRequest, PushScopeRequest,
-    RegisterConditionalMiddlewareGuardrailRequest, RegisterRequest, RegisterResponse, Registration,
-    RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
-    ShutdownRequest, StreamChunk,
-    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
-    ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
-    ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
-    WorkerError,
+use nemo_relay_worker_proto::conversions::{self, WireValue};
+use nemo_relay_worker_proto::nvidia_worker_v1 as wire;
+use nemo_relay_worker_proto::nvidia_worker_v1::WORKER_PROTOCOL;
+use nemo_relay_worker_proto::nvidia_worker_v1::plugin_worker_service_server::{
+    PluginWorkerService as PluginWorker, PluginWorkerServiceServer as PluginWorkerServer,
 };
+use nemo_relay_worker_proto::nvidia_worker_v1::relay_host_runtime_service_client::RelayHostRuntimeServiceClient as RelayHostRuntimeClient;
+use nemo_relay_worker_proto::nvidia_worker_v1::*;
 use nemo_relay_worker_proto::{
-    CallbackMessageLimitService, DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1,
-    WorkerCallbackMessageLimits, decode_json_envelope, decode_json_value, json_envelope,
-    json_value,
+    CallbackMessageLimitService, DOWNSTREAM_CONTINUATION_METADATA, WorkerCallbackMessageLimits,
 };
+type JsonEnvelope = wire::JsonValue;
+type StreamChunk = wire::InvokeStreamResponse;
+type LogLevel = wire::LogSeverity;
+type ProtoRuntimeDiagnostic = wire::RuntimeDiagnostic;
 use serde_json::Map;
 use tokio::net::TcpListener;
 #[cfg(unix)]
@@ -144,10 +138,6 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 /// Boxed JSON stream returned by streaming worker callbacks.
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
-const JSON_SCHEMA: &str = "nemo.relay.Json@1";
-const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
-const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
-
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
     static TASK_CALLBACK_NAME: Option<String>;
@@ -185,7 +175,7 @@ pub enum WorkerSdkError {
     Serialization(#[from] serde_json::Error),
 }
 
-/// Optional fields supported by the additive `grpc-v1` mark-emission request.
+/// Optional fields supported by the additive `nvidia.nemo.relay.worker.v1` mark-emission request.
 #[derive(Debug, Clone, Default)]
 pub struct EmitMarkOptions {
     /// Schema identifier for the mark's opaque data payload.
@@ -276,43 +266,6 @@ type LlmSanitizeRequestFn = Arc<
 >;
 type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> BoxFutureResult<Option<Json>> + Send + Sync>;
-
-/// Per-call context supplied to a tool execution intercept.
-///
-/// `tool_call_id` is the provider-issued correlation identifier recorded on the
-/// managed tool call, and is `None` when the call did not record one.
-#[derive(Debug, Clone)]
-pub struct ToolExecutionContext {
-    tool_name: String,
-    args: Json,
-    tool_call_id: Option<String>,
-}
-
-impl ToolExecutionContext {
-    /// Returns the tool name associated with the execution.
-    #[must_use]
-    pub fn tool_name(&self) -> &str {
-        &self.tool_name
-    }
-
-    /// Returns the JSON argument payload entering this intercept.
-    #[must_use]
-    pub fn args(&self) -> &Json {
-        &self.args
-    }
-
-    /// Consumes the context and returns its JSON argument payload.
-    #[must_use]
-    pub fn into_args(self) -> Json {
-        self.args
-    }
-
-    /// Returns the provider-issued tool-call correlation identifier.
-    #[must_use]
-    pub fn tool_call_id(&self) -> Option<&str> {
-        self.tool_call_id.as_deref()
-    }
-}
 
 /// Active codec identity and capability for an LLM request.
 #[derive(Clone)]
@@ -975,6 +928,12 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    fn credentials(&self) -> wire::Credentials {
+        wire::Credentials {
+            activation_id: self.activation_id.clone(),
+            auth_token: self.auth_token.clone(),
+        }
+    }
     /// Negotiate once per activation. Disabled/unsupported facades skip lazy
     /// diagnostic factories and leave execution and operational logging intact.
     pub async fn diagnostics(&self) -> &diagnostics::WorkerDiagnostics {
@@ -1007,19 +966,18 @@ impl PluginRuntime {
         fields: Option<&Map<String, Json>>,
     ) -> Result<()> {
         let mut client = self.host_client().await?;
-        let response = client
+        let _response = client
             .log(Request::new(LogRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
                 level: level.wire_value(),
                 target: target.into(),
                 message: message.into(),
-                fields: fields.map(json_value).transpose()?,
+                fields: fields.map(encode_wire).transpose()?,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        ack_to_result(response.ok, response.error)
+        Ok(())
     }
 
     /// Emits an info-level operational log record through the Relay host.
@@ -1083,8 +1041,7 @@ impl PluginRuntime {
         let mut client = self.host_client().await?;
         let response = client
             .list_runtime_registrations(Request::new(ListRuntimeRegistrationsRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
                 kinds: kinds
                     .unwrap_or_default()
                     .into_iter()
@@ -1094,51 +1051,10 @@ impl PluginRuntime {
             .await
             .map_err(|error| WorkerSdkError::Transport(error.to_string()))?
             .into_inner();
-        if let Some(error) = response.error {
-            return Err(worker_error_to_sdk(error));
-        }
         response
             .registrations
             .into_iter()
-            .map(|registration| {
-                let kind = RegistrationSurface::try_from(registration.kind)
-                    .map_err(|_| WorkerSdkError::Callback("unknown registration kind".into()))?;
-                let owner = registration.owner.ok_or_else(|| {
-                    WorkerSdkError::Callback("runtime registration owner is missing".into())
-                })?;
-                let owner_kind =
-                    match nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::try_from(
-                        owner.kind,
-                    )
-                    .map_err(|_| {
-                        WorkerSdkError::Callback("unknown registration owner kind".into())
-                    })? {
-                        nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Core => {
-                            RuntimeRegistrationOwnerKind::Core
-                        }
-                        nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::GlobalApi => {
-                            RuntimeRegistrationOwnerKind::GlobalApi
-                        }
-                        nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Plugin => {
-                            RuntimeRegistrationOwnerKind::Plugin
-                        }
-                        nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Unspecified => {
-                            return Err(WorkerSdkError::Callback(
-                                "registration owner kind is unspecified".into(),
-                            ));
-                        }
-                    };
-                Ok(RuntimeRegistrationIdentity {
-                    kind: runtime_registration_kind(kind)?,
-                    local_name: registration.local_name,
-                    effective_name: registration.effective_name,
-                    owner: RuntimeRegistrationOwner {
-                        kind: owner_kind,
-                        plugin_kind: owner.plugin_kind,
-                        component_ordinal: owner.component_ordinal,
-                    },
-                })
-            })
+            .map(|v| conversions::decode(v).map_err(Into::into))
             .collect()
     }
 
@@ -1165,16 +1081,17 @@ impl PluginRuntime {
         let response = match client
             .register_conditional_middleware_guardrail(Request::new(
                 RegisterConditionalMiddlewareGuardrailRequest {
-                    activation_id: self.activation_id.clone(),
-                    auth_token: self.auth_token.clone(),
-                    name: name.into(),
-                    kinds: kinds
-                        .into_iter()
-                        .map(|kind| registration_surface(kind) as i32)
-                        .collect(),
-                    registration_name: registration_name.into(),
-                    reason: String::new(),
-                    callback: true,
+                    credentials: Some(self.credentials()),
+                    registration: Some(wire::ConditionalMiddlewareGuardrailRegistration {
+                        name: name.into(),
+                        kinds: kinds
+                            .into_iter()
+                            .map(|kind| registration_surface(kind) as i32)
+                            .collect(),
+                        registration_name: registration_name.into(),
+                        reason: String::new(),
+                        callback: true,
+                    }),
                 },
             ))
             .await
@@ -1185,9 +1102,9 @@ impl PluginRuntime {
                 return Err(WorkerSdkError::Transport(error.to_string()));
             }
         };
-        if let Some(error) = response.error {
+        if let Err(error) = nemo_relay_worker_proto::validation::validate(&response) {
             self.remove_conditional_middleware_callback(name);
-            return Err(worker_error_to_sdk(error));
+            return Err(WorkerSdkError::InvalidInput(error));
         }
         Ok(ConditionalMiddlewareGuardrailHandle {
             handle: response.handle,
@@ -1204,17 +1121,13 @@ impl PluginRuntime {
         let response = client
             .deregister_conditional_middleware_guardrail(Request::new(
                 DeregisterConditionalMiddlewareGuardrailRequest {
-                    activation_id: self.activation_id.clone(),
-                    auth_token: self.auth_token.clone(),
+                    credentials: Some(self.credentials()),
                     handle: handle.handle.clone(),
                 },
             ))
             .await
             .map_err(|error| WorkerSdkError::Transport(error.to_string()))?
             .into_inner();
-        if let Some(error) = response.error {
-            return Err(worker_error_to_sdk(error));
-        }
         if response.removed {
             self.remove_conditional_middleware_callback(&handle.callback_name);
         }
@@ -1261,17 +1174,16 @@ impl PluginRuntime {
     ) -> Result<AnnotatedLlmRequest> {
         let mut client = self.host_client().await?;
         let response = client
-            .decode_llm_codec_request(Request::new(LlmCodecDecodeRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+            .decode_llm_codec_request(Request::new(DecodeLlmCodecRequestRequest {
+                credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                request: Some(json_envelope(LLM_REQUEST_SCHEMA, request)?),
+                request: Some(encode_wire(request)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, ANNOTATED_LLM_REQUEST_SCHEMA)
+        decode_rpc_result(response)
     }
 
     async fn encode_llm_codec_request(
@@ -1283,18 +1195,17 @@ impl PluginRuntime {
     ) -> Result<LlmRequest> {
         let mut client = self.host_client().await?;
         let response = client
-            .encode_llm_codec_request(Request::new(LlmCodecEncodeRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+            .encode_llm_codec_request(Request::new(EncodeLlmCodecRequestRequest {
+                credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                annotated_request: Some(json_envelope(ANNOTATED_LLM_REQUEST_SCHEMA, annotated)?),
-                original_request: Some(json_envelope(LLM_REQUEST_SCHEMA, original)?),
+                annotated_request: Some(encode_wire(annotated)?),
+                original_request: Some(encode_wire(original)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, LLM_REQUEST_SCHEMA)
+        decode_rpc_result(response)
     }
 
     async fn decode_llm_codec_response(
@@ -1305,17 +1216,16 @@ impl PluginRuntime {
     ) -> Result<AnnotatedLlmResponse> {
         let mut client = self.host_client().await?;
         let response = client
-            .decode_llm_codec_response(Request::new(LlmCodecDecodeResponse {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+            .decode_llm_codec_response(Request::new(DecodeLlmCodecResponseRequest {
+                credentials: Some(self.credentials()),
                 codec_capability_id: capability_id.into(),
                 invocation_id: invocation_id.into(),
-                response: Some(json_envelope(JSON_SCHEMA, response)?),
+                response: Some(encode_wire(response)?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, JSON_SCHEMA)
+        decode_rpc_result(response)
     }
     /// Emits a mark event through the host runtime.
     pub async fn emit_mark(
@@ -1363,34 +1273,24 @@ impl PluginRuntime {
     ) -> Result<()> {
         let scope = self.current_scope_context();
         let mut client = self.host_client().await?;
-        let response = client
+        let _response = client
             .emit_mark(Request::new(EmitMarkRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
                 scope,
-                name: name.into(),
-                data: optional_json_envelope(data)?,
-                metadata: optional_json_envelope(metadata)?,
-                data_schema: optional_typed_json_envelope(
-                    DATA_SCHEMA_SCHEMA,
-                    options.data_schema.as_ref(),
-                )?,
-                severity: options
-                    .severity
-                    .as_ref()
-                    .map(severity_wire_value)
-                    .transpose()?
-                    .unwrap_or_default(),
-                category: category
-                    .as_ref()
-                    .map(EventCategory::as_str)
-                    .unwrap_or_default()
-                    .into(),
+                mark: Some(conversions::encode(PendingMarkSpec {
+                    name: name.into(),
+                    data,
+                    metadata,
+                    data_schema: options.data_schema,
+                    severity: options.severity,
+                    category,
+                    category_profile: None,
+                })?),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        ack_to_result(response.ok, response.error)
+        Ok(())
     }
 
     /// Read owned root-to-top scope identities from the exact current binding.
@@ -1401,9 +1301,8 @@ impl PluginRuntime {
         let mut client = self.host_client().await?;
         let response = client
             .get_current_scope_stack_snapshot(Request::new(
-                nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
-                    activation_id: self.activation_id.clone(),
-                    auth_token: self.auth_token.clone(),
+                nemo_relay_worker_proto::nvidia_worker_v1::GetCurrentScopeStackSnapshotRequest {
+                    credentials: Some(self.credentials()),
                     scope,
                 },
             ))
@@ -1412,7 +1311,7 @@ impl PluginRuntime {
                 if error.code() == tonic::Code::Unimplemented {
                     WorkerSdkError::Callback(
                         "scope stack snapshots are unsupported by this host; \
-                         require the grpc-v1 snapshot extension"
+                         require the worker v1 snapshot contract"
                             .into(),
                     )
                 } else {
@@ -1420,30 +1319,15 @@ impl PluginRuntime {
                 }
             })?
             .into_inner();
-        if let Some(error) = response.error {
-            return Err(worker_error_to_sdk(error));
+        match response.result {
+            Some(wire::get_current_scope_stack_snapshot_response::Result::Snapshot(v)) => {
+                Ok(Some(conversions::decode(v)?))
+            }
+            Some(wire::get_current_scope_stack_snapshot_response::Result::NoContext(_)) => Ok(None),
+            None => Err(WorkerSdkError::InvalidInput(
+                "missing scope snapshot result".into(),
+            )),
         }
-        response
-            .snapshot
-            .map(|snapshot| {
-                let scopes = snapshot
-                    .scopes
-                    .into_iter()
-                    .map(|scope| {
-                        let scope_id = scope.scope_id.parse().map_err(|error| {
-                            WorkerSdkError::InvalidInput(format!(
-                                "invalid snapshot scope UUID: {error}"
-                            ))
-                        })?;
-                        Ok(ScopeStackEntry {
-                            scope_id,
-                            scope_type: snapshot_scope_type_from_proto(scope.scope_type),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ScopeStackSnapshot { scopes })
-            })
-            .transpose()
     }
 
     /// Return a bounded snapshot of active host runtime diagnostics.
@@ -1451,14 +1335,13 @@ impl PluginRuntime {
         let mut client = self.host_client().await?;
         let response = client
             .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
             }))
             .await
             .map_err(|error| {
                 if error.code() == tonic::Code::Unimplemented {
                     WorkerSdkError::Callback(
-                        "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                        "runtime diagnostics require a Relay host with the worker v1 diagnostics contract"
                             .into(),
                     )
                 } else {
@@ -1536,31 +1419,31 @@ impl PluginRuntime {
         let mut client = self.host_client().await?;
         let response = client
             .create_scope_stack(Request::new(CreateScopeStackRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        if let Some(error) = response.error {
-            return Err(worker_error_to_sdk(error));
-        }
+        nemo_relay_worker_proto::validation::validate(&response)
+            .map_err(WorkerSdkError::InvalidInput)?;
         Ok(response.scope_stack_id)
     }
 
     /// Drops an isolated host-owned scope stack.
     pub async fn drop_scope_stack(&self, scope_stack_id: &str) -> Result<()> {
+        let request = DropScopeStackRequest {
+            credentials: Some(self.credentials()),
+            scope_stack_id: scope_stack_id.into(),
+        };
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(WorkerSdkError::InvalidInput)?;
         let mut client = self.host_client().await?;
-        let response = client
-            .drop_scope_stack(Request::new(DropScopeStackRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
-                scope_stack_id: scope_stack_id.into(),
-            }))
+        let _response = client
+            .drop_scope_stack(Request::new(request))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        ack_to_result(response.ok, response.error)
+        Ok(())
     }
 
     /// Runs an async operation with runtime calls bound to a specific host-owned scope stack.
@@ -1645,22 +1528,20 @@ impl PluginRuntime {
         let mut client = self.host_client().await?;
         let response = client
             .push_scope(Request::new(PushScopeRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
                 scope,
                 name: name.into(),
                 scope_type: proto_scope_type(scope_type),
-                data: optional_json_envelope(data)?,
-                metadata: optional_json_envelope(metadata)?,
-                input: optional_json_envelope(input)?,
-                timestamp_unix_micros,
+                data: optional_encode_wire(data)?,
+                metadata: optional_encode_wire(metadata)?,
+                input: optional_encode_wire(input)?,
+                time: micros_to_timestamp(timestamp_unix_micros)?,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        if let Some(error) = response.error {
-            return Err(worker_error_to_sdk(error));
-        }
+        nemo_relay_worker_proto::validation::validate(&response)
+            .map_err(WorkerSdkError::InvalidInput)?;
         Ok(response.scope_handle_id)
     }
 
@@ -1696,19 +1577,18 @@ impl PluginRuntime {
         timestamp_unix_micros: Option<i64>,
     ) -> Result<()> {
         let mut client = self.host_client().await?;
-        let response = client
+        let _response = client
             .pop_scope(Request::new(PopScopeRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
+                credentials: Some(self.credentials()),
                 scope_handle_id: scope_handle_id.into(),
-                output: optional_json_envelope(output)?,
-                metadata: optional_json_envelope(metadata)?,
-                timestamp_unix_micros,
+                output: optional_encode_wire(output)?,
+                metadata: optional_encode_wire(metadata)?,
+                time: micros_to_timestamp(timestamp_unix_micros)?,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        ack_to_result(response.ok, response.error)
+        Ok(())
     }
 
     /// Reuses the host connection while applying this activation's execution caps.
@@ -1795,10 +1675,9 @@ impl ToolNext {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .tool_next(Request::new(ToolNextRequest {
-                activation_id: self.runtime.activation_id.clone(),
-                auth_token: self.runtime.auth_token.clone(),
+                credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                value: Some(json_envelope(JSON_SCHEMA, &value)?),
+                value: Some(encode_wire(&value)?),
                 scope: self.runtime.current_scope_context(),
             }))
             .await
@@ -1825,10 +1704,9 @@ impl LlmNext {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .llm_next(Request::new(LlmNextRequest {
-                activation_id: self.runtime.activation_id.clone(),
-                auth_token: self.runtime.auth_token.clone(),
+                credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                request: Some(encode_wire(&request)?),
                 scope: self.runtime.current_scope_context(),
             }))
             .await
@@ -1857,10 +1735,9 @@ impl LlmStreamNext {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .llm_stream_next(Request::new(LlmStreamNextRequest {
-                activation_id: self.runtime.activation_id.clone(),
-                auth_token: self.runtime.auth_token.clone(),
+                credentials: Some(self.runtime.credentials()),
                 continuation_id: self.continuation_id.clone(),
-                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &request)?),
+                request: Some(encode_wire(&request)?),
                 scope: scope.clone(),
             }))
             .await
@@ -1937,6 +1814,10 @@ async fn serve_plugin_arc_with_endpoint_file(
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let service = WorkerService {
+        health_reporter: tonic_health::server::HealthReporter::new(),
+        shutdown: Arc::new(tokio::sync::Notify::new()),
+        draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        registration: Arc::new(tokio::sync::Mutex::new(None)),
         plugin,
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -1959,9 +1840,22 @@ async fn serve_worker_service(
         let listener = UnixListener::bind(&path).map_err(|err| {
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
+        let shutdown = service.shutdown.clone();
+        service
+            .health_reporter
+            .set_serving::<PluginWorkerServer<WorkerService>>()
+            .await;
+        let health_service = tonic_health::pb::health_server::HealthServer::new(
+            tonic_health::server::HealthService::from_health_reporter(
+                service.health_reporter.clone(),
+            ),
+        );
         return Server::builder()
+            .add_service(health_service)
             .add_service(worker_grpc_service(service))
-            .serve_with_incoming(UnixListenerStream::new(listener))
+            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async move {
+                shutdown.notified().await
+            })
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
     }
@@ -1998,9 +1892,20 @@ async fn serve_tcp_worker_service(
         })?;
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
     }
+    let shutdown = service.shutdown.clone();
+    service
+        .health_reporter
+        .set_serving::<PluginWorkerServer<WorkerService>>()
+        .await;
+    let health_service = tonic_health::pb::health_server::HealthServer::new(
+        tonic_health::server::HealthService::from_health_reporter(service.health_reporter.clone()),
+    );
     Server::builder()
+        .add_service(health_service)
         .add_service(worker_grpc_service(service))
-        .serve_with_incoming(TcpListenerStream::new(listener))
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+            shutdown.notified().await
+        })
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
@@ -2019,6 +1924,10 @@ fn worker_grpc_service(
 
 #[derive(Clone)]
 struct WorkerService {
+    health_reporter: tonic_health::server::HealthReporter,
+    shutdown: Arc<tokio::sync::Notify>,
+    draining: Arc<std::sync::atomic::AtomicBool>,
+    registration: Arc<tokio::sync::Mutex<Option<(Json, wire::RegistrationPlan)>>>,
     plugin: Arc<dyn WorkerPlugin>,
     runtime: PluginRuntime,
     handlers: Arc<Mutex<WorkerHandlers>>,
@@ -2137,20 +2046,32 @@ impl PluginWorker for WorkerService {
         request: Request<HandshakeRequest>,
     ) -> std::result::Result<Response<HandshakeResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let protocol = request
+            .protocol
+            .ok_or_else(|| Status::invalid_argument("missing protocol"))?;
+        if protocol.name != WORKER_PROTOCOL
+            || protocol.version != wire::CONTRACT_VERSION
+            || request.plugin_id != self.plugin.plugin_id()
+        {
+            return Err(Status::failed_precondition(format!(
+                "incompatible worker identity: expected plugin_id '{}', received plugin_id '{}', protocol '{}@{}'",
+                self.plugin.plugin_id(),
+                request.plugin_id,
+                protocol.name,
+                protocol.version
+            )));
+        }
         Ok(Response::new(HandshakeResponse {
-            plugin_id: self.plugin.plugin_id().into(),
-            plugin_kind: self.plugin.plugin_id().into(),
+            identity: Some(self.identity()),
             allows_multiple_components: self.plugin.allows_multiple_components(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            sdk_name: "nemo-relay-worker".into(),
-            sdk_version: env!("CARGO_PKG_VERSION").into(),
-            runtime_name: "rust".into(),
-            runtime_version: rustc_version_runtime(),
-            supported_surfaces: all_surfaces()
-                .into_iter()
-                .map(|surface| surface as i32)
-                .collect(),
+            supported_surfaces: all_surfaces().into_iter().map(|v| v as i32).collect(),
         }))
     }
 
@@ -2159,16 +2080,22 @@ impl PluginWorker for WorkerService {
         request: Request<HealthRequest>,
     ) -> std::result::Result<Response<HealthResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let draining = self.draining.load(Ordering::Acquire);
         Ok(Response::new(HealthResponse {
-            ok: true,
-            message: "ready".into(),
-            plugin_id: self.plugin.plugin_id().into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            sdk_name: "nemo-relay-worker".into(),
-            sdk_version: env!("CARGO_PKG_VERSION").into(),
-            runtime_name: "rust".into(),
-            runtime_version: rustc_version_runtime(),
+            status: if draining {
+                WorkerHealthStatus::Unhealthy as i32
+            } else {
+                WorkerHealthStatus::Ready as i32
+            },
+            message: if draining { "draining" } else { "ready" }.into(),
+            identity: Some(self.identity()),
         }))
     }
 
@@ -2177,21 +2104,37 @@ impl PluginWorker for WorkerService {
         request: Request<ValidateRequest>,
     ) -> std::result::Result<Response<ValidateResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        if request.plugin_id != self.plugin.plugin_id() {
+            return Err(Status::failed_precondition("plugin identity mismatch"));
+        }
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
+        }
         let config = request
             .config
             .as_ref()
-            .map(decode_json_envelope::<Json>)
+            .map(decode_wire::<Json>)
             .transpose()
             .map_err(|err| Status::invalid_argument(format!("invalid config JSON: {err}")))?
             .unwrap_or(Json::Null);
         let diagnostics = self.plugin.validate(&config);
         Ok(Response::new(ValidateResponse {
-            diagnostics: Some(infallible_json_envelope(
-                "nemo.relay.PluginDiagnostics@1",
-                &diagnostics,
+            result: Some(wire::validate_response::Result::Diagnostics(
+                wire::ConfigDiagnostics {
+                    entries: diagnostics
+                        .into_iter()
+                        .map(conversions::encode)
+                        .collect::<std::result::Result<_, _>>()
+                        .map_err(|e| Status::internal(e.to_string()))?,
+                },
             )),
-            error: None,
         }))
     }
 
@@ -2200,40 +2143,71 @@ impl PluginWorker for WorkerService {
         request: Request<RegisterRequest>,
     ) -> std::result::Result<Response<RegisterResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
         let config = request
             .config
             .as_ref()
-            .map(decode_json_envelope::<Json>)
+            .map(decode_wire::<Json>)
             .transpose()
             .map_err(|err| Status::invalid_argument(format!("invalid config JSON: {err}")))?
             .unwrap_or(Json::Null);
+        if request.plugin_id != self.plugin.plugin_id() {
+            return Err(Status::failed_precondition("plugin identity mismatch"));
+        }
+        let mut installed = self.registration.lock().await;
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
+        }
+        if let Some((previous, plan)) = installed.as_ref() {
+            if previous != &config {
+                return Err(Status::failed_precondition(
+                    "worker is already registered with a different config",
+                ));
+            }
+            return Ok(Response::new(RegisterResponse {
+                result: Some(wire::register_response::Result::Plan(plan.clone())),
+            }));
+        }
         let mut ctx = PluginContext::with_runtime(self.runtime.clone());
         if let Err(err) = self.plugin.register(&mut ctx, &config) {
             return Ok(Response::new(RegisterResponse {
-                registrations: Vec::new(),
-                error: Some(sdk_error_to_worker(err)),
-                conditional_middleware_guardrails: Vec::new(),
+                result: Some(wire::register_response::Result::Error(sdk_error_to_worker(
+                    err,
+                ))),
             }));
         }
         if let Err(err) = validate_unique_registrations(&ctx.handlers.registrations) {
             return Ok(Response::new(RegisterResponse {
-                registrations: Vec::new(),
-                error: Some(sdk_error_to_worker(err)),
-                conditional_middleware_guardrails: Vec::new(),
+                result: Some(wire::register_response::Result::Error(sdk_error_to_worker(
+                    err,
+                ))),
             }));
         }
         if let Err(err) = validate_initial_gates(&ctx.handlers.conditional_middleware_guardrails) {
             return Ok(Response::new(RegisterResponse {
-                registrations: Vec::new(),
-                error: Some(sdk_error_to_worker(err)),
-                conditional_middleware_guardrails: Vec::new(),
+                result: Some(wire::register_response::Result::Error(sdk_error_to_worker(
+                    err,
+                ))),
             }));
         }
         let registrations = ctx.handlers.registrations.clone();
         let conditional_middleware_guardrails =
             ctx.handlers.conditional_middleware_guardrails.clone();
         {
+            // Serialize publication with shutdown's admission fence.
+            let _admission = self
+                .active_invocations
+                .lock()
+                .map_err(|err| Status::internal(err.to_string()))?;
+            if self.draining.load(Ordering::Acquire) {
+                return Err(Status::failed_precondition("worker is draining"));
+            }
             let mut callbacks = self
                 .runtime
                 .conditional_middleware_callbacks
@@ -2259,11 +2233,11 @@ impl PluginWorker for WorkerService {
                 })
             {
                 return Ok(Response::new(RegisterResponse {
-                    registrations: Vec::new(),
-                    error: Some(sdk_error_to_worker(WorkerSdkError::InvalidInput(format!(
-                        "conditional middleware callback '{name}' is already registered"
-                    )))),
-                    conditional_middleware_guardrails: Vec::new(),
+                    result: Some(wire::register_response::Result::Error(sdk_error_to_worker(
+                        WorkerSdkError::InvalidInput(format!(
+                            "conditional middleware callback '{name}' is already registered"
+                        )),
+                    ))),
                 }));
             }
             for name in handlers.conditional_middleware_callbacks.keys() {
@@ -2272,10 +2246,13 @@ impl PluginWorker for WorkerService {
             callbacks.extend(ctx.handlers.conditional_middleware_callbacks.clone());
             *handlers = ctx.handlers;
         }
-        Ok(Response::new(RegisterResponse {
+        let plan = wire::RegistrationPlan {
             registrations,
-            error: None,
             conditional_middleware_guardrails,
+        };
+        *installed = Some((config, plan.clone()));
+        Ok(Response::new(RegisterResponse {
+            result: Some(wire::register_response::Result::Plan(plan)),
         }))
     }
 
@@ -2289,7 +2266,14 @@ impl PluginWorker for WorkerService {
             &self.runtime.max_message_bytes,
         )?;
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let request = CallbackInvocation::try_from(request).map_err(status_from_sdk)?;
         let invocation_id = request.invocation_id.clone();
         let mut service = self.clone();
         service.runtime.callback_name = Some(request.registration_name.clone());
@@ -2318,14 +2302,17 @@ impl PluginWorker for WorkerService {
             Ok(response) => response,
             Err(err) if err.is_cancelled() => cancelled_invoke_response(),
             Err(err) => InvokeResponse {
-                result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(
-                    WorkerError {
-                        code: "worker.error".into(),
-                        message: format!("worker invocation task failed: {err}"),
-                        retryable: false,
-                        downstream_continuation_id: None,
-                    },
-                )),
+                result: Some(
+                    nemo_relay_worker_proto::nvidia_worker_v1::invoke_response::Result::Error(
+                        WorkerError {
+                            code: "worker.error".into(),
+                            message: format!("worker invocation task failed: {err}"),
+                            retryable: false,
+                            downstream_continuation_id: None,
+                            http_status: None,
+                        },
+                    ),
+                ),
             },
         };
         abort_on_drop.disarm();
@@ -2337,7 +2324,7 @@ impl PluginWorker for WorkerService {
 
     async fn invoke_stream(
         &self,
-        request: Request<InvokeRequest>,
+        request: Request<InvokeStreamRequest>,
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
         nemo_relay_worker_proto::validate_callback_request(
             &request,
@@ -2348,7 +2335,14 @@ impl PluginWorker for WorkerService {
         let callback_name = request.registration_name.clone();
         let mut runtime = self.runtime.clone();
         runtime.callback_name = Some(callback_name.clone());
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let request = CallbackInvocation::from(request);
         let invocation_id = request.invocation_id.clone();
         let scope = invocation_scope_context(request.scope.as_ref());
         let surface = RegistrationSurface::try_from(request.surface)
@@ -2461,8 +2455,8 @@ impl PluginWorker for WorkerService {
                     let (chunk, terminal) = match item {
                         Ok(value) => (
                             StreamChunk {
-                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                                    match json_envelope(JSON_SCHEMA, &value) {
+                                item: Some(wire::invoke_stream_response::Item::Value(
+                                    match encode_wire(&value) {
                                         Ok(value) => value,
                                         Err(err) => {
                                             let _ = task_tx
@@ -2477,7 +2471,7 @@ impl PluginWorker for WorkerService {
                         ),
                         Err(err) => (
                             StreamChunk {
-                                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                                item: Some(wire::invoke_stream_response::Item::Error(
                                     sdk_error_to_worker(err),
                                 )),
                             },
@@ -2530,9 +2524,15 @@ impl PluginWorker for WorkerService {
     async fn cancel_invocation(
         &self,
         request: Request<CancelInvocationRequest>,
-    ) -> std::result::Result<Response<WorkerAck>, Status> {
+    ) -> std::result::Result<Response<CancelInvocationResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
         let active = {
             let mut invocations = self
                 .active_invocations
@@ -2550,7 +2550,7 @@ impl PluginWorker for WorkerService {
             })
         };
         let Some((abort_handle, stream_cancel, mut completion, accepted)) = active else {
-            return Ok(Response::new(WorkerAck {
+            return Ok(Response::new(CancelInvocationResponse {
                 accepted: false,
                 message: "invocation is not active".into(),
             }));
@@ -2564,7 +2564,7 @@ impl PluginWorker for WorkerService {
                 break;
             }
         }
-        Ok(Response::new(WorkerAck {
+        Ok(Response::new(CancelInvocationResponse {
             accepted,
             message: if !accepted {
                 "invocation is not active".into()
@@ -2579,16 +2579,75 @@ impl PluginWorker for WorkerService {
     async fn shutdown(
         &self,
         request: Request<ShutdownRequest>,
-    ) -> std::result::Result<Response<WorkerAck>, Status> {
+    ) -> std::result::Result<Response<ShutdownResponse>, Status> {
         let request = request.into_inner();
-        self.authorize(&request.activation_id, &request.auth_token)?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.authorize(&credentials.activation_id, &credentials.auth_token)?;
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let (first_shutdown, active) = {
+            let mut active = self
+                .active_invocations
+                .lock()
+                .map_err(|e| Status::internal(e.to_string()))?;
+            let first_shutdown = !self.draining.swap(true, Ordering::AcqRel);
+            let active = active
+                .values_mut()
+                .map(|v| {
+                    // Fence opener-to-pump handoffs before releasing the admission lock.
+                    v.cancel_requested = true;
+                    (
+                        v.abort_handle.clone(),
+                        v.completion.clone(),
+                        v.stream_cancel.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (first_shutdown, active)
+        };
+        if first_shutdown {
+            self.health_reporter
+                .set_not_serving::<PluginWorkerServer<WorkerService>>()
+                .await;
+            self.health_reporter
+                .set_service_status("", tonic_health::ServingStatus::NotServing)
+                .await;
+        }
+        for (abort, _, cancel) in &active {
+            if let Some(cancel) = cancel {
+                let _ = cancel.send(true);
+            }
+            abort.abort();
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            for (_, mut completion, _) in active {
+                while !*completion.borrow_and_update() {
+                    if completion.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
-        Ok(Response::new(WorkerAck {
-            accepted: false,
-            message: "shutdown is not implemented by the Rust worker SDK yet".into(),
-        }))
+        if first_shutdown {
+            // Only the first shutdown updates and clears health entries, so repeated
+            // calls cannot recreate watch senders and prevent graceful exit.
+            let mut health_reporter = self.health_reporter.clone();
+            health_reporter
+                .clear_service_status(
+                    <PluginWorkerServer<WorkerService> as tonic::server::NamedService>::NAME,
+                )
+                .await;
+            health_reporter.clear_service_status("").await;
+        }
+        self.shutdown.notify_one();
+        Ok(Response::new(ShutdownResponse {}))
     }
 }
 
@@ -2634,10 +2693,10 @@ fn validate_initial_gates(gates: &[ConditionalMiddlewareGuardrailRegistration]) 
 impl WorkerService {
     fn authorize(&self, activation_id: &str, auth_token: &str) -> std::result::Result<(), Status> {
         if activation_id != self.runtime.activation_id {
-            return Err(Status::permission_denied("invalid worker activation"));
+            return Err(Status::unauthenticated("invalid worker activation"));
         }
         if auth_token != self.runtime.auth_token {
-            return Err(Status::permission_denied("invalid worker token"));
+            return Err(Status::unauthenticated("invalid worker token"));
         }
         Ok(())
     }
@@ -2677,6 +2736,9 @@ impl WorkerService {
             .active_invocations
             .lock()
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
+        }
         if active.contains_key(invocation_id) {
             return Err(Status::already_exists(format!(
                 "invocation '{invocation_id}' is already active"
@@ -2706,18 +2768,20 @@ impl WorkerService {
         Ok(true)
     }
 
-    async fn invoke_inner(&self, request: InvokeRequest) -> InvokeResponse {
+    async fn invoke_inner(&self, request: CallbackInvocation) -> InvokeResponse {
         match self.invoke_result(request).await {
             Ok(response) => response,
             Err(err) => InvokeResponse {
-                result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(
-                    sdk_error_to_worker(err),
-                )),
+                result: Some(
+                    nemo_relay_worker_proto::nvidia_worker_v1::invoke_response::Result::Error(
+                        sdk_error_to_worker(err),
+                    ),
+                ),
             },
         }
     }
 
-    async fn invoke_result(&self, request: InvokeRequest) -> Result<InvokeResponse> {
+    async fn invoke_result(&self, request: CallbackInvocation) -> Result<InvokeResponse> {
         let scope = invocation_scope_context(request.scope.as_ref());
         TASK_CALLBACK_NAME
             .scope(
@@ -2729,7 +2793,7 @@ impl WorkerService {
 
     async fn invoke_result_scoped(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let surface = RegistrationSurface::try_from(request.surface)
@@ -2774,13 +2838,11 @@ impl WorkerService {
 
     async fn invoke_conditional_middleware_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = match request.payload {
-            Some(nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
-                payload,
-            )) => payload,
+            Some(CallbackPayload::ConditionalMiddleware(payload)) => payload,
             _ => {
                 return Err(WorkerSdkError::InvalidInput(
                     "conditional middleware payload is missing".into(),
@@ -2817,7 +2879,7 @@ impl WorkerService {
 
     fn invoke_subscriber_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let event = event_payload(request.payload)?;
@@ -2828,20 +2890,22 @@ impl WorkerService {
 
     async fn invoke_event_metadata_injector_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let event = event_payload(request.payload)?;
         let handler = self.event_metadata_injector(&request.registration_name)?;
         let future = with_thread_scope(scope, || handler(Arc::new(event)));
-        Ok(json_response(serde_json::to_value(future.await?).map_err(
-            |err| WorkerSdkError::Callback(format!("serialize Event metadata additions: {err}")),
-        )?))
+        Ok(InvokeResponse {
+            result: Some(wire::invoke_response::Result::MetadataAdditions(
+                conversions::encode(future.await?)?,
+            )),
+        })
     }
 
     async fn invoke_event_sanitize_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
         surface: RegistrationSurface,
     ) -> Result<InvokeResponse> {
@@ -2849,14 +2913,16 @@ impl WorkerService {
         let fields = event.sanitize_fields();
         let handler = self.event_sanitizer(surface, &request.registration_name)?;
         let fields = with_thread_scope(scope, || handler(&event, fields)).await?;
-        Ok(json_response(
-            serde_json::to_value(fields).expect("event sanitize fields are JSON serializable"),
-        ))
+        Ok(InvokeResponse {
+            result: Some(wire::invoke_response::Result::EventSanitize(
+                conversions::encode(fields)?,
+            )),
+        })
     }
 
     async fn invoke_tool_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
         surface: RegistrationSurface,
     ) -> Result<InvokeResponse> {
@@ -2884,7 +2950,7 @@ impl WorkerService {
 
     async fn invoke_tool_sanitize_request_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
@@ -2896,7 +2962,7 @@ impl WorkerService {
 
     async fn invoke_tool_sanitize_response_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
@@ -2908,7 +2974,7 @@ impl WorkerService {
 
     async fn invoke_tool_conditional_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
@@ -2919,7 +2985,7 @@ impl WorkerService {
 
     async fn invoke_tool_request_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
@@ -2930,7 +2996,7 @@ impl WorkerService {
 
     async fn invoke_tool_execution_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = tool_payload(request.payload)?;
@@ -2950,7 +3016,7 @@ impl WorkerService {
 
     async fn invoke_llm_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
         surface: RegistrationSurface,
     ) -> Result<InvokeResponse> {
@@ -2978,41 +3044,43 @@ impl WorkerService {
 
     async fn invoke_llm_sanitize_request_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let mut context = payload.sanitize_request_context(&request.invocation_id);
+        let mut context = payload.sanitize_request_context(&request.invocation_id)?;
         context.runtime = Some(self.runtime.clone());
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_sanitize_request(&request.registration_name)?;
         match with_thread_scope(scope, || handler(request_value, context)).await? {
-            Some(request) => Ok(json_response(
-                serde_json::to_value(request).expect("LLM request is JSON serializable"),
-            )),
-            None => Ok(empty_response()),
+            Some(request) => Ok(InvokeResponse {
+                result: Some(wire::invoke_response::Result::LlmRequest(
+                    conversions::encode(request)?,
+                )),
+            }),
+            None => Ok(unchanged_response()),
         }
     }
 
     async fn invoke_llm_sanitize_response_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
-        let mut context = payload.sanitize_response_context(&request.invocation_id);
+        let mut context = payload.sanitize_response_context(&request.invocation_id)?;
         context.runtime = Some(self.runtime.clone());
         let response = required_json::<Json>(payload.response, "llm response")?;
         let handler = self.llm_sanitize_response(&request.registration_name)?;
         match with_thread_scope(scope, || handler(response, context)).await? {
-            Some(response) => Ok(json_response(response)),
-            None => Ok(empty_response()),
+            Some(response) => Ok(llm_response(response)),
+            None => Ok(unchanged_response()),
         }
     }
 
     async fn invoke_llm_conditional_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
@@ -3024,20 +3092,14 @@ impl WorkerService {
 
     async fn invoke_llm_request_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let annotated = payload
             .annotated_request
-            .map(|value| {
-                decode_expected_json_envelope::<AnnotatedLlmRequest>(
-                    &value,
-                    "annotated llm request",
-                    ANNOTATED_LLM_REQUEST_SCHEMA,
-                )
-            })
+            .map(|value| decode_wire::<AnnotatedLlmRequest>(&value))
             .transpose()?;
         let handler = self.llm_request(&request.registration_name)?;
         let outcome = with_thread_scope(scope, || {
@@ -3049,7 +3111,7 @@ impl WorkerService {
 
     async fn invoke_llm_execution_response(
         &self,
-        request: InvokeRequest,
+        request: CallbackInvocation,
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
@@ -3064,7 +3126,7 @@ impl WorkerService {
         let future = with_thread_scope(scope, || {
             handler(&payload.model_name, request_value, execution_context, next)
         });
-        Ok(json_response(future.await?))
+        Ok(llm_response(future.await?))
     }
 
     fn subscriber(&self, name: &str) -> Result<SubscriberFn> {
@@ -3244,13 +3306,14 @@ struct ToolPayload {
     tool_call_id: Option<String>,
 }
 
+#[derive(Default)]
 struct LlmPayload {
     model_name: String,
-    request: Option<JsonEnvelope>,
-    annotated_request: Option<JsonEnvelope>,
-    response: Option<JsonEnvelope>,
-    sanitize_context: Option<nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext>,
-    execution_codec_context: Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>>,
+    request: Option<wire::LlmRequest>,
+    annotated_request: Option<wire::AnnotatedLlmRequest>,
+    response: Option<wire::JsonValue>,
+    request_codec: Option<wire::LlmCodecContext>,
+    response_codec: Option<wire::LlmCodecContext>,
 }
 
 impl LlmPayload {
@@ -3260,334 +3323,162 @@ impl LlmPayload {
         invocation_id: &str,
         response_required: bool,
     ) -> Result<LlmExecutionContext> {
-        let context = require_execution_field(
-            self.execution_codec_context.as_ref(),
-            "execution context is missing",
-        )?;
-        let request =
-            require_execution_field(context.request.as_ref(), "request context is missing")?;
-        let request_identity =
-            require_execution_field(request.codec.as_ref(), "request codec identity is missing")?;
-        let response_codec = context
-            .response
+        let request = self
+            .request_codec
             .as_ref()
-            .map(|response| -> Result<LlmResponseContext> {
-                let identity = require_execution_field(
-                    response.codec.as_ref(),
-                    "response codec identity is missing",
-                )?;
+            .ok_or_else(|| WorkerSdkError::InvalidInput("missing request codec context".into()))?;
+        let response_codec = self
+            .response_codec
+            .as_ref()
+            .map(|context| -> Result<_> {
                 Ok(LlmResponseContext {
-                    codec: codec_identity_from_proto(Some(identity)),
+                    codec: codec_identity_from_proto(context.codec.as_ref())?,
                     runtime: Some(runtime.clone()),
-                    codec_capability_id: response.codec_capability_id.clone(),
+                    codec_capability_id: context.capability_id.clone(),
                     invocation_id: Some(invocation_id.to_owned()),
                 })
             })
             .transpose()?;
         if response_required && response_codec.is_none() {
             return Err(WorkerSdkError::InvalidInput(
-                "malformed LLM execution codec context: response context is missing".into(),
+                "missing response codec context".into(),
             ));
         }
         Ok(LlmExecutionContext {
             request_codec: LlmRequestContext {
-                codec: codec_identity_from_proto(Some(request_identity)),
+                codec: codec_identity_from_proto(request.codec.as_ref())?,
                 runtime: Some(runtime.clone()),
-                codec_capability_id: request.codec_capability_id.clone(),
+                codec_capability_id: request.capability_id.clone(),
                 invocation_id: Some(invocation_id.to_owned()),
             },
             response_codec,
         })
     }
-
-    fn sanitize_request_context(&self, invocation_id: &str) -> LlmSanitizeRequestContext {
-        let codec = match self.sanitize_context.as_ref() {
-            Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
-            _ => None,
-        };
-        LlmSanitizeRequestContext {
-            codec: codec_identity_from_proto(codec),
+    fn sanitize_request_context(&self, invocation_id: &str) -> Result<LlmSanitizeRequestContext> {
+        let context = self
+            .request_codec
+            .as_ref()
+            .ok_or_else(|| WorkerSdkError::InvalidInput("missing request codec context".into()))?;
+        Ok(LlmSanitizeRequestContext {
+            codec: codec_identity_from_proto(context.codec.as_ref())?,
             runtime: None,
-            codec_capability_id: match self.sanitize_context.as_ref() {
-                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec_capability_id.clone(),
-                _ => None,
-            },
+            codec_capability_id: context.capability_id.clone(),
             invocation_id: Some(invocation_id.to_owned()),
-        }
+        })
     }
-
-    fn sanitize_response_context(&self, invocation_id: &str) -> LlmSanitizeResponseContext {
-        let codec = match self.sanitize_context.as_ref() {
-            Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec.as_ref(),
-            _ => None,
-        };
-        LlmSanitizeResponseContext {
-            codec: codec_identity_from_proto(codec),
+    fn sanitize_response_context(&self, invocation_id: &str) -> Result<LlmSanitizeResponseContext> {
+        let context = self
+            .response_codec
+            .as_ref()
+            .ok_or_else(|| WorkerSdkError::InvalidInput("missing response codec context".into()))?;
+        Ok(LlmSanitizeResponseContext {
+            codec: codec_identity_from_proto(context.codec.as_ref())?,
             runtime: None,
-            codec_capability_id: match self.sanitize_context.as_ref() {
-                Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(context)) => context.codec_capability_id.clone(),
-                _ => None,
-            },
+            codec_capability_id: context.capability_id.clone(),
             invocation_id: Some(invocation_id.to_owned()),
-        }
+        })
     }
 }
 
-fn codec_identity_from_proto(
-    codec: Option<&nemo_relay_worker_proto::v1::LlmCodecIdentity>,
-) -> LlmCodecIdentity {
-    let codec_kind = codec
-        .map(|codec| codec.kind)
-        .unwrap_or(LlmCodecKind::Unspecified as i32);
-    let codec_id = codec.and_then(|codec| codec.id.clone());
-    match LlmCodecKind::try_from(codec_kind).ok() {
-        Some(LlmCodecKind::Unspecified) => LlmCodecIdentity::None,
-        Some(LlmCodecKind::Builtin) => codec_id
-            .as_deref()
-            .and_then(BuiltinLlmCodec::from_id)
-            .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::BuiltIn),
-        Some(LlmCodecKind::Runtime) => codec_id
-            .filter(|id| !id.is_empty())
-            .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::Runtime),
-        Some(LlmCodecKind::Opaque) | None => LlmCodecIdentity::Opaque,
-    }
+fn codec_identity_from_proto(value: Option<&wire::LlmCodecReference>) -> Result<LlmCodecIdentity> {
+    let value =
+        value.ok_or_else(|| WorkerSdkError::InvalidInput("missing codec identity".into()))?;
+    conversions::decode(value.clone()).map_err(Into::into)
 }
 
-fn event_payload(
-    payload: Option<nemo_relay_worker_proto::v1::invoke_request::Payload>,
-) -> Result<Event> {
+fn event_payload(payload: Option<CallbackPayload>) -> Result<Event> {
     match payload {
-        Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Event(value)) => {
-            Ok(decode_json_envelope::<Event>(&value)?)
-        }
+        Some(CallbackPayload::Event(value)) => decode_wire(value.as_ref()),
         _ => Err(WorkerSdkError::InvalidInput(
             "expected event payload".into(),
         )),
     }
 }
-
-fn tool_payload(
-    payload: Option<nemo_relay_worker_proto::v1::invoke_request::Payload>,
-) -> Result<ToolPayload> {
+fn tool_payload(payload: Option<CallbackPayload>) -> Result<ToolPayload> {
     match payload {
-        Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Tool(value)) => {
-            let json = required_json::<Json>(value.value, "tool value")?;
-            Ok(ToolPayload {
-                tool_name: value.tool_name,
-                value: json,
-                tool_call_id: value.tool_call_id,
-            })
-        }
+        Some(CallbackPayload::Tool(value)) => Ok(value),
         _ => Err(WorkerSdkError::InvalidInput("expected tool payload".into())),
     }
 }
-
-fn require_execution_field<T>(value: Option<T>, detail: &str) -> Result<T> {
-    value.ok_or_else(|| {
-        WorkerSdkError::InvalidInput(format!("malformed LLM execution codec context: {detail}"))
-    })
-}
-
-fn llm_payload(
-    payload: Option<nemo_relay_worker_proto::v1::invoke_request::Payload>,
-) -> Result<LlmPayload> {
+fn llm_payload(payload: Option<CallbackPayload>) -> Result<LlmPayload> {
     match payload {
-        Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(value)) => Ok(LlmPayload {
-            model_name: value.model_name,
-            request: value.request,
-            annotated_request: value.annotated_request,
-            response: value.response,
-            sanitize_context: value.sanitize_context,
-            execution_codec_context: value.execution_codec_context,
-        }),
-        _ => Err(WorkerSdkError::InvalidInput("expected llm payload".into())),
+        Some(CallbackPayload::Llm(value)) => Ok(*value),
+        _ => Err(WorkerSdkError::InvalidInput("expected LLM payload".into())),
     }
 }
-
-fn required_json<T: serde::de::DeserializeOwned>(
-    value: Option<JsonEnvelope>,
-    field: &str,
-) -> Result<T> {
-    let value = value.ok_or_else(|| WorkerSdkError::InvalidInput(format!("{field} is missing")))?;
-    Ok(decode_json_envelope::<T>(&value)?)
-}
-
-fn decode_expected_json_envelope<T: serde::de::DeserializeOwned>(
-    value: &JsonEnvelope,
-    field: &str,
-    expected_schema: &str,
-) -> Result<T> {
-    if value.schema != expected_schema {
-        return Err(WorkerSdkError::InvalidInput(format!(
-            "{field} has schema {:?}; expected {expected_schema:?}",
-            value.schema
-        )));
-    }
-    Ok(decode_json_envelope(value)?)
+fn required_json<D>(value: Option<impl DecodeTo<D>>, field: &str) -> Result<D> {
+    value
+        .ok_or_else(|| WorkerSdkError::InvalidInput(format!("{field} is missing")))?
+        .decode_to()
 }
 
 fn empty_response() -> InvokeResponse {
     InvokeResponse {
-        result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Empty(
-            EmptyResult {},
-        )),
+        result: Some(wire::invoke_response::Result::Completed(())),
     }
 }
 
 fn json_response(value: Json) -> InvokeResponse {
     InvokeResponse {
-        result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Json(
-            JsonResult {
-                value: Some(infallible_json_envelope(JSON_SCHEMA, &value)),
-                error: None,
-            },
-        )),
+        result: Some(wire::invoke_response::Result::ToolValue(infallible_wire(
+            &value,
+        ))),
     }
 }
 
 fn guardrail_response(reason: Option<String>) -> InvokeResponse {
     InvokeResponse {
-        result: Some(
-            nemo_relay_worker_proto::v1::invoke_response::Result::Guardrail(GuardrailResult {
-                block_reason: reason.unwrap_or_default(),
-            }),
-        ),
+        result: Some(wire::invoke_response::Result::Guardrail(
+            wire::GuardrailDecision {
+                decision: Some(match reason {
+                    None => wire::guardrail_decision::Decision::Allow(()),
+                    Some(reason) => wire::guardrail_decision::Decision::BlockReason(reason),
+                }),
+            },
+        )),
     }
 }
 
 fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeResponse> {
     Ok(InvokeResponse {
-        result: Some(
-            nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(
-                LlmRequestInterceptResult {
-                    outcome: Some(json_envelope(
-                        nemo_relay_types::api::llm::LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-                        &outcome,
-                    )?),
-                },
-            ),
-        ),
+        result: Some(wire::invoke_response::Result::LlmRequestOutcome(
+            conversions::encode(outcome)?,
+        )),
     })
 }
 
 fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<InvokeResponse> {
     Ok(InvokeResponse {
-        result: Some(
-            nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
-                ToolExecutionInterceptResult {
-                    outcome: Some(tool_execution_outcome_to_proto(outcome)?),
-                },
-            ),
-        ),
+        result: Some(wire::invoke_response::Result::ToolExecutionOutcome(
+            conversions::encode(outcome)?,
+        )),
     })
 }
 
-fn tool_execution_result_to_sdk(
-    result: ToolExecutionResultResponse,
-) -> Result<ToolExecutionResult> {
-    if let Some(error) = result.error {
-        return Err(worker_error_to_sdk(error));
-    }
-    let value = result
-        .value
-        .ok_or_else(|| WorkerSdkError::InvalidInput("tool execution result is missing".into()))?;
-    tool_execution_result_from_proto(value)
+fn tool_execution_result_to_sdk(result: wire::ToolNextResponse) -> Result<ToolExecutionResult> {
+    decode_rpc_result(result)
 }
 
-fn tool_execution_outcome_to_proto(
-    outcome: ToolExecutionInterceptOutcome,
-) -> Result<ProtoToolExecutionInterceptOutcome> {
-    Ok(ProtoToolExecutionInterceptOutcome {
-        result: Some(json_value(&outcome.result)?),
-        annotation: outcome
-            .annotation
-            .as_ref()
-            .filter(|value| !value.is_null())
-            .map(json_value)
-            .transpose()?,
-        pending_marks: (!outcome.pending_marks.is_empty())
-            .then(|| json_value(&outcome.pending_marks))
-            .transpose()?,
-    })
-}
-
-fn tool_execution_result_from_proto(
-    value: ProtoToolExecutionResult,
-) -> Result<ToolExecutionResult> {
-    let result = value.result.ok_or_else(|| {
-        WorkerSdkError::InvalidInput("tool execution result.result is missing".into())
-    })?;
-    let annotation = value
-        .annotation
-        .as_ref()
-        .map(decode_json_value)
-        .transpose()?
-        .filter(|value: &Json| !value.is_null());
-    Ok(ToolExecutionResult {
-        result: decode_json_value(&result)?,
-        annotation,
-    })
-}
-
-fn stream_chunk_to_json(chunk: StreamChunk) -> Result<Json> {
+fn stream_chunk_to_json(chunk: wire::LlmStreamNextResponse) -> Result<Json> {
     match chunk.item {
-        Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(value)) => {
-            Ok(decode_json_envelope::<Json>(&value)?)
+        Some(wire::llm_stream_next_response::Item::Value(value)) => {
+            Ok(decode_wire::<Json>(&value)?)
         }
-        Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) => {
-            Err(worker_error_to_sdk(error))
-        }
+        Some(wire::llm_stream_next_response::Item::Error(error)) => Err(worker_error_to_sdk(error)),
         None => Err(WorkerSdkError::InvalidInput("empty stream chunk".into())),
     }
 }
 
-fn json_result_to_sdk(result: JsonResult) -> Result<Json> {
-    if let Some(error) = result.error {
-        return Err(worker_error_to_sdk(error));
-    }
-    required_json(result.value, "json result")
+fn json_result_to_sdk(result: wire::LlmNextResponse) -> Result<Json> {
+    decode_rpc_result(result)
 }
 
-fn decode_typed_json_result<T: serde::de::DeserializeOwned>(
-    result: JsonResult,
-    expected_schema: &str,
-) -> Result<T> {
-    if let Some(error) = result.error {
-        return Err(worker_error_to_sdk(error));
-    }
-    let value = result
-        .value
-        .ok_or_else(|| WorkerSdkError::InvalidInput("json result is missing".into()))?;
-    decode_expected_json_envelope(&value, "json result", expected_schema)
+fn optional_encode_wire(value: Option<Json>) -> Result<Option<JsonEnvelope>> {
+    value.as_ref().map(encode_wire).transpose()
 }
 
-fn optional_json_envelope(value: Option<Json>) -> Result<Option<JsonEnvelope>> {
-    value
-        .as_ref()
-        .map(|value| json_envelope(JSON_SCHEMA, value).map_err(WorkerSdkError::from))
-        .transpose()
-}
-
-fn optional_typed_json_envelope<T: serde::Serialize>(
-    schema: &str,
-    value: Option<&T>,
-) -> Result<Option<JsonEnvelope>> {
-    value
-        .map(|value| json_envelope(schema, value).map_err(WorkerSdkError::from))
-        .transpose()
-}
-
-fn severity_wire_value(value: &LogSeverity) -> Result<String> {
-    serde_json::to_value(value)?
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            WorkerSdkError::InvalidInput("LogSeverity did not serialize as a string".into())
-        })
-}
-
-fn infallible_json_envelope<T: serde::Serialize>(schema: &str, value: &T) -> JsonEnvelope {
-    json_envelope(schema, value).expect("Relay DTOs and serde_json::Value are JSON serializable")
+fn infallible_wire<D: Clone + WireValue<W>, W>(value: &D) -> W {
+    conversions::encode(value.clone()).expect("validated SDK value must encode")
 }
 
 fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
@@ -3612,6 +3503,11 @@ fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
         },
         retryable: false,
         downstream_continuation_id: None,
+        http_status: nemo_relay_types::plugin::parse_http_error_message(match &error {
+            WorkerSdkError::Callback(message) => message,
+            _ => "",
+        })
+        .map(|(status, _)| u32::from(status)),
     }
 }
 
@@ -3621,20 +3517,23 @@ fn cancelled_worker_error() -> WorkerError {
         message: "worker invocation was cancelled".into(),
         retryable: false,
         downstream_continuation_id: None,
+        http_status: None,
     }
 }
 
 fn cancelled_invoke_response() -> InvokeResponse {
     InvokeResponse {
-        result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(
-            cancelled_worker_error(),
-        )),
+        result: Some(
+            nemo_relay_worker_proto::nvidia_worker_v1::invoke_response::Result::Error(
+                cancelled_worker_error(),
+            ),
+        ),
     }
 }
 
 fn cancelled_stream_chunk() -> StreamChunk {
     StreamChunk {
-        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+        item: Some(wire::invoke_stream_response::Item::Error(
             cancelled_worker_error(),
         )),
     }
@@ -3688,6 +3587,14 @@ fn cancellation_aware_worker_stream(
 }
 
 fn worker_error_to_sdk(error: WorkerError) -> WorkerSdkError {
+    let mut error = error;
+    if error.code != "worker.cancelled"
+        && let Some(status) = error.http_status.and_then(|v| u16::try_from(v).ok())
+        && nemo_relay_types::plugin::parse_http_error_message(&error.message).is_none()
+        && let Ok(message) = http_error_message(status, &error.message)
+    {
+        error.message = message;
+    }
     let source = if error.code != "worker.cancelled"
         && nemo_relay_types::plugin::parse_http_error_message(&error.message).is_some()
     {
@@ -3735,16 +3642,6 @@ fn status_from_sdk(error: WorkerSdkError) -> Status {
             .insert(DOWNSTREAM_CONTINUATION_METADATA, value);
     }
     status
-}
-
-fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
-    if ok {
-        Ok(())
-    } else {
-        Err(error
-            .map(worker_error_to_sdk)
-            .unwrap_or_else(|| WorkerSdkError::Callback("host call failed".into())))
-    }
 }
 
 struct ScopedJsonStream {
@@ -3944,36 +3841,19 @@ fn runtime_registration_kind(surface: RegistrationSurface) -> Result<RuntimeRegi
     }
 }
 
-fn snapshot_scope_type_from_proto(scope_type: i32) -> ScopeType {
-    use nemo_relay_worker_proto::v1::ScopeType as ProtoScopeType;
-    match ProtoScopeType::try_from(scope_type) {
-        Ok(ProtoScopeType::Agent) => ScopeType::Agent,
-        Ok(ProtoScopeType::Function) => ScopeType::Function,
-        Ok(ProtoScopeType::Tool) => ScopeType::Tool,
-        Ok(ProtoScopeType::Llm) => ScopeType::Llm,
-        Ok(ProtoScopeType::Retriever) => ScopeType::Retriever,
-        Ok(ProtoScopeType::Embedder) => ScopeType::Embedder,
-        Ok(ProtoScopeType::Reranker) => ScopeType::Reranker,
-        Ok(ProtoScopeType::Guardrail) => ScopeType::Guardrail,
-        Ok(ProtoScopeType::Evaluator) => ScopeType::Evaluator,
-        Ok(ProtoScopeType::Custom) => ScopeType::Custom,
-        _ => ScopeType::Unknown,
-    }
-}
-
 fn proto_scope_type(scope_type: ScopeType) -> i32 {
     (match scope_type {
-        ScopeType::Agent => nemo_relay_worker_proto::v1::ScopeType::Agent,
-        ScopeType::Function => nemo_relay_worker_proto::v1::ScopeType::Function,
-        ScopeType::Tool => nemo_relay_worker_proto::v1::ScopeType::Tool,
-        ScopeType::Llm => nemo_relay_worker_proto::v1::ScopeType::Llm,
-        ScopeType::Retriever => nemo_relay_worker_proto::v1::ScopeType::Retriever,
-        ScopeType::Embedder => nemo_relay_worker_proto::v1::ScopeType::Embedder,
-        ScopeType::Reranker => nemo_relay_worker_proto::v1::ScopeType::Reranker,
-        ScopeType::Guardrail => nemo_relay_worker_proto::v1::ScopeType::Guardrail,
-        ScopeType::Evaluator => nemo_relay_worker_proto::v1::ScopeType::Evaluator,
-        ScopeType::Custom => nemo_relay_worker_proto::v1::ScopeType::Custom,
-        ScopeType::Unknown => nemo_relay_worker_proto::v1::ScopeType::Unknown,
+        ScopeType::Agent => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Agent,
+        ScopeType::Function => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Function,
+        ScopeType::Tool => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Tool,
+        ScopeType::Llm => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Llm,
+        ScopeType::Retriever => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Retriever,
+        ScopeType::Embedder => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Embedder,
+        ScopeType::Reranker => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Reranker,
+        ScopeType::Guardrail => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Guardrail,
+        ScopeType::Evaluator => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Evaluator,
+        ScopeType::Custom => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Custom,
+        ScopeType::Unknown => nemo_relay_worker_proto::nvidia_worker_v1::ScopeType::Unknown,
     }) as i32
 }
 
@@ -4152,3 +4032,108 @@ mod execution_context_tests;
 #[cfg(test)]
 #[path = "../tests/unit/timestamp_tests.rs"]
 mod timestamp_tests;
+
+trait DecodeTo<D> {
+    fn decode_to(&self) -> Result<D>;
+}
+impl<D: WireValue<W>, W: Clone> DecodeTo<D> for W {
+    fn decode_to(&self) -> Result<D> {
+        conversions::decode(self.clone()).map_err(Into::into)
+    }
+}
+fn decode_wire<D>(value: &impl DecodeTo<D>) -> Result<D> {
+    value.decode_to()
+}
+fn encode_wire<D: Clone + WireValue<W>, W>(value: &D) -> Result<W> {
+    conversions::encode(value.clone()).map_err(Into::into)
+}
+impl From<conversions::ConversionError> for WorkerSdkError {
+    fn from(error: conversions::ConversionError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+fn unchanged_response() -> InvokeResponse {
+    InvokeResponse {
+        result: Some(wire::invoke_response::Result::Unchanged(())),
+    }
+}
+fn llm_response(value: Json) -> InvokeResponse {
+    InvokeResponse {
+        result: Some(wire::invoke_response::Result::LlmResponse(infallible_wire(
+            &value,
+        ))),
+    }
+}
+trait RpcResult<D> {
+    fn read_result(self) -> Result<D>;
+}
+fn decode_rpc_result<D>(value: impl RpcResult<D>) -> Result<D> {
+    value.read_result()
+}
+macro_rules! rpc_result {
+    ($response:ty, $module:ident, $domain:ty) => {
+        impl RpcResult<$domain> for $response {
+            fn read_result(self) -> Result<$domain> {
+                nemo_relay_worker_proto::validation::validate(&self)
+                    .map_err(WorkerSdkError::InvalidInput)?;
+                match self.result {
+                    Some(wire::$module::Result::Value(v)) => {
+                        conversions::decode(v).map_err(Into::into)
+                    }
+                    Some(wire::$module::Result::Error(e)) => Err(worker_error_to_sdk(e)),
+                    None => Err(WorkerSdkError::InvalidInput("missing RPC result".into())),
+                }
+            }
+        }
+    };
+}
+rpc_result!(
+    wire::ToolNextResponse,
+    tool_next_response,
+    ToolExecutionResult
+);
+rpc_result!(wire::LlmNextResponse, llm_next_response, Json);
+rpc_result!(
+    wire::DecodeLlmCodecRequestResponse,
+    decode_llm_codec_request_response,
+    AnnotatedLlmRequest
+);
+rpc_result!(
+    wire::EncodeLlmCodecRequestResponse,
+    encode_llm_codec_request_response,
+    LlmRequest
+);
+rpc_result!(
+    wire::DecodeLlmCodecResponseResponse,
+    decode_llm_codec_response_response,
+    AnnotatedLlmResponse
+);
+
+impl WorkerService {
+    fn identity(&self) -> wire::WorkerIdentity {
+        wire::WorkerIdentity {
+            plugin_id: self.plugin.plugin_id().into(),
+            plugin_kind: self.plugin.plugin_id().into(),
+            protocol: Some(wire::ProtocolIdentity {
+                name: WORKER_PROTOCOL.into(),
+                version: wire::CONTRACT_VERSION.into(),
+            }),
+            sdk_name: "nemo-relay-worker".into(),
+            sdk_version: env!("CARGO_PKG_VERSION").into(),
+            runtime_name: "rust".into(),
+            runtime_version: rustc_version_runtime(),
+        }
+    }
+}
+
+fn micros_to_timestamp(value: Option<i64>) -> Result<Option<prost_types::Timestamp>> {
+    value
+        .map(|micros| {
+            Ok(prost_types::Timestamp {
+                seconds: micros.div_euclid(1_000_000),
+                nanos: (micros.rem_euclid(1_000_000) * 1000) as i32,
+            })
+        })
+        .transpose()
+}

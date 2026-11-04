@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use axum::http::HeaderMap;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay_runtime::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use crate::configuration::header_string;

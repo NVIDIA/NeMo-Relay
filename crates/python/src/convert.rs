@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use nemo_relay::error::FlowError;
+use nemo_relay_types::error::FlowError;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::types::{
     PyByteArray, PyBytes, PyDict, PyFrozenSet, PyMapping, PySequence, PySet, PyString,

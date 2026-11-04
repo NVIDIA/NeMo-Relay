@@ -570,6 +570,11 @@ execution guardrails, these response changes apply:
   formatting, stream comments, heartbeats, event IDs, or retry hints.
 - Provider HTTP errors keep their status, supported headers, and body.
 
+If an execution intercept rejects a streaming request before the first chunk,
+Relay returns the corresponding HTTP error and plugin message. Errors after
+streaming begins end the response without a successful completion marker, such
+as `[DONE]` for OpenAI Chat Completions.
+
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit
 how long a stream can run after Relay sends its response headers.
@@ -585,6 +590,16 @@ response for observability. Set
 starting the worker to choose another bound. This setting changes only
 the observation copy. It does not limit, buffer, or cut off the stream delivered
 to the caller.
+
+When a client closes a response before the HTTP body ends, Relay records
+`daemon_worker_observation.terminal` as `cancelled`. The LLM span keeps the
+OpenTelemetry status `UNSET` unless Relay also detects an error. Cancellation
+alone does not mean the provider failed. If the HTTP body reports that it has
+ended, Relay records `complete`. The caller does not need to request another
+frame.
+
+Provider HTTP errors and response-body errors still set `ERROR`. Truncated
+observation copies and observation timeouts also set `ERROR`.
 
 Semantic observation has a separate 15-minute completion deadline, independent
 of the configured provider response-header wait. Exceeding the observation

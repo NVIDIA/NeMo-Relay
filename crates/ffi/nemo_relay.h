@@ -206,7 +206,7 @@ typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
- * `nemo_relay::plugin::PluginRegistrationContext`, not an owned heap allocation.
+ * `nemo_relay_plugin_host::PluginRegistrationContext`, not an owned heap allocation.
  * It is only valid for the duration of the plugin registration callback that receives
  * it. C callers must not store the pointer, use it after the callback returns, or attempt to
  * free or drop it.
@@ -1425,7 +1425,10 @@ NemoRelayStatus nemo_relay_llm_call_execute(const char *name,
  *   May be null, in which case chunks are not collected.
  * - `finalizer`: Callback invoked once when the stream is exhausted to produce
  *   the aggregated response as a JSON C string. May be null, in which case the
- *   finalizer returns `Json::Null`.
+ *   finalizer returns `Json::Null`. A null or non-JSON result marks the LLM end
+ *   event ERROR with a null response and is reported by `nemo_relay_stream_close`.
+ * - `callback_user_data`: Opaque pointer passed to `collector` and `finalizer`.
+ * - `callback_free`: Optional destructor for `callback_user_data`.
  * - `parent`: Optional parent scope handle, or null.
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
@@ -1444,6 +1447,8 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
                                                    NemoRelayFreeFn func_free,
                                                    struct Option_NemoRelayCollectorCb collector,
                                                    struct Option_NemoRelayFinalizerCb finalizer,
+                                                   void *callback_user_data,
+                                                   NemoRelayFreeFn callback_free,
                                                    const struct FfiScopeHandle *parent,
                                                    uint32_t attributes,
                                                    const char *data_json,
@@ -1460,7 +1465,10 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
  * Stop a stream producer and wait for cleanup to complete.
  *
  * This operation is idempotent. It does not free `stream`; callers must still
- * release the handle with [`nemo_relay_stream_free`].
+ * release the handle with [`nemo_relay_stream_free`]. A call from inside this
+ * stream's own collector or finalizer requests cancellation and returns `Ok`
+ * at once. Cleanup finishes after the callback returns, and a later call
+ * reports its result.
  *
  * # Safety
  * `stream` must be a valid `FfiStream` pointer returned by
@@ -1476,7 +1484,9 @@ NemoRelayStatus nemo_relay_stream_close(struct FfiStream *stream);
  * - `1`: A chunk was written to `*out_chunk`. Caller must free with
  *   `nemo_relay_string_free`.
  * - `0`: The stream is complete (no more chunks).
- * - `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+ * - `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call
+ *   from inside this stream's own collector or finalizer fails this way
+ *   instead of waiting on itself.
  *
  * # Safety
  * `stream` and `out_chunk` must be valid, non-null pointers.
@@ -1879,6 +1889,19 @@ NemoRelayStatus nemo_relay_atof_exporter_force_flush(const struct FfiAtofExporte
  * `exporter` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *exporter);
+
+/**
+ * Returns delivery diagnostics recorded by this exporter's stream sink as JSON.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries sorted by code. The caller owns `out_json` and must free it with
+ * `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `exporter` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_atof_exporter_runtime_diagnostics_json(const struct FfiAtofExporter *exporter,
+                                                                  char **out_json);
 
 /**
  * Returns the ATOF exporter output path as a string when its sink is a file.

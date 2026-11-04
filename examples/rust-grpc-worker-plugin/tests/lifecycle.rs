@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Atomic transport coverage for the documented Rust grpc-v1 worker.
+//! Atomic transport coverage for the documented Rust nvidia.nemo.relay.worker.v1 worker.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,11 +10,15 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use nemo_relay::api::event::Event;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
-use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay_plugin_host::PluginConfig;
+use nemo_relay_plugin_host::dynamic::initialize;
+use nemo_relay_runtime::api::event::Event;
+use nemo_relay_runtime::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber,
+};
+use nemo_relay_runtime::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute,
+};
 use serde_json::{Map, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -90,7 +94,7 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
             .build(),
     )
     .await
-    .expect("worker middleware should execute through grpc-v1");
+    .expect("worker middleware should execute through nvidia.nemo.relay.worker.v1");
     assert_eq!(result.result["plugin_tag"], "documentation");
     assert_eq!(result.result["plugin_tool"], "safe_tool");
     assert_eq!(result.annotation, Some(json!({"source": "application"})));
@@ -248,8 +252,8 @@ id = "{PLUGIN_ID}"
 kind = "worker"
 
 [compat]
-relay = ">=0.10.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false

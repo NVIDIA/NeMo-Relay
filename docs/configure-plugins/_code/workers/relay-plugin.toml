@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[load.callback_timeouts]
+default_ms = 60000
+
+[load.callback_timeouts.by_name]
+input_guardrail = 90000
+
+[load.max_message_bytes]
+default_bytes = 4194304
+
+[load.max_message_bytes.by_name]
+input_guardrail = 16777216

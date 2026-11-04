@@ -112,6 +112,63 @@ it. Other providers, such as `ChatOCIGenAI` from `langchain-oci`, receive no Rel
 headers because their SDKs reject unknown request fields. The model call proceeds
 without them.
 
+## Middleware Ordering
+
+LangChain calls the first middleware wrapper in the list first. This is the
+outer wrapper. Requests pass through the wrappers in list order. Results pass
+back through them in reverse order. These rules apply to `wrap_tool_call`,
+`wrap_model_call`, and their async versions.
+
+To record changes to tool results, place `NemoRelayMiddleware()` before the
+middleware that makes those changes. Relay then records the result after the
+other wrapper returns. Tool events and ATIF observations include the changes.
+This example adds a status line to the weather tool's result:
+
+```python
+from langchain.agents.middleware import AgentMiddleware
+
+class AddStatusMiddleware(AgentMiddleware):
+    def wrap_tool_call(self, request, handler):
+        result = handler(request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+agent = create_agent(
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    tools=[get_weather],
+    middleware=[NemoRelayMiddleware(), AddStatusMiddleware()],
+)
+```
+
+Relay records the result after `AddStatusMiddleware` adds the status line.
+If you reverse the two entries, Relay records the result before that change.
+The model still receives the status line in either case.
+
+This example uses a `ToolMessage` with string content. If your tool returns a
+`Command` or content blocks, keep that structure when you change the result.
+
+Choose the order based on what you want to record. An outer Relay wrapper
+records one call around retries in inner middleware. It also records results
+that inner middleware returns from a cache or without calling the tool.
+An inner Relay wrapper records only calls that reach it.
+
+For model calls, an outer Relay wrapper records the request before inner
+wrappers change it. It records the response after those wrappers return.
+Changes to graph state after the Relay wrapper returns are outside the
+recorded call.
+
+`NemoRelayCallbackHandler` creates scopes for the agent run. It does not change
+the middleware order. Use the middleware to route model and tool calls through
+Relay.
+
+For agents that run in LangGraph, use the same middleware order. Refer to
+[Served LangChain Agents](/supported-integrations/langgraph#served-langchain-agents)
+for callback setup. For Deep Agents, use the
+[middleware position option](/supported-integrations/deepagents#middleware-ordering).
+
 ## Human Approval in Tools
 
 `NemoRelayMiddleware` supports tools that pause for human approval with both
