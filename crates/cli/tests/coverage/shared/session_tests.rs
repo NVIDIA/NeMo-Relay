@@ -11937,7 +11937,7 @@ fn custom_call_hint_does_not_claim_inner_execution_or_repeated_wrapper_by_order(
 }
 
 #[tokio::test]
-async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
+async fn custom_call_hint_claims_only_the_matching_direct_custom_hook() {
     let manager = SessionManager::new(session_test_config());
     let mut root = session_event("tool-hints", "SessionStart");
     root.agent_kind = AgentKind::Codex;
@@ -11994,6 +11994,11 @@ async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
                     {
                         "type": "custom_tool_call", "call_id": "call-2",
                         "name": "exec", "input": "text(42)"
+                    },
+                    {
+                        "type": "custom_tool_call", "id": "ctc-patch-item",
+                        "call_id": "call-patch", "name": "apply_patch",
+                        "input": "*** Begin Patch\n*** Add File: proof.txt\n+ok\n*** End Patch"
                     }
                 ]
             }),
@@ -12003,7 +12008,7 @@ async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
         .unwrap();
 
     // Neither an inner execution nor an ambiguous same-text wrapper can consume
-    // the two provider hints. Their native execution IDs remain untouched.
+    // the provider hints. Their native execution IDs remain untouched.
     for (id, name, arguments) in [
         ("exec-inner", "exec_command", json!({"cmd": "pwd"})),
         ("exec-ambiguous", "exec", json!("text(42)")),
@@ -12035,7 +12040,7 @@ async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
             handle.metadata.as_ref().unwrap()["tool_correlation_status"],
             json!("ambiguous_fallback")
         );
-        assert_eq!(session.pending_tool_hints.len(), 2);
+        assert_eq!(session.pending_tool_hints.len(), 3);
     }
 
     manager
@@ -12045,8 +12050,8 @@ async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
                 session_id: "tool-hints".into(),
                 agent_kind: AgentKind::Codex,
                 event_name: "PreToolUse".into(),
-                tool_call_id: "call-1".into(),
-                tool_name: "exec".into(),
+                tool_call_id: "call-patch".into(),
+                tool_name: "apply_patch".into(),
                 subagent_id: None,
                 arguments: Value::Null,
                 result: Value::Null,
@@ -12063,7 +12068,7 @@ async fn custom_call_hint_claims_only_the_matching_wrapper_hook() {
         .get("tool-hints")
         .unwrap()
         .tools
-        .get("call-1")
+        .get("call-patch")
         .unwrap();
     assert_eq!(handle.parent_uuid, Some(subagent_uuid));
     assert_eq!(
