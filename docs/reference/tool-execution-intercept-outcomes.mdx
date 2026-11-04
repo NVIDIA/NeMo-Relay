@@ -291,7 +291,8 @@ while retaining those worker result messages.
 
 Relay 1.0 requires the `nvidia.nemo.relay.worker.v1` worker protocol. Regenerate
 worker protobuf bindings or rebuild with the updated SDK, and declare
-`compat.relay = ">=1.0.0,<2.0"`. Native plugins use ABI v7 with the current SDK.
+`compat.relay = ">=1.0.0,<2.0"`. The current native host supplies ABI v8 and retains
+v7 callback compatibility; scope-stack inspection requires v8.
 Future incompatible contract changes must increment the corresponding native
 API or worker protocol version.
 

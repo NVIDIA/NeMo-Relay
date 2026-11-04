@@ -2118,7 +2118,7 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
 }
 
 #[tokio::test]
-async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
+async fn worker_handshake_request_identity_mismatch_is_attributed_and_cleaned() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_worker_manifest(
@@ -2143,6 +2143,8 @@ async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
         }
         Err(error) => error.to_string(),
     };
+    // The worker SDK rejects the host's requested ID before returning a handshake
+    // response, so these details originate in the SDK's gRPC status.
     assert!(error.contains("incompatible worker identity"), "{error}");
     assert!(
         error.contains("expected plugin_id 'fixture_worker'"),

@@ -31,7 +31,8 @@ for the configuration shape.
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
 not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
-current SDK requires ABI v7, and Relay 0.10 rejects v2-v6 compiled callback layouts.
+current host supplies ABI v8 and retains v7 callback compatibility; scope-stack
+inspection requires v8. Relay 0.10 rejects v2-v6 compiled callback layouts.
 For workers, declare `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"`; the
 [handshake](/build-plugins/workers/grpc-v1-protocol) still negotiates the exact
 protocol, surfaces, authentication token, and lifecycle at startup.

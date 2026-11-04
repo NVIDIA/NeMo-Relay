@@ -38,6 +38,7 @@ class Host:
     def __init__(self, enabled=True):
         self.enabled = enabled
         self.requests = []
+        self.registration_handles = {}
         self.timeouts = []
         self.retry = False
         self.fail = False
@@ -52,6 +53,8 @@ class Host:
             snapshot_contract_version="1.0.0",
             provenance_contract_version="1.0.0",
             max_components=8,
+            max_extensions=16,
+            max_metadata_bytes=16384,
             max_request_bytes=16384,
             max_response_bytes=131072,
             max_pending_submissions=32,
@@ -93,7 +96,9 @@ class Host:
         }[operation]
         response = diagnostics_pb.DiagnosticReceipt(submission_sequence=request.sequence, status=status)
         if operation == "register_component":
-            response.component = 1
+            response.component = self.registration_handles.setdefault(
+                request.sequence, len(self.registration_handles) + 1
+            )
             response.code_count = len(request.register_component.codes)
         elif operation == "record":
             response.evidence = diagnostics_pb.DIAGNOSTIC_EVIDENCE_RETENTION_RETAINED
@@ -787,5 +792,39 @@ def test_terminal_authorization_and_session_errors_fence_without_retrying(code):
         with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
             await facade.close()
         assert facade._task is not None and facade._task.done()
+
+    asyncio.run(run())
+
+
+def test_components_record_and_close_with_their_own_registration_handles():
+    async def run():
+        host = Host()
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        first = await facade.component("first", codes())
+        second = await facade.component("second", codes())
+        first.try_record_lazy(observation)
+        second.try_record_lazy(observation)
+        await second.close()
+        await first.close()
+        await facade.close()
+
+        requests = [diagnostics_service_pb.SubmitDiagnosticRequest.FromString(raw) for raw in host.requests]
+        handles = {
+            request.register_component.local_name: host.registration_handles[request.sequence]
+            for request in requests
+            if request.WhichOneof("operation") == "register_component"
+        }
+        assert set(handles) == {"first", "second"}
+        assert handles["first"] > 0 and handles["second"] > 0
+        assert handles["first"] != handles["second"]
+        assert [request.record.component for request in requests if request.WhichOneof("operation") == "record"] == [
+            handles["first"],
+            handles["second"],
+        ]
+        assert [
+            request.close_component.component
+            for request in requests
+            if request.WhichOneof("operation") == "close_component"
+        ] == [handles["second"], handles["first"]]
 
     asyncio.run(run())
