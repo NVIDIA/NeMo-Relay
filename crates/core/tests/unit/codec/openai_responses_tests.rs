@@ -1927,7 +1927,7 @@ fn custom_calls_preserve_provider_ids_and_free_form_input_without_changing_wire_
         "42",
         "",
     ] {
-        let call = json!({"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "status": "completed", "future": {"keep": true}});
+        let call = json!({"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "status": "completed", "caller": {"type": "program", "caller_id": "call-program"}, "namespace": "functions", "future": {"keep": true}});
         let result = json!({"type": "custom_tool_call_output", "id": "ctco-item", "call_id": "call-wrapper", "output": [{"type": "input_text", "text": "done"}], "future": 2});
         let request =
             make_request(json!({"model": "codex", "input": [call.clone(), result.clone()]}));
