@@ -5669,3 +5669,87 @@ fn streamed_integrity_hashes_preserve_existing_digest_formats_and_snapshot_bytes
     .unwrap();
     assert_eq!(std::fs::read(destination).unwrap(), payload);
 }
+
+#[test]
+fn incompatible_workers_cannot_activate_after_validation_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.incompatible-worker";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(PluginsEnableRequest { id: id.into() }, &server).unwrap();
+    let mut resolved = resolve_plugins_config(None).unwrap();
+    allow_unsigned_test_plugins(&mut resolved);
+    resolved.dynamic_plugin_policy.defaults.startup =
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required);
+    assert_eq!(
+        active_dynamic_plugin_components(None, &resolved)
+            .unwrap()
+            .len(),
+        1
+    );
+    for stale_manifest in [false, true] {
+        let mut scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        let scope = &mut scopes[entry.scope_index];
+        let mut records = scope.registry.cloned_records(true);
+        let record = records
+            .iter_mut()
+            .find(|record| record.metadata.id == id)
+            .unwrap();
+        // Invalid workers must be excluded before even snapshotting the manifest directory.
+        record.source.manifest_ref = Some(
+            temp.path()
+                .join("missing/relay-plugin.toml")
+                .display()
+                .to_string(),
+        );
+        if !stale_manifest {
+            let nemo_relay_plugin_host::dynamic::DynamicPluginCompatibility::Worker(compatibility) =
+                &mut record.compatibility
+            else {
+                unreachable!()
+            };
+            compatibility.worker_protocol = "grpc-v1".into();
+        }
+        scope.registry =
+            nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::from_records(records).unwrap();
+        let (mut manifest, manifest_ref) =
+            load_manifest_for_action("test", &manifest_path).unwrap();
+        if stale_manifest {
+            manifest.compat.worker_protocol = Some("grpc-v1".into());
+        }
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        update_registry_validation_status(scope, id, &manifest, &policy, &trust).unwrap();
+        let record = scope.registry.get(id).unwrap();
+        assert!(record.spec.enabled);
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        for snapshots in [false, true] {
+            assert!(
+                active_dynamic_plugin_components_from_scopes(&scopes, &resolved, snapshots)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        let failure = required_startup_failure(&entry, &resolved.dynamic_plugins).unwrap();
+        assert!(failure.contains(id), "{failure}");
+        assert!(failure.contains("rebuild and reinstall"), "{failure}");
+    }
+}

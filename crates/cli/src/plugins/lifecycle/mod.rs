@@ -2225,7 +2225,10 @@ fn active_dynamic_plugin_components_from_scopes(
                     .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
             })
             .filter(|record| {
-                !record.is_tombstoned() && record.spec.enabled && !optional_trust_failure(record)
+                !record.is_tombstoned()
+                    && record.spec.enabled
+                    && record.status.validation.compatibility != DynamicPluginCheckState::Invalid
+                    && !optional_trust_failure(record)
             })
             .filter_map(|record| match record.metadata.kind {
                 DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
@@ -2264,7 +2267,11 @@ fn active_dynamic_plugin_components_from_scopes(
                 resolved_plugin.plugin_id
             )));
         };
-        if record.is_tombstoned() || !record.spec.enabled || optional_trust_failure(record) {
+        if record.is_tombstoned()
+            || !record.spec.enabled
+            || record.status.validation.compatibility == DynamicPluginCheckState::Invalid
+            || optional_trust_failure(record)
+        {
             continue;
         }
         let host_config = host_config_by_id.get(&record.metadata.id).ok_or_else(|| {
@@ -2595,19 +2602,28 @@ fn update_registry_validation_status(
         .and_then(|record| record.source.environment_ref.as_deref());
     let environment = environment_state(manifest, &scope.state_path, environment_ref);
     let environment_error = environment_last_error(plugin_id, environment, environment_ref);
+    let compatibility_error = manifest.validate().err();
     scope
         .registry
         .update_validation_status(
             plugin_id,
             DynamicPluginValidationStatus {
                 manifest: DynamicPluginCheckState::Valid,
-                compatibility: DynamicPluginCheckState::Valid,
+                compatibility: if compatibility_error.is_some() {
+                    DynamicPluginCheckState::Invalid
+                } else {
+                    DynamicPluginCheckState::Valid
+                },
                 integrity: trust.integrity,
                 environment,
                 authenticity: trust.authenticity,
                 policy_satisfied: policy.check_state(),
                 checked_at: None,
-                message: Some(VALIDATION_MESSAGE.into()),
+                message: Some(
+                    compatibility_error
+                        .as_ref()
+                        .map_or_else(|| VALIDATION_MESSAGE.into(), ToString::to_string),
+                ),
             },
         )
         .map_err(|error| CliError::Config(error.to_string()))?;
@@ -2768,6 +2784,16 @@ fn required_startup_failure(
         != Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required)
     {
         return None;
+    }
+
+    if entry.record.status.validation.compatibility == DynamicPluginCheckState::Invalid {
+        return Some(format!(
+            "- {}: {}",
+            entry.record.metadata.id,
+            entry.record.status.validation.message.as_deref().unwrap_or(
+                "required dynamic plugin is incompatible; remove its old registration, then rebuild and reinstall the plugin"
+            )
+        ));
     }
 
     if entry.record.status.validation.policy_satisfied == DynamicPluginCheckState::Invalid {

@@ -191,13 +191,14 @@ def _staged_proto() -> Generator[None]:
     if staged:
         if _SDIST_ROOT.exists():
             raise FileExistsError(f"refusing to replace existing staged sources: {_SDIST_ROOT}")
-        shutil.copytree(source / _PACKAGE_PATH, _SDIST_ROOT / _PACKAGE_PATH)
-        shutil.copy2(lock, _SDIST_ROOT / "buf.lock")
     try:
+        if staged:
+            shutil.copytree(source / _PACKAGE_PATH, _SDIST_ROOT / _PACKAGE_PATH)
+            shutil.copy2(lock, _SDIST_ROOT / "buf.lock")
         yield
     finally:
         if staged:
-            shutil.rmtree(_SDIST_ROOT)
+            shutil.rmtree(_SDIST_ROOT, ignore_errors=True)
 
 
 @contextlib.contextmanager

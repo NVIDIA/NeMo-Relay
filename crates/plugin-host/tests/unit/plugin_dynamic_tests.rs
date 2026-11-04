@@ -2012,6 +2012,30 @@ fn registry_preserves_unsupported_workers_for_explicit_recovery() {
                 .to_string()
                 .contains("rebuild and reinstall")
         );
+        registry
+            .update_validation_status(
+                "acme.guardrails.pii",
+                DynamicPluginValidationStatus {
+                    compatibility: DynamicPluginCheckState::Valid,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let record = registry.get("acme.guardrails.pii").unwrap();
+        assert!(record.spec.enabled);
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert!(
+            record
+                .status
+                .validation
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("rebuild and reinstall")
+        );
         registry.remove("acme.guardrails.pii").unwrap();
         let mut restored =
             DynamicPluginRegistry::from_records(registry.cloned_records(true)).unwrap();

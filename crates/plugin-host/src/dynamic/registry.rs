@@ -154,6 +154,10 @@ impl DynamicPluginRegistry {
     ) -> Result<()> {
         validation.checked_at = Some(super::current_timestamp());
         let record = self.lookup_mut(plugin_id)?;
+        if let Err(error) = validate_worker_protocol(record) {
+            validation.compatibility = DynamicPluginCheckState::Invalid;
+            validation.message = Some(error.to_string());
+        }
         record.status.validation = validation;
         Ok(())
     }
