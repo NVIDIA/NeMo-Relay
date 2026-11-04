@@ -58,12 +58,12 @@ jobs:
         include:
           - &linux-amd64
             platform: linux-amd64
-            node_build_strategy: zig
+            node_build_strategy: napi-cross
             node_target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
           - &linux-arm64
             platform: linux-arm64
-            node_build_strategy: zig
+            node_build_strategy: napi-cross
             node_target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
           - &macos-arm64
@@ -230,6 +230,11 @@ jobs:
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        if: ${{ matrix.node_build_strategy == 'zig' }}
+        with:
+          tool: cargo-zigbuild@${{ steps.ci-config.outputs.cargo_zigbuild_version }}
 
       - name: Create packaging output directory
         run: |

@@ -1,0 +1,8 @@
+{
+  "name": "nemo-relay-napi-cross-toolchains",
+  "private": true,
+  "optionalDependencies": {
+    "@napi-rs/cross-toolchain-arm64-target-aarch64": "1.0.3",
+    "@napi-rs/cross-toolchain-x64-target-x86_64": "1.0.3"
+  }
+}
