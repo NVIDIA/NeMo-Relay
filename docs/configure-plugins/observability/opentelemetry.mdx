@@ -1180,12 +1180,6 @@ content with an LLM or event sanitizer. Tool content is exported by default;
 retrieval payloads are not exported. Set top-level `enable_full_payloads = true` to retain complete
 sanitized LLM request history on every start span.
 
-When Relay retains only the current user turn, OpenAI Responses messages with
-item IDs or additional provider fields still establish user-turn boundaries.
-Native system and developer messages remain instructions. Relay preserves those fields in
-retained telemetry and does not change the request sent to the provider.
-
-
 ### GenAI Projection Attribute Support
 
 This inventory follows the 72-attribute
