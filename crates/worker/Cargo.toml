@@ -21,6 +21,8 @@ nemo-relay-worker-proto.workspace = true
 futures-util.workspace = true
 hyper-util = { workspace = true, features = ["tokio"] }
 prost.workspace = true
+prost-types.workspace = true
+tonic-health.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -28,3 +30,6 @@ tokio = { workspace = true, default-features = true, features = ["macros", "net"
 tokio-stream = { workspace = true, default-features = true, features = ["net", "sync"] }
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
 tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+nemo-relay-plugin.workspace = true
