@@ -39,8 +39,9 @@ impl Host {
                 name: wire::WORKER_PROTOCOL.into(),
                 version: wire::CONTRACT_VERSION.into(),
             }),
-            snapshot_contract_version: wire::CONTRACT_VERSION.into(),
-            provenance_contract_version: wire::CONTRACT_VERSION.into(),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
+            max_components: 1,
             max_request_bytes: MAX_REQUEST_BYTES as u32,
             max_response_bytes: MAX_RESPONSE_BYTES as u32,
             max_pending_submissions: MAX_PENDING_SUBMISSIONS as u32,
@@ -721,7 +722,7 @@ async fn incompatible_or_unavailable_sessions_are_inert() {
                 session_id: vec![1; 15],
                 capabilities: Some(baseline.clone()),
             },
-            DiagnosticAvailability::Unavailable,
+            DiagnosticAvailability::Unsupported,
         ),
     ] {
         cases.push((
@@ -1140,5 +1141,22 @@ async fn rejected_and_disabled_registrations_remain_valid_acknowledgements() {
         facade.close(Duration::from_secs(2)).await.unwrap();
         assert_eq!(facade.delivery_stats().uncertain, 0);
         assert_eq!(host.requests.lock().unwrap()[1].sequence, 2);
+    }
+}
+
+#[tokio::test]
+async fn invalid_diagnostic_capabilities_do_not_open_a_session() {
+    for disabled in [false, true] {
+        let mut policy = Host::default().capabilities();
+        policy.max_components = 0;
+        let host = Host {
+            policy: Some(policy),
+            disabled,
+            ..Default::default()
+        };
+        let (facade, _server) = connect(host.clone()).await;
+        assert_eq!(facade.availability(), DiagnosticAvailability::Unsupported);
+        assert_eq!(host.open_calls.load(Ordering::Relaxed), 0);
+        assert!(host.requests.lock().unwrap().is_empty());
     }
 }

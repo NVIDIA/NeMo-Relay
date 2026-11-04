@@ -2060,7 +2060,13 @@ impl PluginWorker for WorkerService {
             || protocol.version != wire::CONTRACT_VERSION
             || request.plugin_id != self.plugin.plugin_id()
         {
-            return Err(Status::failed_precondition("incompatible worker identity"));
+            return Err(Status::failed_precondition(format!(
+                "incompatible worker identity: expected plugin_id '{}', received plugin_id '{}', protocol '{}@{}'",
+                self.plugin.plugin_id(),
+                request.plugin_id,
+                protocol.name,
+                protocol.version
+            )));
         }
         Ok(Response::new(HandshakeResponse {
             identity: Some(self.identity()),

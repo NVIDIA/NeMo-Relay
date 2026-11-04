@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
+from google.protobuf.empty_pb2 import Empty
+
 from . import _protocol
 from ._proto.nvidia.nemo.relay.worker.v1 import (
     common_pb2 as common_pb,
@@ -320,11 +322,7 @@ class WorkerDiagnostics:
         try:
             async with asyncio.timeout(timeout):
                 await self.flush(timeout)
-                await self._submit(
-                    diagnostics_service_pb.SubmitDiagnosticRequest(
-                        close_session=__import__("google.protobuf.empty_pb2", fromlist=["Empty"]).Empty()
-                    )
-                )
+                await self._submit(diagnostics_service_pb.SubmitDiagnosticRequest(close_session=Empty()))
         except TimeoutError as error:
             raise DiagnosticDeliveryError("uncertain") from error
         finally:

@@ -22,7 +22,8 @@ communicates with Relay through the versioned `nvidia.nemo.relay.worker.v1` work
 
 The active contract is `nvidia.nemo.relay.worker.v1` at `1.0.0`. Upgrade the host
 and worker SDK together, rebuild workers, and update `compat.worker_protocol` in
-worker manifests. Legacy `grpc-v1` workers are incompatible. Package release
+worker manifests. Set `compat.relay = ">=1.0.0,<2.0"` for the current SDK.
+Legacy `grpc-v1` workers are incompatible. Package release
 versions remain tied to Relay releases.
 
 Callbacks retain shared domain types. Private converters model Relay-owned

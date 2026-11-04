@@ -177,10 +177,17 @@ impl WorkerDiagnostics {
         )
         .await
         {
-            Ok(Ok(response)) => match response.into_inner().capabilities {
-                Some(value) => value,
-                None => return facade,
-            },
+            Ok(Ok(response)) => {
+                let response = response.into_inner();
+                if nemo_relay_worker_proto::validation::validate(&response).is_err() {
+                    facade.availability = DiagnosticAvailability::Unsupported;
+                    return facade;
+                }
+                match response.capabilities {
+                    Some(value) => value,
+                    None => return facade,
+                }
+            }
             Ok(Err(error)) if error.code() == Code::Unimplemented => {
                 facade.availability = DiagnosticAvailability::Unsupported;
                 return facade;
@@ -223,6 +230,10 @@ impl WorkerDiagnostics {
             Ok(Ok(response)) => response.into_inner(),
             _ => return facade,
         };
+        if nemo_relay_worker_proto::validation::validate(&opened).is_err() {
+            facade.availability = DiagnosticAvailability::Unsupported;
+            return facade;
+        }
         let Some(session_capabilities) = opened.capabilities.as_ref() else {
             facade.availability = DiagnosticAvailability::Unsupported;
             return facade;
@@ -239,9 +250,6 @@ impl WorkerDiagnostics {
             facade.availability = DiagnosticAvailability::Unsupported;
             return facade;
         };
-        if opened.session_id.len() != 16 {
-            return facade;
-        }
         let client =
             wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient::new(channel)
                 .max_encoding_message_size(policy.max_request_bytes)

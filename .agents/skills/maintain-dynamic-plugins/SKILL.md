@@ -29,7 +29,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   `>=1.0.0,<2.0` for the current worker SDK.
 - Treat `compat.relay` as the plugin author's compatibility assertion, not
   proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
-- The worker contract uses `nvidia.nemo.relay.worker.v1` and protocol `1.0.0`.
+- The worker contract uses `nvidia.nemo.relay.worker.v1` and contract version `1.0.0`.
   Native ABI v4 permits
   append-only host-table extensions guarded by `struct_size`; existing fields
   must remain frozen at their original offsets. Incompatible native JSON,

@@ -2087,7 +2087,10 @@ async fn worker_invalid_registration_plan_fails_activation() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("local_name"), "{error}");
+    assert!(
+        error.contains("local_name: value length must be at least 1 characters"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -2141,6 +2144,14 @@ async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("incompatible worker identity"), "{error}");
+    assert!(
+        error.contains("expected plugin_id 'fixture_worker'"),
+        "{error}"
+    );
+    assert!(
+        error.contains("received plugin_id 'other_worker'"),
+        "{error}"
+    );
     assert_worker_stage_failure(
         &diagnostics,
         "other_worker",

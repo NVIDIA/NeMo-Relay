@@ -39,9 +39,11 @@ def generate_worker_proto(output_dir: Path = _GENERATED_DIR) -> None:
     source, lock = _proto_sources()
     dependency = resolve_proto_dependencies(lock)
     output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(dependency / "LICENSE", output_dir / "PROTOVALIDATE-LICENSE")
-    for obsolete in output_dir.glob("plugin_worker_pb2*.py"):
+    for namespace in ("nvidia", "buf"):
+        shutil.rmtree(output_dir / namespace, ignore_errors=True)
+    for obsolete in output_dir.glob("*_pb2*.py*"):
         obsolete.unlink()
+    shutil.copy2(dependency / "LICENSE", output_dir / "PROTOVALIDATE-LICENSE")
     protoc: Any = import_module("grpc_tools.protoc")
     grpc_tools: Any = import_module("grpc_tools")
     sources = sorted((source / _PACKAGE_PATH).glob("*.proto"))

@@ -32,8 +32,8 @@ fn open(host: &WorkerDiagnostics) -> Vec<u8> {
             name: wire::WORKER_PROTOCOL.into(),
             version: wire::CONTRACT_VERSION.into(),
         }),
-        snapshot_contract_version: wire::CONTRACT_VERSION.into(),
-        provenance_contract_version: wire::CONTRACT_VERSION.into(),
+        snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+        provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
         ..Default::default()
     })
     .unwrap()
@@ -440,8 +440,8 @@ fn disabled_host_admits_no_session_or_metadata() {
                 name: wire::WORKER_PROTOCOL.into(),
                 version: wire::CONTRACT_VERSION.into()
             }),
-            snapshot_contract_version: "1.0.0".into(),
-            provenance_contract_version: "1.0.0".into(),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
             ..Default::default()
         })
         .is_err()
@@ -702,8 +702,8 @@ fn revocation_closes_live_components_but_retains_evidence_and_context() {
                 name: wire::WORKER_PROTOCOL.into(),
                 version: wire::CONTRACT_VERSION.into()
             }),
-            snapshot_contract_version: wire::CONTRACT_VERSION.into(),
-            provenance_contract_version: wire::CONTRACT_VERSION.into(),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
             ..Default::default()
         })
         .unwrap_err()
@@ -720,8 +720,8 @@ fn incompatible_open_and_closed_session_cannot_create_a_new_counting_period() {
             name: wire::WORKER_PROTOCOL.into(),
             version: wire::CONTRACT_VERSION.into(),
         }),
-        snapshot_contract_version: wire::CONTRACT_VERSION.into(),
-        provenance_contract_version: wire::CONTRACT_VERSION.into(),
+        snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+        provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
         ..Default::default()
     };
     for field in 0..3 {
