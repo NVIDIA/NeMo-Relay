@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct TokenPricingRates &#123;\n    pub input_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub output_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub cache_read_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n    pub cache_write_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct TokenPricingRates &#123;\n    pub input_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub output_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub cache_read_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n    pub cache_write_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n    pub cache_write_1h_per_million: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>&gt;,\n&#125;"}} /></pre>
 
 Token rates expressed as USD per one million tokens.
 
@@ -31,6 +31,12 @@ Cached prompt/input token read price.
 ### `cache_write_per_million: Option<f64>`
 
 Prompt cache write price.
+
+### `cache_write_1h_per_million: Option<f64>`
+
+One-hour prompt cache write price.
+
+Rust callers using exhaustive struct literals must set this to `None` when no distinct one-hour rate is available.
 
 ## Trait Implementations
 

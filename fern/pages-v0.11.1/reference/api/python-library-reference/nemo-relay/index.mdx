@@ -55,6 +55,44 @@ def scopes() -> list[ScopeStackEntry]
 
 ## Functions
 
+### `log`
+
+```python
+def log(level: str, message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
+Emit a structured operational record through Relay.
+
+### `trace`
+
+```python
+def trace(message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
+### `debug`
+
+```python
+def debug(message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
+### `info`
+
+```python
+def info(message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
+### `warn`
+
+```python
+def warn(message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
+### `error`
+
+```python
+def error(message: str, *, target: str = '', fields: JsonObject | None = None) -> None
+```
+
 ### `get_scope_stack`
 
 ```python

@@ -109,7 +109,7 @@ async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
 
 <Tab title="Node.js" language="node">
 ```ts
-import { getHandle, LlmRequest, llmCallExecute, type ScopeHandle } from 'nemo-relay-node';
+import { getHandle, LlmRequest, llmCallExecuteAsync, type ScopeHandle } from 'nemo-relay-node';
 
 type LlmResponse = { text: string; request: unknown };
 
@@ -117,7 +117,7 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
   const parent: ScopeHandle = getHandle();
   const request = new LlmRequest({}, payload);
 
-  return await llmCallExecute(
+  return (await llmCallExecuteAsync(
     providerName,
     request,
     async (req: LlmRequest): Promise<LlmResponse> => ({ text: 'hi', request: req.content }),
@@ -126,7 +126,7 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
     null,
     null,
     'demo-model',
-  ) as Promise<LlmResponse>;
+  )) as LlmResponse;
 }
 ```
 </Tab>
